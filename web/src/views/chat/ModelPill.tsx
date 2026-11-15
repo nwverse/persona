@@ -2,10 +2,13 @@
 // docs/web/web.md "Model pill and model panel", docs/design/DESIGN_SYSTEM.md 3.1): at the right of the composer's bottom
 // row, before voice / Stop / Send, `[provider][model][engine][effort][Fast][⌄]`. It opens the unified model panel above
 // it (ui/model-panel/ModelPanel.tsx), and so does `/model` Enter in the composer. The composer card is a container: under
-// 600 px the pill is 148 px wide, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
+// 600 px the pill takes the width its words need (the name at most 108 px, a bracketed qualifier left out but for a
+// context size, `pillShortName`) and gives way
+// only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
-// words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
-// over what the assistant's computer can run Persona chats on, its panel saying whether the chat follows the default.
+// words as a label, except Codex: its panel explains why. A Persona chat (and the new-chat page) has `AssistantModelPill`
+// (#5033): the same pill over what the assistant's computer can run Persona chats on, its panel saying whether the chat
+// follows the default.
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
@@ -15,7 +18,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -38,6 +41,18 @@ export function pillEffort(id: string): string {
 
 // the composer card's widths (Composer.tsx `@container/composer`): narrow < 600, dense < 520, ultra < 420
 const ULTRA_HIDDEN = "@max-[420px]/composer:hidden";
+
+/** The name where the pill is narrow: a trailing qualifier in brackets left out ("Default (recommended)" → "Default",
+ *  "GPT-5 (beta)" → "GPT-5"), except a context size, which names another model and stays as a short mark, as the chat's
+ *  model names have it ("Opus 5.5 (1M context)" and "Opus 5.5 [1m]" → "Opus 5.5 1M"). The tooltip and the accessible
+ *  name keep the whole name. */
+export function pillShortName(name: string): string {
+  const m = /^(.*?)\s*[(（[]([^()（）[\]]*)[)）\]]\s*$/u.exec(name);
+  const base = m?.[1].trim();
+  if (!m || !base) return name;
+  const size = /^(\d+(?:\.\d+)?)\s*([km])(?:\s*(?:context|ctx|tokens?|上下文|コンテキスト))?$/iu.exec(m[2].trim());
+  return size ? `${base} ${size[1]}${size[2].toUpperCase()}` : base;
+}
 
 export function ModelPill({
   current,
@@ -71,17 +86,21 @@ export function ModelPill({
   const unknown = !shown.model;
   const name = shown.model ?? (loading ? t("chat-modelpill.loading") : failed ? t("chat-modelpill.failed") : t("chat-modelpill.default_model"));
   const describe = (x: PillSetup) =>
-    [agentName(x.engine), x.model ?? name, x.provider, x.effort && effortTitle(x.effort), x.fast && t("chat-sessiondialogs.speed_fast")].filter(Boolean).join(" · ");
+    [agentName(x.engine, x.engineLabel), x.model ?? name, x.provider, x.effort && effortTitle(x.effort), x.fast && t("chat-sessiondialogs.speed_fast")].filter(Boolean).join(" · ");
   const title = pending
     ? t("chat-modelpill.current_and_next", { current: describe(current), next: describe(pending) })
     : [describe(current), failed && !unknown ? t("chat-modelpill.failed") : ""].filter(Boolean).join(" · ");
+  const short = pillShortName(name);
   const effort = shown.effort ? effortTitle(shown.effort) : "";
   // what the next message runs on, before its model: the engine when it changes (Cindy's case), else the launcher
   // (Persona's in-session switch, #5035)
-  const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine) : pending.provider) : "";
-  const label = pending
-    ? t(effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending", { agent: target, model: name, effort })
-    : t(effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria", { model: name, effort });
+  const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine, pending.engineLabel) : pending.provider) : "";
+  const label = t(
+    pending
+      ? (effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending")
+      : (effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria"),
+    { agent: target, model: name, effort },
+  );
 
   const body: ReactNode = (
     <>
@@ -97,10 +116,15 @@ export function ModelPill({
       )}
       {/* the name gives way first (a far larger shrink than the effort's): narrow, the effort truncates only once the
           name has no room left */}
-      <span title={name} className={cx("min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", ULTRA_HIDDEN)}>{name}</span>
+      <span title={name} className={cx("min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:max-w-[108px]", short !== name && "@max-[600px]/composer:hidden", ULTRA_HIDDEN)}>{name}</span>
+      {/* narrow, the name without its bracketed qualifier, a context size kept short (the tooltip keeps all of it): the
+          108 px would cut it there */}
+      {short !== name && (
+        <span title={name} data-pill-short className={cx("hidden min-w-0 shrink-[1000] truncate text-ink @max-[600px]/composer:block @max-[600px]/composer:max-w-[108px]", ULTRA_HIDDEN)}>{short}</span>
+      )}
       {/* the engine's mark is the separator before the effort: no "·" */}
       <span aria-hidden data-pill-engine={shown.engine} className={cx("ml-1 flex shrink-0 items-center @max-[520px]/composer:scale-[0.917]", ULTRA_HIDDEN)}>
-        <AgentMark agent={shown.engine} size={12} decorative className="text-ink-2" />
+        <AgentMark agent={shown.engine} label={shown.engineLabel} size={12} decorative className="text-ink-2" />
       </span>
       {shown.effort && (
         <span title={effort} data-pill-effort className={cx("shrink-0 whitespace-nowrap text-ink @max-[600px]/composer:min-w-0 @max-[600px]/composer:shrink @max-[600px]/composer:truncate", ULTRA_HIDDEN)}>
@@ -117,7 +141,9 @@ export function ModelPill({
   const shell = cx(
     // Cindy's bare toolbar pill: no frame at rest, the capsule shows on hover and while its panel is open
     "flex h-[30px] max-w-[min(320px,100%)] min-w-[72px] shrink items-center rounded-full border border-transparent px-2.5 text-[13px] leading-none whitespace-nowrap transition-colors duration-150",
-    "@max-[600px]/composer:w-[148px] @max-[520px]/composer:text-[12px] @max-[520px]/composer:[--provider-mark:14.2px] @max-[420px]/composer:min-w-[64px]",
+    // narrow, it still takes the width its words need (a fixed width cut "Opus 5.5" to "Opus …" beside free room) and
+    // shrinks, the name first, only when the row is short of room
+    "@max-[520px]/composer:text-[12px] @max-[520px]/composer:[--provider-mark:14.2px] @max-[420px]/composer:min-w-[64px]",
     // under 420 px the tile and the chevron: 64 px, as the pill always was there; only a waiting switch's clock before
     // them makes it grow to hold it
     pending ? "@max-[420px]/composer:w-auto" : "@max-[420px]/composer:w-[64px]",
@@ -157,15 +183,15 @@ export function ModelPill({
 }
 
 /** An Agent's pill: what the session runs, and its panel. Loads the session's own model list once, for the name its list
- *  gives the model and to say when that list can't be read. It opens where the model or the effort can change, or the
- *  engine (a Codex Agent in a terminal on a hub that moves it to Claude Code, #5054). */
+ *  gives the model and to say when that list can't be read. It opens where the model or effort can change, and for Codex
+ *  to explain unsupported effort controls (including a terminal Agent that may switch engines, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
-  const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
-  const opens = switches.model || switches.effort || engineSwitch;
+  const view = pillView(session, modelList(mid, own));
+  const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
   }, [opens, mid, own]);
@@ -190,7 +216,6 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
     if (target && target !== own) void readModels(mid, target);
   }, [target, own, mid]);
 
-  const view = pillView(session, modelList(mid, own));
   const pending = pendingView(session, (name) => modelList(mid, name));
   if (!opens && !view.model) return null;
   const workflow = ultracodeOn(session) ? {} : view.engine === "codex" && session.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;

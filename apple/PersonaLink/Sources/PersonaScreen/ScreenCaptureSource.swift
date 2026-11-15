@@ -3,7 +3,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
-import PersonaScreenKit
+import PersonaScreenCore
 @preconcurrency import ScreenCaptureKit // SCShareableContent and SCStream predate Sendable; used only on `queue`
 import VideoToolbox
 
@@ -24,6 +24,11 @@ import VideoToolbox
 /// size), then `format` and a keyframe. No new `hello`; the
 /// stream and the node's and hub's legs don't notice. `encoding` tells the phone what runs after each change.
 ///
+/// Idle refinement (#3954, for a phone that sets a band): 300 ms after the screen stops changing, the latest captured
+/// picture is encoded again at a boosted bitrate, up to three times, flagged `refinement`, while the link is calm
+/// (`Refinement`). It holds that one picture, so capture gets one more buffer (queue depth 4). Refinement frames' reports
+/// stay out of the rate controller's numbers.
+///
 /// Everything it holds is touched only on `queue`: ScreenCaptureKit delivers frames there, and VideoToolbox's output
 /// and every incoming message hop onto it. That confinement is why it is `@unchecked Sendable`. `generation` counts
 /// (re)starts, so a completion from a capture that has since been replaced does nothing.
@@ -39,6 +44,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     private var codec = "h264"
     private var rate = RateController(cap: 0)
     private var generation = 0
+    /// Whether a new configuration can go to the stream yet (#7856): not before `startCapture` has completed, when
+    /// ScreenCaptureKit can lose it. A change waits in `config` and is applied when capture has started.
+    private var configGate = CaptureConfigGate()
     /// The last frame's number; frames count from 1 for the whole helper run.
     private var number: UInt32 = 0
     /// When the last frame or heartbeat went out, µs on the monotonic clock.
@@ -61,6 +69,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     private var inFlight = 0
     /// The last `encoding` sent, so an update that changed nothing sends none.
     private var announced: EncodingMessage?
+    /// Idle refinement (#3954): when a pass is due, the latest picture captured (sent or skipped), and the passes'
+    /// frame numbers until the phone reports on them. Only for a phone that set a band (`request.tiered`).
+    private var refiner = Refinement()
+    private var latestImage: CVPixelBuffer?
+    private var refinementFrames: Set<UInt32> = []
+    /// The encoder runs at a refinement pass's boosted bitrate until that pass is out.
+    private var boosted = false
+    private var refineTimer: DispatchSourceTimer?
+
+    /// Refinement runs for this request: the phone set a bitrate band (#6396), so it adapts with the tiers.
+    private var refining: Bool { request?.tiered == true }
 
     // MARK: ScreenSource
 
@@ -131,19 +150,27 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     func receive(report: ReceiverReport) {
         queue.async { [self] in
             timing.reported(frame: report.lastFrame, at: Self.nowMicros)
-            let decision = rate.receive(report, now: Self.nowMicros)
+            let refinement = refinementFrames.remove(report.lastFrame) != nil
+            // A pass that came back queued: the link has no room for more of them now.
+            if refinement, let q = rate.queueing(of: report), q > RateController.cutAboveMicros { refiner.queued() }
+            let decision = rate.receive(report, now: Self.nowMicros, refinement: refinement)
             if let kbps = decision.kbps { setBitrate(kbps) }
             if decision.keyframe { wantKeyframe = true }
         }
     }
 
     func stop() {
-        queue.sync {
+        // A work item, not a trailing closure: a non-escaping closure handed to `sync` as a block makes the compiler check
+        // that it didn't escape, with this file's full path as the place, so the helper's bytes would depend on where it
+        // was built and its Screen Recording grant wouldn't survive a rebuild elsewhere (#7927, mac-link.sh verify-screen).
+        queue.sync(execute: DispatchWorkItem { [self] in
             timer?.cancel()
             timer = nil
+            refineTimer?.cancel()
+            refineTimer = nil
             stopCapture()
             request = nil
-        }
+        })
     }
 
     // MARK: Capture
@@ -193,7 +220,8 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         config.height = size.height
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange // what the encoder takes, no conversion
-        config.queueDepth = 3 // gate ①: 1 starves ScreenCaptureKit, more only adds latency
+        // Gate ①: 1 starves ScreenCaptureKit, more only adds latency. Refinement holds the latest picture, so one more.
+        config.queueDepth = refining ? 4 : 3
         config.showsCursor = true
         config.capturesAudio = false
 
@@ -226,12 +254,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         announce()
         lastSent = Self.nowMicros
         let gen = generation
+        configGate.reset()
         stream.startCapture { [weak self] error in
-            guard let self, let error else { return }
+            guard let self else { return }
             self.queue.async {
                 guard gen == self.generation else { return }
-                self.warn("start capture: \(error)")
-                self.pause(CGPreflightScreenCaptureAccess() ? "busy" : "permission")
+                if let error {
+                    self.warn("start capture: \(error)")
+                    self.pause(CGPreflightScreenCaptureAccess() ? "busy" : "permission")
+                    return
+                }
+                if self.configGate.captureStarted() { self.applyConfig() } // a change made while it started (#7856)
             }
         }
     }
@@ -239,6 +272,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// Stops the stream and the encoder, if any. Bumps `generation`, so their late completions do nothing.
     private func stopCapture() {
         generation += 1
+        configGate.reset()
         timing = TimingWindow()
         if let stream {
             self.stream = nil
@@ -251,6 +285,10 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         }
         inFlight = 0
         encodedSize = nil
+        latestImage = nil
+        refiner.reset()
+        refinementFrames.removeAll()
+        boosted = false
     }
 
     /// Stops capture and tells the phone why, once per reason.
@@ -299,7 +337,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// after a `format`; a frame ScreenCaptureKit still has at the old size is scaled by VideoToolbox. Not capturing
     /// (paused, or still opening): nothing now, the next `begin` opens at the new size.
     private func reconfigure(resized: Bool, fpsChanged: Bool) {
-        guard let stream, let config, let request else { return }
+        guard stream != nil, let config, let request else { return }
         let fps = CapturePlan.fps(request.fps)
         var changed = fpsChanged
         if resized, let points = displayPoints, let pixels = displayPixels {
@@ -315,6 +353,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                 encoder = made
                 encodedSize = size
                 wantKeyframe = true
+                boosted = false
+                // A still screen sends no frame at the new size: the first refinement pass carries its keyframe.
+                refiner.changed(at: Self.nowMicros)
                 config.width = size.width
                 config.height = size.height
                 changed = true
@@ -327,6 +368,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                 VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: NSNumber(value: fps))
             }
         }
+        if configGate.changed() { applyConfig() } // else once startCapture has completed (#7856)
+    }
+
+    /// Gives the stream its configuration as it is now.
+    private func applyConfig() {
+        guard let stream, let config else { return }
         stream.updateConfiguration(config) { [weak self] error in
             if let error { self?.warn("reconfigure: \(error)") }
         }
@@ -346,7 +393,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
         // On `queue`.
-        guard type == .screen, stream === self.stream, let encoder, sample.isValid,
+        guard type == .screen, stream === self.stream, encoder != nil, sample.isValid,
               let info = (CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false)
                   as? [[SCStreamFrameInfo: Any]])?.first,
               (info[.status] as? Int) == SCFrameStatus.complete.rawValue, // idle frames: nothing changed
@@ -356,11 +403,25 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         let now = Self.nowMicros
         // Display time to here: about 0, or below it (ScreenCaptureKit hands frames over before their display time).
         let captureMicros = Int64(bitPattern: now &- captured)
+        if refining {
+            // The screen changed: the newest picture is what a still moment refines, even one skipped below.
+            latestImage = image
+            refiner.changed(at: now)
+        }
         guard rate.admit(now: now) else {
             timing.skippedFrame()
             return
         }
+        if boosted { // a refinement pass's bitrate ends with it
+            boosted = false
+            setBitrate(rate.kbps)
+        }
+        encode(image, at: sample.presentationTimeStamp, captured: captured, captureMicros: captureMicros, refinement: false)
+    }
 
+    /// Hands one picture to the encoder; its output goes out through `emit`.
+    private func encode(_ image: CVPixelBuffer, at pts: CMTime, captured: UInt64, captureMicros: Int64, refinement: Bool) {
+        guard let encoder else { return }
         var options: CFDictionary?
         if wantKeyframe {
             options = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary
@@ -370,7 +431,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         let encoding = Self.nowMicros
         inFlight += 1
         timing.encoderHolds(inFlight)
-        let status = VTCompressionSessionEncodeFrame(encoder, imageBuffer: image, presentationTimeStamp: sample.presentationTimeStamp,
+        let status = VTCompressionSessionEncodeFrame(encoder, imageBuffer: image, presentationTimeStamp: pts,
                                                      duration: .invalid, frameProperties: options,
                                                      infoFlagsOut: nil) { [weak self] status, _, out in
             let encodeMicros = Int64(bitPattern: Self.nowMicros &- encoding)
@@ -378,15 +439,39 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             self.queue.async {
                 guard gen == self.generation else { return }
                 self.inFlight = max(0, self.inFlight - 1)
+                if refinement, self.boosted { // back to the stream's bitrate as soon as the pass is out
+                    self.boosted = false
+                    self.setBitrate(self.rate.kbps)
+                }
+                // Over budget, VideoToolbox drops the whole frame (no sample, no error): the pass is tried again.
+                if refinement, status != noErr || out == nil { self.refiner.dropped() }
                 guard status == noErr, let out else { return }
-                self.emit(out, captured: captured, captureMicros: captureMicros, encodeMicros: encodeMicros)
+                self.emit(out, captured: captured, captureMicros: captureMicros, encodeMicros: encodeMicros,
+                          refinement: refinement)
             }
         }
-        if status != noErr { inFlight = max(0, inFlight - 1) }
+        if status != noErr {
+            inFlight = max(0, inFlight - 1)
+            if refinement { refiner.dropped() }
+        }
+    }
+
+    /// Every 100 ms while capturing for a phone with a band: a refinement pass when one is due, the link is calm and the
+    /// encoder holds nothing (a pass never waits behind a frame, nor a frame behind a pass).
+    private func refineTick() {
+        guard refining, !userPaused, pausedReason == nil, stream != nil, encoder != nil, inFlight == 0,
+              let image = latestImage else { return }
+        let now = Self.nowMicros
+        guard refiner.due(at: now, calm: rate.calm) else { return }
+        refiner.passed(at: now)
+        boosted = true
+        setBitrate(Refinement.kbps(target: rate.kbps))
+        encode(image, at: CMClockGetTime(CMClockGetHostTimeClock()), captured: now, captureMicros: 0, refinement: true)
     }
 
     /// One encoded sample: `format` first when the parameter sets changed, then the `frame`.
-    private func emit(_ sample: CMSampleBuffer, captured: UInt64, captureMicros: Int64, encodeMicros: Int64) {
+    private func emit(_ sample: CMSampleBuffer, captured: UInt64, captureMicros: Int64, encodeMicros: Int64,
+                      refinement: Bool) {
         let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[CFString: Any]]
         let keyframe = !((attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false)
         if let description = sample.formatDescription {
@@ -399,11 +484,16 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         guard let block = sample.dataBuffer, let bytes = try? block.dataBytes() else { return }
         number &+= 1
         let writing = Self.nowMicros
-        send(.frame(VideoFrame(number: number, captureMicros: captured, flags: keyframe ? .keyframe : [], sample: bytes)))
+        var flags: VideoFrame.Flags = keyframe ? .keyframe : []
+        if refinement {
+            flags.insert(.refinement)
+            refinementFrames.insert(number)
+        }
+        send(.frame(VideoFrame(number: number, captureMicros: captured, flags: flags, sample: bytes)))
         lastSent = Self.nowMicros
         // The write waits while the stream's window is full: how long is the link pushing back (#6396).
         timing.sent(number: number, at: lastSent, captureMicros: captureMicros, encodeMicros: encodeMicros, bytes: bytes.count,
-                    blockedMicros: Int64(bitPattern: lastSent &- writing))
+                    blockedMicros: Int64(bitPattern: lastSent &- writing), refinement: refinement)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -425,6 +515,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         timer.setEventHandler { [weak self] in self?.tick() }
         timer.resume()
         self.timer = timer
+
+        let refine = DispatchSource.makeTimerSource(queue: queue)
+        refine.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(20))
+        refine.setEventHandler { [weak self] in self?.refineTick() }
+        refine.resume()
+        refineTimer = refine
     }
 
     private func tick() {

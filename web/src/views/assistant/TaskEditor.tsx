@@ -82,8 +82,18 @@ export function TaskEditor({
   const [cronProblem, setCronProblem] = useState("");
   const problem = validateTask(draft, now) || (draft.repeat === "cron" && cronProblem ? cronProblem : null);
   const changed = !saved || !sameTask(saved, draft);
-  const set = (patch: Partial<Task>) => setDraft((d) => ({ ...d, ...patch }));
+  /** The user changed a field since it opened: a new task says what is missing only from then on; until then a grey
+   *  Add is enough (a blank one opened in red before anything was typed). */
+  const [edited, setEdited] = useState(false);
+  const edit = (next: (d: Task) => Task) => {
+    setEdited(true);
+    setDraft(next);
+  };
+  const set = (patch: Partial<Task>) => edit((d) => ({ ...d, ...patch }));
   const working = busy !== "";
+  /** The time zone the hub reads a daily time and a cron expression in, named as the list's footer names it; "your time
+   *  zone" only when the hub doesn't say. */
+  const zone = useStore((s) => s.assistant?.timezone);
 
   /** Saves what changed (adds a new one); returns the task as the hub has it, null when it didn't. */
   const persist = async (): Promise<Task | null> => {
@@ -97,7 +107,8 @@ export function TaskEditor({
       ? await api<{ task: Task }>(`/assistant/tasks/${enc(saved.id)}`, { method: "PUT", json: body })
       : await api<{ task: Task }>("/assistant/tasks", { method: "POST", json: body });
     setSaved(r.task);
-    setDraft((d) => ({ ...d, id: r.task.id }));
+    // Run now may fail after saving. Keep the displayed note and its saved revision in sync if the editor stays open.
+    setDraft((d) => ({ ...d, id: r.task.id, state_note: r.task.state_note }));
     onSaved(r.task);
     return r.task;
   };
@@ -181,7 +192,7 @@ export function TaskEditor({
       {!creating && (
         <Button tone="quiet" icon="trash" className="text-red enabled:hover:text-red" disabled={working} onClick={() => setConfirmDelete(true)}>{t("assistant-taskeditor.delete")}</Button>
       )}
-      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && problem ? problem : ""}</span>
+      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && (edited || !creating) && problem ? problem : ""}</span>
       <Button tone="quiet" disabled={working} onClick={onClose}>{t("common.cancel")}</Button>
       <Button tone="primary" busy={busy === "save"} disabled={working || !!problem || (!creating && !changed)} onClick={() => void save()}>{creating ? t("assistant-taskeditor.add") : t("common.save")}</Button>
     </>
@@ -190,6 +201,7 @@ export function TaskEditor({
   const next = nextRun(saved ?? draft);
   const last = saved ? lastRunText(saved, now) : null;
   const own = saved?.run_session_id;
+  const freshEachRun = draft.repeat !== "once" && draft.fresh_each_run;
 
   return (
     <Dialog open onClose={close} width={600} title={creating ? t("assistant-taskeditor.new_title") : taskTitle(saved ?? draft)} footer={footer}>
@@ -219,7 +231,7 @@ export function TaskEditor({
               <Segmented<Repeat>
                 label={t("assistant-taskeditor.repeat")}
                 value={draft.repeat}
-                onChange={(r) => setDraft((d) => withRepeat(d, r, new Date()))}
+                onChange={(r) => edit((d) => withRepeat(d, r, new Date()))}
                 options={[
                   { v: "once", label: t("assistant-taskeditor.repeat_once") },
                   { v: "daily", label: t("assistant-taskeditor.repeat_daily") },
@@ -239,9 +251,13 @@ export function TaskEditor({
                 : draft.repeat === "once"
                   ? t("assistant-taskeditor.once_hint")
                   : draft.repeat === "daily"
-                    ? t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
+                    ? zone
+                      ? t("assistant-taskeditor.daily_hint_zone", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--", zone })
+                      : t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
                     : draft.repeat === "cron"
-                    ? t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
+                    ? zone
+                      ? t("assistant-taskeditor.cron_hint_named", { zone })
+                      : t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
                     : everyOk(draft.every_minutes)
                       ? t("assistant-taskeditor.interval_hint", { every: everyLabel(draft.every_minutes ?? 0) })
                       : t("assistant-taskeditor.interval_hint_blank")}
@@ -266,6 +282,31 @@ export function TaskEditor({
 
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_run")}</SectionTitle>
+            {draft.repeat !== "once" && (
+              <details className="mb-3">
+                <summary className="cursor-pointer">{t("assistant-taskeditor.continuity")}</summary>
+                <label className="mt-2 flex min-h-11 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.fresh_each_run)}
+                    onChange={(e) => set({ fresh_each_run: e.target.checked })}
+                  />
+                  {t("assistant-taskeditor.fresh_each_run")}
+                </label>
+                <Field label={t("assistant-taskeditor.state_note")}>
+                  <textarea
+                    className={textareaClass}
+                    rows={3}
+                    disabled={working}
+                    value={draft.state_note?.text ?? ""}
+                    onChange={(e) => set({
+                      state_note: { revision: draft.state_note?.revision ?? 0, updated_at: draft.state_note?.updated_at ?? "", text: e.target.value },
+                    })}
+                  />
+                </Field>
+                <p className={HINT}>{t("assistant-taskeditor.state_note_hint")}</p>
+              </details>
+            )}
             <div>
               <Field label={t("assistant-taskeditor.permission_label")}>
                 <select
@@ -316,7 +357,7 @@ export function TaskEditor({
               </p>
             ) : (
               <p className={HINT}>
-                {t("assistant-taskeditor.permission_hint")}
+                {t("assistant-taskeditor.permission_hint", { mode: t("lib-session-actions.mode_auto") })}
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
             )}
@@ -341,7 +382,7 @@ export function TaskEditor({
               <Segmented<Push>
                 label={t("assistant-taskeditor.section_push")}
                 value={draft.push ?? ""}
-                onChange={(p) => setDraft((d) => withPush(d, p))}
+                onChange={(p) => edit((d) => withPush(d, p))}
                 options={[
                   { v: "", label: t("assistant-taskeditor.push_every") },
                   { v: "asked", label: t("assistant-taskeditor.push_asked") },
@@ -379,13 +420,16 @@ export function TaskEditor({
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_chat")}</SectionTitle>
             <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
-              {origin && draft.push !== "asked" && (
+              {origin && draft.push !== "asked" && !freshEachRun && (
                 <div className="flex items-center gap-3 px-3.5 py-2.5">
                   <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("assistant-taskeditor.resume_chat")}</span>
                   <Switch checked={!!draft.session_id} label={t("assistant-taskeditor.resume_chat")} onChange={(on) => set({ session_id: on ? origin : undefined })} />
                 </div>
               )}
-              {!draft.session_id &&
+              {freshEachRun && own && (
+                <LinkRow icon="chat" label={t("assistant-taskeditor.view_last")} onClick={() => open(own)} />
+              )}
+              {!freshEachRun && !draft.session_id &&
                 (own ? (
                   <>
                     <LinkRow icon="chat" label={t("assistant-taskeditor.same_chat")} onClick={() => open(own)} />
@@ -399,7 +443,9 @@ export function TaskEditor({
                 ))}
             </div>
             <p className={HINT}>
-              {draft.session_id
+              {freshEachRun
+                ? t("assistant-taskeditor.fresh_each_run")
+                : draft.session_id
                 ? t("assistant-taskeditor.chat_hint_resume")
                 : own
                   ? t("assistant-taskeditor.chat_hint_own")
