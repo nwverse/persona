@@ -33,8 +33,10 @@ export interface ProviderModel extends ReportedMeta {
 
 /** What a gateway reported of a model that the form does not show (#8778): its output limit, every thinking level in
  *  its own words when some fall outside `efforts`, that it takes none, and whether it takes images and tools. Carried
- *  through the form and saved as it came: the hub keeps `all_efforts` and `no_effort` only while they agree with the
- *  levels saved (assistant/models_discover_meta.go settleSavedEfforts), so levels changed by hand need nothing here. */
+ *  through the form and saved as it came, `no_effort` always named so the hub clears what is left out (an app that
+ *  names none of these keeps what is stored, #8796); the hub keeps `all_efforts` and `no_effort` only while they agree
+ *  with the levels saved (assistant/models_discover_meta.go settleSavedEfforts), so levels changed by hand need
+ *  nothing here. */
 export interface ReportedMeta {
   max_output_tokens?: number;
   all_efforts?: string[];
@@ -265,8 +267,7 @@ export function formFromView(v: ProviderView): ProviderForm {
 export const AUTO_CHECK = 8;
 
 /** Discovered models merged in: new ones added unchecked (all checked when nothing was there and the list is short),
- *  what was typed kept; what the gateway reports now replaces what a row had of it (the hub keeps a model's stored
- *  report when none comes). */
+ *  what was typed kept; what the gateway reports now replaces what a row had of it, nothing included. */
 export function mergeDiscovered(models: FormModel[], found: ProviderModel[], chat = false): FormModel[] {
   const out = [...models];
   const first = models.length === 0 && found.length <= AUTO_CHECK;
@@ -279,8 +280,7 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
       if (!out[i].context_window && m.context_window) {
         out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
       }
-      const meta = metaOf(m);
-      if (Object.keys(meta).length) out[i] = { ...out[i], meta };
+      out[i] = { ...out[i], meta: metaOf(m) };
     }
   }
   return out;
@@ -467,7 +467,7 @@ function modelsOf(f: ProviderForm): ProviderModel[] {
       if (int(m.context_window)) out.context_window = int(m.context_window);
       if (m.efforts.length) out.efforts = [...m.efforts];
       if (m.default_effort) out.default_effort = m.default_effort;
-      return { ...out, ...metaOf(m.meta) };
+      return { ...out, ...metaOf(m.meta), no_effort: !!m.meta.no_effort };
     });
 }
 
@@ -554,6 +554,9 @@ export function probeBody(f: ProviderForm, stored: string | null, model?: string
   const b: Record<string, unknown> = { base_url: f.base_url.trim(), api: f.api };
   if (asksAuth(f)) b.auth = chosenAuth(f) || "auto";
   if (stored) b.name = stored;
+  // the protocol a gateway's capability report is asked about follows the agent (a Codex launcher's api is messages);
+  // always named, so a stored provider's agent never stands in for the one the form has now
+  b.agent = f.kind === "api" ? "" : f.agent;
   if (f.api_key.trim() && !f.key_by_reference) b.api_key = f.api_key.trim();
   if (!(f.kind === "api" && f.api === "chat") && f.headers_touched) b.headers = f.headers.trim();
   if (model !== undefined) b.model = model;
