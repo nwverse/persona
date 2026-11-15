@@ -99,7 +99,7 @@ Time Profiler (main thread, "Hide system libraries" off) or `sample <pid>` durin
 
 **Rule.** Keychain reads (`SecItemCopyMatching`) happen once per launch or change, off the main thread or before the first
 frame is needed, and the result is cached in memory. Values that change often (scroll positions, drafts, split frames,
-counters) never go into UserDefaults: use `StateCache` (`apple/Shared/StateCache.swift`). Heavy views read settings
+counters) never go into UserDefaults: use `StateCache` (`apple/Packages/PersonaWire/Sources/PersonaWire/StateCache.swift`). Heavy views read settings
 through `@StoredValue` (`apple/Persona/App/StoredValue.swift`), not `@AppStorage`. Never call `synchronize()`.
 
 **Why.** A keychain read is IPC to `securityd` and can take tens of milliseconds, more while the device is locking or
@@ -111,7 +111,7 @@ unlocking. Every UserDefaults write, for any key, makes every `@AppStorage` view
 - Fixed before: `AgentSync` wrote UserDefaults on every chat fetch (`docs/apple/ios-state.md`, "Current data flow").
 - `apple/Persona/App/AppModel.swift:277`: writes UserDefaults on every set of the current conversation, changed or not.
 
-**Do.** One reader, `Keychain` (`apple/Shared/Keychain.swift`), called from the code that loads credentials at launch or
+**Do.** One reader, `Keychain` (`apple/Packages/PersonaWire/Sources/PersonaWire/Keychain.swift`), called from the code that loads credentials at launch or
 pairing; keep the value in the model and pass it down. For new persisted state pick `StateCache` first.
 
 **Check.** The isolation lint counts `SecItemCopyMatching` on the main actor and the ratchet counts `synchronize()`; `AppStorageRatchetTests` keeps the list of files
