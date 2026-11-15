@@ -1906,8 +1906,19 @@ struct StarterModesMenu: View {
 /// search still open (Knowledge), UIKit left the bar showing over the root, with the root's title and ~106 pt tall: the top
 /// bar was pushed down under it, and a tap where the switch belongs hit the empty bar (2026-11-01). SwiftUI still has
 /// the bar hidden, so it never hides it again.
+///
+/// Only while the conversation is the root (#8359): in the Sidebar layout another root (a place, an Agent's chat) takes
+/// its place in the same stack, and a hide still waiting from the conversation's last update hid that root's bar, its
+/// title and, on the open Duo upright, the button that brings the sidebar back.
 private struct RootBarHidden: UIViewRepresentable {
     var atRoot: Bool
+
+    /// The conversation is still on screen: cleared when it is taken away (`dismantleUIView`).
+    final class Coordinator {
+        var live = true
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
@@ -1915,11 +1926,17 @@ private struct RootBarHidden: UIViewRepresentable {
         return v
     }
 
+    static func dismantleUIView(_ v: UIView, coordinator: Coordinator) {
+        coordinator.live = false
+    }
+
     func updateUIView(_ v: UIView, context: Context) {
         guard atRoot else { return }
+        let coordinator = context.coordinator
         // Now, and once the pop and the search's own dismissal have finished.
         for delay in [0.0, 0.4, 0.9] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v] in
+                guard coordinator.live, v?.window != nil else { return }
                 var r: UIResponder? = v
                 while let next = r?.next, !(next is UIViewController) { r = next }
                 guard let nav = (r?.next as? UIViewController)?.navigationController,

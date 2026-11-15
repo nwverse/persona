@@ -118,6 +118,9 @@ final class SidebarRootsUITests: XCTestCase {
         var next = settled("recordings", "Recordings from the conversation")
         XCTAssertEqual(next.path, 0, "Recordings is not the root")
         assertSwitched(now, next, "Recordings from the conversation")
+        // Its own bar (its title; on the open Duo upright the button that brings the sidebar back): not hidden by a hide
+        // the conversation still had waiting (`RootBarHidden`).
+        XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 3), "Recordings has no navigation bar:\n\(app.debugDescription)")
         shot("1-recordings")
         now = next
 

@@ -952,7 +952,9 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   folds and brings back the split's column (`SplitShowList.hide`). The shaded row follows the root, also while drilled in
   (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from the root). Laid over the page (the open Duo upright) the
   column slides away on a pick, the only motion. DEBUG: `-probes YES` writes `probe.sidebar-page` (the root, the path, how
-  many animated navigation transitions ran; `SidebarRootsUITests`).
+  many animated navigation transitions ran; `SidebarRootsUITests`). The conversation's `RootBarHidden` (which hides the
+  stack's bar again after a pop) stops once the conversation is taken away: a hide still waiting from its last update hid
+  the next root's bar, its title and, on the open Duo upright, the button that brings the sidebar back.
 - **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
   drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
   of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
