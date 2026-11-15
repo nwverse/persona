@@ -882,6 +882,26 @@ type AuthPrompt struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
+// SettingsCheckParams: settings.check (manifest settings_check): the configuration and secrets as a change would
+// leave them, before the hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+type SettingsCheckParams struct {
+	// The whole configuration as it would be saved, the schema's defaults filled in.
+	Config  json.RawMessage   `json:"config"`
+	Secrets map[string]string `json:"secrets"`
+	// The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+	// permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+	// ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's ordinary
+	// proxy (an older hub sends none).
+	Proxy string `json:"proxy,omitempty"`
+}
+
+// SettingsCheckResult: settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every
+// secret out of it and cuts it to 300 characters).
+type SettingsCheckResult struct {
+	Ok    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 // Values of HubRole.
 const (
 	HubRoleCenter = "center"
@@ -895,10 +915,11 @@ var HubRoles = []string{"center", "member"}
 const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
+	HubCapabilityToolImages      = "tool_images"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -3365,11 +3386,27 @@ type ConnectorCallParams struct {
 // ConnectorCallResult: tools.call and actions.do.
 type ConnectorCallResult struct {
 	Text string `json:"text,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+	// initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+	// pixels; the hub leaves out any over a limit and says so after the text.
+	Images []ConnectorToolImage `json:"images,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
 	// Leave it out when there is none.
 	MessageRef string `json:"message_ref,omitempty"`
+}
+
+// ConnectorToolImage: one picture of a tools.call answer (ConnectorCallResult.images).
+type ConnectorToolImage struct {
+	// image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes.
+	Mime string `json:"mime,omitempty"`
+	// The bytes, base64 (standard, with padding).
+	Data string `json:"data"`
+	// One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+	// post); the hub keeps the first 200 characters of its first line.
+	Caption string `json:"caption,omitempty"`
 }
 
 // ConnectorAction: A write as the card names it: visible says who will see it.
@@ -6038,6 +6075,8 @@ var newDef = map[string]func() any{
 	"AuthStepParams":                func() any { return new(AuthStepParams) },
 	"AuthField":                     func() any { return new(AuthField) },
 	"AuthPrompt":                    func() any { return new(AuthPrompt) },
+	"SettingsCheckParams":           func() any { return new(SettingsCheckParams) },
+	"SettingsCheckResult":           func() any { return new(SettingsCheckResult) },
 	"InitializeParams":              func() any { return new(InitializeParams) },
 	"ExportedContribution":          func() any { return new(ExportedContribution) },
 	"HubInfo":                       func() any { return new(HubInfo) },
@@ -6206,6 +6245,7 @@ var newDef = map[string]func() any{
 	"ConnectorTools":                func() any { return new(ConnectorTools) },
 	"ConnectorCallParams":           func() any { return new(ConnectorCallParams) },
 	"ConnectorCallResult":           func() any { return new(ConnectorCallResult) },
+	"ConnectorToolImage":            func() any { return new(ConnectorToolImage) },
 	"ConnectorAction":               func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":       func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":             func() any { return new(ConnectorDoParams) },
