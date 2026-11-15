@@ -1,5 +1,6 @@
 // "Session info" (iOS SessionInfoSheet), a chunk of its own: SessionDialogs.tsx loads it on the dialog's first open, so its
-// fetch, its rows and the Persona conversation's standing permissions are not the first screen's (#8261).
+// fetch, its rows and the Persona conversation's standing permissions are not the first screen's, nor their words (the
+// chat-sessioninfo namespace, which the first screen's catalog leaves to the rest) (#8261).
 import { useEffect, useState } from "react";
 import { api, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, shortPath } from "../../lib/format";
@@ -57,9 +58,9 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
   const mode = listed ? listedModeOption(info?.permission_mode && listed.includes(info.permission_mode) ? info.permission_mode : "default").title : modeTitle(info?.permission_mode);
   const groups: { title: string; rows: [string, string | undefined, boolean?][] }[] = info
     ? [
-        { title: t("chat-sessiondialogs.group_run"), rows: [[t("chat-sessiondialogs.model"), info.model], [t("chat-sessiondialogs.launcher"), info.launcher || session.launcher], [t("chat-sessiondialogs.permission_mode"), mode], [t("chat-sessiondialogs.effort"), effortTitle(info.effort)], [t("chat-sessiondialogs.version"), info.version, true]] },
-        { title: t("chat-sessiondialogs.group_usage"), rows: [[t("chat-sessiondialogs.context"), count(counted?.context_tokens) && `${count(counted?.context_tokens)} tokens`], [t("chat-sessiondialogs.output"), count(counted?.output_tokens) && `${count(counted?.output_tokens)} tokens`], [t("chat-sessiondialogs.turns"), counted?.turns !== undefined ? String(counted.turns) : ""], [t("chat-sessiondialogs.compaction"), counted?.compactions ? t("chat-sessiondialogs.compactions", { count: counted.compactions }) : ""], [t("chat-sessiondialogs.started"), info.started_at && ago(info.started_at)], [t("chat-sessiondialogs.last_activity"), info.last_activity && ago(info.last_activity)]] },
-        { title: t("chat-sessiondialogs.group_location"), rows: [[t("chat-sessiondialogs.machine"), machineName], [t("chat-sessiondialogs.folder"), info.cwd ? shortPath(info.cwd) : undefined, true], [t("chat-sessiondialogs.branch"), info.git_branch, true], [t("chat-sessiondialogs.transcript"), info.transcript_path ? shortPath(info.transcript_path) : undefined, true]] },
+        { title: t("chat-sessioninfo.group_run"), rows: [[t("chat-sessioninfo.model"), info.model], [t("chat-sessioninfo.launcher"), info.launcher || session.launcher], [t("chat-sessiondialogs.permission_mode"), mode], [t("chat-sessioninfo.effort"), effortTitle(info.effort)], [t("chat-sessioninfo.version"), info.version, true]] },
+        { title: t("chat-sessioninfo.group_usage"), rows: [[t("chat-sessioninfo.context"), count(counted?.context_tokens) && `${count(counted?.context_tokens)} tokens`], [t("chat-sessioninfo.output"), count(counted?.output_tokens) && `${count(counted?.output_tokens)} tokens`], [t("chat-sessioninfo.turns"), counted?.turns !== undefined ? String(counted.turns) : ""], [t("chat-sessioninfo.compaction"), counted?.compactions ? t("chat-sessioninfo.compactions", { count: counted.compactions }) : ""], [t("chat-sessioninfo.started"), info.started_at && ago(info.started_at)], [t("chat-sessioninfo.last_activity"), info.last_activity && ago(info.last_activity)]] },
+        { title: t("chat-sessioninfo.group_location"), rows: [[t("chat-sessioninfo.machine"), machineName], [t("chat-sessiondialogs.folder"), info.cwd ? shortPath(info.cwd) : undefined, true], [t("chat-sessioninfo.branch"), info.git_branch, true], [t("chat-sessioninfo.transcript"), info.transcript_path ? shortPath(info.transcript_path) : undefined, true]] },
       ]
     : [];
 
@@ -67,22 +68,22 @@ export function SessionInfoDialog({ session, machineName, open, onClose }: { ses
     <Dialog
       open={open}
       onClose={onClose}
-      title={t("chat-sessiondialogs.info_title")}
+      title={t("chat-sessioninfo.info_title")}
       width={480}
       footer={
         <>
           <Button tone="quiet" icon="copy" onClick={() => copyText(session.session_id)}>
-            {t("chat-sessiondialogs.copy_session_id")}
+            {t("chat-sessioninfo.copy_session_id")}
           </Button>
           {externalLink(session) && (
             <Button tone="secondary" icon="external" onClick={() => openLink(externalLink(session)!)}>
-              {t("chat-sessiondialogs.open_in_lark")}
+              {t("chat-sessioninfo.open_in_lark")}
             </Button>
           )}
           {/* none for a runtime's session (resumeCommand): its runtime keeps it */}
           {!session.assistant && resumeCommand(session) && (
             <Button tone="secondary" icon="terminal" onClick={() => copyText(resumeCommand(session))}>
-              {t("chat-sessiondialogs.copy_resume_command")}
+              {t("chat-sessioninfo.copy_resume_command")}
             </Button>
           )}
         </>
