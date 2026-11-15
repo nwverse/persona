@@ -87,6 +87,13 @@ func TestDirectHTTPErrorRetainsSemanticsPastClippedText(t *testing.T) {
 	if requests != 1 || !IsContextTooLong(err) {
 		t.Fatalf("requests = %d, error = %v; want the full message's context classification", requests, err)
 	}
+	unknownBody := `{"padding":"` + strings.Repeat("x", 360) + `","error":{"code":"future_code","message":"quota exhausted"}}`
+	err, requests = directAPIError(t, "chat", 429, unknownBody)
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+	// Before full envelopes were parsed, wording beyond the clipped 300-byte body could not turn a plain 429 into quota.
+	requireDirectPause(t, err, ReasonBusy)
 }
 
 func TestDirectExplicitNoRetryAcrossProtocols(t *testing.T) {

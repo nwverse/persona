@@ -604,9 +604,6 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		code, message = gatewayErrorDetails([]byte(h.body))
 	}
 	body := strings.ToLower(h.body)
-	if message != "" {
-		body += "\n" + strings.ToLower(message) // unknown codes keep the wording fallback, past the clipped text too
-	}
 	codedReason, coded := limitReasonForCode(code, message)
 	switch {
 	case h.status == http.StatusPaymentRequired:
