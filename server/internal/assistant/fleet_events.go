@@ -95,6 +95,13 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		if s.ext == nil {
 			return map[string]any{"action": "cancel"}, true, nil
 		}
+		var p struct {
+			CallID json.RawMessage `json:"call_id"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitElicitContext(ctx, callID)
 		out, err := s.ext.AnswerComputerElicit(ctx, machine, params)
 		return out, true, err
 	case "interaction.create":
@@ -145,24 +152,35 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			Assistant bool   `json:"assistant"`
 			SessionID string `json:"session_id"`
 			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision  string `json:"revision"`
 		}
 		_ = json.Unmarshal(params, &p)
+		out := s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision)
 		// Only an assistant conversation defers tools: a guest, by the node's word or by the manager's own record
-		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go).
-		deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
-		tools := s.withToolLoading(ctx, s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest), deferring)
-		return map[string]any{"tools": tools}, true, nil
+		// (guest.go), has no ToolSearch to load one with (node/assistant_guest.go). An unchanged or failed answer
+		// carries no list to mark.
+		if tools, ok := out["tools"].([]proto.Tool); ok {
+			deferring := p.Assistant && !p.Guest && !s.isGuest(ctx, machine, p.SessionID)
+			out["tools"] = s.withToolLoading(ctx, tools, deferring)
+		}
+		return out, true, nil
 	case "mcp.call":
 		var p struct {
-			Name      string          `json:"name"`
-			Args      json.RawMessage `json:"args"`
-			SessionID string          `json:"session_id"`
-			Assistant bool            `json:"assistant"`
-			Guest     bool            `json:"guest"`
+			Name        string          `json:"name"`
+			Args        json.RawMessage `json:"args"`
+			SessionID   string          `json:"session_id"`
+			Assistant   bool            `json:"assistant"`
+			Guest       bool            `json:"guest"`
+			WaitUpdates bool            `json:"wait_updates"`
+			CallID      json.RawMessage `json:"call_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
 		}
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitContext(ctx, machine, callID, p.WaitUpdates)
+		defer s.endMCPWait(ctx)
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}
