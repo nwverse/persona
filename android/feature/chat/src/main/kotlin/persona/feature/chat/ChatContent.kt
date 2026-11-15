@@ -171,6 +171,8 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
                     markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
                     listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
+                    enabled = !LocalInPicture.current) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
                         // A card fence the hub's rules do not take as standalone (in a list or a quote): an example, drawn as
@@ -441,10 +443,6 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
         }
         is WorkItem.Tool -> {
             val call = step.call
-            persona.core.domain.lines.ChildSessionCards.session(call)?.let {
-                ChildSessionCard(it, assistant = style == ChatRenderStyle.Assistant)
-                return
-            }
             // A Workflow call whose run the session lists draws the run's card (#3435); otherwise the row it always was.
             if (call.name == "Workflow") LocalChatWorkflows.current?.let { workflows ->
                 call.use.item.toolUseId?.let(workflows.runs::get)?.let { run ->

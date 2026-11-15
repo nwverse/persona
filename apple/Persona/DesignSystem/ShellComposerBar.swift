@@ -24,6 +24,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// What the model button says, ChatGPT's "6.1 Sol Medium": the model, then the effort (`SessionModes.composerTitle`);
     /// nil: no button. Its menu says what needs saying about the permission mode (Allow Everything), not the button (#1117).
     var modesTitle: SessionModes.ComposerTitle?
+    /// Show that the model itself can be changed here, not only which model happens to be running.
+    var modesDisclosure = false
     /// What goes with the message, quoted at the top of the card (#986); quotes keep it open (`hasAttachments`).
     var quotes: Binding<[ContextRef]>? = nil
     /// Always the card, never the one line (the Mac: the field and its row of buttons stay, as a desktop app's box).
@@ -71,7 +73,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// What the box's field is bound to while the page is up, so it cannot move the caller's `selection` under the
     /// sheet (the page hands its cursor back to that when it goes down).
     @State private var parkedSelection: TextSelection?
-    /// Asks the page for the keyboard: something asked for the box's (a file's path inserted, `PathInsert.edit`; ⌘I)
+    /// Asks the page for the keyboard: something asked for the box's (⌘I)
     /// while the page is up. A focus binding does not reach into a sheet, so the page keeps its own.
     @State private var pageFocusRequest = 0
 
@@ -313,6 +315,11 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     /// The draft's field: one view in both shapes, so focus and the IME's marked text survive the change.
     private var field: some View {
         TextField("", text: $text, selection: fieldSelection, axis: .vertical)
+            // The field's name and identifier on the field itself, before the placeholder drawn over it: applied after the
+            // overlay, they also went to the placeholder, a second `shell-composer-field` element in the tree, listed
+            // first (#8002).
+            .accessibilityLabel(placeholder)
+            .accessibilityIdentifier("shell-composer-field")
             .readingContent() // what is typed grows past the interface's cap, as in Messages
             .font(Theme.Font.body)
             .overlay(alignment: .leading) {
@@ -322,7 +329,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                         .lineLimit(1).minimumScaleFactor(0.5).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
-            .accessibilityLabel(placeholder)
             .lineLimit(expanded ? 1...maximumLines : 1...1)
             #if os(iOS) || os(visionOS)
             // Grown taller, the field must not stay scrolled down a line (#909, TextViewScroll).
@@ -344,7 +350,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             .padding(.trailing, fieldRightInset)
             .padding(.top, expanded ? Theme.Space.l : 0)
             .scaledFrame(minHeight: fieldMinimumHeight)
-            .accessibilityIdentifier("shell-composer-field")
             #if os(iOS)
             // Measure at full width, before the button's reserved inset, not the field's capped height.
             // Not while the page is up: it has its own lines, and the box measures again as it comes back.
@@ -424,7 +429,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         if focused.wrappedValue {
             TypedText.commitFocused(into: $text)
         } else {
-            // An unfocused field's selection is stale (a restored draft's, PathInsert.edit): the page starts at the end.
+            // An unfocused field's selection is stale (a restored draft's): the page starts at the end.
             selection = TextSelection(insertionPoint: text.endIndex)
         }
         dictation.stop()
@@ -511,6 +516,13 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                     .font(Theme.Font.secondary)
                     .foregroundStyle(AppStyle.current.usesBeautifulUI ? theme.colors.ink2 : Color.secondary)
                     .fixedSize()
+            }
+            if modesDisclosure {
+                ThemedIcon(Theme.Icon.expand)
+                    .font(Theme.Font.label)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .accessibilityHidden(true)
             }
             // Claude Code's ultracode on, or a Codex thread at "ultra" (#1307): read out with the title (`spoken`).
             if title.mark != nil {
@@ -757,6 +769,7 @@ private struct ComposerPageEditor: View {
                     .font(Theme.Font.body)
                     .focused($focused)
                     .scrollContentBackground(.hidden)
+                    .accessibilityIdentifier("composer-page-field") // on the editor, not over its placeholder (#7632)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty {
                             // Where the text view's first line starts: its inset, then its line padding.
@@ -772,7 +785,6 @@ private struct ComposerPageEditor: View {
                     .padding(.horizontal, Theme.Space.m)
                     .shellScaled() // the box's type size, a size up
                     .accessibilityLabel(placeholder)
-                    .accessibilityIdentifier("composer-page-field")
                 HStack {
                     Spacer()
                     if !canSend, let stop {

@@ -73,6 +73,21 @@ type webDelivery struct {
 	Error    string     `json:"error,omitempty"`
 }
 
+// webPushSubscription identifies one subscription's delivery queue. An endpoint rotation is a new queue: an old push
+// service that is slow or no longer answers cannot hold up the browser's replacement endpoint.
+type webPushSubscription struct {
+	device   string
+	endpoint string
+}
+
+// webPushQueued is one dispatch. done closes only after its complete delivery attempt, including all of its retries.
+type webPushQueued struct {
+	sub       webSub
+	plaintext []byte
+	message   webpush.Message
+	done      chan struct{}
+}
+
 type webPusher struct {
 	store Store
 	logf  func(string, ...any)
@@ -93,12 +108,16 @@ type webPusher struct {
 	mu     sync.Mutex
 	subs   map[string]webSub // by device
 	last   map[string]webDelivery
+
+	queueMu sync.Mutex
+	tails   map[webPushSubscription]*webPushQueued // the last dispatch queued for each browser endpoint
 }
 
 func newWebPusher(store Store, logf func(string, ...any)) *webPusher {
 	w := &webPusher{store: store, logf: logf, now: time.Now, client: &http.Client{Timeout: webPushTimeout},
 		check: webpush.CheckEndpoint, retryWaits: []time.Duration{time.Second, 4 * time.Second},
-		storeTimeout: deviceStoreTimeout, subs: map[string]webSub{}, last: map[string]webDelivery{}}
+		storeTimeout: deviceStoreTimeout, subs: map[string]webSub{}, last: map[string]webDelivery{},
+		tails: map[webPushSubscription]*webPushQueued{}}
 	if store == nil {
 		return w
 	}
@@ -411,24 +430,46 @@ func (w *webPusher) postOnce(ctx context.Context, s webSub, keys webpush.Keys, p
 	return resp.StatusCode, fmt.Errorf("%d %s", resp.StatusCode, strings.TrimSpace(string(text)))
 }
 
-// dispatch sends plaintext to s in the background, the delivery bounded by webPushTimeout and its retries.
+// dispatch sends plaintext to s in the background, the delivery bounded by webPushTimeout and its retries. Dispatches
+// to one subscription run in FIFO order, including the whole retry loop; different subscriptions stay concurrent.
 func (w *webPusher) dispatch(s webSub, plaintext []byte, m webpush.Message) {
+	key := webPushSubscription{device: s.Device, endpoint: s.Endpoint}
+	queued := &webPushQueued{sub: s, plaintext: plaintext, message: m, done: make(chan struct{})}
+	// Append before starting the worker: a later dispatch must see this tail even if this worker has not run yet.
+	w.queueMu.Lock()
+	previous := w.tails[key]
+	w.tails[key] = queued
+	w.queueMu.Unlock()
 	go func() {
+		defer func() {
+			close(queued.done)
+			w.queueMu.Lock()
+			if w.tails[key] == queued { // a newer dispatch owns the queue now; its completion cleans it up
+				delete(w.tails, key)
+			}
+			w.queueMu.Unlock()
+		}()
+		if previous != nil {
+			<-previous.done
+		}
+		// Queued waiting is not part of the delivery's timeout. Cancellation, Gone and every other return from push
+		// still close done above, allowing the next dispatch to proceed.
 		ctx, cancel := context.WithTimeout(context.Background(), webPushTimeout*time.Duration(len(w.retryWaits)+1)+10*time.Second)
 		defer cancel()
-		_, _ = w.push(ctx, s, plaintext, m)
+		_, _ = w.push(ctx, queued.sub, queued.plaintext, queued.message)
 	}()
 }
 
 // webPushNotify sends a notify event (notifyWSFrom's msgIn) to every subscribed browser with no Persona page open
 // now that has the capability it requires and whose settings take it (wantsOn, the decision a socket gets: manager
 // mutes, the "Needs you" and "Done" choices, quiet hours, posted without a sound inside them). Called under h.mu by
-// notifyWSFrom: what is sent goes in the background.
-func (h *Hub) webPushNotify(kind string, required []string, wantsOn func(device string) (ok, quiet bool), msgIn func(i18n.Lang) map[string]any) {
+// notifyWSFrom: what is sent goes in the background. It returns how many browsers it was handed to (sent) and how many
+// could take this kind before their settings decided (capable).
+func (h *Hub) webPushNotify(kind string, required []string, wantsOn func(device string) (ok, quiet bool), msgIn func(i18n.Lang) map[string]any) (sent, capable int) {
 	w := h.push.webPusher()
 	subs := w.list()
 	if len(subs) == 0 {
-		return
+		return 0, 0
 	}
 	open := h.openWebDevicesLocked()
 	for _, s := range subs {
@@ -438,6 +479,7 @@ func (h *Hub) webPushNotify(kind string, required []string, wantsOn func(device 
 		if len(required) > 0 && !slices.Contains(s.Features, required[0]) {
 			continue
 		}
+		capable++
 		ok, quiet := wantsOn(s.Device)
 		if !ok {
 			continue
@@ -449,7 +491,9 @@ func (h *Hub) webPushNotify(kind string, required []string, wantsOn func(device 
 			continue
 		}
 		w.dispatch(s, plain, webpush.Message{TTL: webPushTTL, Urgency: webPushUrgency(kind), Topic: webpush.TopicFor(webPushTag(msg))})
+		sent++
 	}
+	return sent, capable
 }
 
 // credentialKey keys a connection by its credential in openWebDevicesLocked, apart from device ids.
@@ -518,7 +562,7 @@ func todoID(v any) string {
 // webPushTag is the tag the service worker shows msg under, the one the page gives the same event (web
 // lib/attention-signals.ts notify): `<machine>/<session>#needs` or `#finished`, `card:<id>#needs` for a card no session
 // has, `todo:<id>`, `alert:<id>`; "" for one that replaces nothing. The Topic is made from it, so pushes waiting at the
-// push service replace each other the way the notifications do.
+// push service replace each other the way the notifications do; one with no tag goes without a Topic (TopicFor).
 func webPushTag(msg map[string]any) string {
 	str := func(k string) string { s, _ := msg[k].(string); return s }
 	mid, sid, ix := str("machine_id"), str("session_id"), str("interaction_id")

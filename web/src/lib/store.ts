@@ -7,10 +7,11 @@ import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
-import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
+import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_AGENTS_ONLY_FEATURE, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
+import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
@@ -581,6 +582,27 @@ export function send(msg: Record<string, unknown>) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
+// What client_hello declares beyond CLIENT_FEATURES now: lib/attention-signals.ts asks for the hub's `notify` events
+// (`ws_notify`) while this page can alert (#8145). Read at every hello.
+let helloExtras: () => string[] = () => [];
+
+function sendHello(sock: WebSocket) {
+  // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
+  // and what it can render: MCP forms and links come only to a socket that says so
+  // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
+  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+}
+
+/** Sets what client_hello declares beyond CLIENT_FEATURES, from the next hello on. */
+export function setHelloExtras(extras: () => string[]) {
+  helloExtras = extras;
+}
+
+/** Says client_hello again on the open socket: the hub takes a later one's features in place of the earlier one's. */
+export function sayHello() {
+  if (ws?.readyState === WebSocket.OPEN) sendHello(ws);
+}
+
 export function connect() {
   setCompatibilityFeatures([]);
   stopped = false;
@@ -597,10 +619,7 @@ export function connect() {
   // flipping at every backoff tick (the app's ConnectionTitle); shownConn decides it when the attempt fails
   sock.onopen = () => {
     socketOpenedAt = Date.now(); // a direction tree read since then serves this hello (lib/direction-tree.ts)
-    // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
-    // and what it can render: MCP forms and links come only to a socket that says so
-    // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+    sendHello(sock);
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();
@@ -770,6 +789,8 @@ function onMessage(msg: Record<string, unknown>) {
       helloHooks.forEach((f) => f()); // e.g. a hub that came back may serve a new web build (lib/new-version.ts)
       setCompatibilityFeatures(Array.isArray(msg.features) ? msg.features as string[] : []);
       const mesh = (msg.mesh as { hubs?: MeshHub[] } | undefined)?.hubs;
+      // a hub that folds side sessions into their parent's chat (#7944): set before the features, which redraw the lists
+      setSideFold(Array.isArray(msg.features) && (msg.features as unknown[]).includes(SESSIONS_SIDE_FOLD_FEATURE));
       set({
         conn: "online",
         link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
@@ -780,10 +801,20 @@ function onMessage(msg: Record<string, unknown>) {
       });
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
+      const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
+      const agentsMode = state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE);
+      const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
+      const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
       runtimeSessions.setSummary(summaryMode);
       // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
-      runtimeSessions.setRoots(state.features.includes(SESSIONS_HIERARCHY_FEATURE));
+      runtimeSessions.setRoots(rootsMode);
+      if (agentsMode) {
+        runtimeAgents.setSummary(summaryMode);
+        runtimeAgents.setRoots(rootsMode);
+      } else if (usedAgentsList) {
+        runtimeAgents.reset();
+      }
       setRuntimePageCounts(state.features.includes(SESSIONS_PAGE_COUNTS_FEATURE));
       setPersonalPageCounts(state.features.includes(AGENTS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
@@ -799,6 +830,7 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
+        if (agentsMode && usedAgentsList) runtimeAgents.invalidate();
         void refreshAgentSessions();
         void refreshAgentPrefs();
       }
@@ -822,6 +854,10 @@ function onMessage(msg: Record<string, unknown>) {
     case "sessions_list":
       // A hint is not a checkpoint. Even resumed connections must check the HTTP epoch.
       runtimeSessions.invalidate();
+      if (state.features.includes(SESSIONS_AGENTS_ONLY_FEATURE)) {
+        const agentsList = runtimeAgents.getSnapshot();
+        if (agentsList.loaded || agentsList.loading || agentsList.error !== null) runtimeAgents.invalidate();
+      }
       break;
     case "sessions": {
       const mid = msg.machine_id as string;
@@ -1349,6 +1385,12 @@ export async function refreshTodos() {
   }
 }
 
+/** A setting of the assistant's changed from this page (#8324): the copy in `assistant` shows it before the hub answers. */
+export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations">>) {
+  const a = state.assistant;
+  if (a) set({ assistant: { ...a, ...patch } });
+}
+
 export async function refreshAssistant() {
   const asked = assistantAsked.ask();
   const from = pageOf();
@@ -1544,6 +1586,7 @@ export function reset() {
   cardRowsFor = null;
   listedFull.clear();
   runtimeSessions.reset();
+  runtimeAgents.reset();
   clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;

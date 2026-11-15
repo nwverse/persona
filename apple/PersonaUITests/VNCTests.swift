@@ -1150,6 +1150,30 @@ final class VNCTests: XCTestCase {
         shot(app, "vnc-video-lost")
     }
 
+    /// #8320: the hub refuses the video because the Mac already sends it to two devices (the mock's ?refuse=busy: the
+    /// hub's 429): VNC stays, and the line says two devices are watching rather than that video stopped, in each
+    /// language, light and dark.
+    @MainActor func testVideoRefusedAsBusySaysTwoDevicesWatch() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SCREEN_VIDEO"] == "1" else {
+            throw XCTSkip("needs the mock's video channel: MOCK_SCREEN_VIDEO=1 (PERSONA_SCREEN_VIDEO=1)")
+        }
+        guard let hub else { throw XCTSkip("needs the mock: PERSONA_SCREEN_HUB") }
+        try mock(hub, "/mock/screen-video?refuse=busy")
+        addTeardownBlock { [self] in try? mock(hub, "/mock/screen-video?refuse=0") } // runs after a failure too, unlike defer
+        for (lang, locale, words) in [("zh-Hans", "zh_CN", "两台设备在看视频"), ("en", "en_US", "Two devices are already watching"),
+                                      ("ja", "ja_JP", "2 台のデバイスで表示中")] {
+            for scheme in ["light", "dark"] {
+                let (app, _) = try signedInMachinePage(["-ui.scheme", scheme, "-AppleLanguages", "(\(lang))", "-AppleLocale", locale])
+                let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+                let line = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
+                XCTAssertTrue(line.waitForExistence(timeout: 15), "\(lang) \(scheme): why:\n\(app.debugDescription)")
+                XCTAssertTrue(picture(screen, "vnc"), "busy: VNC stays")
+                shot(app, "vnc-video-busy-\(lang)-\(scheme)")
+                app.terminate()
+            }
+        }
+    }
+
     /// #6398: the stats overlay's Route row (the demo's numbers: a direct LAN route, its round trip and loss, and why the
     /// live screen moved, on its own line), for review in light and dark, at the default size and at xxxLarge.
     @MainActor func testTheOverlayShowsTheRoute() throws {
@@ -1164,6 +1188,25 @@ final class VNCTests: XCTestCase {
                 if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
             }
             shot(app, "vnc-overlay-route-\(scheme)-\(size == "L" ? "default" : "xxxl")")
+            app.terminate()
+        }
+    }
+
+    /// #7873: the Route row says "· UDP" while the video rides a UDP flow (the demo with `-showScreenUDP`), for review
+    /// beside `testTheOverlayShowsTheRoute`'s, in light and dark, at the default size and at xxxLarge.
+    @MainActor func testTheOverlayShowsTheUDPRoute() throws {
+        for (scheme, size) in [("light", "L"), ("dark", "L"), ("light", "XXXL"), ("dark", "XXXL")] {
+            let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", "-showScreenUDP", "YES", "-ui.scheme", scheme,
+                                                    "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"])
+            let overlay = app.descendants(matching: .any)["screen-stats"].firstMatch
+            XCTAssertTrue(overlay.waitForExistence(timeout: 10), "the overlay:\n\(app.debugDescription)")
+            XCTAssertTrue(overlay.label.contains("UDP"), "the Route row names UDP: \(overlay.label)")
+            XCTAssertTrue(overlay.label.contains("4 ms"), "the flow's round trip: \(overlay.label)")
+            for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] { // the icon follows the look
+                let alert = source.alerts.containing(NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")).firstMatch
+                if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
+            }
+            shot(app, "vnc-overlay-udp-\(scheme)-\(size == "L" ? "default" : "xxxl")")
             app.terminate()
         }
     }
@@ -1272,10 +1315,11 @@ final class VNCTests: XCTestCase {
     @MainActor private func live(_ app: XCUIApplication) -> Bool {
         let phase = app.descendants(matching: .any)["screen-phase"].firstMatch
         let deadline = Date.now.addingTimeInterval(30)
-        // Down a rail (on its side) the phase is the dot's value. In Chinese, as these tests run, or English (#7775's shots).
+        // Down a rail (on its side) the phase is the dot's value. In Chinese, as these tests run, English (#7775's shots) or
+        // Japanese (#8320's).
         while Date.now < deadline {
             let said = phase.exists ? phase.label + (phase.value as? String ?? "") : ""
-            if said.contains("已连接") || said.contains("Connected") { return true }
+            if said.contains("已连接") || said.contains("Connected") || said.contains("接続済み") { return true }
             usleep(250_000)
         }
         return false

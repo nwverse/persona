@@ -4,6 +4,7 @@
   "evening": "Evening review",
   "unavailable": "Can’t read scheduled tasks right now (the database isn’t responding). Try again in a bit.",
   "save_failed": "Couldn’t save scheduled tasks. Your change wasn’t applied. Please try again.",
+  "task_state_changed": "The task state note has changed. Reopen the editor and try again.",
   "prompt_empty": "The prompt can’t be empty",
   "time_format": "Write the time {time} as HH:MM",
   "daily_title": "A daily task needs a title",
@@ -41,5 +42,8 @@
   "cron_month": "month (1–12 or JAN–DEC)",
   "cron_day_of_week": "day of week (0–7 or SUN–SAT, 0 and 7 are Sunday)",
   "cron_often": "{cron} runs {gap} minutes apart. A scheduled task runs at most every {min} minutes.",
-  "cron_never": "{cron} never runs: no date in the next 5 years matches it."
+  "cron_never": "{cron} never runs: no date in the next 5 years matches it.",
+  "run_if_approval": "Allow this command to run on the routine’s computer before each scheduled run?",
+  "run_if_skipped": "The pre-run command asked to skip this run.",
+  "run_if_failed": "Pre-run check failed: {error}"
 }

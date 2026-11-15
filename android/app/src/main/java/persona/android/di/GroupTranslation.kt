@@ -374,6 +374,7 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
     return object : AgentCreationService {
         override val scope get() = source.scope
         override suspend fun launchers(machineId: String) = source.launchers(names.rawMachine(machineId))
+        override suspend fun launcherList(machineId: String) = source.launcherList(names.rawMachine(machineId))
         override suspend fun directories(machineId: String, path: String) = source.directories(names.rawMachine(machineId), path)
         override suspend fun start(request: AgentStartRequest, operationId: String) =
             result(source.start(request.copy(machineId = names.rawMachine(request.machineId)), operationId))

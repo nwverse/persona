@@ -155,7 +155,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 // mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
-		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime}
+		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime, ConfigDir: base.ConfigDir}
 	}
 	if over.Model != "" {
 		base.Model = over.Model
@@ -166,14 +166,21 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Runtime != "" {
 		base.Runtime = over.Runtime
 	}
+	if over.ConfigDir != "" {
+		base.ConfigDir = over.ConfigDir
+	}
 	return base
 }
 
 // effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+// The In-meeting conversation takes no runtime from the main chat it follows: a room runs on Claude Code's CLI only.
 func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
 	b := mergeModel(base, over)
 	if p.ID == "inbox.triage" && b.Effort == "" {
 		b.Effort = "off"
+	}
+	if p.ID == purposeMeetingRoom {
+		b.Runtime = ""
 	}
 	return b
 }
@@ -229,7 +236,7 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
 					return c, err
 				}
-				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
 				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
 					return c, err
@@ -255,11 +262,13 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if b.Model != "" {
 		c.Model = b.Model
 	}
-	c.ReasoningEffort = b.Effort
+	if b.Effort != "" {
+		c.ReasoningEffort = b.Effort
+	}
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && c.API != "messages" && c.API != "" && b.Effort != "" {
+	if c.API != "responses" && c.API != "messages" && c.API != "" && c.ReasoningEffort != "" {
 		c.ReasoningEffort = ""
 	}
 	return c, nil
@@ -296,6 +305,7 @@ func (s *Service) modelFingerprint(ctx context.Context, id string) (string, erro
 
 // modelBindingFingerprint changes when what the binding runs on does (the provider's settings, the key sealed anew).
 func (s *Service) modelBindingFingerprint(ctx context.Context, b ModelBinding) string {
+	b.ConfigDir = "" // where new conversations start, not what this binding runs on (#4633)
 	raw, _ := json.Marshal(b)
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		v, _ := json.Marshal(s.legacyModelConfig(ctx, b.Provider))
