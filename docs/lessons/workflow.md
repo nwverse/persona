@@ -263,3 +263,14 @@ set `max-parallel`, and measure normal-load PRs separately from peak queues.
   `main`, look at what landed since your branch (`git log HEAD..origin/main -- <your files>`), and merge it into your
   branch. If someone fixed it already, close yours. A lane that a pre-commit hook or a failing check sends to a fix
   should look for an open PR with that fix before writing one.
+
+## A check that runs only on `main` keeps `main` red (2026-11-15, #7977)
+
+- The fixed-sleep and web font ratchets ran in scheduled CI on `main` and in the optional `scripts/test/check-fast.sh`, never
+  on the way in: `scripts/hooks/merge-pr.sh` ran only the privacy scan. Of the 3,040 commits merged from the sleep ratchet's
+  arrival (#1745) to 2026-11-14, 106 added a failure (79 to the sleep ratchet, 29 to the font one, 2 to both), and about 57
+  issues were filed for them. `main` failed the sleep ratchet at 48% of those commits and the font ratchet at 57% of the
+  commits since its own arrival; every PR verified against those guards meanwhile failed for a reason that wasn't its own.
+- Check at merge time what the merge adds, not the whole tree: a whole-tree check blocks every merge while `main` is red, and
+  one that takes seconds gets skipped. `scripts/ci/changed_ratchets.py` reads only the changed files from Git objects (0.14 s
+  per merge, median, over those commits) and leaves a file `main` already fails to its own fix.
