@@ -385,7 +385,8 @@ export interface Session {
   /** The session on the same machine this one is drawn under while staying a session of its own (#5935): a Claude
    *  desktop app's side chat, /btw question or spawned session names the one it was started from. Unlike `folded_under`
    *  it folds nothing away: the row keeps its state and counts and only moves under its parent, a level in
-   *  (lib/side-sessions.ts). Set by the node while both are listed; older hubs leave it out. */
+   *  (lib/side-sessions.ts). Set by the node while both are listed; older hubs leave it out.
+   *  An Orca terminal worker names its coordinator here (#4575); that is no provider-native subagent either. */
   parent_agent_id?: string;
   /** How it folds under `folded_under`: `"worker"` for an Agent of a host tab whose lead (its first pane) is
    *  `folded_under` (#5180, a Claude Code agent team's teammate): it is in the lead's Team panel, not a card in its chat. */

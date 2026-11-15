@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { AgentGroup, AgentMutes } from "./agent-groups";
+import { sessionHost, type AgentGroup, type AgentMutes } from "./agent-groups";
 import { repoOf } from "./agent-repos";
 import { backgroundWaiting, stateOf } from "./format";
 import { buildTodoAgentGroups, interruptedAgent, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
@@ -26,7 +26,7 @@ export interface TreeAgent {
   key: string;
   session: Session;
   state: TreeState;
-  /** The agents it spawned for the same todo (todo_agents.source "spawned", via this one). */
+  /** Explicit host/provider children, or agents spawned for the same to-do. */
   children: TreeAgent[];
   folded: boolean;
 }
@@ -167,6 +167,11 @@ const keyOf = (s: Session) => `${s.machine_id}/${s.session_id}`;
 export function nestAgents(sessions: Session[], todo: Todo | undefined, now: number): TreeAgent[] {
   const parentOf = new Map<string, string>();
   for (const a of todo?.agents ?? []) if (!a.released_at && a.source === "spawned" && a.via) parentOf.set(`${a.machine_id}/${a.session_id}`, a.via);
+  const byKey = new Map(sessions.map((s) => [keyOf(s), s]));
+  for (const s of sessions) {
+    const p = listedParent(s, byKey);
+    if (p) parentOf.set(keyOf(s), keyOf(p));
+  }
   const listed = new Set(sessions.map(keyOf));
   const nodes = new Map<string, TreeAgent>();
   for (const s of sessions) nodes.set(keyOf(s), { key: `s:${keyOf(s)}`, session: s, state: agentTreeState(s), children: [], folded: false });
@@ -186,6 +191,51 @@ export function nestAgents(sessions: Session[], todo: Todo | undefined, now: num
     return all;
   };
   roots.forEach(settle);
+  return roots;
+}
+
+/** The listed session `s` names as its explicit parent: a host coordinator (`parent_agent_id`, same host) or a
+ *  provider parent (`parent_session_id`, same source and agent), on its machine and manager. Never a guess by title or
+ *  directory. */
+function listedParent(s: Session, byKey: Map<string, Session>): Session | undefined {
+  const id = s.parent_agent_id || s.parent_session_id;
+  if (!id) return undefined;
+  const p = byKey.get(`${s.machine_id}/${id}`);
+  if (!p || (p.manager ?? "") !== (s.manager ?? "")) return undefined;
+  if (s.parent_agent_id ? (p.host || sessionHost(p)) !== (s.host || sessionHost(s)) :
+    (p.source_instance_id ?? "") !== (s.source_instance_id ?? "") || p.agent !== s.agent) return undefined;
+  return p;
+}
+
+/** A host tab and the tabs nested under it. */
+export interface TabBranchNode<T> {
+  tab: T;
+  children: TabBranchNode<T>[];
+}
+
+/** One workspace's tabs nested by their Agents' host coordinators (#4575): a tab whose Agents' coordinators all sit in
+ *  one other tab of the list goes under that tab. Every tab stays a tab of its own (its row, panes and menu); a tab with
+ *  coordinators in several tabs, one in a loop, or one whose coordinator is not listed stays at the top. In list order. */
+export function nestTabs<T extends { key: string; sessions: Session[] }>(tabs: T[]): TabBranchNode<T>[] {
+  const byKey = new Map(tabs.flatMap((t) => t.sessions.map((s) => [keyOf(s), s] as const)));
+  const tabOf = new Map(tabs.flatMap((t) => t.sessions.map((s) => [keyOf(s), t.key] as const)));
+  const parentOf = new Map<string, string>();
+  for (const t of tabs) {
+    const outside = new Set<string>();
+    for (const s of t.sessions) {
+      const p = s.parent_agent_id ? listedParent(s, byKey) : undefined;
+      const pt = p && tabOf.get(keyOf(p));
+      if (pt && pt !== t.key) outside.add(pt);
+    }
+    if (outside.size === 1) parentOf.set(t.key, [...outside][0]!);
+  }
+  const nodes = new Map(tabs.map((t) => [t.key, { tab: t, children: [] as TabBranchNode<T>[] }]));
+  const roots: TabBranchNode<T>[] = [];
+  for (const t of tabs) {
+    const p = parentOf.get(t.key);
+    if (p && !cycles(t.key, parentOf)) nodes.get(p)!.children.push(nodes.get(t.key)!);
+    else roots.push(nodes.get(t.key)!);
+  }
   return roots;
 }
 

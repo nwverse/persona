@@ -523,6 +523,9 @@ func (v *orcaView) agent(t orcart.Terminal) host.Agent {
 	a.AgentStatus = proto.StatusUnknown
 	current := hasRow && orcaAgents[row.AgentType] == a.Agent &&
 		(started.IsZero() || row.UpdatedAt == 0 || time.UnixMilli(row.UpdatedAt).After(started.Add(-orcaRowSlack)))
+	if current && row.ParentPaneKey != "" && row.ParentPaneKey != key {
+		a.ParentPaneID = host.PaneRef{Kind: host.Orca, ID: row.ParentPaneKey}.String()
+	}
 	if s := orcaStatus[row.PaneState()]; current && s != "" {
 		a.AgentStatus = s
 	} else if s := v.fallback[key]; s != "" {

@@ -170,8 +170,10 @@ func (c *Client) WorktreeHeads(ctx context.Context) (map[string]string, error) {
 
 // AgentRow is one agent of worktree.ps: its pane, kind and state from Orca's hooks.
 type AgentRow struct {
-	PaneKey   string `json:"paneKey"`
-	AgentType string `json:"agentType"`
+	PaneKey string `json:"paneKey"`
+	// ParentPaneKey is the coordinator's pane, as reported by Orca's worker dispatch.
+	ParentPaneKey string `json:"parentPaneKey"`
+	AgentType     string `json:"agentType"`
 	// State: working | blocked | waiting | done, folding in the agent's children (a settled agent with live subagents
 	// reads working); MainAgent.State is the agent's own, when Orca has it.
 	State     string `json:"state"`

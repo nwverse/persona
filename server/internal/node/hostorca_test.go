@@ -165,7 +165,11 @@ func TestOrcaListsClaudeTerminals(t *testing.T) {
 	)
 	o.SetWorktrees(orcarttest.Worktree("repo::"+orcaCwd, orcaCwd, "refs/heads/feature-x",
 		orcarttest.Agent("tab1:leaf1", "claude", "working"),
-		orcarttest.Agent("tab1:leaf2", "claude", "waiting"),
+		func() map[string]any {
+			row := orcarttest.Agent("tab1:leaf2", "claude", "waiting")
+			row["parentPaneKey"] = "tab1:leaf1"
+			return row
+		}(),
 		orcarttest.Agent("tab2:leaf4", "claude", "done"),
 	))
 	procs.set("tab1:leaf1", orcaProc{pid: 4242, agent: "claude"})
@@ -181,7 +185,7 @@ func TestOrcaListsClaudeTerminals(t *testing.T) {
 		a.SlotName != "tab tab1" || a.SlotIndex != 1 {
 		t.Errorf("term_1: %+v", a)
 	}
-	if b.PaneID != "orca:tab1:leaf2" || b.Status != proto.StatusBlocked {
+	if b.PaneID != "orca:tab1:leaf2" || b.Status != proto.StatusBlocked || b.ParentAgentID() != sidA {
 		t.Errorf("term_2: %+v", b)
 	}
 	if c.PaneID != "orca:tab2:leaf3" || c.Status != proto.StatusUnknown || c.SlotIndex != 2 {

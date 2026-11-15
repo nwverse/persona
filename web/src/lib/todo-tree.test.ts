@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
+import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState, nestTabs } from "./todo-tree";
 import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
@@ -223,5 +223,53 @@ describe("waiting in the background in the tree (#6045)", () => {
     expect(todoTreeState("working", [waiting, busy])).toBe("working");
     expect(todoTreeState("working")).toBe("working");
     expect(todoTreeState("needs_you", [waiting])).toBe("needs_you");
+  });
+});
+
+
+describe("explicit agent hierarchy", () => {
+  const agent = (id: string, patch: Partial<Session> = {}) => s(id, "idle", "/code/app", { host: "orca", agent: "codex", manager: "assistant", ...patch });
+  it("nests multiple levels in input order and rolls up attention", () => {
+    const roots = nestAgents([agent("b", { parent_agent_id: "p" }), agent("g", { parent_agent_id: "b", state: "needs_you" }), agent("p"), agent("a", { parent_agent_id: "p" })], undefined, NOW);
+    expect(roots.map((a) => a.session.session_id)).toEqual(["p"]);
+    expect(roots[0]!.children.map((a) => a.session.session_id)).toEqual(["b", "a"]);
+    expect(roots[0]!.children[0]!.children[0]!.session.session_id).toBe("g");
+    expect(roots[0]!.state).toBe("needs_you");
+  });
+  it("keeps every visible row when the parent is filtered out or cyclic", () => {
+    for (const rows of [
+      [agent("a", { parent_agent_id: "missing" })],
+      [agent("a", { parent_agent_id: "b" }), agent("b", { parent_agent_id: "a" })],
+      [agent("a", { parent_agent_id: "a" })],
+    ]) expect(nestAgents(rows, undefined, NOW)).toHaveLength(rows.length);
+  });
+  it.each([
+    { machine_id: "other" }, { manager: "other" }, { host: "herdr" },
+  ])("does not link an identically named parent in another identity scope: %j", (patch) => {
+    expect(nestAgents([agent("p", patch), agent("c", { parent_agent_id: "p" })], undefined, NOW)).toHaveLength(2);
+  });
+  it("keeps provider-native hierarchy scoped to its source instance", () => {
+    expect(nestAgents([agent("p", { source_instance_id: "one" }), agent("c", { parent_session_id: "p", source_instance_id: "two" })], undefined, NOW)).toHaveLength(2);
+    expect(nestAgents([agent("p"), agent("c", { parent_session_id: "p" })], undefined, NOW)).toHaveLength(1);
+  });
+});
+
+describe("nestTabs (#4575)", () => {
+  const s = (id: string, patch: Partial<Session> = {}): Session => ({ machine_id: "m", session_id: id, title: id, cwd: "/code/app", status: "idle", state: "idle", updated_at: "2026-11-14T12:00:00Z", host: "orca", ...patch });
+  const tab = (key: string, ...sessions: Session[]) => ({ key, sessions });
+  const shape = (nodes: ReturnType<typeof nestTabs<ReturnType<typeof tab>>>): unknown => nodes.map((n) => (n.children.length ? { [n.tab.key]: shape(n.children) } : n.tab.key));
+
+  it("puts a worker's tab under its coordinator's tab and keeps every tab, in list order", () => {
+    const tabs = [tab("a", s("coord")), tab("b", s("w1", { parent_agent_id: "coord" })), tab("c", s("w2", { parent_agent_id: "w1" }), s("helper")), tab("d", s("plain"))];
+    expect(shape(nestTabs(tabs))).toEqual([{ a: [{ b: ["c"] }] }, "d"]);
+  });
+
+  it("leaves a tab at the top when its coordinators are in several tabs, loop, are not listed or use another host", () => {
+    expect(shape(nestTabs([tab("a", s("x")), tab("b", s("y")), tab("c", s("w1", { parent_agent_id: "x" }), s("w2", { parent_agent_id: "y" }))]))).toEqual(["a", "b", "c"]);
+    expect(shape(nestTabs([tab("a", s("x", { parent_agent_id: "y" })), tab("b", s("y", { parent_agent_id: "x" }))]))).toEqual(["a", "b"]);
+    expect(shape(nestTabs([tab("a", s("w", { parent_agent_id: "gone" }))]))).toEqual(["a"]);
+    expect(shape(nestTabs([tab("a", s("x", { host: "herdr" })), tab("b", s("w", { parent_agent_id: "x" }))]))).toEqual(["a", "b"]);
+    // a provider-native child (parent_session_id) is no host coordinator: it does not move a tab
+    expect(shape(nestTabs([tab("a", s("x")), tab("b", s("w", { parent_session_id: "x" }))]))).toEqual(["a", "b"]);
   });
 });

@@ -178,6 +178,7 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		Ports:     []proto.Port{{Port: 3000, PID: 7, Title: "dev"}}}
 	v := map[string]func(*proto.Session){
 		"parent_thread_id":  func(s *proto.Session) { s.ParentThreadID = "parent" },
+		"parent_agent_id":   func(s *proto.Session) { s.SetParentAgentID("coordinator") },
 		"parent_session_id": func(s *proto.Session) { s.ParentSessionID = "parent-public" },
 		"root_session_id":   func(s *proto.Session) { s.RootSessionID = "root-public" },
 		"is_subagent":       func(s *proto.Session) { s.IsSubagent = true },
