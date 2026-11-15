@@ -667,7 +667,7 @@ export function createPiHost(deps, options = {}) {
         if (ctx.hasUI) {
           open++
           const opts = { signal: done.signal }
-          Promise.resolve(options.length ? ctx.ui.select(params.question, options, opts) : ctx.ui.input(params.question, undefined, opts)).then((a) => {
+          Promise.resolve().then(() => options.length ? ctx.ui.select(params.question, options, opts) : ctx.ui.input(params.question, undefined, opts)).then((a) => {
             const v = answered(a)
             if (v) settle({ answer: v })
             else if (!done.signal.aborted) settle({ none: true }) // closed without an answer
