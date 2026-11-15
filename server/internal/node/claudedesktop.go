@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +29,9 @@ import (
 // (claudeDesktopIndex.gone, #8314). Only that: a transcript another client ran is never judged by the index; an index
 // with no readable entry (not there, another layout) leaves out nothing; an entry that cannot be read keeps every id it
 // mentions; and a transcript written in the last desktopEntryGrace stays, as the app may not have written its entry yet.
-// The app writes deleted_<uuid> beside the entry it removes (measured 2026-11-15: the time of the delete, in ms), so the
-// transcript of an entry this node read before is left out at once (claudeDesktopFile.deletedAt), grace or not.
+// But Delete also writes deleted_<uuid> beside the entries, for the session's own id and for each transcript it ran
+// (measured 2026-11-15: each holds the time of the delete in ms; 51 of 57 deletes wrote more than one): a transcript a marker
+// names is gone at once.
 //
 // A scheduled task's runs are sessions of their own in the index, each naming the task (scheduledTaskId); the app's
 // sidebar lists them under the task in its own section, apart from the projects. The list draws a task's runs the
@@ -88,9 +88,6 @@ type claudeDesktopFile struct {
 	entry claudeDesktopEntry // transcript "": unreadable
 	// mentions are the ids an unreadable entry holds as far as it is read (mentionedIDs): none of them is gone.
 	mentions []string
-	// deletedAt: when a scan found the file gone and the app's deleted_<uuid> marker beside it (deletedInApp): the session
-	// was deleted in the app. Kept for desktopEntryGrace, after which gone no longer needs it.
-	deletedAt time.Time
 }
 
 var claudeDesktopFiles = struct {
@@ -114,8 +111,7 @@ type claudeDesktopIndex struct {
 	// entries counts the readable entries. gone reads both.
 	named   map[string]bool
 	entries int
-	// deleted: the transcripts (current and earlier) of entries the app removed with its deleted_<uuid> marker since
-	// this node read them: gone without waiting out desktopEntryGrace.
+	// deleted: the ids the app's deleted_<uuid> markers name (deletedMarkers): a transcript among them is gone at once.
 	deleted map[string]bool
 }
 
@@ -135,7 +131,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		paths = append(paths, found...)
 	}
 	x := claudeDesktopIndex{visible: map[string]bool{}, earlier: map[string][]claudeDesktopNow{}, about: map[string]claudeDesktopAbout{},
-		parents: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}, deleted: map[string]bool{}}
+		parents: map[string]string{}, seen: map[string]claudeDesktopSeen{}, named: map[string]bool{}, deleted: deletedMarkers(home)}
 	claudeDesktopFiles.Lock()
 	defer claudeDesktopFiles.Unlock()
 	current := make(map[string]bool, len(paths))
@@ -149,7 +145,7 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 		}
 		current[p] = true
 		f, ok := claudeDesktopFiles.byPath[p]
-		if !ok || !f.mtime.Equal(st.ModTime()) || f.size != st.Size() || !f.deletedAt.IsZero() {
+		if !ok || !f.mtime.Equal(st.ModTime()) || f.size != st.Size() {
 			f = claudeDesktopFile{mtime: st.ModTime(), size: st.Size()}
 			if st.Size() <= 4<<20 {
 				f.entry = readClaudeDesktopEntry(p)
@@ -207,45 +203,27 @@ func readClaudeDesktopIndex(home string) claudeDesktopIndex {
 			}
 		}
 	}
-	roots := make([]string, 0, 2)
-	for _, dir := range claudeDesktopDirs(home) {
-		roots = append(roots, filepath.Join(dir, "claude-code-sessions")+string(filepath.Separator))
-	}
-	for p, f := range claudeDesktopFiles.byPath {
-		if current[p] {
-			continue
-		}
-		mine := slices.ContainsFunc(roots, func(r string) bool { return strings.HasPrefix(p, r) })
-		switch {
-		case !f.deletedAt.IsZero() && time.Since(f.deletedAt) > desktopEntryGrace:
+	for p := range claudeDesktopFiles.byPath {
+		if !current[p] {
 			delete(claudeDesktopFiles.byPath, p)
-			continue
-		case !mine: // another home's (tests run many in one process)
-			if f.deletedAt.IsZero() {
-				delete(claudeDesktopFiles.byPath, p)
-			}
-			continue
-		case f.deletedAt.IsZero():
-			if f.entry.transcript == "" || !deletedInApp(p) {
-				delete(claudeDesktopFiles.byPath, p)
-				continue
-			}
-			f.deletedAt = time.Now()
-			claudeDesktopFiles.byPath[p] = f
-		}
-		x.deleted[f.entry.transcript] = true
-		for _, old := range f.entry.prior {
-			x.deleted[old] = true
 		}
 	}
 	return x
 }
 
-// deletedInApp: the app removed the entry at path (local_<uuid>.json) as it deletes a session: deleted_<uuid> is beside it.
-func deletedInApp(path string) bool {
-	name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "local_"), ".json")
-	_, err := os.Stat(filepath.Join(filepath.Dir(path), "deleted_"+name))
-	return err == nil
+// deletedMarkers are the ids the app's deleted_<uuid> markers name under home: a deleted session's own (local_<uuid>
+// without its prefix) and the transcripts it ran.
+func deletedMarkers(home string) map[string]bool {
+	out := map[string]bool{}
+	for _, dir := range claudeDesktopDirs(home) {
+		found, _ := filepath.Glob(filepath.Join(dir, "claude-code-sessions", "*", "*", "deleted_*"))
+		for _, p := range found {
+			if id := strings.TrimPrefix(filepath.Base(p), "deleted_"); validID(id) {
+				out[id] = true
+			}
+		}
+	}
+	return out
 }
 
 func readClaudeDesktopEntry(path string) claudeDesktopEntry {
@@ -304,9 +282,9 @@ var desktopIDRe = lazyre.New(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 const desktopEntryGrace = 2 * time.Minute
 
 // gone: transcript id, which the desktop app ran, belongs to a session deleted in the app: no entry names id and nothing
-// unreadable mentions it, and either the app removed the entry that did with its deleted_<uuid> marker (deleted), or
-// the index has readable entries and the transcript was last written (written) longer than desktopEntryGrace ago. The
-// caller asks only about a transcript whose entrypoint is the desktop app's.
+// unreadable mentions it, and either a deleted_<id> marker says so, or the index has readable entries and the transcript
+// was last written (written) longer than desktopEntryGrace ago. The caller asks only about a transcript whose
+// entrypoint is the desktop app's.
 func (x claudeDesktopIndex) gone(id string, written time.Time) bool {
 	return !x.named[id] && (x.deleted[id] || x.entries > 0 && time.Since(written) > desktopEntryGrace)
 }
