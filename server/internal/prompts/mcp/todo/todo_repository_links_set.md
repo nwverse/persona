@@ -41,6 +41,7 @@ Replace one repository's issue/PR links using the exact revision from todo_repos
           },
           "title": {
             "type": "string",
+            "description": "Full source title; at most 1,024 UTF-8 bytes after trimming whitespace.",
             "maxLength": 1024
           }
         },

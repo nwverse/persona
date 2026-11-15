@@ -208,7 +208,13 @@ func NormalizeLink(identity Identity, in LinkInput) (TaskLink, error) {
 		}
 		u, err := url.Parse(in.URL)
 		base, baseErr := url.Parse(identity.CanonicalURL)
-		if err != nil || baseErr != nil || (u.Scheme != "http" && u.Scheme != "https" || u.Scheme != base.Scheme) || u.User != nil || u.Host != base.Host || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
+		if err != nil || baseErr != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" {
+			return TaskLink{}, Problem("link_repository_mismatch")
+		}
+		// Validate the actual URL before comparing its normalized source identity.
+		// Public HTTP aliases share HTTPS identity; self-hosted schemes/ports do not.
+		actual, err := Parse(in.URL, identity.Provider)
+		if err != nil || actual != identity {
 			return TaskLink{}, Problem("link_repository_mismatch")
 		}
 		prefix := base.Path + "/"
@@ -216,10 +222,11 @@ func NormalizeLink(identity Identity, in LinkInput) (TaskLink, error) {
 		if identity.Provider == "gitlab" {
 			paths = map[string]string{"-/issues/": "issue", "-/merge_requests/": "pull_request"}
 		}
+		path := strings.ToLower(u.Path)
 		for suffix, kind := range paths {
-			if strings.HasPrefix(u.Path, prefix+suffix) {
+			if strings.HasPrefix(path, prefix+suffix) {
 				in.Kind = kind
-				in.Number = strings.TrimPrefix(u.Path, prefix+suffix)
+				in.Number = strings.TrimPrefix(path, prefix+suffix)
 				break
 			}
 		}
@@ -452,15 +459,7 @@ func ParseTaskLink(raw string) (Identity, TaskLink, error) {
 	if err != nil {
 		return Identity{}, TaskLink{}, Problem("invalid")
 	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.RawPath != "" {
-		return Identity{}, TaskLink{}, Problem("invalid")
-	}
-	// Identity parsing normalizes public hosts, ports and repository casing. Keep
-	// credentials, queries, fragments and encodings for NormalizeLink to reject.
-	base, _ := url.Parse(identity.InstanceURL)
-	u.Scheme, u.Host, u.Path = base.Scheme, base.Host, strings.ToLower(u.Path)
-	link, err := NormalizeLink(identity, LinkInput{URL: u.String()})
+	link, err := NormalizeLink(identity, LinkInput{URL: raw})
 	return identity, link, err
 }
 

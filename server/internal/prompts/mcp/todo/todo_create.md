@@ -109,6 +109,7 @@ Add a to-do to the user's Persona to-dos, when the user asks you to note somethi
                     },
                     "title": {
                       "type": "string",
+                      "description": "Full source title; at most 1,024 UTF-8 bytes after trimming whitespace.",
                       "maxLength": 1024
                     }
                   },

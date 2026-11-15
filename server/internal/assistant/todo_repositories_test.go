@@ -175,7 +175,7 @@ func TestTodoRepositoryAgentReportsUseUnifiedStore(t *testing.T) {
 	if _, err = s.toolTodoRepositoryLinksAdd(t.Context(), "", "", "todo_repository_links_add", args); err != nil {
 		t.Fatal(err)
 	}
-	text, err = s.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	text, err = s.toolTodoGet(t.Context(), "", "", json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
 	if err != nil || !strings.Contains(text, "issues/12") || !strings.Contains(text, "pull/7") || !strings.Contains(text, "pull/8") || !strings.Contains(text, "Keep task context during checkout") || !strings.Contains(text, "Retain the current workspace") {
 		t.Fatal("agent context omitted associations", text, err)
 	}
@@ -304,7 +304,7 @@ func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {
 	if old := todoNow(next, todo.ID); old.Stage != "review" || old.PRURL != "https://github.com/example/web/pull/8" {
 		t.Fatal("legacy progress changed", old)
 	}
-	text, err := next.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	text, err := next.toolTodoGet(t.Context(), "", "", json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
 	if err != nil || strings.Contains(text, "/pull/7") || strings.Contains(text, "/pull/8") || !strings.Contains(text, "stage review") {
 		t.Fatal("agent context resurrected removed legacy PR", text, err)
 	}
@@ -329,7 +329,7 @@ func TestTodoRepositoryEmptyTodoNeedsNoCatalog(t *testing.T) {
 	if err := database.PutSetting(t.Context(), repository.CatalogKey, "invalid catalog"); err != nil {
 		t.Fatal(err)
 	}
-	text, err := s.toolTodoGet(t.Context(), json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
+	text, err := s.toolTodoGet(t.Context(), "", "", json.RawMessage(fmt.Sprintf(`{"id":%q}`, todo.ID)))
 	if err != nil || !strings.Contains(text, "Plain work") {
 		t.Fatal("ordinary Todo gained a catalog dependency", text, err)
 	}

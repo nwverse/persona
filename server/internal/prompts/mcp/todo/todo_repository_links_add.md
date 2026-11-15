@@ -32,6 +32,7 @@ Add issue/PR links to an existing to-do, including their full titles when known.
           },
           "title": {
             "type": "string",
+            "description": "Full source title; at most 1,024 UTF-8 bytes after trimming whitespace.",
             "maxLength": 1024
           }
         },

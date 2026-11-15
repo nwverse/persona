@@ -31,7 +31,7 @@ func (s *Service) toolTodo(ctx context.Context, machine, self, name string, args
 	case "todo_list":
 		return s.toolTodoList(ctx, args)
 	case "todo_get":
-		return s.toolTodoGet(ctx, args)
+		return s.toolTodoGet(ctx, machine, self, args)
 	case "todo_create":
 		return s.toolTodoCreate(ctx, machine, self, args)
 	case "todo_update":
@@ -151,7 +151,7 @@ func (s *Service) toolTodoList(ctx context.Context, args json.RawMessage) (strin
 	return b.String(), nil
 }
 
-func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string, error) {
+func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	t, err := s.toolTodoArg(args)
 	if err != nil {
 		return "", err
@@ -234,7 +234,7 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		}
 	}
 	if _, ok := s.store().(todoRepositoryStore); ok {
-		set, err := s.readTodoRepositories(ctx, t.ID)
+		set, err := s.readTodoRepositoriesForTool(ctx, machine, self, t.ID)
 		if err != nil {
 			return "", err
 		}

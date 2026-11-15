@@ -99,12 +99,36 @@ func taskRepositoriesError(w http.ResponseWriter, err error) {
 	apierr.WriteCode(w, status, "task_repositories_"+code, i18n.Err("task-repositories."+code))
 }
 func (s *Service) readTodoRepositories(ctx context.Context, id string) (repository.TaskSet, error) {
-	st, ok := s.store().(todoRepositoryStore)
+	_, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
 	}
 	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
 		return repository.TaskSet{}, err
+	}
+	return s.savedTodoRepositories(ctx, id)
+}
+
+// Meeting reads must not migrate metadata or acknowledge historical reports.
+// Sessionless Agent calls conservatively use the same machine-wide meeting check.
+func (s *Service) readTodoRepositoriesForTool(ctx context.Context, machine, session, id string) (repository.TaskSet, error) {
+	running, err := s.meetingTurnRunning(ctx, machine, session)
+	if session == "" {
+		running, err = s.meetingTurnAgentRunning(ctx, machine)
+	}
+	if err != nil {
+		return repository.TaskSet{}, err
+	}
+	if running || s.isRoom(session) {
+		return s.savedTodoRepositories(ctx, id)
+	}
+	return s.readTodoRepositories(ctx, id)
+}
+
+func (s *Service) savedTodoRepositories(ctx context.Context, id string) (repository.TaskSet, error) {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return repository.TaskSet{}, repository.Problem("store_unavailable")
 	}
 	// Import may have committed a new revision. The first response must describe that
 	// committed state, just like later reads, rather than a pre-import snapshot.
@@ -219,7 +243,7 @@ func (s *Service) toolTodoRepositories(ctx context.Context, machine, self, name 
 		if err := decodeTaskRepositoryInput(args, &in); err != nil {
 			return "", err
 		}
-		set, err := s.readTodoRepositories(ctx, in.ID)
+		set, err := s.readTodoRepositoriesForTool(ctx, machine, self, in.ID)
 		if err != nil {
 			return "", err
 		}

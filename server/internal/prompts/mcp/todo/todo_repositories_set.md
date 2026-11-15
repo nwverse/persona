@@ -75,6 +75,7 @@ Replace the business repository associations of a to-do. Read todo_repositories_
                 },
                 "title": {
                   "type": "string",
+                  "description": "Full source title; at most 1,024 UTF-8 bytes after trimming whitespace.",
                   "maxLength": 1024
                 }
               },

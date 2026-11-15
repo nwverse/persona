@@ -930,7 +930,9 @@ its canonical associations. The additive tool accepts `{id, links: [{url, title}
 with full source titles, or legacy `{id, urls}` (one to 50 exact issue/PR URLs in
 total), infers repository groups offline and needs no preconfigured catalog.
 Titles are optional plain text, limited to 1,024 UTF-8 bytes after trimming; control
-characters are rejected. A nonempty title updates a retained link and increments
+characters are rejected. The tool schemas describe this byte limit explicitly;
+their `maxLength` is only a character ceiling, not a UTF-8 byte validator.
+A nonempty title updates a retained link and increments
 the association revision. Omitted or empty titles in URL-only reports or older
 editors preserve known titles; removing a link removes its title. Agents obtain
 titles from the related work and maintain them through the same tool. The app
@@ -944,8 +946,11 @@ existing Todo with supplied bindings is explicitly refused so callers can read
 and edit that Todo without silently discarding associations. Writes retain the
 existing outbound confirmation rule for health conversations.
 
-Existing `pr_url` / `prs` references are imported once before the first association
-read or edit. New Agent reports append every supported PR URL to this same store,
+Existing `pr_url` / `prs` references are imported once before the first interactive
+association read or edit. During a meeting turn, `todo_get` and
+`todo_repositories_get` read only saved associations: they never import links or
+write association data, revisions or receipts. An ordinary user turn retains the
+historical import behavior. New Agent reports append every supported PR URL to this same store,
 including self-hosted instances; old stage and delivery fields retain their existing
 judgment semantics. A stored receipt prevents historical imports and repeated reports
 from restoring links removed by the user. An explicit additive call can restore them.
