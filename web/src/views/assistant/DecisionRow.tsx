@@ -196,7 +196,7 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
         </p>
       )}
       {blocker && answering.state === "idle" && (
-        <div data-decision-blocked role="alert" className="flex min-w-0 items-center gap-2 rounded-control bg-orange-tint px-2.5 py-1.5 text-[12px] text-orange">
+        <div data-decision-blocked role="alert" className="flex min-w-0 items-center gap-2 rounded-control bg-orange-tint px-2.5 py-1.5 text-label text-orange">
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
             {blocker.dialog ? t("assistant-decisionrow.dialog_open", { dialog: blocker.dialog }) : t("assistant-decisionrow.dialog_open_unnamed")}
           </span>
