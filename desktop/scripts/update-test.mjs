@@ -143,7 +143,7 @@ async function build(version, port) {
   const { code, text } = await run(process.execPath, [
     join(root, "node_modules", "electron-builder", "cli.js"), "--config", "electron-builder.update-test.yml", ...target, "--publish", "never",
     `-c.publish.url=http://127.0.0.1:${port}/`, `-c.appId=${testAppId(runPaths.identity)}`, `-c.nsis.guid=${nsisGuid(runPaths.identity)}`,
-    `-c.extraMetadata.version=${version}`, `-c.extraMetadata.name=${cacheIdentity}`, `-c.directories.output=${directory}`,
+    `-c.extraMetadata.version=${version}`, `-c.extraMetadata.name=${runPaths.identity}`, `-c.directories.output=${directory}`,
   ], { seconds: 1500, quiet: true, env: { ...process.env, PERSONA_DESKTOP_APP_ID: "com.example.persona.update-test", CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
   if (code !== 0) console.log(text);
   need(`build ${version}`, code === 0, `exit ${code}`);
@@ -166,7 +166,7 @@ function events(profile) {
   return readUpdateTestEvents(profile);
 }
 
-function launch(executable, profile) {
+function launch(executable, profile, installed) {
   // An AppImage unpacks itself where FUSE is missing; keep that inside this test's own directory.
   const env = { ...process.env, ...runPaths.environment, PERSONA_UPDATE_TEST_EXECUTABLE_DIR: installed, ...(platform === "linux" ? { APPIMAGE_EXTRACT_AND_RUN: "1", TMPDIR: join(work, "tmp") } : {}) };
   for (const name of ["PERSONA_HUB_URL", "PERSONA_DESKTOP_DISABLE_UPDATE", "PERSONA_DESKTOP_SMOKE", "ELECTRON_RUN_AS_NODE"]) delete env[name];
@@ -286,7 +286,7 @@ async function main() {
   // A saved hub, as on any computer where Persona is already set up; the first-run setup window is not under test here.
   await mkdir(profile, { recursive: true });
   await writeFile(join(profile, "desktop-state.json"), `${JSON.stringify({ hub: `http://127.0.0.1:${port}/` })}\n`, "utf8");
-  const first = launch(executable, profile);
+  const first = launch(executable, profile, installed);
   // "Ready" is the moment the update can be installed. On macOS that is Squirrel.Mac's own verdict on the file,
   // which arrives after electron-updater's download event; a refusal arrives as an error instead.
   const ready = platform === "darwin" ? "native-downloaded" : "downloaded";
@@ -358,7 +358,7 @@ async function main() {
     }
     // The reopened app is the new version and finds nothing newer.
     const before = (await events(profile)).length;
-    const second = launch(executable, profile);
+    const second = launch(executable, profile, installed);
     const again = await watch(profile, 180, all => { const fresh = all.slice(before); return fresh.some(entry => entry.event === "current" || entry.event === "error") ? fresh : undefined; });
     stop(second);
     await exited(second, 30);
