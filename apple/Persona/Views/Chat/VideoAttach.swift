@@ -3,6 +3,7 @@ import CryptoKit
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import PersonaWire
 
 // Videos from Photos (docs/protocol/protocol.md「Sending videos」) go as files, never as pictures: read out of the library, compressed
 // to H.264 MP4 only when they would not fit the hub's upload cap, and uploaded to the conversation's machine the way

@@ -1,5 +1,15 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A terminal review covers its criteria, not every later scope (#6880). Explicitly replacing criteria on an open, previously accepted or cancelled task must invalidate its terminal supervision state; otherwise unfinished or unjudged follow-up work is silently suppressed. Keep review history and unchanged criteria's evidence. Metadata-only changes and ordinary follow-up conversation do not invalidate the review, and existing stale records still need a real supervisor review rather than an automatic migration.
+
+- Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
+- A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
+  The task leader path picked "resume and escalate" from the listed status (`StatusOffline`), but a stopped, read-only
+  agent is also listed `interrupted` when a restart cut it off, and the node refuses every send to it
+  (`agent_stopped`). Put back as an ordinary failure, that became a node round trip every 30 seconds that nobody above
+  the leader heard of. Classify by the node's refusal code, not by status or its words: a refusal that holds until
+  someone acts goes the escalation path once, with a growing retry; transient failures keep the digest retry.
+
 - A finite startup wait cannot make a one-shot MCP tool list reliable (#8470). Registering a task leader and resolving
   its pane can both happen after discovery. Capture a change cursor before building the list, wake it from persisted
   task-link changes, and refresh only when the tool definitions actually differ. Re-resolve identity on heartbeat,
@@ -8,7 +18,7 @@
   column to update. A sharing `node_receipt=identity_missing` instead concerns creation/incarnation receipts, not MCP
   pane identity, and is not evidence of the latter's failure.
 
-- A GitHub number is not proof of a delivery PR (#8248). Resolve number-only references through issue metadata before recording them; an ordinary issue has no `pull_request` object. Prefer an explicit closeout PR artifact over incidental references, and recover a PR hidden by a clipped preview from the linked agent's full closeout when repairing a false record. Do not turn a masked permission 404 into proof of absence: confirm PR access, preserve real historical PRs, and persist correction before publishing it. Item-level misses must not put unrelated PR checks on an outage cooldown.
+- A GitHub number or a saved PR reference is not proof of this task's delivery (#8248). Confirm numbered references through issue metadata, then distinguish an explicit task-owned final closeout PR artifact from ordinary links, documents, quotes and earlier turns. Never promote unproven reference history after removing an issue-as-PR record: a related, unmerged PR can create the same acceptance deadlock without returning 404. A completed non-PR closeout must explicitly say merge/deploy are not applicable before clearing a contaminated delivery; genuine explicit PRs still pass the merge/deployment gate. Do not treat missing evidence or a masked permission 404 as proof of absence. Persist correction before publishing it, and keep item-level misses out of unrelated PR checks' outage cooldown.
 
 - A presence window is not an owner-turn guarantee (#6394). The two-minute `ownerPresentFor` hold and the
   five-minute `relayDecisionMax` cap let queued relayed/decision messages start new rounds behind the owner's back

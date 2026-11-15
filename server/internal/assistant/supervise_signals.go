@@ -23,6 +23,7 @@ const (
 	sigInterrupted = "interrupted" // the model service cut its turn off
 	sigFailed      = "failed"      // its agent did not start
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
+	sigPRConflict  = "pr_conflict" // the task's current open PR has merge conflicts at this head
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -39,6 +40,9 @@ var (
 	// superviseEvery is the least time between two supervision messages; superviseUrgentEvery when one waits on a decision.
 	superviseEvery       = 10 * time.Minute
 	superviseUrgentEvery = 2 * time.Minute
+	// superviseNoMainLogEvery is how often a digest that still finds no main conversation says so in the log: the
+	// watch's every pass (superviseTick) tries again, and each said it once before.
+	superviseNoMainLogEvery = time.Hour
 	// superviseNeedsAfter is how long an agent waits for an answer before the supervisor hears of it (the user was
 	// pushed; a quiet task's at once: the user was not).
 	superviseNeedsAfter = 3 * time.Minute
@@ -115,7 +119,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
 		sigParkDecided: // the owner answered: what they said is acted on soon
 		return true
@@ -142,8 +146,11 @@ type superviseBook struct {
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
-	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible map[string]bool      // an explicit user action makes the current triage turn visible
+	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
+	// when that was last logged (sendDigest).
+	noMainSince, noMainLogged time.Time
+	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
+	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen

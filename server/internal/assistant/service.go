@@ -54,6 +54,8 @@ type Options struct {
 type Service struct {
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
+	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
+	extTr extTranscriptions
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -376,6 +378,18 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		id, _ := p["session_id"].(string)
+		if err := s.putSupervisionInstructions(ctx, device, id, p); err != nil {
+			return err
+		}
+		if method == DeviceSessionSend {
+			cfg := s.settings(ctx)
+			if id != "" && id == cfg.Main && device == cfg.mainRouteMachine() {
+				p["is_main"] = true // internal sends must not restart main on ordinary-chat compaction settings
+			}
+		}
+	}
 	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {

@@ -442,6 +442,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only, never the health space) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
+| `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
 
 Scopes cover what an extension calls with its token. The owner's own answers that a channel extension relays (a button pressed, a reply typed) never go through these routes: they follow the channel's trust model (`docs/extensions/channels.md`, "Responsibilities").
@@ -590,6 +591,38 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 ```json
 {"permissions":{"hub":["kb.read","kb.write","models"]}}
 ```
+
+### Transcription for extensions (#8485)
+
+An extension granted the scope `transcription` turns its own audio into text with the transcription the owner chose for meetings
+(`meeting_transcription_extension`, the built-in voice extension's `gpt-live` by default; "Transcription" below). It never sees a key, and never
+gets anyone else's audio: this is the other direction from meetings, its audio handed to the owner's choice. The schema is
+`schema/extension/transcription.schema.json`; the Go SDK has `ext.Hub.TranscriptionStart` / `TranscriptionAudio` / `TranscriptionFinish` /
+`TranscriptionCancel`, and `ext.Transcribe` does the whole of it.
+
+- **Calls** over the program's connection (the manager checks the scope and hands each to the assistant with the extension's id, which the params cannot set):
+  `transcription.start {language?, label?}` → `{job}`; `transcription.audio {job, data}` (base64 PCM16 little-endian, mono, 16 kHz, contiguous, at most 256 KiB of
+  PCM a call); `transcription.finish {job}` → `{segments: [{from, to, text}], gaps?: [{from, to}], seconds}` (seconds from the start of the audio);
+  `transcription.cancel {job}`. Unknown fields are `invalid_params`.
+- **How it runs**: a job on the contribution's `replay` mode (speed 4), as a meeting's final pass but with no transcript of record to check against: the built-in
+  adapter runs three sessions a window and takes a window's text only when two agree. A window where they do not (noise, music, crosstalk) comes back in
+  `gaps`, never as a guess; its upstream bills about three times the audio's length. `transcription.audio` returns once its audio is sent and no more than
+  60 seconds wait past the contribution's last `ack`, so calling it again as soon as it returns paces the job. `finish` waits for the contribution's `done`,
+  up to 5 minutes without a frame.
+- **Limits**: one job per extension and two across extensions at a time (`busy`), meetings' jobs not counted and not held up; at most 15 minutes of audio a
+  job (`too_long`, the job ended); a job with no call for 60 seconds is cancelled. No budget (the owner's decision, as for model calls): the extension keeps
+  its own limits.
+- **Errors**: `permission_denied` (data `{scope: "transcription"}`), `invalid_params`, `assistant_offline`, `transcription_unavailable` (none chosen, not
+  set up, or no `replay`), `busy`, `too_long`, `timeout` (the contribution stopped answering), `transcription_failed` (its fatal error; data `{code}`).
+- **Privacy**: the audio is never kept: it goes to the contribution as it comes. The text goes back to the calling extension only. The manager logs one
+  line a job (the extension, its label cut to 40 characters, the seconds, the outcome, the upstream's billed seconds), never the text or the audio.
+- An extension that asks for the scope needs a hub that knows it in `engines.persona` (an older hub refuses the manifest).
+
+```json
+{"permissions":{"hub":["transcription"]}}
+```
+
+Code: `extmgr/extension_transcription.go`, `assistant/extension_transcribe.go`, `assistantwire/transcription_rpc.go`.
 
 ### Assistant conversations (#1288)
 
@@ -1627,8 +1660,10 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
     program calls can (`TestExtensionCannotWriteItsSettings`).
   - When the settings change, the old address is refused at once (`Proxy.SetTargets`), before the restart.
   - The consent line is 「访问你在设置里填的地址」: the field's title, the address there now (「当前：…」, 未填 before
-    install), and whether http is allowed. An upgrade that adds such an entry lists it under the permissions that grew,
-    like a new host.
+    install), and whether http is allowed. An upgrade keeps the settings, so its preview, the upgrades list and the
+    market's lines for an installed extension name the address saved there (not the old version's default); a fresh
+    install says 未填 (#8570). An upgrade that adds such an entry lists it under the permissions that grew, like a new
+    host.
   - The proxy holds the extension to these rules only while its sandbox is **enabled** (`sandbox.enabled`, "Sandbox").
     With the sandbox also **active**, the proxy is its only way out. Enabled but not active (this machine has no
     sandbox), its environment points it at the proxy: a well-behaved program goes through it, a misbehaving one can go
@@ -3152,7 +3187,8 @@ The hub stores only desired state: if an extension is enabled, configured, selec
 and the node follows (`node/plugins.go`). Reconciliation runs on computer connection and extension install / switch / config change / upgrade / uninstall, as full reconciliation without queuing; offline computers reconcile when reconnecting.
 
 - **Package**: the hub makes a tar.gz for the computer's platform (`extension.NodePackage`: excludes other-platform and hub programs, fixed order, no timestamps or owners, byte-identical for the same package),
-  using sha256 as digest; transfer only if the computer lacks it (`plugin.node.have`), in chunks (`plugin.node.put.begin/chunk/commit`, 1 MB each), then the node verifies sha256, extracts and checks as at install.
+  using sha256 as digest; transfer only if the computer lacks it (`plugin.node.have`), in 32 KiB chunks (`plugin.node.put.begin/chunk/commit`), then the node verifies sha256, extracts and checks as at install.
+  Small chunks leave room for heartbeats on a slow Link connection without upgrading the node. A failed transfer is held for ten minutes per computer and package identity, surviving connection replacements in the hub process; the next lease tick retries due packages. A package already present bypasses and clears this delay. This is not resumable transfer: the existing node protocol has no offset query, so the next attempt starts again. Restarting the hub clears this transient delay.
   Stored in that computer's `~/.persona/node-plugins/<id>/<version>/`, program data in `~/.persona/node-plugins/<id>/data/`, retained across versions.
   **Not `~/.persona/extensions/`**: on the hub computer, node and hub share `~/.persona`; `plugins/` is the hub's extension-install location (`installed/`, `data/`, `staging/`…).
   Every node-created extension directory has `.persona-node`; reconciliation deletes only marked directories. #1921's node used `plugins/` and deleted the hub's `installed/` during reconciliation as if it were an uninstalled extension (#1933).
@@ -3603,6 +3639,8 @@ the program stores nothing. The contract (the job's frames both ways, which cont
 - **Which one transcribes**: the built-in voice extension's `gpt-live`, unless the owner names another in the assistant's `meeting_transcription_extension`
   (`"<extension id>/<contribution id>"`): installing an extension never sends it meeting audio. A contribution is used only while its extension is enabled and running and
   the contribution is not switched off ("Turning contributions on and off"); an extension started by requests is started for `/info`, as for any relayed request.
+- **Extensions' own audio**: besides meetings, the manager runs jobs for extensions granted `transcription` on the same chosen contribution, in `replay`
+  mode ("Transcription for extensions"); the contribution sees a job like any other, and gets no meeting audio through it.
 - **A job is a request**: it holds the program's open request (`host.Proc.BeginHTTP`) until it ends, so an extension started by requests is not stopped mid-meeting.
   The phone's audio socket to the manager, by contrast, does not count in the manager's open requests (`Manager.Serving`): a meeting never holds a redeploy, and the phone sends again from where the hub's audio ends.
 

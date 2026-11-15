@@ -72,7 +72,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -1655,7 +1655,7 @@ const TodoListItem = memo(function TodoListItem({
               <Icon name="pullRequest" size={11} />
               {pr.text}
             </a>
-            <span className="truncate">· {t("todos.pr_idle", { age: view.age })}</span>
+            <span className="truncate">· {prBlockers(todo).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
           </div>
         )}
 
@@ -2642,7 +2642,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
                       </div>
                     )}
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-[11.5px] text-ink-3">
-                      <span>{clock(d.created_at)}</span>
+                      <span>{clock(d.phase_completed_at ?? d.created_at)}</span>
                       <span>·</span>
                       <span>{decisionSourceLabel(d, todo, lookup)}</span>
                       {off && (

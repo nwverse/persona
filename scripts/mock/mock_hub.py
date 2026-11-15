@@ -57,7 +57,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -1067,6 +1067,7 @@ if os.environ.get("MOCK_SHARED_FOLDER") == "1":
     SESSIONS += [
         _desktop("a1f3c2d4-0000-4000-8000-00000000571%d" % i, title, *(("done", "unread") if i == 1 else ("idle", "idle")),
                  40 + 20 * i, last, repo_root=_atlas, source_kind="claude_desktop",
+                 space_kind="claude_desktop", space_id="codex-project:" + _atlas, space_name="atlas",  # its project (#8521)
                  **({} if i == 1 else {"seen_at": ago(minutes=30 + 20 * i)}))
         for i, (title, last) in enumerate([("地图瓦片缓存", "瓦片缓存改成按缩放级别分目录了。"),
                                            ("离线包大小评估", "离线包压到 180 MB，列了三种取舍。"),
@@ -1543,7 +1544,8 @@ if os.environ.get("MOCK_SOURCES"):
         # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
         sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
              "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
-             capabilities=_desktop_caps, **NO_SPACE),
+             capabilities=_desktop_caps, **dict(NO_SPACE, space_kind="claude_desktop",
+                                                 space_id="codex-project:/home/me/code/release", space_name="release")),
         sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
              "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
@@ -1746,8 +1748,11 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
             kw.update(space_kind="codex_app", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1],
                       agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True},
                       efforts=["low", "medium", "high", "xhigh", "max", "ultra"], effort="max")
-        elif surface == "desktop" and status != "offline":
-            kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+        elif surface == "desktop":
+            if status != "offline":
+                kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+            if project:  # in its project, as the app's sidebar groups it; the home directory's in none (#8521)
+                kw.update(space_kind="claude_desktop", space_id=f"codex-project:{cwd}", space_name=cwd.rsplit("/", 1)[-1])
         SESSIONS.append(sess("macbook", sid, title, cwd, status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
     # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
@@ -14318,7 +14323,9 @@ def machine_launchers(mid=""):
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
-                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api" and l["name"] != OWN_SERVICE_PROVIDER["name"]]
+    if OWN_SERVICE_SKIP and not own_service_skips(OWN_SERVICE_PROVIDER, mid):  # #8109: listed where its rule lets it run
+        out.append({k: OWN_SERVICE_PROVIDER[k] for k in ("name", "display_name", "base_url", "model", "source")})
     if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
         # docs/integrations/claude-integration.md "New sessions in the desktop app").
@@ -17861,10 +17868,10 @@ def session_catalog(rows, revision, state_of):
     waiting = lambda n: {"needs_you": n} if n else {}
     for s in rows:
         needs = 1 if state_of(s) == "needs_you" else 0
-        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")
+        path = s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd") or ""
         at = places.setdefault((s["machine_id"], path), [0, 0])
         at[0] += 1; at[1] += needs
-        group = s.get("space_id") or s.get("workspace_id", "")
+        group = s.get("space_id") or s.get("workspace_id") or ""  # a row may name none as null (NO_SPACE)
         at = groups.setdefault((s["machine_id"], group), [0, 0])
         at[0] += 1; at[1] += needs
         if group and s.get("space_name"):
@@ -17988,6 +17995,18 @@ def paged_sessions(query):
     fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    scope = query.get("agents_only", ["0"])
+    if len(scope) != 1 or scope[0] not in ("0", "1", "false", "true"):
+        return {"error": "agents_only must be true, false, 1, or 0", "code": "invalid_query"}, 400
+    agents_only = scope[0] in ("1", "true")
+
+    def agent_row(s):
+        cwd = posixpath.normpath((s.get("cwd") or "").replace("\\", "/"))
+        parts = cwd.split("/")
+        health_dir = any(parent in (".persona", ".jarvis") and re.fullmatch(r"health(?:-m-[0-9a-f]+)?", name)
+                         for parent, name in zip(parts, parts[1:]))
+        return not (s.get("assistant") or s.get("space") == "health" or health_dir)
+
     # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
     # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
     roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
@@ -18015,7 +18034,8 @@ def paged_sessions(query):
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
 
     def matching(rows):
-        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+        rows = [s for s in rows if (not agents_only or agent_row(s))
+                and (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
                 and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
@@ -24546,7 +24566,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
-    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
+    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
 _features_without_voice = features
@@ -24780,6 +24800,7 @@ def model_defaults_launchers(h, p, q):
             default["runtime"] = b.get("runtime") or "cli"
     out = {"launchers": machine_launchers(p.split("/")[4]), "default": default}
     if pid == "agent.new":
+        out = with_own_service_unavailable(out, p.split("/")[4], h.headers.get("Accept-Language"))
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
         out["tiers_profile"] = {"id": "performance", "name": "Performance"}
@@ -24840,6 +24861,49 @@ if LAUNCHER_HEALTH:
                          "weather-app", 2, "agent-3", 3, 1, "", launcher="work_gw",
                          **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == "macbook"), "macbook"))))
 # ---------- end of area: launcher health ----------
+
+
+# ---------- area: a provider its own-service rule leaves out (#8109) ----------
+# MOCK_OWN_SERVICE_SKIP=1: a Persona-managed provider added with the defaults (DeepSeek: share all, own_service skip) and
+# the MacBook's Claude Code signed in on its own. New Agent's list (GET /api/v1/machines/{mid}/launchers, agent.new or no
+# purpose) leaves it out on the MacBook and says why in `unavailable` (code launcher_own_service, the hub's sentence in
+# the request's language); the server and the Mac Studio, without a sign-in of their own, list it. Settings › Model
+# providers has it, so How to fix opens its page.
+OWN_SERVICE_SKIP = os.environ.get("MOCK_OWN_SERVICE_SKIP") == "1"
+OWN_SERVICE_PROVIDER = {"name": "deepseek", "display_name": "DeepSeek", "source": "persona",
+                        "base_url": "https://api.deepseek.example.com/anthropic", "model": "deepseek-v4", "has_key": True,
+                        "auth": "bearer", "share": "all", "delivery": "on_demand", "own_service": "skip"}
+OWN_SERVICE_SIGNED_IN = ("macbook",)  # computers whose Claude Code has a sign-in of its own
+
+
+def own_service_skips(launcher, mid):
+    """The provider's own-service rule leaves it out on computer mid."""
+    return launcher.get("own_service") == "skip" and mid in OWN_SERVICE_SIGNED_IN
+
+
+def own_service_unavailable(mid, accept_language):
+    """New Agent's `unavailable` on computer mid (hub ownServiceSkipped): absent (None) when there is none."""
+    if not OWN_SERVICE_SKIP or mid not in OWN_SERVICE_SIGNED_IN:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    machine = next((m["name"] for m in MACHINES if m["id"] == mid), mid)
+    l = OWN_SERVICE_PROVIDER
+    reason = readiness_mock.t(readiness_mock.lang_of(accept_language), "assistant-models_launchers.err_own_service",
+                              machine=machine, harness="Claude Code", provider=l["display_name"])
+    return [{"name": l["name"], "display_name": l["display_name"], "kind": "launcher", "agent": "claude",
+             "code": "launcher_own_service", "reason": reason}]
+
+
+def with_own_service_unavailable(out, mid, accept_language):
+    """A launcher list's answer with `unavailable` added where the rule leaves the provider out (MOCK_OWN_SERVICE_SKIP)."""
+    skipped = own_service_unavailable(mid, accept_language)
+    return dict(out, unavailable=skipped) if skipped else out
+
+
+if OWN_SERVICE_SKIP:
+    LAUNCHERS.insert(0, dict(OWN_SERVICE_PROVIDER))
+# ---------- end of area: a provider its own-service rule leaves out ----------
 
 
 # ---------- HTTP ----------
@@ -25815,7 +25879,8 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
+            mid = p.split("/")[4]
+            return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -27656,6 +27721,9 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
+            LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
+            return self.send_json({"enabled": LN["on"]})
         if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):  # Settings › Notifications
             body = json.loads(self.last_body or b"{}")
             PREFS.update({k: v for k, v in body.items() if k in ("input", "done", "live_activity", "lock_details")})
