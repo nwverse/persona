@@ -288,7 +288,7 @@ func windowsTaskActiveText(active string) string {
 func taskText(s *serviceState, line func(string, ...any)) {
 	switch {
 	case s.Active == "" && !s.Installed:
-		line(terminalText("link-cli.windows_service_missing"))
+		line("%s", terminalText("link-cli.service_not_installed"))
 	case s.Active == "":
 		line("%s", terminalText("link-cli.windows_service_unregistered", i18n.Args{"task": s.Unit, "path": s.File}))
 	default:

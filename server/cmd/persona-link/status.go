@@ -375,9 +375,9 @@ func (r report) serviceText(line func(string, ...any), user string) {
 				"unit": s.Unit, "missing": noUserInstance(), "detail": strings.TrimPrefix(s.Missing, noUserInstance()+"："), "user": user,
 			}))
 		case s.Missing != "":
-			line("%s", terminalText("link-cli.service_missing", i18n.Args{"missing": link.StatusErrorText(i18n.Terminal(), s.Missing)}))
+			line("%s", terminalText("link-cli.service_missing", i18n.Args{"missing": systemdReason(s.Missing).Text(i18n.Terminal())}))
 		case !s.Installed:
-			line("%s", terminalText("link-cli.windows_service_missing"))
+			line("%s", terminalText("link-cli.service_not_installed"))
 		default:
 			linger := terminalText("link-cli.linger_enabled")
 			if !s.Linger {

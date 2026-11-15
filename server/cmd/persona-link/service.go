@@ -91,6 +91,9 @@ func (e *env) systemdMissing() string {
 	return ""
 }
 
+// systemdReason keeps the canonical reason in errors and JSON, translating only a person's view of it.
+func systemdReason(reason string) link.StatusText { return link.StatusText(reason) }
+
 // lingering: the user's systemd instance runs from boot, with nobody logged in (loginctl enable-linger).
 func (e *env) lingering() bool {
 	return e.user != "" && e.exists("/var/lib/systemd/linger/"+e.user)
@@ -224,7 +227,7 @@ func install(e *env, args []string) error {
 		fmt.Fprintln(e.stdout, terminalText("link-cli.binary_installed", i18n.Args{"path": bin}))
 	}
 	if why := e.systemdMissing(); why != "" {
-		noSystemd(e, why, bin)
+		noSystemd(e, systemdReason(why).Text(i18n.Terminal()), bin)
 		if withNode {
 			fmt.Fprintln(e.stdout, terminalText("link-cli.node_nohup", i18n.Args{"binary": shellQuote(e.nodeBin()), "log": shellQuote(e.nodeLog())}))
 			// nodeupdate.Options: what restarts the node on exit has to say so, or the hub cannot update it.
@@ -419,7 +422,7 @@ func uninstall(e *env, args []string) error {
 				fmt.Fprintln(e.stdout, terminalText("link-cli.uninstall_stop_error", i18n.Args{"error": orErr(out, err)}))
 			}
 		} else {
-			fmt.Fprintln(e.stdout, terminalText("link-cli.uninstall_stop_unavailable", i18n.Args{"error": why}))
+			fmt.Fprintln(e.stdout, terminalText("link-cli.uninstall_stop_unavailable", i18n.Args{"error": systemdReason(why).Text(i18n.Terminal())}))
 		}
 		if err := os.Remove(unit); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err

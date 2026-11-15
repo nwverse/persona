@@ -199,8 +199,16 @@ func newTextError(key string, cause error, args ...i18n.Args) error {
 	e := &textError{key: key, cause: cause}
 	if len(args) > 0 {
 		e.args = args[0]
-	} else if cause != nil {
-		e.args = i18n.Args{"error": cause}
+	}
+	if cause != nil {
+		if _, named := e.args["error"]; !named {
+			withCause := make(i18n.Args, len(e.args)+1)
+			for name, value := range e.args {
+				withCause[name] = value
+			}
+			withCause["error"] = cause
+			e.args = withCause
+		}
 	}
 	return e
 }
@@ -215,14 +223,24 @@ func (e *textError) Unwrap() error { return e.cause }
 func (e *textError) Text(l i18n.Lang) string {
 	args := i18n.Args{}
 	for name, value := range e.args {
-		if err, ok := value.(error); ok {
-			args[name] = ErrorText(l, err)
-		} else {
+		switch value := value.(type) {
+		case error:
+			args[name] = ErrorText(l, value)
+		case interface{ Text(i18n.Lang) string }:
+			args[name] = value.Text(l)
+		default:
 			args[name] = value
 		}
 	}
 	return i18n.T(l, e.key, args)
 }
+
+// StatusText marks a canonical saved-status fragment that may be rendered by the closed StatusErrorText mapper when
+// nested inside another error. Its default-language text is always the original byte string.
+type StatusText string
+
+// Text renders only the marked fragment, never arbitrary surrounding peer or OS text.
+func (s StatusText) Text(l i18n.Lang) string { return StatusErrorText(l, string(s)) }
 
 // ErrUnpaired: link.json has no credential for active mode (never paired, or only for passive mode). It is an
 // fs.ErrNotExist, as a missing file is.

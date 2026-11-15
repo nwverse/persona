@@ -352,7 +352,7 @@ func TestJoinedCandidateDelimiterRemainsCanonical(t *testing.T) {
 	if len(parts) != 3 || parts[1] != "域名 b：peer 原文：keep" || parts[2] != "untouched" {
 		t.Fatalf("parts = %#v", parts)
 	}
-	if got := link.StatusErrorText(i18n.En, parts[0]); got != "LAN 192.0.2.10:18662: Timed out" {
+	if got := link.StatusErrorText(i18n.En, parts[0]); got != "LAN 192.0.2.10:18662: timed out" {
 		t.Fatalf("known candidate = %q", got)
 	}
 	for _, part := range parts[1:] {
@@ -428,28 +428,26 @@ func TestMalformedConfigJSONAndHumanRendering(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(f.configPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(f.configPath(), []byte(`{"machine":`), 0o600); err != nil {
+	if err := os.WriteFile(f.configPath(), []byte(`{broken`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var canonical string
+	const detail = "invalid character 'b' looking for beginning of object key string"
+	canonical := f.configPath() + ": " + detail
 	var machine []byte
 	for _, language := range []string{"zh-Hans", "en", "ja", "fr"} {
 		setTerminalLanguage(t, language)
 		r := gather(f.env)
-		if canonical == "" {
-			canonical = r.Error
-		} else if r.Error != canonical {
-			t.Fatalf("%s changed canonical config error: %q", language, r.Error)
+		if r.Error != canonical {
+			t.Fatalf("%s canonical config error = %q, want %q", language, r.Error, canonical)
 		}
 		human := r.text(f.now(), "me")
-		detail := strings.TrimPrefix(canonical, f.configPath()+": ")
 		switch language {
 		case "zh-Hans":
 			if !strings.Contains(human, "凭据：读不了（"+canonical+"）") {
 				t.Fatalf("legacy Chinese rendering = %q", human)
 			}
 		case "en", "fr":
-			if !strings.Contains(human, "Credentials: cannot read them (Cannot read "+f.configPath()+": "+detail+")") {
+			if !strings.Contains(human, "Credentials: cannot read them (Cannot read "+canonical+")") {
 				t.Fatalf("English rendering = %q", human)
 			}
 		case "ja":
@@ -457,6 +455,7 @@ func TestMalformedConfigJSONAndHumanRendering(t *testing.T) {
 				t.Fatalf("Japanese rendering = %q", human)
 			}
 		}
+		assertNoTerminalPlaceholder(t, human)
 		f.out.Reset()
 		_ = status(f.env, []string{"--json"})
 		if machine == nil {

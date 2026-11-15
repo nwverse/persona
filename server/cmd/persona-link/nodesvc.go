@@ -156,7 +156,7 @@ func nodeInstall(e *env, from string, fromAny ...bool) error {
 	switch e.goos {
 	case "linux":
 		if why := e.systemdMissing(); why != "" {
-			return link.NewTextError("link-cli.node_no_systemd", nil, i18n.Args{"error": why, "binary": shellQuote(bin), "log": shellQuote(e.nodeLog())})
+			return link.NewTextError("link-cli.node_no_systemd", nil, i18n.Args{"error": systemdReason(why), "binary": shellQuote(bin), "log": shellQuote(e.nodeLog())})
 		}
 		if err := os.WriteFile(file, []byte(nodeUnitFile(bin, e.nodeLog())), 0o644); err != nil {
 			return err

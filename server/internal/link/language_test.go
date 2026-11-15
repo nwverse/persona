@@ -1,6 +1,7 @@
 package link
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func TestCandidateSummaryCanonicalBytesAndPresentation(t *testing.T) {
 			t.Fatalf("language %s changed canonical summary: %q", language, got)
 		}
 	}
-	if got := summaryText(i18n.En, err); got != "LAN 192.0.2.10:18662: Timed out; Domain hub.example.com:18662: peer 原文：keep" {
+	if got := summaryText(i18n.En, err); got != "LAN 192.0.2.10:18662: timed out; Domain hub.example.com:18662: peer 原文：keep" {
 		t.Fatalf("English summary = %q", got)
 	}
 	joined := ErrorText(i18n.En, err)
@@ -38,8 +39,8 @@ func TestStatusErrorTextRecognizesOnlyKnownShapes(t *testing.T) {
 	for _, test := range []struct {
 		name, canonical, english string
 	}{
-		{"candidate", "内网 192.0.2.10:18662：超时", "LAN 192.0.2.10:18662: Timed out"},
-		{"listener", ":18663：端口被占用了", ":18663: The port is already in use"},
+		{"candidate", "内网 192.0.2.10:18662：超时", "LAN 192.0.2.10:18662: timed out"},
+		{"listener", ":18663：端口被占用了", ":18663: the port is already in use"},
 		{"node down", "本机的常驻 node 没在运行（/tmp/node.sock 连不上）：persona-link node install（systemd 用户服务）", "This computer's resident node isn't running (cannot connect to /tmp/node.sock): run persona-link node install (systemd user service)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -106,25 +107,60 @@ func TestPassivePeerTextDoesNotFollowTerminalLanguage(t *testing.T) {
 
 func TestMalformedConfigKeepsCanonicalParserDetail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "link.json")
-	if err := os.WriteFile(path, []byte(`{"machine":`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{broken`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Read(path)
 	if err == nil {
 		t.Fatal("malformed JSON loaded")
 	}
-	canonical := err.Error()
-	if !strings.HasPrefix(canonical, path+": ") {
-		t.Fatalf("canonical error = %q", canonical)
+	const detail = "invalid character 'b' looking for beginning of object key string"
+	canonical := path + ": " + detail
+	if err.Error() != canonical {
+		t.Fatalf("canonical error = %q, want %q", err, canonical)
 	}
 	if got := ErrorText(i18n.ZhHans, err); got != canonical {
-		t.Fatalf("legacy Chinese presentation changed: %q", got)
+		t.Fatalf("legacy Chinese presentation = %q, want %q", got, canonical)
 	}
-	detail := strings.TrimPrefix(canonical, path+": ")
 	if got := ErrorText(i18n.En, err); got != "Cannot read "+path+": "+detail {
 		t.Fatalf("English error = %q", got)
 	}
-	if got := ErrorText(i18n.Ja, err); !strings.HasSuffix(got, detail) || got == canonical {
+	if got := ErrorText(i18n.Ja, err); got != path+" を読み取れません："+detail {
 		t.Fatalf("Japanese error = %q", got)
+	}
+	var syntax *json.SyntaxError
+	if !errors.As(err, &syntax) || syntax.Offset != 2 {
+		t.Fatalf("cause is not the JSON parser's syntax error: %T %v", syntax, err)
+	}
+	if !errors.Is(err, syntax) {
+		t.Fatal("errors.Is does not reach the JSON parser's cause")
+	}
+}
+
+func TestTextErrorCauseFillsErrorAlongsideArguments(t *testing.T) {
+	cause := errors.New("disk full")
+	const path = "/tmp/persona-link"
+	args := i18n.Args{"path": path}
+	err := newTextError("link-cli.binary_install_failed", cause, args)
+	if got, want := err.Error(), "放不进 "+path+"：disk full"; got != want {
+		t.Fatalf("canonical error = %q, want %q", got, want)
+	}
+	if got, want := ErrorText(i18n.En, err), "Cannot install "+path+": disk full"; got != want {
+		t.Fatalf("English error = %q, want %q", got, want)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is does not reach the install failure")
+	}
+	if _, mutated := args["error"]; mutated {
+		t.Fatal("the constructor mutated the caller's argument map")
+	}
+
+	explicit := errors.New("shown detail")
+	withExplicitError := newTextError("link-cli.binary_install_failed", cause, i18n.Args{"path": path, "error": explicit})
+	if got, want := ErrorText(i18n.En, withExplicitError), "Cannot install "+path+": shown detail"; got != want {
+		t.Fatalf("explicit error argument = %q, want %q", got, want)
+	}
+	if !errors.Is(withExplicitError, cause) {
+		t.Fatal("an explicit error argument detached the wrapped cause")
 	}
 }
