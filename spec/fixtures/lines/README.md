@@ -38,11 +38,11 @@
 | 工具失败只取结果的 `is_error`，不根据输出文字推断。 | `ToolCall.isError` | `failed_tool_counts_known_failure` |
 | 带 `tool_use_id` 的图片归工具卡，普通及被吸收的用户图片在消息上方显示。 | `buildRows`、`ChatLines.photos`、`flatLines`、`viewed`；`docs/lessons/transcript.md` 图片两条路 | `tool_images_belong_to_call`、`regular_user_images`、`absorbed_user_images` |
 | After background-task wakes the answer is the latest run's last reply, whatever its length (#638; it used to be the longest). These cases were updated from `ChatStoreTests.backgroundWakeEndsOnTheNewestWords` and `wakeAfterARecapStaysInItsExchange`, read against the Swift code rather than run. | `Turn.pickAnswerAcrossWakes` | `multiple_wakes_pick_latest_answer`、`only_last_reply_in_each_wake_is_candidate`、`short_reply_after_wake_is_the_answer`、`wake_after_recap_reopens_turn`、`photos_after_wake_stay_with_message` |
-| 选中回复之前的工作留在主列表，之后的助手内容只放抽屉，抽屉从第一次唤醒开始。 | `pickAnswerAcrossWakes`、`Turn.hasPendingWake` | `short_reply_after_wake_is_the_answer`、`long_answer_after_wake`、`live_tail_runs_behind_chip` |
-| 唤醒后的用户文本和图片仍留在主轮，`tail` 和 `afterWake` 排除这些用户输入。 | `pickAnswerAcrossWakes`、`ChatRow.isUserInput`；`ChatStoreTests.picturesSentAfterAWakeStayWithTheirMessage` | `photos_after_wake_stay_with_message` |
+| 选中回复之前的工作留在主列表，之后的助手内容只放抽屉，抽屉从第一次唤醒开始。 Corpus contract (Android); not current iOS since #2996. | `pickAnswerAcrossWakes`、`Turn.hasPendingWake` | `short_reply_after_wake_is_the_answer`、`long_answer_after_wake`、`live_tail_runs_behind_chip` |
+| 唤醒后的用户文本和图片仍留在主轮，`tail` 和 `afterWake` 排除这些用户输入。 `afterWake` is the corpus contract (Android); current iOS has no such list since #2996. | `pickAnswerAcrossWakes`、`ChatRow.isUserInput`；`ChatStoreTests.picturesSentAfterAWakeStayWithTheirMessage` | `photos_after_wake_stay_with_message` |
 | 回顾独立于轮，回顾后的唤醒能重新打开原轮且不移动回顾。 | `ChatBlock.build`；`ChatStoreTests.wakeAfterARecapStaysInItsExchange` | `recap_separates_turns`、`wake_after_recap_reopens_turn` |
-| 没有唤醒标记的后台通知只算工作过程，没有回复的唤醒轮也保留抽屉入口。 | `ChatBlock.build`、`pickAnswerAcrossWakes` | `notification_without_wake`、`wake_without_any_reply` |
-| 窗口以唤醒通知开头时先显示该通知，后续运行可以由唤醒入口承接。 | `ChatLines.flatLines`、`Turn.hasPendingWake` | `orphan_wake_opens_with_notice`、`live_tail_runs_behind_chip`、`live_answer_after_wake` |
+| 没有唤醒标记的后台通知只算工作过程，没有回复的唤醒轮也保留抽屉入口。 Corpus contract (Android); not current iOS since #2996. | `ChatBlock.build`、`pickAnswerAcrossWakes` | `notification_without_wake`、`wake_without_any_reply` |
+| 窗口以唤醒通知开头时先显示该通知，后续运行可以由唤醒入口承接。 Corpus contract (Android); not current iOS since #2996. | `ChatLines.flatLines`、`Turn.hasPendingWake` | `orphan_wake_opens_with_notice`、`live_tail_runs_behind_chip`、`live_answer_after_wake` |
 | 无任务字段且含“中断”的通知进入轮尾，压缩通知和任务标题里的“中断”仍属工作过程。 | `ChatBlock.build`；`TaskNoteTests.aNoticeAboutAnInterruptIsNotTheInterrupt` | `interrupt_is_trailing_notice`、`compaction_stays_inside_work`、`task_title_containing_interrupt_is_not_interrupt` |
 | fold 按其代表的工具和思考计数，结束时间取 `fold.until`，收起步数按工具数加思考数。 | `ToolStep`、`ChatLines.unfold`；`FoldedWorkTests.aFoldCountsWhatItStandsFor` | `fold_counts_tools_and_thoughts` |
 | fold 替换范围内的工作，重复 fold 幂等，扩大范围替换旧 fold，展开还原原步骤。 | `ChatStore.dropFolded`、`ChatStore.unfold`；`FoldedWorkTests.aFoldReplacesTheStepsItCoversAndOpeningItPutsThemBack` | `fold_replaces_extends_and_unfolds` |
@@ -69,7 +69,7 @@
 | 可选字段 | 含义与默认值 |
 | --- | --- |
 | `live_turn_id` | 当前进行中的 Turn ID，缺省为 `null`，对应 iOS 已从会话状态选出的轮，不根据工具结果自行推断 |
-| `open_work` | 展开的行 ID 集合，缺省为空，既可以有 `w-…`，也可以有抽屉的 `dw-…` |
+| `open_work` | 展开的行 ID 集合，缺省为空，既可以有 `w-…`，也可以有抽屉的 `dw-…`（the drawer is the corpus contract; current iOS has none since #2996） |
 | `now` | 固定比较时钟，缺省为 `2026-01-01T00:01:00Z`，只用于工作行时长投影 |
 | `menu_queries` | 要传给每行 `holds` 的原消息 ID，允许 `null`，结果按查询顺序排列 |
 | `frozen` | `{seq, part, live_turn_id}`，按该位置截取 item 前缀并用冻结时的进行中轮重建 |
@@ -92,7 +92,7 @@
 | `work` | 过程步骤、计数、时间、展开状态和进行中状态，见下文 |
 | `work_step` | `group_id`、`first` 和 `step`，ID 为组 ID 加 `/` 再加步骤 ID |
 | `work_end` | `group_id` 和收起步数 `count`，ID 为组 ID 加 `-end` |
-| `wakes` | `notice_ids`、`live` 及真正的 `drawer_lines`，ID 为 `wk-` 加 Turn ID |
+| `wakes` | `notice_ids`、`live` 及真正的 `drawer_lines`，ID 为 `wk-` 加 Turn ID。Corpus contract (Android): current iOS draws no `wakes` line since #2996. |
 | `task_note` | 原通知内容及 `task_note` 投影，包含标签、主题、结果、失败标记和回配的调用 ID |
 
 `work` 的 `steps` 即折叠内容，展开时每个步骤另有一条 `work_step`，两者不重复计数。步骤类型包括 `tool`、`thinking`、`notice`、`task_note`、`narration`、`fold`。工具步骤保存实际结果 ID、结果文本、`running`、`failed`、图片数和可选的 `background_badge`；任务步骤沿用 `TaskNoteText` 的标签与结果；fold 保存代表计数和加载范围。
@@ -108,7 +108,7 @@
 
 `separator_before` 只描述展开卡片内部的结构：首步骤没有分隔线，后续步骤及收起行有分隔线；不规定颜色、线宽、位置等像素。原始 iOS 代码分别来自 `WorkStepView` 和 `lineView` 的 `.workEnd` 分支。
 
-`turns` 包含用户、过程、回复、轮尾、唤醒、抽屉和到达顺序的 ID 列表，以及 Turn 本身的计数和起止时间；`process_ids` 中的工具组使用 `tools-<首步骤 ID>`。Turn 统计发生在 View 的空思考过滤之前，不能直接拿 `thought_count` 当工作行的 `thoughts`。有任务通知时还输出 `task_index`，包含 `started`、通知到调用的 `calls`、描述、开始时间和按调用归组的状态序列。
+`turns` 包含用户、过程、回复、轮尾、唤醒、抽屉和到达顺序的 ID 列表，以及 Turn 本身的计数和起止时间；`process_ids` 中的工具组使用 `tools-<首步骤 ID>`。Turn 统计发生在 View 的空思考过滤之前，不能直接拿 `thought_count` 当工作行的 `thoughts`。有任务通知时还输出 `task_index`，包含 `started`、通知到调用的 `calls`、描述、开始时间和按调用归组的状态序列。Current iOS has no drawer list (`after_wake_ids`) since #2996: its turns carry `has_pending_wake` instead (`spec/fixtures/lines/ios/differences.json`).
 
 `layout.json` 额外输出 `footer`：请求 ID 顺序、`placement: "above_composer"`、`part_of_transcript: false`；不把请求交互和新的 `StatusLine` 塞进 transcript 行。
 
@@ -121,6 +121,12 @@
 - 总纲第 5 节提到权限卡挂记录末尾，而当前 `mainFooter` 把所有请求面板放在输入区；本夹具采用实际位置，与 UX 3.2/3.4 的当前规则一致。
 - Swift 的 `String.count` 数扩展字素簇，Kotlin 实现取答时须注意复合表情，不能直接用 UTF-16 长度代替。
 
+## Where current iOS differs
+
+The corpus is the shared contract: Android's `LinesFixtureTest` replays every case against its own Kotlin port, which keeps `afterWake` and the wake drawer, and compares complete objects. Current iOS differs from it in three ways. Since #1015, and by transcript entry since #2112, a user picture in an entry of its own is a message of its own that opens the next turn (`regular_user_images`, `tool_images_belong_to_call`). Since #2112 user pictures are a turn's input, not its process (`absorbed_user_images`, `photos_after_wake_stay_with_message`). Since #2996 a wake's continuation stays in the exchange's work line: there is no wake chip or drawer, a turn has no `after_wake_ids` but `has_pending_wake`, and a wake with no reply after it leaves the tail empty (`live_tail_runs_behind_chip`).
+
+`spec/fixtures/lines/ios/differences.json` pins exactly these differences, each with why and the Apple code and test that assert it. `turn_wake_state` drops `after_wake_ids` from every turn and sets `has_pending_wake`, true only for the turns it lists; an entry of `cases` replaces whole keys of a case's `expected` (`replace`) or single fields of one of its turns (`turn_fields`). The file sits in a subdirectory, so neither the replay's fixture loop nor Android's readers, which list only this directory's own `*.json` files, take it for a fixture. The replay fails on an entry that changes nothing, on one the case passes without, and on one that names a case or turn the corpus does not have, so the file can only shrink. Moving the corpus to current iOS is a follow-up once Android's port follows; until then the corpus values stay as they are.
+
 ## 对照和复跑
 
 The replay has no file of its own in the repository: the Python block below writes what it needs to a temporary directory under `/tmp`. It takes the Swift adapter from this README and extracts types and functions from the Apple sources by unique start and end markers; `apple/Shared/ChatStore.swift`, `apple/Persona/Views/Chat/ViewedImages.swift` and a few small `apple/Shared` files go to `swiftc` whole, and no source file is changed. `struct ChatLines` (`apple/Persona/Views/Chat/ChatLines.swift`), `ChatLine`, `WorkItem`, `WorkSummary` and `TaskNoteText` are taken verbatim; the adapter only hosts them and projects what they return, it does not reimplement any folding. The packages these sources import, `PersonaWire`, `PersonaKit` and `BeautifulUI` under `apple/Packages/`, are first compiled from their sources into static modules, nonisolated by default as SwiftPM builds them. The app's sources are compiled in Swift 6 mode with the settings `apple/project.yml` gives the app (`SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor`, `SWIFT_APPROACHABLE_CONCURRENCY: YES`), so `ChatStore` keeps its concurrency. The app's `apple/Shared/Localization/Localizable.xcstrings` is compiled next to the binary, which runs in Simplified Chinese (`-AppleLanguages (zh-Hans)`), as the Apple tests do: the summaries and durations in the fixtures are the zh-Hans words.
@@ -129,11 +135,11 @@ The lines are built as an Agent's chat in a style without BeautifulUI draws them
 
 The replay's output differs from the projection the fixtures were written against in three ways, each forced by the refactor:
 
-- `Turn.afterWake` is gone: #2996 folded a wake's continuation into the exchange's ordinary work line and removed the wake chip and its drawer. Each turn reports the state that replaced it, `has_pending_wake` (`Turn.hasPendingWake`), where the fixtures still have `after_wake_ids`; `wakes` lines and their `drawer_lines` no longer occur.
+- `Turn.afterWake` is gone: #2996 folded a wake's continuation into the exchange's ordinary work line and removed the wake chip and its drawer. Each turn reports the state that replaced it, `has_pending_wake` (`Turn.hasPendingWake`), where the corpus has `after_wake_ids`; `wakes` lines and their `drawer_lines` no longer occur.
 - The line kinds `ChatLines.build` gained since are projected as `LinesFixtureTest` on Android projects them: `viewed` (`image_ids`), `recaps` (`item_ids`) and `api_error` (`item_id`, `count`, `status`, `reason`); subagents launched one after another share an `agents` line (`group_id`, `call_ids`, `first`, `separator_before`, `alone`). A kind the replay's options cannot produce traps.
 - The Swift runner prints what it built for each case, and the Python block compares that with `expected` and lists every difference instead of stopping at the first mismatching case.
 
-The expected values were not rewritten to match: until they are reviewed against the current Apple code and tests (#8239), the replay lists the cases that differ and exits with an error.
+The corpus's expected values are not rewritten to match: the replay compares each case with its `expected` after `spec/fixtures/lines/ios/differences.json` is applied ("Where current iOS differs"), and any difference fails it.
 
 四份指定测试的覆盖情况：
 
@@ -152,6 +158,7 @@ Run the Python block from the repository root, for example `` sed -n '/^```pytho
 ```python
 from pathlib import Path
 import subprocess
+import copy
 import os
 import json
 import re
@@ -241,6 +248,42 @@ zh = ['-AppleLanguages', '(zh-Hans)']
 names = set()
 all_cases = {}
 failed = []
+# Where current iOS differs from the corpus ("Where current iOS differs" above), applied to `expected` before comparing.
+overlay_path = root / 'spec/fixtures/lines/ios/differences.json'
+overlay = json.loads(overlay_path.read_text())
+assert overlay['schema_version'] == 1 and overlay['domain'] == 'lines'
+assert overlay_path.read_text() == json.dumps(overlay, ensure_ascii=False, indent=2) + '\n'
+wake = overlay.get('turn_wake_state')
+pending = {(p['case'], p.get('checkpoint'), p['turn']) for p in (wake['pending'] if wake else [])}
+patches = {entry['name']: entry for entry in overlay['cases']}
+assert len(patches) == len(overlay['cases'])
+seen_pending = set()
+
+
+def ios_expected(case, patched=True):
+    """The case's `expected` as current iOS draws it. An overlay entry that changes nothing is stale and fails."""
+    expected = copy.deepcopy(case['expected'])
+    checkpoints = 'checkpoints' in expected
+    for k, state in enumerate(expected.get('checkpoints', [expected])):
+        for turn in state['turns'] if wake else []:
+            assert wake['drop'] in turn and wake['set'] not in turn, 'stale turn_wake_state: ' + case['name']
+            del turn[wake['drop']]
+            key = (case['name'], k if checkpoints else None, turn['id'])
+            turn[wake['set']] = key in pending
+            seen_pending.add(key)
+    entry = patches.get(case['name']) if patched else None
+    if entry:
+        assert set(entry) <= {'name', 'why', 'source', 'replace', 'turn_fields'} and entry['why'] and entry['source']
+        for key, value in entry.get('replace', {}).items():
+            assert key in expected and expected[key] != value, 'stale replace: %s.%s' % (case['name'], key)
+            expected[key] = value
+        for turn_id, fields in entry.get('turn_fields', {}).items():
+            turns = [t for t in expected.get('turns', []) if t['id'] == turn_id]
+            assert len(turns) == 1, 'no turn %s in %s' % (turn_id, case['name'])
+            for key, value in fields.items():
+                assert key in turns[0] and turns[0][key] != value, 'stale turn_fields: %s[%s].%s' % (case['name'], turn_id, key)
+                turns[0][key] = value
+    return expected
 
 
 def check_lines(lines):
@@ -298,13 +341,18 @@ for path in sorted((root / 'spec/fixtures/lines').glob('*.json')):
     actual = [json.loads(line) for line in run.stdout.splitlines()]
     assert [a['name'] for a in actual] == [case['name'] for case in data['cases']]
     for case, got in zip(data['cases'], actual):
-        for state in got['actual'].get('checkpoints', [got['actual']]):
+        want = ios_expected(case)
+        for state in want.get('checkpoints', [want]) + got['actual'].get('checkpoints', [got['actual']]):
             check_lines(state['lines'])
         out = []
-        diff(case['name'], case['expected'], got['actual'], out)
+        diff(case['name'], want, got['actual'], out)
         if out:
             failed.append(case['name'])
             print('不匹配：%s/%s\n  %s' % (path.name, case['name'], '\n  '.join(out)))
+            unpatched = []
+            diff(case['name'], ios_expected(case, patched=False), got['actual'], unpatched)
+            if case['name'] in patches and not unpatched:
+                print('  stale: the case passes without its entry in ios/differences.json')
 
 closed = all_cases['closed_work_identity']['expected']['lines']
 opened = all_cases['open_work_identity']['expected']['lines']
@@ -312,6 +360,8 @@ assert [line['id'] for line in closed] == [opened[i]['id'] for i in [0, 1, 4]]
 assert all_cases['menu_owner_per_message']['expected']['lines'][0]['holds'] == [True, False, False]
 assert all_cases['fold_counts_tools_and_thoughts']['expected']['turns'][0]['tool_count'] == 3
 assert all_cases['task_notices_find_calls']['expected']['task_index']['calls'] == {'7#0': 'm', '8#0': 'b', '9#0': 'm'}
+assert pending <= seen_pending, 'turn_wake_state names no turn of the corpus: %s' % sorted(map(str, pending - seen_pending))
+assert set(patches) <= names, 'ios/differences.json names no case of the corpus: %s' % sorted(set(patches) - names)
 subprocess.run([str(tmp / 'check'), '--properties', *zh], env=env, check=True, timeout=60)
 assert not failed, '%d cases do not match: %s' % (len(failed), ', '.join(failed))
 print(f'全部通过：{len(names)} 个夹具；临时对照器：{tmp}')
