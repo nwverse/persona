@@ -16726,6 +16726,28 @@ if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
     mock_reply_markdown()
 
 
+# MOCK_CJK_PATHS=1 (#8386): a reply naming files whose names are Chinese or Japanese, written without backticks, and
+# those files (so …/stat says they are there; their folders are too). Before the fix only the ASCII start of each path
+# linked: the folder. In an Agents chat of its own and at the end of Persona's conversation. Made-up content.
+CJK_PATHS = "a1f3c2d4-0000-4000-8000-000000008386"
+CJK_PATHS_TEXT = ("报表整理好了：\n\n"
+                  "- 报表：/Users/me/code/weather/reports/报表_2026H2.xlsx\n"
+                  "- 说明：~/文档/项目说明.md，改动记在 /Users/me/code/weather/docs/变更记录.md里了。\n"
+                  "- 会议纪要：/Users/me/code/weather/notes/会議メモ.txtを参照してください。\n\n"
+                  "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。")
+
+
+def mock_cjk_paths():
+    for f in ("/Users/me/code/weather/reports/报表_2026H2.xlsx", "/Users/me/文档/项目说明.md", "/Users/me/code/weather/docs/变更记录.md",
+              "/Users/me/code/weather/notes/会議メモ.txt", "/Users/me/code/weather/data/2026年/sales-売上_v2.csv"):
+        FILES[f] = "placeholder\n".encode()
+    ITEMS[CJK_PATHS] = [it("user", "text", 6, text="报表放哪了？"), it("assistant", "text", 5, text=CJK_PATHS_TEXT)]
+    SESSIONS.append(sess("macbook", CJK_PATHS, "报表整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "cjk-paths", 21, 5,
+                         "原始数据还在 /Users/me/code/weather/data/2026年/sales-売上_v2.csv。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="报表放哪了？"), it("assistant", "text", 1, text=CJK_PATHS_TEXT)]
+
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
@@ -18089,6 +18111,8 @@ if os.environ.get("MOCK_MESSAGE_LIFT") == "1":  # the paths in the lift's long m
     for _f in ("docs/review-queue.md", "notes/status.md", "docs/brief.md", "notes/runs/20261110T165351Z/snapshot.json"):
         FILES["/Users/me/code/shop-app/" + _f] = b"# placeholder\n"
     FILES["/Users/me/.config/example-gateway/management.key"] = b"placeholder\n"
+if os.environ.get("MOCK_CJK_PATHS") == "1":  # its files are there (#8386)
+    mock_cjk_paths()
 VIDEO_READS = []
 VIDEO_READ_LOCK = threading.Lock()
 FILE_PAGE = 2 << 20
