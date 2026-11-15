@@ -12,6 +12,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -203,7 +204,7 @@ internal fun trayDrafts(inbox: List<AssistantInboxDraft>, feed: List<FeedItem>):
 @Composable
 internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     requests: List<Interaction>, inbox: List<AssistantInboxDraft>, schedules: List<ScheduledTask>,
-    maximumHeight: Dp, busy: Boolean, enabled: Boolean,
+    maximumHeight: () -> Dp, busy: Boolean, enabled: Boolean,
     onApprove: (List<Pair<Interaction, Resolution>>) -> Unit, onReview: (Interaction) -> Unit,
     onSend: (TrayDraft) -> Unit, onSchedule: (ScheduledTask) -> Unit,
     backgroundRecords: Boolean = false, onBackground: (() -> Unit)? = null,
@@ -279,7 +280,13 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     Column(Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         state.expanded?.let { tray ->
             JCard(Modifier.fillMaxWidth().testTag("assistant-tray-${tray.tag}"), padding = Tokens.Space.xs) {
-                LazyColumn(Modifier.heightIn(max = minOf(maximumHeight, AssistantTrayTokens.maximumHeight)),
+                // The room is read while measuring: it follows the keyboard frame by frame without composing the tray again.
+                LazyColumn(Modifier.layout { measurable, constraints ->
+                    val most = minOf(maximumHeight(), AssistantTrayTokens.maximumHeight).roundToPx()
+                    val placeable = measurable.measure(constraints.copy(
+                        maxHeight = minOf(constraints.maxHeight, most).coerceAtLeast(constraints.minHeight)))
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                },
                     contentPadding = PaddingValues(bottom = Tokens.Space.s)) {
                     item {
                         val count = when (tray) {
