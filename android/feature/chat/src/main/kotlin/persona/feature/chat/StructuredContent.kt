@@ -302,7 +302,7 @@ internal fun DiffView(diff: ToolDiff, id: String) {
                             is DiffRow.Fold -> Text(pluralStringResource(R.plurals.chat_diff_unchanged_lines, row.count, row.count),
                                 Modifier.fillMaxWidth().background(palette.sunken).padding(start = DiffNumberColumn + signColumn),
                                 style = style, color = palette.ink3, maxLines = 1)
-                            is DiffRow.Line -> DiffCodeLine(row.line, style, codeWidth, signColumn, horizontal)
+                            is DiffRow.Line -> DiffCodeLine(row.line, style, codeWidth, signColumn, horizontal, tinted = diff.foldsContext)
                         }
                     }
                 }
@@ -314,15 +314,16 @@ internal fun DiffView(diff: ToolDiff, id: String) {
 }
 
 /**
- * One line of a diff on iOS's line model: its numbers and sign, then the code; an added or removed line on its own tint,
- * the words that changed deeper still. Only the code is selectable, and a screen reader hears "added" or "removed" for the sign.
+ * One line of a diff on iOS's line model: its numbers and sign, then the code; with [tinted] (an edit's own comparison, not a
+ * Codex patch) an added or removed line on its own tint, the words that changed deeper still. Only the code is selectable, and a screen reader hears "added" or "removed" for the sign.
  */
 @Composable
-private fun DiffCodeLine(line: DiffLine, style: TextStyle, codeWidth: Dp, signColumn: Dp, horizontal: ScrollState) {
+private fun DiffCodeLine(line: DiffLine, style: TextStyle, codeWidth: Dp, signColumn: Dp, horizontal: ScrollState, tinted: Boolean) {
     val palette = PersonaTheme.palette
     val density = LocalDensity.current
-    val fill = when (line.sign) { '+' -> palette.diffAddFill; '-' -> palette.diffDelFill; else -> null }
-    val word = when (line.sign) { '+' -> palette.diffAddWord; '-' -> palette.diffDelWord; else -> Color.Unspecified }
+    // The palette's diff tints (iOS Theme.Diff); a Codex patch keeps its plain rows, as before.
+    val fill = if (!tinted) null else when (line.sign) { '+' -> palette.diffAddFill; '-' -> palette.diffDelFill; else -> null }
+    val word = if (!tinted) Color.Unspecified else when (line.sign) { '+' -> palette.diffAddEmphasis; '-' -> palette.diffDelEmphasis; else -> Color.Unspecified }
     val text = remember(line, word) { diffText(line, word) }
     val state = when (line.sign) {
         '+' -> stringResource(R.string.chat_diff_line_added)

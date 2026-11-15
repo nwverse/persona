@@ -51,6 +51,15 @@ data class PersonaPalette(
     val scrim: Color,
     val dark: Boolean,
     val ai: Color = accent,
+    /**
+     * An added / removed line's tint behind its code, and the words that changed in it, deeper still (iOS `Theme.Diff.addFill` /
+     * `addEmphasis`, `delFill` / `delEmphasis`). Glass takes the token's own colour; Brief and Board keep their own diff hue
+     * at the token's strength ([DiffFillAlpha], [DiffEmphasisAlpha]).
+     */
+    val diffAddFill: Color = diffAdd.copy(alpha = DiffFillAlpha.add),
+    val diffDelFill: Color = diffDel.copy(alpha = DiffFillAlpha.del),
+    val diffAddEmphasis: Color = diffAdd.copy(alpha = DiffEmphasisAlpha.add),
+    val diffDelEmphasis: Color = diffDel.copy(alpha = DiffEmphasisAlpha.del),
     val positiveRole: StatusColors? = null,
     val cautionRole: StatusColors? = null,
     val customRoles: Boolean = false,
@@ -161,6 +170,9 @@ internal object Palettes {
         danger = StatusColors(Tokens.Common.Dark.danger, Tokens.Common.Dark.danger, Tokens.Common.Dark.danger.copy(alpha = 0.12f), Color.Black),
         positive = Tokens.Common.Dark.positive, caution = Tokens.Common.Dark.caution, cautionText = Tokens.Common.Dark.cautionText,
         diffAdd = Tokens.Common.Dark.Diff.add, diffDel = Tokens.Common.Dark.Diff.del,
+        diffAddFill = Tokens.Common.Dark.Diff.addFill, diffDelFill = Tokens.Common.Dark.Diff.delFill,
+        diffAddEmphasis = Tokens.Common.Dark.Diff.addFill.copy(alpha = DiffEmphasisAlpha.add),
+        diffDelEmphasis = Tokens.Common.Dark.Diff.delFill.copy(alpha = DiffEmphasisAlpha.del),
         terminalBackground = Tokens.Common.Dark.terminalBackground, terminalText = Tokens.Common.Dark.terminalText,
         scrim = Color.Black.copy(alpha = 0.45f), dark = true, ai = Tokens.Common.Dark.ai,
         positiveRole = StatusColors(Tokens.Common.Dark.positive, Tokens.Common.Dark.positive, Tokens.Common.Dark.positive.copy(alpha = 0.12f), Color.Black),
@@ -187,6 +199,9 @@ internal object Palettes {
         danger = StatusColors(Tokens.Common.Light.danger, Tokens.Common.Light.danger, Tokens.Common.Light.danger.copy(alpha = 0.12f)),
         positive = Tokens.Common.Light.positive, caution = Tokens.Common.Light.caution, cautionText = Tokens.Common.Light.cautionText,
         diffAdd = Tokens.Common.Light.Diff.add, diffDel = Tokens.Common.Light.Diff.del,
+        diffAddFill = Tokens.Common.Light.Diff.addFill, diffDelFill = Tokens.Common.Light.Diff.delFill,
+        diffAddEmphasis = Tokens.Common.Light.Diff.addFill.copy(alpha = DiffEmphasisAlpha.add),
+        diffDelEmphasis = Tokens.Common.Light.Diff.delFill.copy(alpha = DiffEmphasisAlpha.del),
         terminalBackground = Tokens.Common.Light.terminalBackground, terminalText = Tokens.Common.Light.terminalText,
         scrim = Color.Black.copy(alpha = 0.2f), dark = false, ai = Tokens.Common.Light.ai,
         positiveRole = StatusColors(Tokens.Common.Light.positive, Tokens.Common.Light.positive, Tokens.Common.Light.positive.copy(alpha = 0.12f)),
@@ -352,6 +367,14 @@ fun statusTone(status: Status, darkTheme: Boolean): StatusTone =
 val PersonaPalette.diffAddWord: Color get() = diffAdd.copy(alpha = 0.30f)
 val PersonaPalette.diffDelWord: Color get() = diffDel.copy(alpha = 0.30f)
 
-/** An added or removed line's own tint behind its code (iOS `Theme.Diff.addFill` / `delFill`), under [diffAddWord] / [diffDelWord]. */
-val PersonaPalette.diffAddFill: Color get() = diffAdd.copy(alpha = Tokens.Common.Light.Diff.addFill.alpha)
-val PersonaPalette.diffDelFill: Color get() = diffDel.copy(alpha = Tokens.Common.Light.Diff.delFill.alpha)
+/** The strength of a diff line's tint, the same in light and dark (iOS `Theme.Diff.addFill` / `delFill`: 0.14 and 0.12). */
+internal object DiffFillAlpha {
+    val add: Float get() = Tokens.Common.Light.Diff.addFill.alpha
+    val del: Float get() = Tokens.Common.Light.Diff.delFill.alpha
+}
+
+/** The strength of the changed words' tint over the line's own (iOS `Theme.Diff.addEmphasis` / `delEmphasis`: 0.32 and 0.30). */
+internal object DiffEmphasisAlpha {
+    const val add = 0.32f
+    const val del = 0.30f
+}
