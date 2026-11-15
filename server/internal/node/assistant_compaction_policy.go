@@ -27,6 +27,8 @@ type assistantCompaction struct {
 	// and the user's settings reach the agent as they are, so nothing is written over them.
 	pin         bool
 	ownSettings string
+	// profile: the conversation's Claude config directory as the policy resolves it, "" for none (assistantUserSetup).
+	profile string
 }
 
 // codexLimit is the model_auto_compact_token_limit a Codex start passes: a managed launcher's declared window (the main
@@ -180,6 +182,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 			}
 		}
 	}
+	c.profile = configDir
 	if isCodex {
 		if codexHome == "" {
 			codexHome = n.codexHome()
@@ -205,6 +208,17 @@ func (c *assistantCompaction) capMain(execution modelExecution) {
 	if limit := execution.MainCompactWindow; execution.IsMain && c.pin && limit > 0 && c.declared() > limit {
 		c.window = limit
 	}
+}
+
+// mainWindowOn is the window the manager sent with a main conversation's start (window) as that start on launcher
+// carries it (modelExecution.MainCompactWindow): only a managed launcher applies it (capMain), so anywhere else it is
+// 0, or it would change the fingerprint and restart the conversation, or miss the spare warmed for it, for nothing.
+// assistantSend and assistantWarm both read it, so the main chat's spare matches its next start.
+func (n *Node) mainWindowOn(launcher string, isMain bool, window int) int {
+	if _, managed := n.managedLauncher(launcher); isMain && window > 0 && managed {
+		return window
+	}
+	return 0
 }
 
 // claudeModelUsage is one model's entry in a stream-json result's modelUsage: what this process read with it and the
@@ -328,6 +342,7 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 		overrides[name] = "off"
 	}
 	s["skillOverrides"] = overrides
+	n.assistantUserSetup(s, cwd, c.profile) // a private profile: ~/.claude's instructions out, the user's skill switches in
 
 	b, err := json.Marshal(s)
 	if err != nil {

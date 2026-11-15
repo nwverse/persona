@@ -72,6 +72,57 @@ func TestMainCompactWindowGoesWithTheMainConversation(t *testing.T) {
 	}
 }
 
+// The manager's own messages into the main conversation (session.send carries is_main since #8365) and the spare warmed
+// for its next start carry the window as its starts do: without it the node would start the main conversation again on
+// its launcher's window, and never adopt the spare. Another conversation's session.send carries none.
+func TestMainCompactWindowGoesWithSessionSendAndWarm(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	lastParams := func(method string) map[string]any {
+		t.Helper()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for i := len(f.calls) - 1; i >= 0; i-- {
+			if f.calls[i].Method == method {
+				var p map[string]any
+				if err := json.Unmarshal(f.calls[i].Params, &p); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			}
+		}
+		t.Fatalf("no %s", method)
+		return nil
+	}
+	main, err := s.start(ctx, StartParams{Main: true, Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, err := s.start(ctx, StartParams{Text: "side"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("server", proto.Session{SessionID: main.SessionID, Assistant: true}, proto.Session{SessionID: side.SessionID, Assistant: true})
+	setSettings(t, s, func(v *Settings) { v.Main, v.MainCompactWindow = main.SessionID, ptr(250_000) })
+	if err := s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": main.SessionID, "text": "A task finished."}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := lastParams(DeviceSessionSend); p["is_main"] != true || p["main_compact_window"] != float64(250_000) {
+		t.Fatalf("session.send into the main conversation: %v", p)
+	}
+	if err := s.call(ctx, "server", DeviceSessionSend, map[string]any{"session_id": side.SessionID, "text": "A task finished."}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p := lastParams(DeviceSessionSend); p["is_main"] == true || p["main_compact_window"] != nil {
+		t.Fatalf("session.send into another conversation: %v", p)
+	}
+	s.warm("")
+	if p := lastParams(DeviceAssistantWarm); p["is_main"] != true || p["main_compact_window"] != float64(250_000) {
+		t.Fatalf("the main chat's warm spare: %v", p)
+	}
+}
+
 // persona_settings and PUT /api/v1/assistant take 0 or 100000–10000000 tokens; the card names the window before and
 // after in the user's language.
 func TestMainCompactWindowSetting(t *testing.T) {

@@ -175,3 +175,36 @@ func TestAssistantMainCompactWindowRPC(t *testing.T) {
 		t.Fatalf("recorded %+v", st)
 	}
 }
+
+// The main chat's warm spare (assistant.warm with is_main, #8365) starts with the window the main conversation's start
+// carries, only on a managed launcher, so that start adopts it instead of starting another process.
+func TestAssistantMainCompactWindowWarmSpare(t *testing.T) {
+	fakeClaudeHome(t, "echo '{\"type\":\"system\",\"subtype\":\"init\"}'\nwhile read line; do :; done\n")
+	n := codexTestNode(t)
+	n.dir = t.TempDir() // a managed launcher's settings file goes there
+	withFakeHub(t, n)
+	n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
+	for _, tt := range []struct {
+		launcher string
+		want     int
+	}{{"gw", 400_000}, {"claude", 0}} {
+		t.Run(tt.launcher, func(t *testing.T) {
+			cwd := t.TempDir()
+			if _, err := nodeCall(t, n, "assistant.warm", map[string]any{"launcher": tt.launcher, "cwd": cwd, "is_main": true, "main_compact_window": 400_000}); err != nil {
+				t.Fatal(err)
+			}
+			n.mu.Lock()
+			spare := n.spare
+			n.mu.Unlock()
+			if spare == nil || !spare.model.IsMain || spare.model.MainCompactWindow != tt.want {
+				t.Fatalf("spare %+v, want window %d", spare, tt.want)
+			}
+			t.Cleanup(spare.stop)
+			// What assistantSend runs a new main conversation's first message with.
+			start := modelExecution{IsMain: true, MainCompactWindow: n.mainWindowOn(tt.launcher, true, 400_000), ConfigDir: spare.model.ConfigDir}
+			if n.adoptSpare(cwd, tt.launcher, start) != spare {
+				t.Fatal("the main conversation's start did not adopt the spare warmed for it")
+			}
+		})
+	}
+}
