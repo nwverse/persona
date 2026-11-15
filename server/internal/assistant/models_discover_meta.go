@@ -79,11 +79,11 @@ func readModelMeta(fields map[string]json.RawMessage, m *proto.ProviderModel) (c
 }
 
 // reportedEfforts is what an entry says of its thinking levels: the levels in EffortWords' words (anything else
-// dropped; a list naming none of them says nothing), or none (a top-level list that is empty or names only none,
-// reasoning false, a reasoning object whose status is unsupported, supported_parameters without a reasoning
-// parameter); and the default level it names, if any. A list wins over the signals of none, the first list in the
-// order below over the others. A reasoning object's levels count only when it names some and its status is not
-// unknown (a capability report's {"status","allowed","default"}).
+// dropped; a list naming none of them says nothing), or none (a top-level list that is empty or names only none, a
+// reasoning object whose status is unsupported, reasoning false, supported_parameters without a reasoning parameter
+// unless reasoning is said to be true); and the default level it names, if any. A top-level list wins over the
+// signals of none, the first list in the order below over the others. A reasoning object's levels count only when it
+// names some and its status is neither unknown nor unsupported (a capability report's {"status","allowed","default"}).
 func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none bool, def string) {
 	reasoning := rawObject(fields["reasoning"])
 	def = effortWord(cmp.Or(rawString(fields["default_reasoning_level"]), rawString(fields["default_reasoning_effort"]),
@@ -92,9 +92,6 @@ func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none b
 		def = ""
 	}
 	status := strings.ToLower(rawString(reasoning["status"]))
-	if status == "unsupported" {
-		return nil, true, ""
-	}
 	for _, raw := range []json.RawMessage{fields["reasoning_levels"], fields["supported_reasoning_levels"],
 		fields["supported_efforts"], fields["reasoning_efforts"], fields["efforts"]} {
 		if words, ok := rawStrings(raw); ok {
@@ -102,6 +99,9 @@ func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none b
 				return levels, none, def
 			}
 		}
+	}
+	if status == "unsupported" {
+		return nil, true, ""
 	}
 	if status != "unknown" {
 		for _, raw := range []json.RawMessage{reasoning["allowed"], reasoning["supported_efforts"], reasoning["efforts"], reasoning["levels"]} {
@@ -112,12 +112,15 @@ func reportedEfforts(fields map[string]json.RawMessage) (levels []string, none b
 			}
 		}
 	}
+	thinks := false // said to reason: supported_parameters then says nothing of levels
 	for _, raw := range []json.RawMessage{fields["reasoning"], fields["supports_reasoning"], fields["supports_reasoning_effort"]} {
 		if b, ok := rawBool(raw); ok && !b {
 			return nil, true, ""
+		} else if ok {
+			thinks = true
 		}
 	}
-	if params, ok := rawStrings(fields["supported_parameters"]); ok &&
+	if params, ok := rawStrings(fields["supported_parameters"]); ok && !thinks &&
 		!slices.ContainsFunc(params, func(p string) bool { return slices.Contains(reasoningParameters, p) }) {
 		return nil, true, ""
 	}
@@ -203,9 +206,8 @@ func providerEffortVocab(kind, agent string) []string {
 }
 
 // settleSavedEfforts keeps m's levels in the words vocab takes (providerEffortVocab) as a provider is saved:
-// AllEfforts only while it adds a level to Efforts and still agrees with them (a client that changed the levels by
-// hand, or knows nothing of AllEfforts, leaves Efforts the truth); NoEffort only while no level is chosen, and then no
-// default either.
+// AllEfforts only while it adds a level to Efforts and still agrees with them (levels changed by hand leave Efforts the
+// truth); NoEffort only while no level is chosen, and then no default either.
 func settleSavedEfforts(m proto.ProviderModel, vocab []string) proto.ProviderModel {
 	if len(m.Efforts) > 0 {
 		m.NoEffort = false
@@ -223,10 +225,28 @@ func settleSavedEfforts(m proto.ProviderModel, vocab []string) proto.ProviderMod
 	return m
 }
 
-// mergeModelMeta fills what first leaves unsaid from next (a repeated entry, the capability report).
+// keepReported is m as a client sends it, with what the gateway reported of it kept from the stored models when m
+// carries none of it: an app from before these fields (the iOS and Android editors) resends a model without them.
+// settleSavedEfforts then drops what no longer agrees with the levels it sends.
+func keepReported(m proto.ProviderModel, stored []proto.ProviderModel) proto.ProviderModel {
+	if reportedLevels(m) || m.MaxOutputTokens != 0 || m.ImageInput != nil || m.ToolCalls != nil {
+		return m
+	}
+	if i := slices.IndexFunc(stored, func(o proto.ProviderModel) bool { return o.ID == m.ID }); i >= 0 {
+		o := stored[i]
+		m.MaxOutputTokens, m.AllEfforts, m.NoEffort, m.ImageInput, m.ToolCalls = o.MaxOutputTokens, o.AllEfforts, o.NoEffort, o.ImageInput, o.ToolCalls
+	}
+	return m
+}
+
+// mergeModelMeta fills what first leaves unsaid from next (a repeated entry, the capability report). Levels taken from
+// next bring next's default unless first's is one of them.
 func mergeModelMeta(first, next proto.ProviderModel) proto.ProviderModel {
-	if !reportedLevels(first) {
+	if !reportedLevels(first) && reportedLevels(next) {
 		first.AllEfforts, first.NoEffort = next.AllEfforts, next.NoEffort
+		if next.DefaultEffort != "" && !slices.Contains(next.AllEfforts, first.DefaultEffort) {
+			first.DefaultEffort = next.DefaultEffort
+		}
 	}
 	if first.DefaultEffort == "" && !first.NoEffort {
 		first.DefaultEffort = next.DefaultEffort
@@ -292,18 +312,15 @@ func (t *probeTarget) applyCapabilities(ctx context.Context, models []proto.Prov
 		if id == "" {
 			continue
 		}
-		if protocols, ok := rawStrings(fields["protocols"]); ok && len(protocols) == 0 {
-			unreachable[id] = true
-			continue
+		if _, dup := byID[id]; dup || unreachable[id] {
+			continue // the first entry for an id is its answer
 		}
 		var m proto.ProviderModel
-		if !readModelMeta(fields, &m) {
+		if protocols, ok := rawStrings(fields["protocols"]); ok && len(protocols) == 0 || !readModelMeta(fields, &m) {
 			unreachable[id] = true
 			continue
 		}
-		if _, dup := byID[id]; !dup {
-			byID[id] = m
-		}
+		byID[id] = m
 	}
 	out := models[:0:0]
 	for _, m := range models {

@@ -265,7 +265,8 @@ export function formFromView(v: ProviderView): ProviderForm {
 export const AUTO_CHECK = 8;
 
 /** Discovered models merged in: new ones added unchecked (all checked when nothing was there and the list is short),
- *  what was typed kept; a row with nothing reported yet takes what the gateway reported. */
+ *  what was typed kept; what the gateway reports now replaces what a row had of it (the hub keeps a model's stored
+ *  report when none comes). */
 export function mergeDiscovered(models: FormModel[], found: ProviderModel[], chat = false): FormModel[] {
   const out = [...models];
   const first = models.length === 0 && found.length <= AUTO_CHECK;
@@ -278,7 +279,8 @@ export function mergeDiscovered(models: FormModel[], found: ProviderModel[], cha
       if (!out[i].context_window && m.context_window) {
         out[i] = { ...out[i], context_window: String(m.context_window), ...(!chat && !out[i].efforts.length ? { efforts: [...(m.efforts ?? [])] } : {}) };
       }
-      if (!Object.keys(out[i].meta).length) out[i] = { ...out[i], meta: metaOf(m) };
+      const meta = metaOf(m);
+      if (Object.keys(meta).length) out[i] = { ...out[i], meta };
     }
   }
   return out;

@@ -124,19 +124,24 @@ func TestDiscoveryReadsGatewayMetadataByShape(t *testing.T) {
 				     {"type":"model","id":"example-b","display_name":"Example B","max_input_tokens":200000,"max_tokens":64000}],
 				     "first_id":"example-a","has_more":true,"last_id":"example-b"}`,
 				"after_id=example-b": `{"data":[{"type":"model","id":"example-c","max_input_tokens":200000,"max_tokens":64000},
-				     {"type":"model","id":"example-image","max_input_tokens":200000,"max_tokens":64000}],
-				     "first_id":"example-c","has_more":false,"last_id":"example-image"}`,
+				     {"type":"model","id":"example-image","max_input_tokens":200000,"max_tokens":64000},
+				     {"type":"model","id":"example-d","default_effort":"high"}],
+				     "first_id":"example-c","has_more":false,"last_id":"example-d"}`,
 			},
 			report: `{"object":"list","schema_version":1,"data":[
 				{"model_id":"example-a","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low","high","xhigh"],"default":"high","source":"synthetic"}},
 				{"model_id":"example-b","protocols":["messages"],"reasoning":{"status":"unsupported","allowed":[],"default":null,"source":"synthetic"}},
 				{"model_id":"example-c","protocols":["messages"],"reasoning":{"status":"unknown","allowed":["low"],"default":null,"source":"synthetic"}},
 				{"model_id":"example-image","protocols":[],"reasoning":{"status":"unsupported","allowed":[],"default":null,"source":"synthetic"}},
-				{"model_id":"example-unlisted","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low"],"default":"low"}}]}`,
+				{"model_id":"example-unlisted","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low"],"default":"low"}},
+				{"model_id":"example-d","protocols":["messages"],"reasoning":{"status":"supported","allowed":["low","medium"],"default":"medium"}},
+				{"model_id":"example-a","protocols":[],"reasoning":{"status":"unsupported"}}]}`,
 			want: []discovered{
 				{id: "example-a", name: "Example A", window: 400000, efforts: []string{"low", "high", "xhigh"}, def: "high", inheritedFromEmpty: true},
 				{id: "example-b", name: "Example B", window: 200000, none: true, inheritedFromEmpty: true},
 				{id: "example-c", window: 200000, inheritedFromEmpty: true},
+				// the report's levels bring its default: the list's is none of them
+				{id: "example-d", efforts: []string{"low", "medium"}, def: "medium", inheritedFromEmpty: true},
 			},
 			asked: "protocol=messages|Bearer " + fakeKey,
 		},
@@ -172,12 +177,18 @@ func TestDiscoveryReadsGatewayMetadataByShape(t *testing.T) {
 				{"id":"example-vendor-words","reasoning_levels":["light","extra_high"],"efforts":["medium","high"]},
 				{"id":"example-embed","mode":"embedding"},
 				{"id":"example-rerank","supported_endpoint_types":["jina-rerank"]},
-				{"id":"example-chat-endpoints","supported_endpoint_types":["openai","image-generation"]}]}`},
+				{"id":"example-chat-endpoints","supported_endpoint_types":["openai","image-generation"]},
+				{"id":"example-says-thinks","reasoning":true,"supported_parameters":["tools"]},
+				{"id":"example-mixed","supported_reasoning_levels":["low","high"],"reasoning":{"status":"unsupported"}}]}`},
 			want: []discovered{
 				{id: "example-router", window: 131072, output: 16384, none: true, images: "true", tools: "false", inheritedFromEmpty: true},
 				{id: "example-limits", output: 8192, efforts: []string{"low", "high"}, def: "low", images: "false", tools: "true", inheritedFromEmpty: true},
 				{id: "example-vendor-words", efforts: []string{"medium", "high"}, inheritedFromEmpty: true},
 				{id: "example-chat-endpoints", inheritedFromEmpty: true},
+				// said to reason: supported_parameters without a reasoning entry says nothing of its levels
+				{id: "example-says-thinks", tools: "true", inheritedFromEmpty: true},
+				// a list wins over a status of unsupported
+				{id: "example-mixed", efforts: []string{"low", "high"}, inheritedFromEmpty: true},
 			},
 			asked: "protocol=messages|Bearer " + fakeKey,
 		},
@@ -395,13 +406,37 @@ func TestProviderSaveKeepsDiscoveredMetadata(t *testing.T) {
 		!strings.Contains(list, `"max_output_tokens":64000`) || !strings.Contains(list, `"image_input":true`) || !strings.Contains(list, `"tool_calls":false`) {
 		t.Fatalf("GET: %s", list)
 	}
+	cxModels := func() []proto.ProviderModel {
+		for _, l := range s.storedLaunchers(ctx) {
+			if l.Name == "cx" {
+				return l.Models
+			}
+		}
+		return nil
+	}
 	if code, raw := launcherCall(t, mux, "PUT", "/api/v1/launchers/cx", `{"base_url":"https://gw.example.com/v1","model":"example-codex-1"}`); code != 200 {
 		t.Fatal(raw)
 	}
-	for _, l := range s.storedLaunchers(ctx) {
-		if l.Name == "cx" && (len(l.Models) != 2 || len(l.Models[0].AllEfforts) != 4 || !l.Models[1].NoEffort) {
-			t.Fatalf("kept: %+v", l.Models)
-		}
+	if m := cxModels(); len(m) != 2 || len(m[0].AllEfforts) != 4 || !m[1].NoEffort {
+		t.Fatalf("kept without models: %+v", m)
+	}
+	// an app that knows only the old fields resends the models: what the gateway reported stays, as far as it still
+	// agrees with the levels sent (levels chosen for the second model undo its none)
+	if code, raw := launcherCall(t, mux, "PUT", "/api/v1/launchers/cx", `{"base_url":"https://gw.example.com/v1","model":"example-codex-1",
+		"models":[{"id":"example-codex-1","efforts":["low","high","max"],"default_effort":"high"},{"id":"example-plain","efforts":["high"]}]}`); code != 200 {
+		t.Fatal(raw)
+	}
+	if m := cxModels(); len(m) != 2 || len(m[0].AllEfforts) != 4 || m[0].MaxOutputTokens != 64000 || m[0].ImageInput == nil ||
+		m[1].NoEffort || !slices.Equal(m[1].Efforts, []string{"high"}) {
+		t.Fatalf("kept with old models: %+v", m)
+	}
+	// levels changed by hand leave all_efforts behind
+	if code, raw := launcherCall(t, mux, "PUT", "/api/v1/launchers/cx", `{"base_url":"https://gw.example.com/v1","model":"example-codex-1",
+		"models":[{"id":"example-codex-1","efforts":["high"]}]}`); code != 200 {
+		t.Fatal(raw)
+	}
+	if m := cxModels(); len(m) != 1 || m[0].AllEfforts != nil || m[0].MaxOutputTokens != 64000 {
+		t.Fatalf("levels by hand: %+v", m)
 	}
 	if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers", `{"name":"neg","base_url":"https://gw.example.com","model":"m",
 		"api_key":"`+fakeKey+`","models":[{"id":"m","max_output_tokens":-1}]}`); code != 400 || !strings.Contains(raw, "输出上限") {

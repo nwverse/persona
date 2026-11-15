@@ -229,7 +229,7 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 		var models []proto.ProviderModel
 		for _, m := range *in.Models {
 			m.ID, m.Name = strings.TrimSpace(m.ID), strings.TrimSpace(m.Name)
-			models = append(models, m)
+			models = append(models, keepReported(m, s.Models))
 		}
 		s.Models = models
 	}

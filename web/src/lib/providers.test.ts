@@ -311,14 +311,16 @@ describe("probes", () => {
     expect(merged[2]).toMatchObject({ context_window: "300", efforts: [], default_effort: "" });
     expect(merged[3]).toMatchObject({ context_window: "400", efforts: ["high"], default_effort: "high" });
   });
-  it("gives rows already there what the gateway reported when they have none of it yet (#8778)", () => {
-    const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", max_output_tokens: 1 })];
+  it("gives rows already there what the gateway reports now, keeping theirs when it reports nothing (#8778)", () => {
+    const rows = [formModel({ id: "a", context_window: 100 }), formModel({ id: "c", no_effort: true }), formModel({ id: "d", max_output_tokens: 1 })];
     const merged = mergeDiscovered(rows, [
       { id: "a", no_effort: true, max_output_tokens: 8000, image_input: false, tool_calls: true },
       { id: "c", max_output_tokens: 9000, efforts: ["high"], all_efforts: ["high", "ultra"] },
+      { id: "d" },
     ]);
     expect(merged.map((m) => [m.efforts, m.meta])).toEqual([
       [[], { max_output_tokens: 8000, no_effort: true, image_input: false, tool_calls: true }],
+      [[], { max_output_tokens: 9000, all_efforts: ["high", "ultra"] }],
       [[], { max_output_tokens: 1 }],
     ]);
     const fresh = mergeDiscovered([], [{ id: "d", efforts: ["high", "max"], all_efforts: ["high", "ultra"], max_output_tokens: 4096 }]);

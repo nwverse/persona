@@ -3,6 +3,7 @@ package assistant
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -835,38 +836,16 @@ func parseModelsList(raw []byte) ([]proto.ProviderModel, bool) {
 			if json.Unmarshal(item, &fields) != nil {
 				continue
 			}
-			str := func(k string) string {
-				var s string
-				_ = json.Unmarshal(fields[k], &s)
-				return strings.TrimSpace(s)
-			}
-			num := func(k string) int {
-				var f float64
-				if json.Unmarshal(fields[k], &f) != nil || f <= 0 || f > 1e9 {
-					return 0
-				}
-				return int(f)
-			}
-			for _, k := range []string{"id", "slug", "key", "model_name", "model_id"} {
-				if id = str(k); id != "" {
-					break
-				}
-			}
+			id = cmp.Or(rawString(fields["id"]), rawString(fields["slug"]), rawString(fields["key"]), rawString(fields["model_name"]),
+				rawString(fields["model_id"]))
 			if id == "" {
 				continue
 			}
-			m.Name = str("display_name")
-			if m.Name == "" {
-				m.Name = str("name")
-			}
-			if m.Name == id {
+			if m.Name = cmp.Or(rawString(fields["display_name"]), rawString(fields["name"])); m.Name == id {
 				m.Name = ""
 			}
-			for _, k := range []string{"max_model_len", "context_length", "context_window", "max_context_length", "max_input_tokens"} {
-				if m.ContextWindow = num(k); m.ContextWindow != 0 {
-					break
-				}
-			}
+			m.ContextWindow = firstTokens(fields["max_model_len"], fields["context_length"], fields["context_window"],
+				fields["max_context_length"], fields["max_input_tokens"])
 			if !readModelMeta(fields, &m) {
 				continue
 			}
