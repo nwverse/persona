@@ -59,6 +59,11 @@ internal data class NewAgentState(
     val machineId: String = "",
     val selection: AgentDefaults = AgentDefaults(),
     val launchers: List<AgentLauncher> = emptyList(),
+    /**
+     * What the hub lists off on this computer (#8109, its `unavailable`): the Persona-managed providers their own-service
+     * rule leaves out here, with why. Shown after the launchers ([leftOutLaunchers]), never picked; empty from an older hub.
+     */
+    val unavailable: List<UnavailableLauncher> = emptyList(),
     val recent: List<AgentRecentDirectory> = emptyList(),
     val browser: AgentDirectories? = null,
     val browsing: Boolean = false,
@@ -301,7 +306,7 @@ internal class NewAgentViewModel(
         machineJob?.cancel()
         browseJob?.cancel()
         modelsJob?.cancel()
-        mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), recent = emptyList(),
+        mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(), recent = emptyList(),
             browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
             workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "", providerMode = "", providerEffort = "") }
         loadWorkspaces(id)
@@ -309,16 +314,17 @@ internal class NewAgentViewModel(
             try {
                 val defaults = store.defaults(service.scope, id)
                 val known = state.value.modelConfig.takeIf { it is NewAgentModelConfig.Follow || it is NewAgentModelConfig.Unsupported }
-                val (launchers, dirs, config) = coroutineScope {
-                    val l = async { service.launchers(id) }
+                val (listed, dirs, config) = coroutineScope {
+                    val l = async { service.launcherList(id) }
                     val d = async { service.directories(id) }
                     // The "New Agent" configuration is the hub's, not the machine's: read once per form.
                     val c = async { known ?: modelConfig() }
                     Triple(l.await(), d.await(), c.await())
                 }
                 val prefilledCwd = prefill?.cwd?.takeIf { prefill.machineId == id && it.isNotBlank() }
+                val launchers = listed.launchers
                 val launcher = defaultLauncher(config, defaults, launchers)
-                mutable.update { it.copy(loading = false, launchers = launchers, recent = dirs.recent.take(6), modelConfig = config,
+                mutable.update { it.copy(loading = false, launchers = launchers, unavailable = listed.unavailable, recent = dirs.recent.take(6), modelConfig = config,
                     selection = defaults.copy(cwd = it.space?.cwd ?: prefilledCwd ?: defaults.cwd.ifEmpty { dirs.recent.firstOrNull()?.path ?: dirs.path },
                         launcher = launcher),
                     model = RecentSetups.model(it.recentSetups, id, launcher),
