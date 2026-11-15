@@ -59,14 +59,14 @@ final class TierFixtureTests: XCTestCase {
                 "input": ["points": c.points, "pixels": c.pixels, "maxSize": c.maxSize, "bias": c.bias.rawValue,
                           "capKbps": c.capKbps, "maxFps": c.maxFps, "codec": c.codec],
                 "expected": tiers.map { ["scale": $0.scale, "fps": $0.fps, "width": $0.width, "height": $0.height,
-                                         "minKbps": $0.minKbps, "maxKbps": $0.maxKbps] }]
+                                         "minKbps": $0.minKbps, "maxKbps": $0.maxKbps, "pixelsPerPoint": $0.pixelsPerPoint] }]
     }
 
     // MARK: Signals
 
     /// One step of a signals scenario: an event, or `take` with what it returned.
     private enum Step {
-        case frame(capture: UInt64, arrival: UInt64, firstByte: UInt64?, bytes: Int, refinement: Bool, fps: Int)
+        case frame(capture: UInt64, arrival: UInt64, firstByte: UInt64?, bytes: Int, refinement: Bool, keyframe: Bool, fps: Int)
         case decoded(ms: Double, at: UInt64)
         case shown(replaced: Bool, at: UInt64)
         case pathChanged
@@ -84,13 +84,14 @@ final class TierFixtureTests: XCTestCase {
     private static func frames(_ count: Int, start: UInt64 = 1_000_000, every: UInt64 = 16_667, fps: Int = 60,
                                delay: (Int) -> UInt64 = { _ in 20_000 }, bytes: (Int) -> Int = { _ in 20_000 },
                                firstByte: (Int) -> UInt64? = { _ in nil }, refinement: (Int) -> Bool = { _ in false },
-                               decode: Double? = nil, replaced: (Int) -> Bool? = { _ in nil }) -> [Step] {
+                               keyframe: (Int) -> Bool = { _ in false }, decode: Double? = nil,
+                               replaced: (Int) -> Bool? = { _ in nil }) -> [Step] {
         var steps: [Step] = []
         for i in 0 ..< count {
             let capture = start + UInt64(i) * every
             let arrival = capture + 5_000_000 + delay(i)
             steps.append(.frame(capture: capture, arrival: arrival, firstByte: firstByte(i).map { arrival - $0 },
-                                bytes: bytes(i), refinement: refinement(i), fps: fps))
+                                bytes: bytes(i), refinement: refinement(i), keyframe: keyframe(i), fps: fps))
             if let decode { steps.append(.decoded(ms: decode, at: arrival + UInt64(decode * 1000))) }
             if let r = replaced(i) { steps.append(.shown(replaced: r, at: arrival + 8_000)) }
         }
@@ -98,7 +99,7 @@ final class TierFixtureTests: XCTestCase {
     }
 
     private static func lastArrival(_ steps: [Step]) -> UInt64 {
-        steps.reduce(0) { at, s in if case let .frame(_, a, _, _, _, _) = s { max(at, a) } else { at } }
+        steps.reduce(0) { at, s in if case let .frame(_, a, _, _, _, _, _) = s { max(at, a) } else { at } }
     }
 
     private static let signals: [SignalsCase] = {
@@ -124,6 +125,17 @@ final class TierFixtureTests: XCTestCase {
             frames(12, every: 100_000, fps: 30, delay: { $0 % 3 == 2 ? 300_000 : 20_000 },
                    bytes: { $0 % 3 == 2 ? 48_000 : 4_000 }, firstByte: { $0 % 3 == 2 ? 40_000 : nil },
                    refinement: { $0 % 3 == 2 }))
+        // Three frames to a read, every one queued: all their bytes count toward what the link carried (#7842).
+        add("read_together", "A backlog read three frames at a time: every frame's bytes count in the delivered rate.",
+            frames(42, every: 25_000, fps: 30, delay: { 80_000 + UInt64($0 / 3) * 27_000 + UInt64(2 - $0 % 3) * 25_000 },
+                   bytes: { _ in 30_000 }))
+        // A keyframe that took 80 ms to come in, and two frames queued behind it (#7842).
+        add("keyframe_wake", "A keyframe and the frames queued behind it are left out of queueP95Ms, not out of the rest.",
+            frames(15, every: 33_333, fps: 30, delay: { [8: 120_000, 9: 95_000, 10: 62_000][$0] ?? 20_000 },
+                   bytes: { $0 == 8 ? 200_000 : 6_000 }, firstByte: { $0 == 8 ? 80_000 : nil }, keyframe: { $0 == 8 }))
+        add("keyframe_wake_over", "Frames after a keyframe's wake count in queueP95Ms again.",
+            frames(30, every: 33_333, fps: 30, delay: { [3: 120_000, 4: 95_000, 25: 90_000, 26: 90_000][$0] ?? 20_000 },
+                   bytes: { $0 == 3 ? 200_000 : 6_000 }, firstByte: { $0 == 3 ? 80_000 : nil }, keyframe: { $0 == 3 }))
         add("decode_behind", "Slow decodes and pictures replaced before they showed.",
             frames(60, decode: 24, replaced: { $0 % 2 == 0 }))
         var moved = frames(30)
@@ -143,11 +155,11 @@ final class TierFixtureTests: XCTestCase {
         var steps: [[String: Any]] = []
         for step in c.steps {
             switch step {
-            case let .frame(capture, arrival, firstByte, bytes, refinement, fps):
+            case let .frame(capture, arrival, firstByte, bytes, refinement, keyframe, fps):
                 r.frame(captureMicros: capture, arrivalMicros: arrival, firstByteMicros: firstByte, bytes: bytes,
-                        refinement: refinement, fps: fps)
+                        refinement: refinement, keyframe: keyframe, fps: fps)
                 steps.append(["frame": ["capture": capture, "arrival": arrival, "firstByte": firstByte.map { $0 as Any } ?? NSNull(),
-                                        "bytes": bytes, "refinement": refinement, "fps": fps]])
+                                        "bytes": bytes, "refinement": refinement, "keyframe": keyframe, "fps": fps]])
             case let .decoded(ms, at):
                 r.decoded(ms: ms, at: at)
                 steps.append(["decoded": ["ms": ms, "at": at]])
@@ -162,6 +174,7 @@ final class TierFixtureTests: XCTestCase {
                 func v(_ d: Double?) -> Any { d.map { $0 as Any } ?? NSNull() }
                 steps.append(["take": ["now": now],
                               "expected": ["frames": s.frames, "queueP50Ms": v(s.queueP50Ms), "queueP95Ms": v(s.queueP95Ms),
+                                           "queueLastMs": v(s.queueLastMs),
                                            "queueRising": s.queueRising, "queueFalling": s.queueFalling,
                                            "deliveredKbps": v(s.deliveredKbps), "burstKbps": s.burstKbps,
                                            "lateShare": v(s.lateShare), "decodeP95Ms": v(s.decodeP95Ms),
@@ -194,12 +207,13 @@ final class TierFixtureTests: XCTestCase {
         var ops: [Op] = []
     }
 
-    private static func sig(queue: Double, p95: Double? = nil, delivered: Double? = nil, rising: Bool = false,
+    private static func sig(queue: Double, p95: Double? = nil, last: Double? = nil, delivered: Double? = nil, rising: Bool = false,
                             falling: Bool = false, frames: Int = 30, bursts: [Double] = [], decode: Double? = 4) -> TierSignals {
         var s = TierSignals()
         s.frames = frames
         s.queueP50Ms = queue
         s.queueP95Ms = p95 ?? queue
+        s.queueLastMs = last ?? queue
         s.deliveredKbps = delivered
         s.queueRising = rising
         s.queueFalling = falling
@@ -227,6 +241,10 @@ final class TierFixtureTests: XCTestCase {
         PolicyCase(name: "start_relay_wifi", description: "The relay over Wi-Fi: the second.", link: relay),
         PolicyCase(name: "start_relay_cellular", description: "The relay over cellular, under the cellular cap: the third rung.",
                    capKbps: 4_000, link: cellular),
+        PolicyCase(name: "start_relay_1x_display", description: "The relay on a display at one pixel per point: its step (1.5×60) is 2×60's picture, so 60 fps, as on a Retina Mac.",
+                   display: TierPolicy.Display(points: [1920, 1080], pixels: [1920, 1080], maxSize: 2868), link: relay),
+        PolicyCase(name: "start_cellular_1x_display", description: "Cellular on a display at one pixel per point: its step (1.5×30), so 30 fps.",
+                   display: TierPolicy.Display(points: [1920, 1080], pixels: [1920, 1080], maxSize: 2868), capKbps: 4_000, link: cellular),
         PolicyCase(name: "start_unmeasured", description: "No route measured yet: as the relay over Wi-Fi.", link: nil),
         PolicyCase(name: "start_remembered", description: "Where this computer last settled over this route.", link: relay,
                    remembered: 3),
@@ -234,9 +252,15 @@ final class TierFixtureTests: XCTestCase {
                    capKbps: 1_500, maxScale: 1, link: cellular),
         PolicyCase(name: "long_queue_jumps", description: "A queue over 400 ms for a quarter second jumps to what arrived.",
                    link: lan, ops: [.tick(sig(queue: 500, delivered: 3_000), now: 1), .tick(sig(queue: 500, delivered: 3_000), now: 1.25)]),
-        PolicyCase(name: "skipped_frames", description: "Frames the helper skipped count as a long queue; no rate: one down.",
-                   link: lan, ops: [.helper(target: 7_000, sent: 7_000, skipped: 4), .tick(sig(queue: 100), now: 1),
-                                    .tick(sig(queue: 100), now: 1.25)]),
+        PolicyCase(name: "skipped_frames", description: "Frames the helper skipped, with a queue still over 150 ms, count as a long queue; no rate: one down.",
+                   link: lan, ops: [.helper(target: 12_000, sent: 12_000, skipped: 4), .tick(sig(queue: 200), now: 1),
+                                    .tick(sig(queue: 200), now: 1.25)]),
+        PolicyCase(name: "backlog_gone", description: "Skipped frames with the queue under 150 ms, a backlog that came in at once (its newest frame barely waited), the band's floor with no backlog now: nothing steps down; a backlog still there does.",
+                   link: lan, ops: [.helper(target: 12_000, sent: 12_000, skipped: 4), .tick(sig(queue: 100), now: 1), .tick(sig(queue: 100), now: 1.25),
+                                    .tick(sig(queue: 500, last: 3, delivered: 1_000), now: 1.5),
+                                    .tick(sig(queue: 500, last: 3, delivered: 1_000), now: 1.75),
+                                    .helper(target: 2_500, sent: 900, skipped: 0), .tick(sig(queue: 200, last: 2, delivered: 1_000), now: 2.25),
+                                    .tick(sig(queue: 200, last: 180, delivered: 1_000), now: 2.5)]),
         PolicyCase(name: "exhausted_band", description: "The bitrate at the band's floor and the queue not draining: down, spaced, and at once for a runaway queue.",
                    link: lan, ops: [.helper(target: 10_000, sent: 10_000, skipped: 0), .tick(sig(queue: 200), now: 1),
                                     .helper(target: 6_500, sent: 6_500, skipped: 0), .tick(sig(queue: 200, delivered: 5_500), now: 1.25),
@@ -252,7 +276,7 @@ final class TierFixtureTests: XCTestCase {
                    link: lan, ops: [.tick(sig(queue: 5, decode: 30), now: 1), .tick(sig(queue: 5, decode: 30), now: 2.75),
                                     .tick(sig(queue: 5, decode: 30), now: 3)]),
         PolicyCase(name: "up_needs_proof", description: "A calm window isn't enough: up only once the link carried more.",
-                   link: relay, ops: [.helper(target: 12_000, sent: 300, skipped: 0)] + ticks(from: 0.25, to: 12, sig(queue: 5))
+                   link: relay, ops: [.helper(target: 12_000, sent: 4_000, skipped: 0)] + ticks(from: 0.25, to: 12, sig(queue: 5))
                        + [.helper(target: 12_000, sent: 11_000, skipped: 0)] + ticks(from: 12, to: 22, sig(queue: 5))),
         PolicyCase(name: "first_seconds", description: "In the first 10 s a step up waits 3 s, not 8.",
                    link: relay, ops: [.helper(target: 12_000, sent: 11_500, skipped: 0)] + ticks(from: 0.25, to: 4, sig(queue: 5))),
@@ -263,15 +287,28 @@ final class TierFixtureTests: XCTestCase {
         PolicyCase(name: "undone_step_up", description: "A step up undone within 15 s doubles that tier's window.",
                    link: relay, ops: [.helper(target: 12_000, sent: 11_500, skipped: 0)] + ticks(from: 0.25, to: 3.5, sig(queue: 5))
                        + [.tick(sig(queue: 600, delivered: 7_000), now: 13.25), .tick(sig(queue: 600, delivered: 7_000), now: 13.5)]
-                       + ticks(from: 13.75, to: 30, sig(queue: 5))),
+                       + [.helper(target: 12_000, sent: 11_500, skipped: 0)] + ticks(from: 13.75, to: 30, sig(queue: 5))),
         PolicyCase(name: "still_screen", description: "A still screen (no frames) neither proves nor breaks the window.",
                    link: relay, ops: [.helper(target: 12_000, sent: 11_500, skipped: 0), .tick(sig(queue: 5), now: 0.25)]
                        + ticks(from: 0.5, to: 3, sig(queue: 0, frames: 0)) + [.tick(sig(queue: 5), now: 3.25)]),
         PolicyCase(name: "slower_route", description: "A slower route steps down at once; a faster one keeps the tier.",
                    link: lan, ops: [.path(cellular, now: 5), .path(lan, now: 30)]),
         PolicyCase(name: "new_bias", description: "A new bias takes the tier the rate fits, never richer in pixels a second.",
-                   link: lan, ops: [.helper(target: 3_000, sent: 3_000, skipped: 0), .setBias(.sharper, now: 1), .setBias(.sharper, now: 2),
-                                    .setBias(.smoother, now: 3)]),
+                   link: relay, ops: [.helper(target: 4_500, sent: 4_500, skipped: 0), .setBias(.sharper, now: 1), .setBias(.sharper, now: 2),
+                                      .setBias(.smoother, now: 3)]),
+        PolicyCase(name: "skipped_then_still", description: "Skipped frames, then a still screen: one step down for that second's report, not one a second after it (#7842).",
+                   link: lan, ops: [.helper(target: 9_000, sent: 9_000, skipped: 2), .tick(sig(queue: 200), now: 0.25), .tick(sig(queue: 200), now: 0.5)]
+                       + ticks(from: 0.75, to: 6, sig(queue: 0, frames: 0))),
+        PolicyCase(name: "light_content_up", description: "A screen sending at most half the next floor, calm for twice the window: up without proof, from the new tier's floor.",
+                   link: relay, ops: stride(from: 10.25, to: 27, by: 0.25).flatMap { t -> [Op] in
+                       (Int(t * 4) % 4 == 1 ? [Op.helper(target: 12_000, sent: 600, skipped: 0)] : []) + [.tick(sig(queue: 5), now: t)] }),
+        PolicyCase(name: "bias_on_a_still_screen", description: "The helper's last word under the tier's floor (a still screen): Smoother starts from the tier's floor and keeps 60 fps (#7842).",
+                   link: lan, ops: [.helper(target: 300, sent: 150, skipped: 0), .tick(sig(queue: 0, frames: 0), now: 1),
+                                    .setBias(.smoother, now: 2)]),
+        PolicyCase(name: "data_saver_1x_display", description: "Data Saver on a display at one pixel per point: every tier is 1×, so 30 fps stays within reach (#7842).",
+                   display: TierPolicy.Display(points: [1920, 1080], pixels: [1920, 1080], maxSize: 2868), capKbps: 1_500, maxScale: 1,
+                   link: cellular, ops: [.helper(target: 1_400, sent: 900, skipped: 0), .tick(sig(queue: 5, bursts: [3_000]), now: 0.25),
+                                         .tick(sig(queue: 5, bursts: [3_000, 3_200]), now: 0.5)] + ticks(from: 0.75, to: 4, sig(queue: 5))),
         PolicyCase(name: "data_saver_budget", description: "Choosing Data Saver moves the stream at once; Clearer back.",
                    capKbps: 4_000, link: cellular, ops: [.helper(target: 2_500, sent: 2_500, skipped: 0),
                                                          .setBudget(cap: 1_500, fps: 60, maxScale: 1, now: 1),
@@ -290,12 +327,14 @@ final class TierFixtureTests: XCTestCase {
     private static func changeObject(_ c: TierPolicy.Change?) -> Any {
         guard let c else { return NSNull() }
         return ["index": c.index, "scale": c.tier.scale, "fps": c.tier.fps, "width": c.tier.width, "height": c.tier.height,
-                "minKbps": c.tier.minKbps, "maxKbps": c.tier.maxKbps, "targetKbps": c.targetKbps, "reason": c.reason.rawValue]
+                "minKbps": c.tier.minKbps, "maxKbps": c.tier.maxKbps, "pixelsPerPoint": c.tier.pixelsPerPoint,
+                "targetKbps": c.targetKbps, "reason": c.reason.rawValue]
     }
 
     private static func signalsObject(_ s: TierSignals) -> [String: Any] {
         func v(_ d: Double?) -> Any { d.map { $0 as Any } ?? NSNull() }
-        return ["frames": s.frames, "queueP50Ms": v(s.queueP50Ms), "queueP95Ms": v(s.queueP95Ms), "queueRising": s.queueRising,
+        return ["frames": s.frames, "queueP50Ms": v(s.queueP50Ms), "queueP95Ms": v(s.queueP95Ms), "queueLastMs": v(s.queueLastMs),
+                "queueRising": s.queueRising,
                 "queueFalling": s.queueFalling, "deliveredKbps": v(s.deliveredKbps), "burstKbps": s.burstKbps,
                 "lateShare": v(s.lateShare), "decodeP95Ms": v(s.decodeP95Ms), "replacedShare": v(s.replacedShare)]
     }
