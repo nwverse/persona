@@ -61,7 +61,42 @@ fn c_abi_replays_the_exact_projection_cases_and_rejects_bad_input() {
             assert!(replayed.insert(name), "duplicate projection case");
         }
     }
-    assert_eq!(replayed.len(), 30, "C ABI must replay every projection case");
+    assert_eq!(
+        replayed,
+        BTreeSet::from([
+            "active_space_uses_rank_not_slots".to_owned(),
+            "compact_expands_idle_without_reordering".to_owned(),
+            "cross_machine_same_session_id".to_owned(),
+            "cross_machine_same_session_id_reversed".to_owned(),
+            "empty_list".to_owned(),
+            "filter_all".to_owned(),
+            "filter_needsyou".to_owned(),
+            "filter_unread".to_owned(),
+            "filter_working".to_owned(),
+            "folded_machine_hides_rows".to_owned(),
+            "folded_space_keeps_counts".to_owned(),
+            "folded_state_and_expanded_idle".to_owned(),
+            "kept_cannot_escape_base".to_owned(),
+            "machine_search_before_counts".to_owned(),
+            "machine_uses_registry_order".to_owned(),
+            "mute_allow_and_explicit_override".to_owned(),
+            "pinned_offline_is_visible".to_owned(),
+            "pinned_sessions_use_pin_order_once".to_owned(),
+            "quick_filter_ignores_rank".to_owned(),
+            "quick_spaces_use_updated_time".to_owned(),
+            "rank_all_states_and_mutes".to_owned(),
+            "search_expands_idle".to_owned(),
+            "space_header_counts".to_owned(),
+            "space_time_tie".to_owned(),
+            "space_time_tie_reversed".to_owned(),
+            "spaces_pin_busy_muted_quiet".to_owned(),
+            "unread_keeps_seen_rows".to_owned(),
+            "unread_reselected_drops_seen_rows".to_owned(),
+            "working_since_then_id".to_owned(),
+            "working_since_then_id_reversed".to_owned(),
+        ]),
+        "the C ABI boundary must pin the exact projection names"
+    );
     assert_eq!(project(b"{\"invalid\":true}"), None);
     assert_eq!(project(&[0xff]), None);
     assert_eq!(project(b""), None);
