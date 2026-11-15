@@ -416,7 +416,8 @@ struct NewChatView: View {
                 } header: { Text(models?.models.isEmpty == false || modelChoice?.canPick == true ? String(localized: "Launcher & Model (This Time Only)") : String(localized: "Launcher (This Time Only)")) } footer: {
                     let about = unifiedModels ? String(localized: "Uses Model Configuration › New Agent by default. A choice here applies to this session only and doesn't change the global default.")
                         : String(localized: "Claude Code / Codex launchers from this machine. It runs in a new tab in the terminal engine.")
-                    Text(modelChoice?.canPick == true ? String(localized: "\(about) Models are the same as what /model shows in the terminal.") : about)
+                    // A Paseo provider of another kind has no terminal and no /model (#8144).
+                    Text(modelChoice?.canPick == true && !limitedModes ? String(localized: "\(about) Models are the same as what /model shows in the terminal.") : about)
                 }
 
                 if !codex { // Claude Code's modes (`StartModes`); a Codex keeps its own
