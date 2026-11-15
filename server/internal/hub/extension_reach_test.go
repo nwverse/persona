@@ -199,6 +199,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/agents":                                 "manager", "GET /api/v1/agents/sessions": "manager",
 		"GET /api/v1/agents/sessions/{id}": "manager", "GET /api/v1/agents/sessions/{id}/messages": "manager",
 		"GET /api/v1/agents/sessions/{id}/avatar": "manager",
+		"GET /api/v1/saved-agent-searches":        "manager",
 		"GET /api/v1/workspaces":                  "manager", "GET /api/v1/workspace-board": "manager",
 		"GET /api/v1/workspace-board/activity": "manager", "GET /api/v1/workspace-board/activity/{revision}": "manager",
 		"POST /api/v1/sessions":                            "body", // machine_id, resume_session_id: its manager's (startSession)
@@ -229,6 +230,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/assistant/conversations/{id}/stop":   "path",
 		"GET /api/v1/assistant/reporters":                  "manager",
 		"GET /api/v1/assistant/leaders":                    "manager",
+		"GET /api/v1/assistant/dispatch-policy":            "manager",
+		"PUT /api/v1/assistant/dispatch-policy":            "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"POST /api/v1/todos": "manager", "PATCH /api/v1/todos/{id}": "manager",
 		"POST /api/v1/todos/{id}/decisions":                 "manager",
