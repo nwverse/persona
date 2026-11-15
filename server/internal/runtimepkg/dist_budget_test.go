@@ -15,9 +15,10 @@ import (
 // an interrupt that waits for the turn to end, and the SDK's queued / settled / runtime.driven (#8097: 449,837 B over
 // main's 447,432 B, with main's 290 B of headroom). Raised by 3,011 B for the Paseo bridge keeping cards and their
 // answers across link drops, and the SDK's wait for the next node counted from the drop (#8128: 452,848 B over main's
-// 449,837 B, with main's 290 B of headroom).
+// 449,837 B, with main's 290 B of headroom). Raised by 2,725 B for pi registering Persona's model providers in scope so a
+// computer without a models.json runs pi (#8194: 455,573 B over main's 452,848 B, with main's 290 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 453_138
+	const budget = 455_863
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
