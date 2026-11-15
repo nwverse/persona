@@ -302,3 +302,60 @@ func TestModelProfileSwitchKeepsTheMainChatsConfigDir(t *testing.T) {
 		t.Fatal("a model profile set the main chat's profile")
 	}
 }
+
+// A model profile stored holding a config_dir (written past checkModelProfile, which refuses one) is read without it:
+// it shows no change it cannot make, switching to it and rolling it back keep the main chat's choice, current and
+// made since the switch, and an edit saves it clean.
+func TestStoredModelProfileConfigDirIsNotTheProfiles(t *testing.T) {
+	s, _, st := modelService(t)
+	ctx := context.Background()
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example", Model: "m1"}})
+	setSettings(t, s, func(p *Settings) { p.Launcher = "gw" })
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw", Model: "test-chat"}) // Persona's own profile
+	storeProfiles(t, st,
+		ModelProfile{ID: "economy", Name: "Economy", Purposes: map[string]ModelBinding{"assistant": {Model: "test-selected", ConfigDir: assistantConfigDirLegacy}}},
+		ModelProfile{ID: "same", Name: "Same", Purposes: map[string]ModelBinding{"assistant": {Provider: "launcher.gw", Model: "test-chat", ConfigDir: assistantConfigDirLegacy}}})
+	for _, p := range profilesOf(t, s).Profiles {
+		if p.Purposes["assistant"].ConfigDir != "" {
+			t.Fatalf("%s is shown with the main chat's profile: %+v", p.ID, p.Purposes)
+		}
+		if p.ID == "same" && len(p.Changes) > 0 {
+			t.Fatalf("a profile differing in config_dir alone shows changes: %v", p.Changes)
+		}
+	}
+	by := ProfileActor{Kind: "device", Name: "Test device"}
+	if _, err := s.applyModelProfile(ctx, "economy", by); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.modelRecord(ctx, "assistant"); r.Binding != (ModelBinding{Model: "test-selected"}) {
+		t.Fatalf("switch took the stored profile's config_dir: %+v", r.Binding)
+	}
+	setModel(t, s, "assistant", ModelBinding{Model: "test-selected", ConfigDir: assistantConfigDirLegacy}) // chosen since the switch
+	if _, err := s.rollbackModelProfile(ctx, by); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.modelRecord(ctx, "assistant"); r.Binding != (ModelBinding{Provider: "launcher.gw", Model: "test-chat", ConfigDir: assistantConfigDirLegacy}) {
+		t.Fatalf("rollback did not keep the choice made since the switch: %+v", r.Binding)
+	}
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw", Model: "test-chat"}) // and back to Persona's own
+	if sw, err := s.applyModelProfile(ctx, "same", by); err != nil {
+		t.Fatal(err)
+	} else if slices.Contains(sw.Changed, "assistant") {
+		t.Fatalf("switching to a profile differing in config_dir alone changed the main chat: %v", sw.Changed)
+	}
+	if r, _ := s.modelRecord(ctx, "assistant"); r.Binding != (ModelBinding{Provider: "launcher.gw", Model: "test-chat"}) {
+		t.Fatalf("switch took the stored profile's config_dir: %+v", r.Binding)
+	}
+	if _, err := s.saveModelProfile(ctx, nil, "economy", by, func(p *ModelProfile, _ bool) error { p.Name = "Cheap"; return nil }); err != nil {
+		t.Fatalf("a stored profile holding a config_dir cannot be edited: %v", err)
+	}
+	var stored modelProfiles
+	if _, err := st.Setting(ctx, modelProfilesKey, &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range stored.Profiles {
+		if p.ID == "economy" && p.Purposes["assistant"].ConfigDir != "" {
+			t.Fatalf("an edit saved the stored config_dir again: %+v", p.Purposes)
+		}
+	}
+}

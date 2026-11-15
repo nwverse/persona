@@ -30,6 +30,7 @@ import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
+import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
 import { conversationTitle } from "./assistant/conversations";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
@@ -289,7 +290,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const directions = leaders.map((id) => assistant?.conversations.find((c) => c.session_id === id)).filter((c): c is Session => !!c);
   const recentCount = useRecentCount();
   const recentMore = useRecentMore();
-  const ownChats = recentConversations(assistant?.conversations ?? [], assistant?.main, leaders, assistant?.background_supervisor);
+  const ownChats = recentConversations(assistant?.conversations ?? [], assistant?.main, leaders, assistant?.background_supervisor, assistant?.recent_task_chats === true);
   const recent = ownChats.slice(0, recentCount * (1 + recentMore));
   const recentLeft = ownChats.length - recent.length;
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
@@ -660,6 +661,8 @@ const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = 
 function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping }: AgentsBlockProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const catalog = useStore((s) => s.features.includes(SESSIONS_CATALOG_FEATURE));
+  // a hub that folds side sessions (#7944) leaves them out of the list: nothing to nest under a parent
+  const sideFold = useStore((s) => s.features.includes(SESSIONS_SIDE_FOLD_FEATURE));
   const archives = useStore((s) => s.features.includes(AGENT_ARCHIVES_FEATURE));
   const [rowMenu, setRowMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
   const [renaming, setRenaming] = useState<Session | null>(null);
@@ -740,7 +743,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
     {listMenu.anchor && <Menu anchor={listMenu.anchor} onClose={listMenu.close} align="right" items={listItems} />}
     <HubNoticeLine />
     <HerdrNotices />
-    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
+    <PagedSessionList root={runtimeSessions} path="/sessions" identity={runtimeIdentity} compare={runtimeOrder} removeIdentity={runtimeRemoval} parentOf={sideFold ? undefined : runtimeParentIdentity} event="sessions_list" grouping={pagedGrouping}
       activeAt={runtimeActiveAt} needsYou={runtimeNeedsYou} isOpen={(s) => activeKey === `s:${s.machine_id}/${s.session_id}`}
       catalog={catalog} placeOf={runtimePlace} failureText={agentsReadFailed}
       label={(dimension, id) => dimension === "machine" ? machineWithHub(id, machines) : id}

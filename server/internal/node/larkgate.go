@@ -46,6 +46,8 @@ type larkCall struct {
 	CLI  bool     // lark-cli
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
 	Args []string // lark-cli's arguments, for the phone card
+
+	relBody bool // the body is a relative @file, read from the conversation's directory (classifyLark, #8404)
 }
 
 // larkVerdict: what the gate makes of a whole Bash command.
@@ -84,7 +86,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
-	analysisCommand := normalizeLarkCommand(command, cwd)
+	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
 	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
 	if v.deny != "" {
 		return "deny", v.deny, nil
