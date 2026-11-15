@@ -129,6 +129,7 @@
   "machines.empty_title",
   "machines.never_connected",
   "machines.waiting_node",
+  "mark-read",
   "node-health",
   "notify",
   "pageboundary",

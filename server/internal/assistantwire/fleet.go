@@ -105,6 +105,9 @@ type Clients struct {
 type FleetSeen struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
+	// Manual: the user pressed Mark as read, not an app that marks what it opens (#7356); only these count while
+	// Manual mark as read is on.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // The kinds of push the manager asks the hub for (Notification.Kind besides NotifyPush).

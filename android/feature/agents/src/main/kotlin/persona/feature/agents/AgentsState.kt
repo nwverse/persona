@@ -98,6 +98,8 @@ class AgentsPreferences @Inject constructor(private val store: DataStore<Prefere
     suspend fun markSeen(sessions: List<Session>) {
         sessions.forEach { hub.markSeen(it.key, it.readVersion) }
     }
+    /** Seen without the user saying so (the capsule's shown reply): false when Manual mark as read dropped it (#7356). */
+    suspend fun markLooked(session: Session): Boolean = hub.markLooked(session.key, session.readVersion)
 }
 
 private val foldedTabsKey = stringSetPreferencesKey("folded-tabs")

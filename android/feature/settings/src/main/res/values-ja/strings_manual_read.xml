@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_manual_read">手動で既読にする</string>
+    <string name="settings_manual_read_footer">Agent を開いても未読は消えません。メニューの「既読にする」を使います。既定はオフ。hub に保存され、すべてのデバイスで共通です。</string>
+    <string name="settings_manual_read_readonly">読み取り専用のデバイスでは変更できません。</string>
+    <string name="settings_manual_read_old_hub">この hub はまだ対応していません。hub を更新すると使えます。</string>
+    <string name="settings_manual_read_failed">変更できませんでした: %1$s</string>
+</resources>

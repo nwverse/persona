@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Settings › Agents › Manual mark as read (#7356): the hub's switch, the same on every device. -->
+    <string name="settings_manual_read">Manual mark as read</string>
+    <string name="settings_manual_read_footer">Opening an Agent no longer clears Unread; use Mark as read in its menu. Off by default. Saved on the hub, so every device matches.</string>
+    <string name="settings_manual_read_readonly">A read-only device can\'t change this.</string>
+    <string name="settings_manual_read_old_hub">This hub doesn\'t support it yet. Update the hub to use it.</string>
+    <string name="settings_manual_read_failed">Couldn\'t change it: %1$s</string>
+</resources>

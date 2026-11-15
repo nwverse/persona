@@ -1364,6 +1364,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		IsError    bool            `json:"is_error"`
 		Epoch      string          `json:"epoch"`
 		AfterSeq   int             `json:"after_seq"`
+		Manual     bool            `json:"manual"` // seen: the user pressed Mark as read (#7356)
 		// terminal_subscribe, terminal_input: the grid the app drives the terminal at (docs/integrations/terminal.md)
 		Control  *termCtl `json:"control"`
 		Takeover bool     `json:"takeover"`
@@ -1524,7 +1525,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		h.unregisterDesktop(c)
 	case "seen":
 		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
-			h.markSeen(m.cfg.ID, msg.SessionID)
+			h.markSeen(m.cfg.ID, msg.SessionID, msg.Manual)
 		}
 	case "tool_result":
 		if c.role != roleFull {
