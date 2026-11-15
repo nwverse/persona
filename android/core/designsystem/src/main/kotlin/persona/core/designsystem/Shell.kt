@@ -372,8 +372,8 @@ fun HomeNavigation(
             centerSwitcher = false,
             centerInlineVertically = true,
             endAccessory = null,
-            endAccessoryOffset = 0.dp,
-            compactEndAccessoryOffset = 0.dp,
+            endAccessoryOffset = Tokens.Space.flush,
+            compactEndAccessoryOffset = Tokens.Space.flush,
             leading = leading,
             trailing = trailing,
             fullSwitcher = { switcher(false, false) },
@@ -385,7 +385,7 @@ fun HomeNavigation(
     val choose: (NavItem) -> Unit = { item ->
         if (item.key == selected && onSelectedMenu != null) onSelectedMenu() else select(item.key)
     }
-    val segmentWidth = HomeTokens.segmentWidth * scale + if (density.fontScale > 1f) Tokens.Space.s else 0.dp
+    val segmentWidth = HomeTokens.segmentWidth * scale + if (density.fontScale > 1f) Tokens.Space.s else Tokens.Space.flush
     val waiting = items.lastOrNull()?.badge ?: 0
     HomeNavigationLayout(
         modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
@@ -397,7 +397,7 @@ fun HomeNavigation(
         centerInlineVertically = false,
         endAccessory = if (waiting > 0) ({ GlassHomeBadge(waiting) }) else null,
         endAccessoryOffset = Tokens.Space.s,
-        compactEndAccessoryOffset = 0.dp,
+        compactEndAccessoryOffset = Tokens.Space.flush,
         leading = leading,
         trailing = trailing,
         fullSwitcher = {
@@ -406,11 +406,11 @@ fun HomeNavigation(
         },
         compactSwitcher = {
             GlassHomeSwitcher(items, selected, segmentWidth, scale,
-                textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = 0.dp, onClick = choose)
+                textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = Tokens.Space.flush, onClick = choose)
         },
         stackedSwitcher = { available ->
             val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
-                .coerceIn(0.dp, segmentWidth)
+                .coerceIn(Tokens.Space.flush, segmentWidth)
             GlassHomeSwitcher(items, selected, fittedWidth, scale,
                 textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
                 narrowText = fittedWidth < segmentWidth, onClick = choose)
