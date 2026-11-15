@@ -1829,8 +1829,9 @@ and it also reconnects when the page returns to the foreground or the network co
 a first page that failed subscribes too, and the backlog that subscribe brings stands in for it. A first page refused as `not_loaded` (an agent Paseo let go, which
 its bridge reads only while the chat is watched, `docs/integrations/paseo.md` "Content", #8132) is the subscribe's to bring: it loads the agent, a second or three,
 and the chat keeps saying **Loading chat** meanwhile instead of the refusal (#8321, `useTranscript`). The first items for the session end the wait; the refusal (with
-**Retry**) shows only when the hub sends an `error` for the session instead (its backlog read failed too, in its words) or after a read's time (`READ_TIMEOUT_MS`,
-45 s, past the hub's own limits for a backlog), and the stale-page reads below wait for it too. Check: `web/e2e/paseo-not-loaded.mjs` against the mock hub's
+**Retry**) shows only when none came within a read's time (`READ_TIMEOUT_MS`, 45 s, past the hub's own limits for a backlog), and the stale-page reads below wait
+for it too. A backlog the hub could not read shows then as well: the page does not read the hub's `error` for a session, which Android shows at once (reading it here
+would cost about 70 B of the first screen, `FIRST_SCREEN_BUDGET`). Check: `web/e2e/paseo-not-loaded.mjs` against the mock hub's
 `MOCK_PASEO_NOT_LOADED=1` (a closed Grok agent whose reads are refused until a subscribe loads it, `MOCK_PASEO_LOAD_SECONDS`, default 3; `GET /mock/paseo-unload`
 lets it go again), wide and phone width, light and dark;
 when `from_seq` doesn't connect, it fills the gap with `after_seq` after 1.5 seconds (`docs/protocol/protocol.md` ("Continuity of items")), and when `history` changes it refetches the whole page.

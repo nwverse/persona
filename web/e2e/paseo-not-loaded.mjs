@@ -1,4 +1,4 @@
-// End-to-end check of opening a chat whose agent Paseo let go (#8321, docs/web/web.md "Paseo agents"): its bridge reads
+// End-to-end check of opening a chat whose agent Paseo let go (#8321, docs/web/web.md "Connection"): its bridge reads
 // such an agent only while its chat is watched (#8132), so the page's first read is refused as not_loaded, and the
 // subscribe that follows loads it; the hub's backlog brings the history a few seconds later. Meanwhile the chat says
 // "Loading chat", never the refusal.

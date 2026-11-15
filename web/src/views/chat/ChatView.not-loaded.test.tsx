@@ -2,8 +2,8 @@
 // Opening a chat whose first page is refused as not_loaded (#8321): an agent Paseo let go is read only while its chat
 // is watched (#8132), and this page reads its first page before it subscribes. The subscribe loads the agent and its
 // backlog brings the page a second or three later. Until then the chat shows its usual loading state, never the
-// refusal; the refusal shows only when the backlog fails or nothing comes within a read's time. The real store,
-// useTranscript and ChatView; the hub is the sync cases' (sync/fake-hub.ts), with its backlog sent when the test says.
+// refusal; the refusal shows only when nothing comes within a read's time. The real store, useTranscript and
+// ChatView; the hub is the sync cases' (sync/fake-hub.ts), with its backlog sent when the test says.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,12 +157,16 @@ describe("ChatView: a first page refused as not_loaded", () => {
     expect(text()).toContain(ANSWER);
   });
 
-  it("says why when the hub could not send the backlog either", async () => {
+  it("keeps loading when the hub could not send the backlog either, and shows the refusal after a read's time", async () => {
     await open();
     await settle(1_000);
+    // the hub's own failure for the session, which this page does not read: the wait runs its course
     await act(async () => hub.failBacklog("Paseo could not load this agent."));
-    await settle();
-    expect(text()).toContain("Paseo could not load this agent.");
+    await settle(READ_TIMEOUT_MS - 2_000);
+    expect(loading()).toBe(true);
+    expect(text()).not.toContain(REFUSAL);
+    await settle(1_000);
+    expect(text()).toContain(REFUSAL);
     expect(loading()).toBe(false);
     expect(retry()).toBeDefined();
   });

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionPath } from "../../lib/api";
 import { sessionLoadError } from "../../lib/session-link";
-import { getState, listenSession, onHubEvent, send, type ItemsEvent } from "../../lib/store";
+import { getState, listenSession, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
 import { mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
@@ -160,14 +160,13 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     let pendingItems: Item[] = []; // pushes after the HTTP request started win over its answer
     let pendingHistory = "";
     // The first read was refused as not_loaded (isNotLoaded): the chat keeps loading until the subscribe's items come,
-    // instead of showing the refusal for the second or three the load takes (#8321). Its words, for when the hub's
-    // backlog fails (its `error` for the session) or nothing comes within a read's time.
-    let refused = "";
-    let refusedTimer: number | undefined;
-    const endRefused = (error: string) => {
-      if (!refused) return;
-      refused = "";
-      clearTimeout(refusedTimer);
+    // instead of showing the refusal for the second or three the load takes (#8321). It shows the refusal, with Retry,
+    // only when none came within a read's time (this timer): past the hub's own limits for a backlog (the watch's, then
+    // the read's), so a backlog the hub could not read shows then too.
+    let refused: number | undefined;
+    const endRefused = (error = "") => {
+      clearTimeout(refused);
+      refused = undefined;
       setError(error);
       setLoading(false);
       setFirstRead(true);
@@ -292,9 +291,9 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       if (e.history) history.current = e.history;
       if (!ready && e.history) pendingHistory = e.history;
-      endRefused(""); // the watch brings the chat its first read could not
+      if (refused) endRefused(); // the watch brings the chat its first read could not
       if (e.has_more !== undefined) {
-        // The replay of a subscribe without since_seq (the first read failed) stands in for that read.
+        // The replay of a subscribe without since_seq (the first read failed or was refused) stands in for that read.
         latestMore = e.has_more;
         setHasMore(latestMore);
         setError("");
@@ -345,11 +344,6 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         if (ready) subscribe();
       },
     });
-    // The hub could not send the backlog of a subscribe either: an `error` for the session in its words, instead of items.
-    const offError = onHubEvent("error", (msg) => {
-      if (dead || !refused || msg.machine_id !== mid || msg.session_id !== sid) return;
-      endRefused(typeof msg.error === "string" && msg.error ? sessionLoadError(msg.error) : refused);
-    });
 
     (async () => {
       try {
@@ -375,8 +369,9 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         if (dead) return;
         // a session that is still starting has no transcript yet
         if (!opts.starting) {
-          if (isNotLoaded(e)) refused = sessionLoadError(errorText(e));
-          else setError(sessionLoadError(errorText(e)));
+          const text = sessionLoadError(errorText(e));
+          if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
+          else setError(text);
         }
       } finally {
         if (!dead && !refused) {
@@ -386,18 +381,14 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         lastArrival = Date.now();
         ready = true;
       }
-      if (dead) return;
-      subscribe();
-      // The hub's own limits for a backlog (the watch, then the read) end within a read's time, and its error comes first.
-      if (refused) refusedTimer = window.setTimeout(() => endRefused(refused), READ_TIMEOUT_MS);
+      if (!dead) subscribe();
     })();
 
     return () => {
       dead = true;
       ctl.abort();
       off();
-      offError();
-      clearTimeout(refusedTimer);
+      clearTimeout(refused);
       deltas.current.cancel();
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own
