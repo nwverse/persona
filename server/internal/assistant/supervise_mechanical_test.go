@@ -147,6 +147,7 @@ func TestMechanicalSignalFailsOpen(t *testing.T) {
 		{"review signal", superviseSignal{Kind: sigReview}, nil}, {"failed signal", superviseSignal{Kind: sigFailed}, nil},
 		{"needs you", superviseSignal{Kind: sigNeedsYou}, nil}, {"interrupted", superviseSignal{Kind: sigInterrupted}, nil},
 		{"all agents stopped needs judgment", superviseSignal{Kind: sigAllStopped}, nil},
+		{"owner ended parking with a decision", superviseSignal{Kind: sigParkDecided}, nil},
 		{"unjudged", superviseSignal{Kind: sigUnjudged}, nil}, {"question report", superviseSignal{Kind: sigReport, Report: upReportQuestion}, nil},
 		{"rework", superviseSignal{Kind: sigIdle}, func(_ *testing.T, _ *Service, _ *fakeHub, t *Todo, _ *proto.Session, _ time.Time) {
 			t.Supervision.State = reviewRework

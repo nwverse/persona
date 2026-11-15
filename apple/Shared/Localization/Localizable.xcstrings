@@ -5976,6 +5976,41 @@
       },
       "extractionState" : "manual"
     },
+    "%lld More Files" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld More File"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld More Files"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほか%1$lld個のファイル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有 %1$lld 个文件"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld ms round trip" : {
       "localizations" : {
         "en" : {
@@ -63187,6 +63222,29 @@
       },
       "extractionState" : "manual"
     },
+    "Failed · Tap to Retry" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed · Tap to Retry"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失敗 · タップして再試行"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "失败 · 点按重试"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Faster" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -63231,6 +63289,29 @@
           }
         }
       }
+    },
+    "File %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "File %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイル %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件 %1$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "FYI" : {
       "localizations" : {
@@ -94291,6 +94372,29 @@
       },
       "extractionState" : "manual"
     },
+    "No longer on the computer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No longer on the computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータにはもうありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已不在电脑上"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "No Matches" : {
       "localizations" : {
         "en" : {
@@ -110278,6 +110382,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "PDF 文档"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Please look at the attached files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Please look at the attached files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添付ファイルを見てください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请看附件"
           }
         }
       },
@@ -151640,6 +151767,29 @@
         }
       }
     },
+    "The files are still uploading. Send once they're done." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The files are still uploading. Send once they're done."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルをアップロード中です。完了してから送信してください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件还在上传，传完再发送"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "The Fullest [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -173638,6 +173788,41 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一条最多 %1$lld 字，长的拆开发"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Up to %lld files in one message" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$lld file in one message"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$lld files in one message"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1件のメッセージに添付できるファイルは%1$lld個までです"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一条消息最多 %1$lld 个文件"
           }
         }
       },

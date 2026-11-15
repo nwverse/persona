@@ -89,7 +89,7 @@
   "mcp_tools.assistant#subscription_sources": 1161,
   "mcp_tools.assistant#supervision_finish": 878,
   "mcp_tools.assistant#task_decided": 1837,
-  "mcp_tools.assistant#task_plan": 14979,
+  "mcp_tools.assistant#task_plan": 15165,
   "mcp_tools.assistant#task_plan_withdraw": 941,
   "mcp_tools.assistant#task_retry": 741,
   "mcp_tools.assistant#task_review": 11100,
@@ -119,5 +119,5 @@
   "supervise.parked_due": 856,
   "supervise.review_rework": 555,
   "supervise.rework": 396,
-  "supervision_instructions": 15688
+  "supervision_instructions": 15442
 }

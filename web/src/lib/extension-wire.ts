@@ -891,8 +891,8 @@ export interface SettingsCheckResult {
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
