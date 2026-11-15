@@ -27,6 +27,7 @@ import {
   retryTask,
   routeTodoId,
   startFailure,
+  startInFlight,
   setRoute,
   startPlan,
   todayFailedRow,
@@ -80,7 +81,7 @@ import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
 import { MessageActions } from "../chat/MessageActions";
 import { sessionTitle, stateOf } from "../../lib/format";
-import { formatDate, t } from "../../i18n";
+import { formatDate, formatList, t } from "../../i18n";
 import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { lazyPage } from "../../lib/lazy-page";
@@ -169,18 +170,19 @@ export function removeTaskNow(todo: Todo) {
   );
 }
 
-/** The task's state as an agent state, for its dot and tone. */
-function dotState(st: TodoStatus): AgentState {
-  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "waiting" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
+/** The task's state as an agent state, for its dot and tone. `starting`: a not-started task's Agent is being started
+ *  (startInFlight); one nobody dispatched is still, as on the To-dos page (#7552). */
+function dotState(st: TodoStatus, starting = true): AgentState {
+  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "waiting" || (st === "not_started" && starting) ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed, not started
 }
 
-function TaskMark({ status, size = 9 }: { status: TodoStatus; size?: number }) {
+function TaskMark({ status, size = 9, starting }: { status: TodoStatus; size?: number; starting?: boolean }) {
   if (status === "usage_limit") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-orange" />;
   if (status === "waiting") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-ink-2" />;
   if (status === "failed" || status === "interrupted") return <Icon name="info" size={size + 4} stroke={2.4} className="text-red" />;
   if (status === "done" || status === "unread")
     return <Icon name="check" size={size + 4} stroke={2.4} className={status === "done" ? "text-ink-3" : "text-green"} />;
-  return <StatusMark state={dotState(status)} />;
+  return <StatusMark state={dotState(status, starting)} />;
 }
 
 /** Where a task runs: machine · folder · agent. `machines` and `plans` default to the stores' own; a selector passes
@@ -272,8 +274,18 @@ function usePlanUltracodeBlocked(plan: TaskPlan): string[] | undefined {
 /** A computer can't start with ultracode now (what Start sends checks it as it goes). */
 const ultracodeBlockedNow = (machine: string) => Boolean(machineStartBlocked(getState(), machine));
 
+/** What "Start these directly" remembers, said on the card (#8095): each task that changes files, by its computer and
+ *  folder; the remembered kind then covers that folder's subfolders too. "" when every task only reads: those start
+ *  without asking anyway, so there is nothing to remember. */
+export function rememberScope(tasks: PlanTask[], machines: Machine[]): string {
+  const places = [...new Set(tasks.filter((task) => !task.readonly).map((task) =>
+    t("assistant-tasks.plan_remember_place", { machine: machines.find((m) => m.id === task.machine)?.name ?? task.machine, directory: task.cwd })))];
+  return places.length ? t("assistant-tasks.plan_remember", { places: formatList(places) }) : "";
+}
+
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
+  const machines = useStore((s) => s.machines);
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
@@ -299,6 +311,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
+  const scope = rememberScope(editedPlan.tasks, machines);
   const startEdits = () => {
     const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
     const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
@@ -318,10 +331,10 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           <TaskWorkspaceEditor plan={editedPlan} index={i} disabled={busy} onChange={(workspace) => setWorkspaceChoice((c) => ({ ...c, [i]: workspace }))} />
         </div>
       ))}
-      <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
+      {scope && <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
-        {t("assistant-tasks.plan_remember")}
-      </label>
+        {scope}
+      </label>}
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps
           its buttons at the tray's bottom edge; a card that fits looks as it did (the padding it takes it gives back) */}
       <div data-plan-actions className="sticky bottom-0 z-[1] -mx-4 -mt-2 -mb-4 flex gap-2 rounded-b-card bg-surface px-4 pt-2 pb-4">
@@ -414,6 +427,12 @@ function BackgroundReviewLine({ item, title, known }: { item: FeedItem; title: s
   );
 }
 
+/** The plan a `plan` item carries in its body (the hub writes it there with the item), when it is one of this item's. */
+function itemPlan(item: FeedItem): TaskPlan | undefined {
+  const p = item.body?.plan as TaskPlan | undefined;
+  return p && typeof p === "object" && p.id === item.ref && Array.isArray(p.tasks) ? p : undefined;
+}
+
 // Memoized: the chat re-renders on every streamed item and session push, while an item keeps its identity until its body
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
@@ -428,7 +447,13 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   if (simplified) {
     // the Agents a dispatch handed work to, a card each that opens its page (#5096, cindy's hand-off card); never the
     // whole In progress tray (#3700)
-    if (item.kind === "plan") return plan?.state === "started" ? <PlanHandoffs plan={plan} /> : null;
+    // a plan not started yet is its card where it was made, Start / Edit / Dismiss included, as on iOS (FeedLine,
+    // #8193); it is in the Needs you tray as well. The item's own body draws it when the store has none (a missed event).
+    if (item.kind === "plan") {
+      const shown = plan ?? itemPlan(item);
+      if (!shown) return null;
+      return shown.state === "started" ? <PlanHandoffs plan={shown} /> : <PlanCard plan={shown} />;
+    }
     if (item.kind === "task") return planned ? null : <TaskHandoffs item={item} />;
     // a task's conclusion, a card for each of done / stopped / failed / interrupted (#5569); an interrupted one the hub worked
     // out stays as its record (#3834): one card for a batch, a grey line once handled
@@ -971,7 +996,8 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
   return s.todos
     .filter((t) => t.origin === conversation)
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
-    .filter((x) => DOCK_RANK[x.st] !== undefined)
+    // a to-do nobody dispatched is not going on (#7552)
+    .filter((x) => DOCK_RANK[x.st] !== undefined && (x.st !== "not_started" || startInFlight(x.t, plans)))
     .sort((a, b) => DOCK_RANK[a.st]! - DOCK_RANK[b.st]! || byTime(b.t.created_at, a.t.created_at))
     .map(({ t: todo, st }) => {
       const lead = mostUrgentAgent(todo, lookup)?.session;
@@ -1053,11 +1079,13 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: T
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
   const toStart = !todo && !!card.plan_id && plans[card.plan_id]?.state === "open";
+  // Starting only while an Agent is being started for it; a to-do nobody dispatched says Not started (#7552)
+  const starting = !todo || startInFlight(todo, plans);
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
-  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" && starting ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
   const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
@@ -1076,7 +1104,7 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen }: { card: T
     : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
-      <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
+      <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} starting={starting} /></span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold" title={title}>{title}</div>
         <BackgroundWorkDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} />

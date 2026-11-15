@@ -36,6 +36,7 @@ struct PersonaApp: App {
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
+                    if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
                     // A computer's pairing link (「添加电脑」, Add computer) is for Persona Link on that computer, not for this device (#4198).
                     if ServerConfig.isComputerLink(url) {
                         model.toast = Toast(String(localized: "Open this link on the computer you're adding"))
@@ -188,9 +189,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
                       "agents.list.width", "agents.list.closed"] { d.removeObject(forKey: k) }
         }
-        // `-openSplitFresh YES`: the lists beside the pages at the system's width and open (SplitDividerTests, #2624).
+        // `-openSplitFresh YES`: the lists beside the pages shown (SplitListTests, #2624, #4206).
         if d.bool(forKey: "openSplitFresh") {
-            for list in ["agents.list", "assistant.list"] { d.removeObject(forKey: list + ".width"); d.removeObject(forKey: list + ".closed") }
+            for list in ["agents.list", "assistant.list", "sidebar.list"] { d.removeObject(forKey: list + ".closed") }
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }
