@@ -898,6 +898,10 @@ return a valid answer immediately for all others, and bound blocked requests too
   tap those instead, or find multiple elements. Each passes alone but fails in the suite.
 - Start cases with corresponding `-open…Fresh YES` / `-show…Fresh YES` to clear leftovers (Lark uses `-showLarkSendFresh` in both `LarkSendTests` and `LarkAttachmentFlowTests`).
   **Remove the flag** on the relaunch that tests persistence, or it clears the very data under test.
+- A `-open…Fresh` flag at a case's start protects only that case: a draft the case types is saved (1 s debounce) and appears in the
+  next suite that opens the chat without the flag (2026-11-15, #8543). Clean up in `addTeardownBlock`, which runs after a failure too,
+  unlike `defer`: relaunch with `-openDraftsFresh YES`, keep the app up about 2 s for the save, then terminate
+  (`AssistantModelPickerUITests`). Typed deletes are not reliable for this: after a relaunch the caret can sit before a restored draft.
 - After adding UI test classes, run the whole suite sequentially, not only the new case.
 - `./scripts/test/test-server.sh … -run 'A|B'` became `bash: B: command not found` on hub, running nothing (2026-11-05, #1830): remote shell reparses ssh arguments and treats `|` as a pipe.
   Add another quote layer: `-run "'A|B'"`. Exit codes alone can look like test failure; inspect the final log lines first.
