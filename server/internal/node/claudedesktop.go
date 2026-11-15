@@ -361,19 +361,18 @@ func linkSideSessions(list []proto.Session, parents map[string]string) {
 }
 
 // placeClaudeDesktop puts each of the desktop app's sessions in its project, as the app's sidebar groups them and as
-// the Codex App's chats are placed (decorateCodexSession): the repository of the folder the session was started in
-// (origins, the index's originCwd; else its own directory), a linked worktree's main checkout (codexProjectRoot); a
-// folder that is no repository is its own project, but not the home folder or one above it (a session started there is
-// in no project, as the apps' lists by app have it). Without a space a session was in no project in every client's
-// list by project, a session in a worktree the app made (<repo>/.claude/worktrees/<name>) included (#8521). The space
-// is the one the Codex App's chats of the same repository are in (projectSpace), so a repository is one project on a
-// computer whichever app works in it. The app's sessions are the ones a claude of the app runs (claude_desktop) and
-// the transcripts it ran that nothing runs now (the desktop surface, no source, no pane); a session some host placed
-// keeps its place.
+// the Codex App's chats are placed (decorateCodexSession). Without a space a session was in no project in every
+// client's list by project, a session in a worktree the app made (<repo>/.claude/worktrees/<name>) included (#8521).
+// The project is the repository the session works in, a linked worktree's main checkout (repo_root, fillGitPlace);
+// until that is read, and for a folder that is no repository, the folder the app started the session in (origins, the
+// index's originCwd). The home folder, or one above it, is no project (as the apps' lists by app have it). The space is
+// the one the Codex App's chats of the same repository are in (projectSpace), so a repository is one project on a
+// computer whichever app works in it. Nothing here runs git: repo_root comes from the list's own cache of Git places.
+// The app's sessions are the ones a claude of the app runs (claude_desktop) and the transcripts it ran that nothing
+// runs now (the desktop surface, no source, no pane); a session some host placed keeps its place.
 func placeClaudeDesktop(list []proto.Session, origins map[string]string, home string) {
-	roots := map[string]string{} // codexProjectRoot's cache for this list
 	if home != "" {
-		home = realPath(filepath.Clean(home))
+		home = cmp.Or(physicalDirs.lookup(filepath.Clean(home)).root, filepath.Clean(home))
 	}
 	for i := range list {
 		s := &list[i]
@@ -381,8 +380,11 @@ func placeClaudeDesktop(list []proto.Session, origins map[string]string, home st
 		if s.SourceKind != proto.SourceClaudeDesktop && !resting || s.SpaceID != "" || s.Assistant {
 			continue
 		}
-		root := codexProjectRoot(cmp.Or(origins[s.SessionID], s.Cwd), roots)
-		if root == "" || home != "" && pathWithin(home, root) {
+		root := cmp.Or(s.RepoRoot, origins[s.SessionID])
+		if !filepath.IsAbs(root) {
+			continue
+		}
+		if root = filepath.Clean(root); home != "" && pathWithin(home, root) {
 			continue
 		}
 		s.SpaceKind, s.SpaceID, s.SpaceName = proto.SourceClaudeDesktop, projectSpace+root, filepath.Base(root)

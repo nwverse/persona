@@ -29,9 +29,9 @@ func writeTranscriptIn(t *testing.T, dir, id, cwd, entrypoint string) {
 
 // The desktop app's sessions are in their project's space (#8521): one the app ran in a worktree it made
 // (<repo>/.claude/worktrees/<name>) is in its repository's, the space the Codex App's chats of that repository are in,
-// whether or not the app's index names the folder it was started in; one in a folder that is no repository is in the
-// folder the app started it in, unless that is the home folder. A command line's session gets no space, and neither
-// does a desktop session some host placed already.
+// whether or not the app's index names the folder it was started in (the repository is the one the list's Git places
+// read: no git runs for it); one in a folder that is no repository is in the folder the app started it in, unless that
+// is the home folder. A command line's session gets no space, and neither does a desktop session some host placed.
 func TestDesktopSessionsAreInTheirProject(t *testing.T) {
 	const (
 		inTree   = "abcdabcd-0000-4000-8000-000000000001" // in a worktree the app made, its index naming the repository
@@ -81,6 +81,7 @@ func TestDesktopSessionsAreInTheirProject(t *testing.T) {
 	writeDesktopEntry(t, third, noOrigin, noOrigin, false, nil, "")
 	writeDesktopEntry(t, third, inNotes, inNotes, false, nil, origin(notes))
 
+	awaitGitPlace(t, gitPlaces, tree) // read in the background: the first list after a start may not have it yet
 	rows := map[string]proto.Session{}
 	for _, s := range n.sessionList(context.Background(), false) {
 		rows[s.SessionID] = s
@@ -106,14 +107,19 @@ func TestDesktopSessionsAreInTheirProject(t *testing.T) {
 		}
 	}
 
-	// A live session of the app is placed the same way; one in the home folder is in no project, and a row some host
-	// placed keeps its space.
+	// The space is the one a Codex App chat in that worktree is in (decorateCodexSession).
+	if codex := projectSpace + codexProjectRoot(tree, map[string]string{}); rows[inTree].SpaceID != codex {
+		t.Errorf("space %q, a Codex App chat's there %q", rows[inTree].SpaceID, codex)
+	}
+
+	// A live session of the app is placed the same way, by the folder the app started it in while its repository is not
+	// read yet; one in the home folder is in no project, and a row some host placed keeps its space.
 	list := []proto.Session{
 		{SessionID: "home", Agent: "claude", SourceKind: proto.SourceClaudeDesktop, Cwd: home},
 		{SessionID: "live", Agent: "claude", SourceKind: proto.SourceClaudeDesktop, Cwd: tree},
 		{SessionID: "hosted", Agent: "claude", SourceKind: proto.SourceClaudeDesktop, Cwd: tree, SpaceKind: "herdr", SpaceID: "w1", SpaceName: "Release"},
 	}
-	placeClaudeDesktop(list, nil, home)
+	placeClaudeDesktop(list, map[string]string{"home": home, "live": repo}, home)
 	if s := list[1]; s.SpaceKind != proto.SourceClaudeDesktop || s.SpaceID != projectSpace+root || s.SpaceName != "app" {
 		t.Errorf("live: %q %q %q", s.SpaceKind, s.SpaceID, s.SpaceName)
 	}
