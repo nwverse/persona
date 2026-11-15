@@ -4,7 +4,8 @@ import { throwIfUpdateTestAborted } from "./update-test-lifecycle.mjs";
 const isRegistryAbsent = result => result.code === 1 && /unable to find the specified (?:registry key|registry key or value)|cannot find the path specified/i.test(result.text ?? "");
 export async function inspectWindowsRegistryKeys({ keys, run, signal }) {
   throwIfUpdateTestAborted(signal);
-  const script = `$ErrorActionPreference='Stop'; ${JSON.stringify(keys)} | ForEach-Object { $key = $_ -replace '^HKCU\\\\', 'HKCU:\\'; [PSCustomObject]@{ Name = $_; Exists = Test-Path -LiteralPath $key; InstallLocation = (Get-ItemPropertyValue -LiteralPath $key -Name InstallLocation -ErrorAction SilentlyContinue) } } | ConvertTo-Json -Compress`;
+  const quotedKeys = keys.map(key => `'${key.replaceAll("'", "''")}'`).join(",");
+  const script = `$ErrorActionPreference='Stop'; @(${quotedKeys}) | ForEach-Object { $key = $_ -replace '^HKCU\\\\', 'HKCU:\\'; [PSCustomObject]@{ Name = $_; Exists = Test-Path -LiteralPath $key; InstallLocation = (Get-ItemPropertyValue -LiteralPath $key -Name InstallLocation -ErrorAction SilentlyContinue) } } | ConvertTo-Json -Compress`;
   const { code, text } = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { seconds: 60, quiet: true, signal });
   throwIfUpdateTestAborted(signal);
   if (code !== 0) throw new Error(`could not inspect this run's NSIS registry keys (exit ${code})`);

@@ -36,7 +36,9 @@ test("native preflight queries only this run's GUID keys and reads NSIS's Instal
   const script = calls[0].args.at(-1);
   assert.ok(script.includes(guid));
   assert.ok(script.includes("InstallLocation"));
-  for (const key of keys) assert.ok(script.includes(JSON.stringify(key)));
+  const quotedKeys = keys.map(key => `'${key.replaceAll("'", "''")}'`).join(",");
+  assert.ok(script.startsWith(`$ErrorActionPreference='Stop'; @(${quotedKeys}) | ForEach-Object`), script);
+  for (const key of keys) assert.ok(script.includes(`'${key.replaceAll("'", "''")}'`));
 });
 
 test("native preflight accepts one-key PowerShell output and rejects nonzero exits", async () => {
