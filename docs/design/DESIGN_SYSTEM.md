@@ -1182,6 +1182,7 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - `CandleChart`: candlesticks with an optional volume chart under them; rising and falling colors come from the caller (the diff's green and red); holding a candle reads its prices, else the last one's.
 - `TrendLine`: a trend line the size of a word, no axes, in the quiet ink unless given a color; VoiceOver reads where it went and its lowest and highest.
 - Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
+- Machine monitoring has its own `MetricColor` palette on both Apple and Android: CPU blue, memory teal, download orange, upload purple and load magenta, with separate light/dark values from `spec/tokens/color.metric.json`. These series never reuse Agent state colors and do not change with interface style or theme accent. Android's additional disk series uses the registered neutral slate token. Holding a chart keeps one shared timestamp across the detail's charts; only **Back to now**, or that timestamp leaving the selected range, returns to current values. Missing series remain unknown and gaps never borrow a neighboring value.
 
 ### 3.14 Tabletop hinge safety (Android)
 
