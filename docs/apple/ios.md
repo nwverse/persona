@@ -2617,7 +2617,9 @@ After successful QR-code or manual pairing, first choose an engine for the hub m
 
 Both mock hub and demo mode support selection and machine pushes. For screenshots, first open the pairing page with `-openWelcome YES`, then open a `persona://pair` link to the mock hub to enter the real post-pairing flow; settings details keep using `-tab settings -openMachines YES -openMachineDetail server`. No new DEBUG arguments.
 
-The To-dos page (iOS / Mac) and the assistant's tasks share `TodoItem` / `TaskState` in `apple/Shared/Tasks.swift`. The To-dos page uses the state labels, sorting and colors specified in `docs/assistant/todos.md`.
+The To-dos page (iOS / visionOS) and the assistant's tasks share `TodoItem` / `TaskState` in `apple/Shared/Tasks.swift`. The To-dos page uses the state labels, sorting and colors specified in `docs/assistant/todos.md`, and its sections and related rows follow `docs/assistant/todo-status-sop.md`.
+
+For a to-do whose optional `kind` is exactly `concern`, iOS adds one compact neutral **Concern** chip on open and closed rows, beside a short title or directly below a title that needs its existing two lines. It never replaces the row's state word, counts or actions. An accepted open concern keeps its open status words, tone and checkbox rather than Accepted / Done presentation, and the list omits its Accepted review chip while its report remains open. Open concerns never merge with related to-dos or one another, including transitively; closed concerns group normally. A missing or unknown `kind` is an ordinary to-do, so older hubs and cached items keep their previous behavior (#3582).
 
 
 ### Orca workspace containers in Agents (#1399)

@@ -41049,6 +41049,28 @@
         }
       }
     },
+    "Concern" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Concern"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "関心事"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关注点"
+          }
+        }
+      }
+    },
     "Concurrency limit reached" : {
       "localizations" : {
         "en" : {
@@ -47443,6 +47465,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没能移到「已完成」：%@"
+          }
+        }
+      }
+    },
+    "Couldn't move it to Other open: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't move it to Other open: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「その他の未完了」に移動できませんでした：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没能移到「其余没完成」：%@"
           }
         }
       }
@@ -68067,6 +68112,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "知道了：把「%@」移到已完成"
+          }
+        }
+      }
+    },
+    "Got It: move %@ to Other open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got It: move %@ to Other open"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解：「%@」をその他の未完了に移動"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了：把「%@」移到其余没完成"
           }
         }
       }
@@ -89504,6 +89572,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已移到「已完成」"
+          }
+        }
+      }
+    },
+    "Moved to Other open" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moved to Other open"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「その他の未完了」に移動しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移到「其余没完成」"
           }
         }
       }

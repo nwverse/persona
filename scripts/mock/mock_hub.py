@@ -2933,6 +2933,18 @@ def _todo_list_fixture(variant):
              done_reason="验收通过")
         todo("tl_failed_panel_a", "部署自托管面板", 60 * 24, **dict(failed, done_at=ago(hours=24)))
         todo("tl_failed_panel_b", "部署自托管面板", 60 * 28, **dict(failed, done_at=ago(hours=28)))
+    if os.environ.get("MOCK_TODO_CONCERNS") == "1":
+        # The general block below adds working, plain-open and report-closed concerns. Only with MOCK_TODO_LIST, this
+        # block adds accepted, finished-unseen and plan-related open concerns plus an ordinary control; the pinned list is unchanged.
+        out = []
+        todo("concern_open", "Weekly errands", 60 * 100, kind="concern", plan_id="plan_concern_mock")
+        todo("concern_accepted", "Backup answer", 30, kind="concern",
+             supervision={"supervisor": "main", "done_when": [], "state": "accepted",
+                          "reviews": [{"at": ago(hours=1), "verdict": "accepted", "checks": []}]})
+        todo("concern_unseen", "Check the unseen answer", 120,
+             [agent(41, "Finish the unseen answer", "/home/me/code/concerns", "unread", 120,
+                    "The answer is ready to read.")], kind="concern")
+        todo("concern_control", "An ordinary follow-up", 10, plan_id="plan_concern_mock")
     return out
 
 
