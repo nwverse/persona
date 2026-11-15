@@ -274,7 +274,8 @@ func TestAHoldPastTodayNamesItsDay(t *testing.T) {
 }
 
 // The gate counts right whatever comes in whatever order: random runs of requests coming, ending every way a request
-// ends (answered, a limit before or after the 200, another failure, a panic unwinding through it) and time passing.
+// ends (answered, a limit before or after the 200, another failure before or after it, a panic unwinding through it
+// before or after it) and time passing.
 // After every step the requests counted as out are the ones that are, at most one of them is finding out, and with
 // nothing out and no pause running a request goes out at once: no order of events strands the connection (#6698).
 func TestTheGateCountsRightInAnyOrder(t *testing.T) {
@@ -295,7 +296,9 @@ func TestTheGateCountsRightInAnyOrder(t *testing.T) {
 		{"not found", false, &httpError{status: 404, body: "no such model"}},
 		{"bad gateway", false, &httpError{status: 502, body: "bad gateway"}},
 		{"dropped", false, io.ErrUnexpectedEOF},
+		{"cut off after the 200", true, io.ErrUnexpectedEOF},
 		{"panicked", false, errUnwound},
+		{"panicked after the 200", true, errUnwound},
 	}
 	waits := []time.Duration{time.Second, 6 * time.Second, time.Minute, 6 * time.Minute, 31 * time.Minute}
 	type request struct {
@@ -361,9 +364,11 @@ func TestTheGateCountsRightInAnyOrder(t *testing.T) {
 				if end.answered && r.turn.probe && g.answers() { // its 200 is seen before its answer is read
 					r.let = true
 				}
-				// A limit the stream reports after the 200 is no answer to the gate (messageFailure, respond).
+				// A limit the stream reports after the 200 is no answer to the gate (messageFailure, respond), and
+				// neither is a request that did not return (Chat's defer).
 				var limit *streamLimit
-				_ = g.done(r.turn, r.turn.probe && !r.let, end.answered && !errors.As(end.err, &limit), end.err)
+				told := end.answered && !errors.As(end.err, &limit) && end.err != errUnwound
+				_ = g.done(r.turn, r.turn.probe && !r.let, told, end.err)
 				trace = append(trace, end.name)
 			default:
 				d := waits[rnd.Intn(len(waits))]
