@@ -2388,7 +2388,9 @@ final class AppModel {
 
     /// The complete fallback is authoritative on a list-negotiated hub. Older delta sockets retain their live rows
     /// while REST fills history, including a snapshot still waiting for the burst flush.
-    func landCompleteSessionList(_ rows: [Session], group: String) {
+    /// `manager` is the list query's filter when the landing is one assistant's sessions only (`sessions_manager`);
+    /// nil or empty means every manager, and a missing held row is dropped as before.
+    func landCompleteSessionList(_ rows: [Session], group: String, manager: String? = nil) {
         var updates = Dictionary(grouping: rows, by: \.machineRef)
         let delta = socket(group)?.state == .connected && features(group).contains(SessionPatch.feature) && !features(group).contains("sessions_list")
         for (ref, list) in updates {
@@ -2401,14 +2403,13 @@ final class AppModel {
         if !delta {
             for ref in pendingSessions.keys where ref.group == group && updates[ref]?.isEmpty != false { pendingSessions[ref] = [] }
         }
-        // A filtered landing (one manager's sessions) would clear another manager's open chat from the index (#8748).
-        // Keep rows that are open or subscribed so the composer stays enabled while that chat is on screen.
-        retainHeldSessionRows(&updates, group: group)
+        // A filtered landing would clear another manager's open chat from the index (#8748). Keep only those other-
+        // manager held rows; a row of this filter that really left the list (deleted, archived) still drops.
+        retainHeldSessionRows(&updates, group: group, manager: manager)
         applySessions(updates)
     }
 
-    /// Keys of chats this group is still showing or streaming: their rows stay in the index across a filtered complete
-    /// landing that would otherwise wipe their machines.
+    /// Keys of chats this group is still showing or streaming: candidates to keep across a filtered complete landing.
     private func heldSessionKeys(group: String) -> Set<SessionKey> {
         var keys = Set(subscribers.keys.filter { $0.group == group })
         if let open = openChat, open.group == group { keys.insert(open) }
@@ -2417,11 +2418,15 @@ final class AppModel {
         return keys
     }
 
-    private func retainHeldSessionRows(_ updates: inout [MachineRef: [Session]], group: String) {
+    /// Keep an open/subscribed row only when this landing filtered by `manager` and the row's own manager is a
+    /// different nonempty id. An unfiltered landing, or one for the row's manager, leaves removals as they are.
+    private func retainHeldSessionRows(_ updates: inout [MachineRef: [Session]], group: String, manager: String?) {
+        guard let filter = manager, !filter.isEmpty else { return }
         for key in heldSessionKeys(group: group) {
             if updates[key.machineRef]?.contains(where: { $0.sessionID == key.sessionID }) == true { continue }
             guard let row = sessionIndex[key] ?? sessionsByMachine[key.machineRef]?.first(where: { $0.sessionID == key.sessionID })
             else { continue }
+            guard let rowManager = row.manager, !rowManager.isEmpty, rowManager != filter else { continue }
             updates[key.machineRef] = Self.replacing(row, in: updates[key.machineRef] ?? [])
         }
     }

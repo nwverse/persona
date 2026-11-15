@@ -370,7 +370,7 @@ import PersonaWire
     @Test func openingAMissingRowOnACompleteHubFetchesItEnabled() async throws {
         let hub = FakeHub()
         let id = UUID().uuidString.lowercased()
-        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","state":"working","status":"working"}]}"#)
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#)
         let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
         let model = await completeChatModel(hub, key: key)
         model.open(key)
@@ -386,17 +386,50 @@ import PersonaWire
     @Test func aFilteredCompleteLandingKeepsAnOpenMissingRow() async throws {
         let hub = FakeHub()
         let id = UUID().uuidString.lowercased()
-        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","state":"working","status":"working"}]}"#)
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#)
         let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
         let model = await completeChatModel(hub, key: key)
         model.open(key)
         await eventually { model.latest(key) != nil }
-        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"state":"idle","status":"idle"}"#.utf8))
+        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
         var stamped = other
         stamped.group = key.group
-        model.landCompleteSessionList([stamped], group: key.group)
+        model.landCompleteSessionList([stamped], group: key.group, manager: "assistant")
         #expect(model.latest(key)?.sessionID == id, "the open other-manager row must survive a filtered landing")
         #expect(model.latest(key)?.canSend == true)
+    }
+
+    /// A held row of the landing's own manager that left the list, or any held row on an unfiltered landing, still drops
+    /// (#8748 round 2): deleted / archived Agents must not keep the composer enabled.
+    @Test func aHeldRowOfTheFilterOrAnUnfilteredLandingIsDropped() async throws {
+        let hub = FakeHub()
+        let sameID = UUID().uuidString.lowercased()
+        let otherID = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions") { request in
+            let sid = request.query["session_id"] ?? ""
+            if sid == sameID {
+                return Data(#"{"sessions":[{"machine_id":"macbook","session_id":"\#(sameID)","title":"Mine","manager":"assistant","state":"working","status":"working"}]}"#.utf8)
+            }
+            if sid == otherID {
+                return Data(#"{"sessions":[{"machine_id":"macbook","session_id":"\#(otherID)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#.utf8)
+            }
+            return Data(#"{"sessions":[]}"#.utf8)
+        }
+        let sameKey = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: sameID)
+        let otherKey = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: otherID)
+        let model = await completeChatModel(hub, key: sameKey)
+        model.open(sameKey)
+        await eventually { model.latest(sameKey) != nil }
+        let kept = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
+        var stamped = kept
+        stamped.group = sameKey.group
+        model.landCompleteSessionList([stamped], group: sameKey.group, manager: "assistant")
+        #expect(model.latest(sameKey) == nil, "a row of the filter that left the list is dropped")
+
+        model.open(otherKey)
+        await eventually { model.latest(otherKey) != nil }
+        model.landCompleteSessionList([stamped], group: otherKey.group, manager: nil)
+        #expect(model.latest(otherKey) == nil, "an unfiltered landing drops a missing held row")
     }
 
     /// When the hub answers with no row, the composer gets a reason instead of a silent disable (#8748).
