@@ -193,6 +193,7 @@ test('a failed version receipt rolls back to one connected previous version', as
   host.started = async (version) => {
     if (version === 'v2') await until('v2 connected', () => n.hello?.version === 'v2')
   }
+  n.offerUpdates = false
   n.offer = v2
   mkdirSync(join(store, 'current.json'))
   await loader.offer(v2)
@@ -230,6 +231,7 @@ test('a cleanup failure keeps the new version connected and its receipt', async 
   host.started = async (version) => {
     if (version === 'v2') await until('v2 connected', () => n.hello?.version === 'v2')
   }
+  n.offerUpdates = false
   n.offer = v2
   const originalRmSync = fs.rmSync
   t.mock.method(fs, 'rmSync', (path, options) => {
@@ -263,6 +265,7 @@ test('stop while rollback stops the new version leaves nothing connected and doe
   let releaseStop
   const stoppingV2 = new Promise((resolve) => { releaseStop = resolve })
   host.beforeStop = (version) => version === 'v2' ? stoppingV2 : undefined
+  n.offerUpdates = false
   n.offer = v2
   mkdirSync(join(store, 'current.json'))
   const switching = loader.offer(v2)
@@ -286,6 +289,7 @@ test('stop while rollback restarts the previous version stops its late start', a
     if (version === 'v2') await until('v2 connected', () => n.hello?.version === 'v2')
     if (version === 'v1' && host.starts.join(',') === 'v1,v2,v1') await startingV1
   }
+  n.offerUpdates = false
   n.offer = v2
   mkdirSync(join(store, 'current.json'))
   const switching = loader.offer(v2)
@@ -309,6 +313,7 @@ test('the previous version failing to restart after a receipt failure leaves not
   host.started = async (version) => {
     if (version === 'v2') await until('v2 connected', () => n.hello?.version === 'v2')
   }
+  n.offerUpdates = false
   n.offer = v2
   mkdirSync(join(store, 'current.json'))
   await loader.offer(v2)
