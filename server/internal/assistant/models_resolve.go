@@ -242,6 +242,17 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 					return c, err
 				}
 				c.APIKey = key
+				if l.HeadersSealed != "" {
+					headers, err := s.openKey(l.HeadersSealed)
+					if err != nil {
+						return c, i18n.Err("assistant-models_probe.err_open_headers")
+					}
+					for _, header := range parseHeaders(headers) {
+						if strings.EqualFold(header[0], "User-Agent") {
+							c.UserAgent = &header[1]
+						}
+					}
+				}
 				found = true
 				break
 			}
