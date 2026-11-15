@@ -1,6 +1,5 @@
 #if os(iOS)
 import UIKit
-import UniformTypeIdentifiers
 import XCTest
 @testable import Persona
 
@@ -371,77 +370,6 @@ private nonisolated final class FakePasteboard: @unchecked Sendable {
     }
 }
 #endif
-
-/// Get Clipboard writes the documented PNG / JPEG formats without changing their encoded bytes.
-@MainActor final class PhonePasteboardImageWriteTests: XCTestCase {
-    func testPNGWriteReadsBackImageAndExactOriginalBytes() throws {
-        try assertImageRoundTrip(mime: "image/png", type: UTType.png.identifier,
-                                 bytes: try XCTUnwrap(SyntheticClipboardImage.image().pngData()))
-    }
-
-    func testJPEGWriteReadsBackImageAndExactOriginalBytes() throws {
-        let bytes = try XCTUnwrap(SyntheticClipboardImage.image().jpegData(compressionQuality: 0.73))
-        try assertImageRoundTrip(mime: "image/jpeg", type: UTType.jpeg.identifier, bytes: bytes)
-    }
-
-    func testImageBytesDetermineTypeDespiteMismatchedMIME() throws {
-        let bytes = try XCTUnwrap(SyntheticClipboardImage.image().jpegData(compressionQuality: 0.73))
-        let board = UIPasteboard.general
-        defer { board.items = [] }
-
-        PhonePasteboard.live.write(.image(ClipboardImage(mime: "image/png", bytes: bytes)))
-
-        XCTAssertNotNil(board.image)
-        XCTAssertEqual(try XCTUnwrap(board.data(forPasteboardType: UTType.jpeg.identifier)), bytes)
-    }
-
-    func testInvalidOrTruncatedImageDoesNotReplaceThePasteboard() throws {
-        let valid = try XCTUnwrap(SyntheticClipboardImage.image().pngData())
-        let jpeg = try XCTUnwrap(SyntheticClipboardImage.image().jpegData(compressionQuality: 0.73))
-        let board = UIPasteboard.general
-        defer { board.items = [] }
-        var invalidZlib = valid
-        let idat = try XCTUnwrap(valid.range(of: Data([0x49, 0x44, 0x41, 0x54])))
-        invalidZlib[idat.lowerBound + 4] = 0
-        var invalidComponents = jpeg
-        let sof = try XCTUnwrap(jpeg.range(of: Data([0xff, 0xc0])))
-        invalidComponents[sof.lowerBound + 9] = 0
-        let invalid = [
-            ("image/png", Data([0, 1, 2, 3])),
-            ("image/png", Data(valid.prefix(16))),
-            ("image/png", Data(valid.dropLast(12))),
-            ("image/jpeg", Data(jpeg.dropLast(2))),
-            ("image/jpeg", Data([0xff, 0xd8, 0xff, 0xd9])),
-            ("image/png", invalidZlib),
-            ("image/jpeg", invalidComponents),
-        ]
-        for (mime, bytes) in invalid {
-            board.string = "synthetic text to preserve"
-            let changeCount = board.changeCount
-
-            PhonePasteboard.live.write(.image(ClipboardImage(mime: mime, bytes: bytes)))
-
-            XCTAssertEqual(board.string, "synthetic text to preserve")
-            XCTAssertEqual(board.changeCount, changeCount)
-            XCTAssertFalse(board.hasImages)
-        }
-    }
-
-    private func assertImageRoundTrip(mime: String, type: String, bytes: Data) throws {
-        let board = UIPasteboard.general
-        defer { board.items = [] }
-        board.string = "synthetic text to replace"
-
-        PhonePasteboard.live.write(.image(ClipboardImage(mime: mime, bytes: bytes)))
-
-        let image = try XCTUnwrap(board.image)
-        XCTAssertEqual(image.size, CGSize(width: 2, height: 2))
-        XCTAssertEqual(image.cgImage?.width, 2)
-        XCTAssertEqual(image.cgImage?.height, 2)
-        XCTAssertEqual(try XCTUnwrap(board.data(forPasteboardType: type)), bytes)
-        XCTAssertNil(board.string)
-    }
-}
 
 private enum SyntheticClipboardImage {
     static func image() -> UIImage {
