@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -122,6 +123,8 @@ func TestNotifyUserLetThroughIsCopiedAndSaysSo(t *testing.T) {
 func TestNotifyUserCopyNotConfirmedInTime(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, entered, release := feishuPushHub(t, nil)
+		landed := sync.OnceFunc(func() { close(release) })
+		defer landed() // a failure below must not leave the card's post hanging in the bubble
 		zero := 0
 		s.hub.(*fakeHub).notifyResult = NotifyResult{OK: true, Devices: &zero, Reason: "no_device"}
 		l := s.lang(t.Context()) // now: the fake hub answers nothing else while the card's post hangs
@@ -139,7 +142,7 @@ func TestNotifyUserCopyNotConfirmedInTime(t *testing.T) {
 		if out != want {
 			t.Fatalf("answer = %q, want %q", out, want)
 		}
-		close(release)
+		landed()
 		synctest.Wait()
 		if !s.pushedLately(channel.Feishu, "server", "main-conv") {
 			t.Fatal("the late card did not mark the bot pushed")
