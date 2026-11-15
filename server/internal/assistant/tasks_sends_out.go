@@ -340,22 +340,27 @@ func (s *Service) sendsOpened(ctx context.Context, t Todo, mid, sid string) {
 // of more for the task noted before it, also when the task was closed already and stays closed on the same done_at (an
 // acceptance again, which sendsPrune cannot tell): those sends stop counting, an answer to one still out opens nothing
 // (sendAnswered), and a turn held for them is let go, its end a closed task's. A send noted after at counts as ever.
-// The sends a manager before this one kept are read first; should that read fail, the acceptance is applied to them as
-// they are read (sendsAcceptedUnread).
+// Before the sends a manager before this one kept are read (loadSendsOut), none is in memory (a send of more is noted
+// only once they are): the acceptance is applied to them as they are read (sendsAcceptedUnread).
 func (s *Service) sendsAccepted(ctx context.Context, id string, at time.Time) {
-	loaded := s.loadSendsOut(ctx) == nil
-	s.tasks.completionMu.Lock()
-	defer s.tasks.completionMu.Unlock()
-	now, gone := time.Now(), false
-	s.tasks.mu.Lock()
-	if !loaded {
+	s.tasks.sendsSaving.Lock()
+	if !s.tasks.sendsLoaded {
+		s.tasks.mu.Lock()
 		if s.tasks.sendsAcceptedUnread == nil {
 			s.tasks.sendsAcceptedUnread = map[string]time.Time{}
 		}
 		if at.After(s.tasks.sendsAcceptedUnread[id]) {
 			s.tasks.sendsAcceptedUnread[id] = at
 		}
+		s.tasks.mu.Unlock()
+		s.tasks.sendsSaving.Unlock()
+		return
 	}
+	s.tasks.sendsSaving.Unlock()
+	s.tasks.completionMu.Lock()
+	defer s.tasks.completionMu.Unlock()
+	now, gone := time.Now(), false
+	s.tasks.mu.Lock()
 	for key, o := range s.tasks.sendsOut {
 		kept := len(o.notes)
 		o.notes = slices.DeleteFunc(o.notes, func(n *agentSendNote) bool { return n.task == id && n.at.Before(at) })

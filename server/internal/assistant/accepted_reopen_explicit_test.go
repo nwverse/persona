@@ -1118,20 +1118,21 @@ func TestAHeldTurnStaysWhileItsAnswerOpensTheTask(t *testing.T) {
 // More for an accepted task is sent its agent, and before the agent's next turn the task is accepted again as it
 // stands (still closed, on the same done_at). That acceptance answers the send: whether its answer was unknown, or it
 // is still out and taken after (a turn held for it meanwhile included, or a later send out then), the task stays as
-// accepted through the agent's next turns, across a manager restart too (also one before the acceptance again, whose first read of the kept sends
-// fails), and its supervisor hears nothing. A send after the acceptance again opens the task as ever.
+// accepted through the agent's next turns, across a manager restart too (also one before the acceptance again that
+// could not read the kept sends yet), and its supervisor hears nothing. A send after the acceptance again opens the
+// task as ever.
 func TestAnAcceptanceAgainEndsTheSendsBeforeIt(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		out     bool // the send is still out when the task is accepted again (its answer, taken, comes after)
 		held    bool // a turn of the agent started while it was out
 		restart bool // the manager restarts after the acceptance again
-		// readFails: the manager restarts before the acceptance again, and its first read of the kept sends fails
+		// readFails: the manager restarts before the acceptance again, and its read of the kept sends as it starts fails
 		readFails bool
 	}{
 		{"its answer unknown", false, false, false, false},
 		{"its answer unknown, then a restart", false, false, true, false},
-		{"its answer unknown, a restart that cannot read the kept sends at first", false, false, false, true},
+		{"its answer unknown, a restart that cannot read the kept sends yet", false, false, false, true},
 		{"still out, taken after", true, false, false, false},
 		{"still out with a turn held, taken after", true, true, false, false},
 	} {
@@ -1159,11 +1160,12 @@ func TestAnAcceptanceAgainEndsTheSendsBeforeIt(t *testing.T) {
 				s, f = newQuietServiceOn(t, keep)
 				f.judge = `{"verdict":"done","reason":"merged"}`
 				keep.arm(true, false)
+				s.recoverSendsOut(ctx) // as Run does when the manager starts: the read fails
+				if keep.take(&keep.failRead) {
+					t.Fatal("the restarted manager did not read the kept sends")
+				}
 			}
 			again := reviewAndWait(t, s, accepted.ID, reviewAccepted)
-			if c.readFails && keep.take(&keep.failRead) {
-				t.Fatal("the acceptance again did not read the kept sends")
-			}
 			if !again.DoneAt.Equal(*accepted.DoneAt) || again.DoneBy != db.DoneByReview || again.ReopenedAt != nil {
 				t.Fatalf("not accepted again as it stood: %+v", again)
 			}
