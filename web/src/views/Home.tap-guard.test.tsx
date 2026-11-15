@@ -116,7 +116,9 @@ describe("the overview's quick-answer rows", () => {
     now += 1100;
     fake.interactions = [permission];
     await mount();
-    findButton("允许").click(); // element.click() carries detail 0, as an Enter on a focused button does
+    await act(async () => {
+      findButton("允许").click(); // element.click() carries detail 0, as an Enter on a focused button does
+    });
     await flush();
     expect(calls).toHaveLength(1);
   });
