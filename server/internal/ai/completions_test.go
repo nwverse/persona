@@ -11,7 +11,42 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
+
+func TestUserAgentDirectRequests(t *testing.T) {
+	custom, empty := "ExampleAgent/1.0", ""
+	for _, api := range []string{"messages", "responses", "chat"} {
+		for _, tc := range []struct {
+			name    string
+			agent   *string
+			want    string
+			present bool
+		}{
+			{name: "default", want: modelhttp.UserAgent(), present: true},
+			{name: "custom", agent: &custom, want: custom, present: true},
+			{name: "empty", agent: &empty},
+		} {
+			t.Run(api+"/"+tc.name, func(t *testing.T) {
+				calls := 0
+				s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					values, present := r.Header["User-Agent"]
+					if present != tc.present || r.Header.Get("User-Agent") != tc.want {
+						t.Errorf("User-Agent = %q, present = %v; want %q, %v", values, present, tc.want, tc.present)
+					}
+					w.WriteHeader(http.StatusBadRequest)
+				}))
+				defer s.Close()
+				_, err := New(Config{API: api, BaseURL: s.URL, APIKey: "example-key", Model: "model", UserAgent: tc.agent}).Complete(context.Background(), "system", "hello", 8)
+				if err == nil || calls != 1 {
+					t.Fatalf("expected one rejected request, calls=%d err=%v", calls, err)
+				}
+			})
+		}
+	}
+}
 
 func TestChatCompletionsStreaming(t *testing.T) {
 	for _, base := range []string{"/prefix", "/prefix/v1/"} {
