@@ -35,7 +35,7 @@ import { conversationTitle } from "./assistant/conversations";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, type MenuItem } from "../ui/atoms";
+import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
@@ -822,12 +822,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, []);
   const listed = useMemo(() => withoutBotmux(all, botmuxHidden), [all, botmuxHidden]);
   const facets = useMemo(() => buildAgentFacets(listed, machines, pins), [listed, machines, pins]);
-  const evalCtx = useMemo(() => ({ machines, pins, interactions, now: Date.now() }), [machines, pins, interactions]);
+  const dimActive = hasActiveDimensionFilters(dimFilters);
+  const clock = useNow(60_000, dimActive);
+  const evalCtx = useMemo(() => ({ machines, pins, interactions, now: Date.now() }), [listed, dimFilters, machines, pins, interactions, clock]);
   const { sessions: dimFiltered, plan: searchPlan } = useMemo(
     () => applyDimensionFilters(listed, dimFilters, evalCtx, facets),
     [listed, dimFilters, evalCtx, facets],
   );
-  const dimActive = hasActiveDimensionFilters(dimFilters);
   const { live, recent: offline } = useMemo(() => splitAgentSessions(dimFiltered, machines), [dimFiltered, machines]);
   const seeded = useRef(false);
   useEffect(() => {
@@ -1066,7 +1067,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         <Section title={t("sidebar.idle_spaces", { count: idle.length })} folded={idleFolded} onToggle={toggleIdle}>
           <AgentTreeRows sessions={idleSessions} activeKey={activeKey} scope="idle-agents" row={(s) => {
             const sp = idleSpaceOf.get(rowKey(s))!;
-            return <SessionRow s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />;
+            return <SessionRow s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={(s.slot_id?.trim() || s.tab_id?.trim()) ? sp.name : sp.sessions.length > 1 ? `${sp.name} › ${tabLabel(s)}` : sp.name} onMenu={onRowMenu} />;
           }} />
         </Section>
       )}

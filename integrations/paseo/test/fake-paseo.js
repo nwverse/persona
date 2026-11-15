@@ -18,6 +18,12 @@ export function agentSnapshot(fields = {}) {
   }
 }
 
+/** Paseo's Auto Accept switch as an ACP agent lists it (acp-agent.ts buildACPAutoAcceptFeature). */
+export function autoAcceptFeature(value = false) {
+  return { type: 'toggle', id: 'auto_accept', label: 'Auto Accept', description: 'Automatically approves ACP permission prompts.',
+    tooltip: 'Auto accept permission prompts', icon: 'shield-check', value }
+}
+
 /**
  * A workspace descriptor (messages.ts WorkspaceDescriptorPayload) with what the bridge reads; fields override. A git
  * one's project placement is its own unless given (project: null for none, as Paseo's answer to workspace.create).
@@ -286,6 +292,17 @@ export async function startFakePaseo(t, o = {}) {
         }
         return reply(c, replyType(msg.type), { requestId: id, agentId: msg.agentId, accepted: true, error: null })
       }
+      case 'set_agent_feature_request': {
+        // Paseo loads the agent first (ensureLoaded: a closed ACP agent lists its switch again) and refuses a feature its
+        // provider lacks; the new value reaches the lists.
+        const e = f.agents.get(msg.agentId)
+        const features = e?.agent.features ?? (f.providers[e?.agent.provider]?.extends === 'acp' ? [autoAcceptFeature()] : [])
+        if (!e || e.agent.archivedAt || !features.some((x) => x.id === msg.featureId)) {
+          return reply(c, replyType(msg.type), { requestId: id, agentId: msg.agentId, accepted: false, error: `Unknown ${e?.agent.provider} feature: ${msg.featureId}` })
+        }
+        f.update(msg.agentId, { features: features.map((x) => (x.id === msg.featureId ? { ...x, value: msg.value } : x)) })
+        return reply(c, replyType(msg.type), { requestId: id, agentId: msg.agentId, accepted: true, error: null })
+      }
       case 'archive_agent_request': {
         const at = new Date().toISOString()
         reply(c, 'agent_archived', { requestId: id, agentId: msg.agentId, archivedAt: at })
@@ -301,9 +318,12 @@ export async function startFakePaseo(t, o = {}) {
           else refuse()
           return
         }
+        // A provider Paseo runs over ACP has the Auto Accept switch, off unless the request turned it on (acp-agent.ts).
+        const acp = f.providers[msg.config.provider]?.extends === 'acp'
         const agent = agentSnapshot({ id: msg.agentId ?? randomUUID(), provider: msg.config.provider, cwd: msg.config.cwd, labels: msg.labels ?? {},
           model: msg.config.model ?? null, currentModeId: msg.config.modeId ?? null, thinkingOptionId: msg.config.thinkingOptionId ?? null,
-          status: msg.initialPrompt ? 'running' : 'idle', workspaceId: msg.workspaceId ?? 'wks_new' })
+          status: msg.initialPrompt ? 'running' : 'idle', workspaceId: msg.workspaceId ?? 'wks_new',
+          ...(acp ? { features: [autoAcceptFeature(msg.config.featureValues?.auto_accept === true)] } : {}) })
         f.upsert(agent, { projectKey: 'prj_1', projectName: 'proj', workspaceName: 'ws', checkout: { cwd: agent.cwd, isGit: false } })
         return reply(c, 'agent.create.response', { requestId: id, agent, error: null })
       }
@@ -406,12 +426,17 @@ export async function startFakePaseo(t, o = {}) {
     f.update(agentId, { pendingPermissions: [...e.agent.pendingPermissions, request] })
     f.emit('events', { type: 'agent_permission_request', payload: { agentId, request } }, (s) => s.events.includes('agent_permission_request'))
   }
-  /** It is answered (by the bridge's response, or in Paseo's own app when c is undefined). */
+  /**
+   * It is answered (by the bridge's response on c, or in Paseo's own app when c is undefined), in Paseo 0.15's order
+   * (agent-manager respondToPermission, session handleAgentPermissionResponse): the agent's update without it, the
+   * subscriptions' agent_permission_resolved, under the permission's id, which is also the response's requestId, then
+   * the response's own reply.
+   */
   f.resolvePermission = (agentId, requestId, resolution, c) => {
     const e = f.agents.get(agentId)
     f.update(agentId, { pendingPermissions: e.agent.pendingPermissions.filter((r) => r.id !== requestId) })
-    if (c) c.write(JSON.stringify({ type: 'session', message: { type: 'agent_permission_resolved', payload: { agentId, requestId, resolution } } }))
     f.emit('events', { type: 'agent_permission_resolved', payload: { agentId, requestId, resolution } }, (s) => s.events.includes('agent_permission_resolved'))
+    if (c) c.write(JSON.stringify({ type: 'session', message: { type: 'agent_permission_resolved', payload: { agentId, requestId, resolution } } }))
   }
   /** An agent's timeline (projected entries) and its epoch. */
   f.setTimeline = (agentId, entries, epoch = 'ep1') => f.timelines.set(agentId, { epoch, entries })
