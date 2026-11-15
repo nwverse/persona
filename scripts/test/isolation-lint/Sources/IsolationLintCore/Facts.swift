@@ -33,6 +33,9 @@ struct Parameter: Sendable {
     var escaping: Bool
     var mainActorClosure: Bool
     var isFunctionType: Bool
+    /// What an argument passed here is converted to, as far as that decides whether it may be a function: see
+    /// `Collector.heldType`.
+    var heldType: String?
 }
 
 struct FunctionInfo: Sendable {
@@ -640,7 +643,8 @@ private final class Collector: SyntaxVisitor {
             return Parameter(label: first == "_" ? nil : first, name: parameter.secondName?.text ?? first,
                              hasDefault: parameter.defaultValue != nil, variadic: parameter.ellipsis != nil,
                              escaping: text.contains("@escaping") || (!function && text.contains("->")),
-                             mainActorClosure: text.contains("@MainActor"), isFunctionType: function || text.contains("->"))
+                             mainActorClosure: text.contains("@MainActor"), isFunctionType: function || text.contains("->"),
+                             heldType: heldType(type))
         }
     }
 
@@ -648,6 +652,31 @@ private final class Collector: SyntaxVisitor {
         if type.is(FunctionTypeSyntax.self) { return true }
         if let attributed = type.as(AttributedTypeSyntax.self) { return isFunctionType(attributed.baseType) }
         return false
+    }
+
+    /// The type a value passed to a parameter of this type is held as, to tell whether that value may be a function
+    /// (for a variadic parameter, the element's): the named type as `typeName` reads it, through optionals,
+    /// attributes and parentheses; `(value)` for an array, a dictionary, a tuple or a metatype, which no function
+    /// converts to. nil for a function type, `some` / `any`, a composition and every other form: any of them may hold
+    /// a function.
+    func heldType(_ type: TypeSyntax) -> String? {
+        if let optional = type.as(OptionalTypeSyntax.self) { return heldType(optional.wrappedType) }
+        if let optional = type.as(ImplicitlyUnwrappedOptionalTypeSyntax.self) { return heldType(optional.wrappedType) }
+        if let attributed = type.as(AttributedTypeSyntax.self) { return heldType(attributed.baseType) }
+        if let tuple = type.as(TupleTypeSyntax.self) {
+            if tuple.elements.count == 1, let only = tuple.elements.first { return heldType(only.type) }
+            return "(value)"
+        }
+        if type.is(ArrayTypeSyntax.self) || type.is(DictionaryTypeSyntax.self) || type.is(MetatypeTypeSyntax.self) { return "(value)" }
+        if let identifier = type.as(IdentifierTypeSyntax.self) {
+            if identifier.name.text == "Optional", let argument = identifier.genericArgumentClause?.arguments.first,
+               case .type(let wrapped) = argument.argument {
+                return heldType(wrapped)
+            }
+            return typeName(type)
+        }
+        if type.is(MemberTypeSyntax.self) { return typeName(type) }
+        return nil
     }
 
     /// How many arguments a value of this type takes, when it is a function type (optional or attributed).

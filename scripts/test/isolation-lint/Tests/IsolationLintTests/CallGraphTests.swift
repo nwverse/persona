@@ -233,6 +233,58 @@ final class CallGraphTests: XCTestCase {
         XCTAssertTrue(why.contains("passes it on as a value"), why)
     }
 
+    func testAFunctionInAStringInterpolationMayBeCalledByAnInterpolationThatTakesAnyValue() {
+        // An unlabeled `appendInterpolation` whose parameter may hold a function may call `label`: a protocol
+        // (`CustomStringConvertible`, one of the sources), `Any`, `some` / `any`, a generic parameter or associated
+        // type, an alias, and a struct's name that is also a generic parameter or an alias elsewhere (#7578 review).
+        let parameters = ["(_ value: CustomStringConvertible)", "(_ value: Any?)", "(_ value: some Sendable)",
+                          "(_ value: Shown)", "<T: Sendable>(_ value: T)", "<T: Sequence>(_ value: T.Element)",
+                          "(_ value: Make)", "(_ value: Item)", "(_ value: Recipe)"]
+        for parameter in parameters {
+            let findings = expect("""
+            protocol Shown {}
+            typealias Make = () -> String
+            struct Item {}
+            struct Element {}
+            struct Recipe {}
+            enum Kitchen { typealias Recipe = () -> String }
+            func pick<Item>(_ all: [Item]) -> Item? { all.first }
+            nonisolated func label() -> String { _ = try? Data(contentsOf: url); return "" } // unknown
+            extension DefaultStringInterpolation {
+                mutating func appendInterpolation\(parameter) { if let make = value as? () -> String { appendLiteral(make()) } }
+            }
+            func screen() -> String {
+                Task.detached { _ = label() }
+                return "\\(label)"
+            }
+            """)
+            let why = findings.first?.reason ?? ""
+            XCTAssertTrue(why.contains("passes it on as a value"), "\(parameter): \(why)")
+        }
+    }
+
+    func testAFunctionInAStringInterpolationIsNotCalledByAnInterpolationThatTakesAConcreteType() {
+        // No function converts to these, and `"\(label)"` cannot call one whose first parameter has a label, so the
+        // default interpolation still only describes `label` (#7578 review).
+        let parameters = ["(_ value: Int)", "(_ value: String?)", "(_ value: Badge)", "(_ value: Kitchen.Order)",
+                          "(_ value: [Any])", "(value: Any)"]
+        for parameter in parameters {
+            let findings = expect("""
+            struct Badge { var count = 0 }
+            enum Kitchen { struct Order {} }
+            nonisolated func label() -> String { _ = try? Data(contentsOf: url); return "" } // off
+            extension DefaultStringInterpolation {
+                mutating func appendInterpolation\(parameter) { appendLiteral("") }
+            }
+            func screen() -> String {
+                Task.detached { _ = label() }
+                return "\\(label)"
+            }
+            """)
+            XCTAssertEqual(findings.map(\.verdict.rawValue), ["off"], parameter)
+        }
+    }
+
     func testACallInAStringInterpolationIsACall() {
         expect("""
         nonisolated func count() -> Int { (try? Data(contentsOf: url))?.count ?? 0 } // main
