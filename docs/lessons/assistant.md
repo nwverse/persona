@@ -1,5 +1,6 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Process lifetime is not model-health evidence (#8480). Keep an observed completed answer and its original timestamp independently of the live session row. Otherwise releasing an idle process drops the only recovery evidence while an older failed probe remains, reviving an already repaired authentication error. Capture completed-turn evidence without requiring a client poll, scope it to the model binding, retire superseded probes and let newer failures win. Failed persistence must remain retryable.
 - A retry that puts a failed send back for the next digest must first ask whether the next try can succeed (#8518).
   The task leader path picked "resume and escalate" from the listed status (`StatusOffline`), but a stopped, read-only
   agent is also listed `interrupted` when a restart cut it off, and the node refuses every send to it
