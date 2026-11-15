@@ -1048,3 +1048,69 @@ func TestACardMessageReopensOnlyItsOwnTask(t *testing.T) {
 	longTurn(s, f, proto.StatusWorking, "")
 	closedUnchanged(t, s, other)
 }
+
+// A turn of the agent starts while a send of more for its accepted task is out, and is held for its answer; the answer
+// (taken, or unknown) opens the task and takes the turn up. In between, the task is open, so the agent is no longer its
+// closed task's: a write of the kept sends then (one for the turn's own end that came before the answer, another
+// send's, a retry) and the turn's end coming then both leave the turn and its end held for that answer. The end is the
+// task's either way: the task waits for review again.
+func TestAHeldTurnStaysWhileItsAnswerOpensTheTask(t *testing.T) {
+	const done = "Landscape covered: PR https://github.com/o/r/pull/78 is merged"
+	for _, c := range []struct {
+		name   string
+		answer error // the send's (nil: taken)
+		// before: the turn ended before the answer, and a write of the kept sends runs as the answer opens the task;
+		// else the turn ends then
+		before bool
+	}{
+		{"taken, ended before, a write meanwhile", nil, true},
+		{"unknown, ended before, a write meanwhile", context.DeadlineExceeded, true},
+		{"taken, it ends meanwhile", nil, false},
+		{"the node could not confirm it, it ends meanwhile", nodeUnconfirmed, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, f, accepted := acceptedPlanTask(t, nil)
+			before := supervisionOf(s, f, accepted.ID)
+			note, err := s.noteAgentSend(ctx, "conv1", "box", longAgent, "", "Please cover the landscape case too")
+			if err != nil {
+				t.Fatal(err)
+			}
+			longTurn(s, f, proto.StatusWorking, "") // held for the answer
+			closedUnchanged(t, s, accepted)
+			if c.before {
+				longTurn(s, f, proto.StatusDone, done) // put off
+				closedUnchanged(t, s, accepted)
+			}
+			between := false
+			s.sendsSettleHook = func() { // the answer opened the task, and has not taken the turn up yet
+				between = true
+				if got := todoNow(s, accepted.ID); got.DoneAt != nil {
+					t.Errorf("not open as its answer takes the turn up: %+v", got)
+				}
+				if c.before {
+					s.saveSendsOut(ctx)
+					return
+				}
+				longRow(f, proto.StatusDone, done)
+				end := make(chan turnSettle, 1)
+				go func() { end <- s.settleTurn(ctx, "box", longAgent, "") }()
+				select {
+				case got := <-end:
+					if got != settleLater {
+						t.Errorf("the turn's end as its answer takes the turn up: %v, want put off (settleLater)", got)
+					}
+				case <-time.After(10 * time.Second): // it waits for the answer's lock: it was not put off
+					t.Error("the turn's end as its answer takes the turn up was not put off within 10s")
+				}
+			}
+			note.sent(ctx, c.answer)
+			s.sendsSettleHook = nil
+			if !between {
+				t.Fatal("the answer did not open the task")
+			}
+			waitFor(t, "the review again", func() bool { return todoNow(s, accepted.ID).Supervision.State == reviewPending })
+			waitFor(t, "the next review message", func() bool { return supervisionOf(s, f, accepted.ID).notices > before.notices })
+		})
+	}
+}

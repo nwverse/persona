@@ -29,8 +29,9 @@ import (
 //     again, was accepted again, or the agent went to another task: sendsPrune), and at the latest after sendKeep.
 //
 // A turn of the agent that starts while such a send is out is held for the answer (closedTurnHeld), and so is its end
-// (endHeld). Taken or unknown, the turn is the task's: the task opens and the turn is followed from then. Failed, with
-// no other send of more for the task out or counting, it was other work: the task stays closed through it and its end.
+// (endHeld). Taken or unknown, the turn is the task's: the task opens and the turn is followed from then, its end too
+// (sendsOut.settling keeps both until then). Failed, with no other send of more for the task out or counting, it was
+// other work: the task stays closed through it and its end.
 // A manager that starts with notes the one before kept takes each as a send whose answer is unknown (loadSendsOut), and
 // a turn held for one as the task's (recoverSendsOut). A write of the notes that fails is tried again (retrySendsOut):
 // what it would have removed, a refused send's note say, must not come back with a restart as a send whose answer is
@@ -73,11 +74,18 @@ type agentSendNote struct {
 type sendsOut struct {
 	notes []*agentSendNote
 	// held, heldAt: the task, and its acceptance, that a turn of the agent is held for; it started while a send of more
-	// for that task was out ("": none). ended: that turn ended meanwhile, and its end was put off (endHeld).
-	held   string
-	heldAt time.Time
-	ended  bool
+	// for that task was out ("": none). ended: that turn ended meanwhile, and its end was put off (endHeld). settling:
+	// an answer took the turn as the task's and is opening the task (sendsSettle, under s.tasks.completionMu): until it
+	// has taken the turn and its end up, nothing else lets them go (sendsPrune, saveSendsOut, endHeld), though the task
+	// it opened no longer holds the agent as closed.
+	held     string
+	heldAt   time.Time
+	ended    bool
+	settling bool
 }
+
+// letGo forgets the turn held here, and its end.
+func (o *sendsOut) letGo() { o.held, o.heldAt, o.ended, o.settling = "", time.Time{}, false, false }
 
 // reopens: n asks an accepted task for more, and its answer decides what a turn of the agent that starts meanwhile is
 // (closedTurnHeld): such a send has a bounded wait of its own (its ctx deadline: liveSendWait for a live agent_send or a
@@ -219,16 +227,19 @@ func (s *Service) sendAnswered(ctx context.Context, n *agentSendNote, how sendOu
 	}
 	held := o.holds(n.task, n.doneAt)
 	pending, answered := o.asking(n.task, n.doneAt, time.Now())
-	s.tasks.mu.Unlock()
 	take := held && (how != sendFailed || !pending && answered)
 	drop := held && how == sendFailed && !pending && !answered
+	if take {
+		o.settling = true // the turn is the task's: kept until sendsSettle took it up
+	}
+	s.tasks.mu.Unlock()
 	switch {
 	case how == sendTaken || take:
 		s.sendsSettle(ctx, n.key, n.task, n.doneAt, n.from, take, false)
 	case drop:
 		s.tasks.mu.Lock()
 		if o := s.tasks.sendsOut[n.key]; o.holds(n.task, n.doneAt) {
-			o.held, o.heldAt, o.ended = "", time.Time{}, false
+			o.letGo()
 			if len(o.notes) == 0 {
 				delete(s.tasks.sendsOut, n.key)
 			}
@@ -246,8 +257,10 @@ func (s *Service) sendAnswered(ctx context.Context, n *agentSendNote, how sendOu
 // sent the one answered), under s.tasks.completionMu, when it is still closed on that acceptance (doneAt): a turn start
 // or another answer may have opened it, or it moved (opened and closed again, the agent works for another task). Those
 // sends are done with then; one whose reopen could not be written keeps counting, for the agent's next turn. take: the
-// turn held for the task is the task's: it is followed from here, and its end, when it came meanwhile (look: in any
-// case), is taken up again.
+// turn held for the task is the task's, and the caller marked it settling under the same lock it read it with: it is
+// followed from here, and its end, when it came meanwhile (look: in any case), is taken up again. The task opened, the
+// agent is no longer its closed task's, and settling keeps the turn and its end from a write of the kept sends or the
+// turn's end meanwhile (sendsPrune, endHeld) until they are taken up here.
 func (s *Service) sendsSettle(ctx context.Context, key [2]string, id string, doneAt time.Time, from string, take, look bool) {
 	mid, sid := key[0], key[1]
 	written := true
@@ -258,6 +271,9 @@ func (s *Service) sendsSettle(ctx context.Context, key [2]string, id string, don
 		} else {
 			s.logf("task %s: reopened: %s sent its agent %s/%s more", id, short(from), mid, short(sid))
 		}
+	}
+	if f := s.sendsSettleHook; f != nil {
+		f()
 	}
 	followed := false
 	if take {
@@ -274,7 +290,7 @@ func (s *Service) sendsSettle(ctx context.Context, key [2]string, id string, don
 	if o := s.tasks.sendsOut[key]; o != nil {
 		if take && o.holds(id, doneAt) {
 			ended = o.ended
-			o.held, o.heldAt, o.ended = "", time.Time{}, false
+			o.letGo()
 		}
 		if written {
 			o.notes = slices.DeleteFunc(o.notes, func(m *agentSendNote) bool { return m.task == id && sameInstant(m.doneAt, doneAt) })
@@ -302,7 +318,7 @@ func (s *Service) sendsOpened(ctx context.Context, t Todo, mid, sid string) {
 		return
 	}
 	if o.holds(t.ID, *t.DoneAt) {
-		o.held, o.heldAt, o.ended = "", time.Time{}, false
+		o.letGo()
 	}
 	o.notes = slices.DeleteFunc(o.notes, func(m *agentSendNote) bool { return m.task == t.ID && sameInstant(m.doneAt, *t.DoneAt) })
 	if len(o.notes) == 0 && o.held == "" {
@@ -317,9 +333,10 @@ func (s *Service) sendsOpened(ctx context.Context, t Todo, mid, sid string) {
 // when the sends failed, the turn was other work, and its end is dropped with it. A turn held for sends that no longer
 // count (past sendKeep) is let go: its end is a closed task's, and dropped. So is one held for a task the agent no
 // longer belongs to on that acceptance (sendsPrune): the agent went to another task, whose turn ends are its own, or
-// the task opened again, and the end is the open task's. A turn the manager before this one held is looked at again as
-// the manager starts (recoverSendsOut), its end included, so this reads only what is in memory: every turn's end comes
-// here.
+// the task opened again, and the end is the open task's. One an answer is taking up as the task's (settling) is put off
+// whatever the sends now say: that answer takes its end up. A turn the manager before this one held is looked at again
+// as the manager starts (recoverSendsOut), its end included, so this reads only what is in memory: every turn's end
+// comes here.
 func (s *Service) endHeld(ctx context.Context, mid, sid string) bool {
 	key := [2]string{mid, sid}
 	s.tasks.mu.Lock()
@@ -338,11 +355,11 @@ func (s *Service) endHeld(ctx context.Context, mid, sid string) bool {
 		return false
 	}
 	pending, answered := o.asking(o.held, o.heldAt, time.Now())
-	held := pending || answered
+	held := pending || answered || o.settling // settling: the answer takes the end up with the turn
 	if held {
 		o.ended = true
 	} else {
-		o.held, o.heldAt, o.ended = "", time.Time{}, false
+		o.letGo()
 	}
 	s.tasks.mu.Unlock()
 	s.saveSendsOut(ctx)
@@ -446,7 +463,9 @@ func (s *Service) saveSendsOut(ctx context.Context) error {
 	for key, o := range s.tasks.sendsOut {
 		o.notes = slices.DeleteFunc(o.notes, func(n *agentSendNote) bool { return !now.Before(n.until) })
 		if len(o.notes) == 0 {
-			delete(s.tasks.sendsOut, key) // a turn held for them is let go (endHeld)
+			if !o.settling {
+				delete(s.tasks.sendsOut, key) // a turn held for them is let go (endHeld)
+			}
 			continue
 		}
 		r := sendsOutRecord{Machine: key[0], Session: key[1], Held: o.held, HeldAt: o.heldAt.UTC(), Ended: o.ended}
@@ -507,8 +526,8 @@ func (s *Service) retrySendsOut() {
 // sendsPrune forgets the sends of more for a task that is no longer its agent's closed task on the acceptance they ask
 // more of (closedTaskOf), and the turns held for them: the task opened again (its agent's turns are followed as an open
 // task's), was accepted again (that acceptance asked for nothing yet), or the agent went to another task. Only what was
-// noted before the to-dos are read is looked at, and nothing is forgotten when they cannot be read. s.tasks.mu must
-// not be held.
+// noted before the to-dos are read is looked at, and nothing is forgotten when they cannot be read. A turn an answer is
+// taking up (settling) stays: its task opened under it. s.tasks.mu must not be held.
 func (s *Service) sendsPrune(ctx context.Context) {
 	type seen struct {
 		notes  []*agentSendNote
@@ -546,8 +565,8 @@ func (s *Service) sendsPrune(ctx context.Context) {
 	defer s.tasks.mu.Unlock()
 	for key, o := range s.tasks.sendsOut {
 		o.notes = slices.DeleteFunc(o.notes, func(n *agentSendNote) bool { return stale[n] })
-		if v, ok := letGo[key]; ok && o.holds(v.held, v.heldAt) {
-			o.held, o.heldAt, o.ended = "", time.Time{}, false
+		if v, ok := letGo[key]; ok && o.holds(v.held, v.heldAt) && !o.settling {
+			o.letGo()
 		}
 		if len(o.notes) == 0 && o.held == "" {
 			delete(s.tasks.sendsOut, key)
@@ -559,7 +578,8 @@ func (s *Service) sendsPrune(ctx context.Context) {
 // never got (loadSendsOut). That answer is unknown, and a turn held for an unknown answer is the task's
 // (sendAnswered): the task opens again unless it moved meanwhile, the turn is followed, and its end is looked at, since
 // it may have come while no manager listened. A turn held for sends that stopped counting meanwhile (past sendKeep) is
-// let go; one whose task moved meanwhile opens nothing (sendsSettle), and is followed when its task is open again.
+// let go; one whose task moved meanwhile opens nothing (sendsSettle), and is followed when its task is open again. Each
+// is read again under s.tasks.completionMu before it is taken up: a turn start may have taken it since.
 func (s *Service) recoverSendsOut(ctx context.Context) {
 	_ = s.loadSendsOut(ctx) // a read that failed is tried again by the next send of more
 	type heldTurn struct {
@@ -587,14 +607,26 @@ func (s *Service) recoverSendsOut(ctx context.Context) {
 		turns = append(turns, h)
 	}
 	s.tasks.mu.Unlock()
+	settled := false
 	for _, h := range turns {
-		s.logf("task %s: its agent %s/%s started a turn while more for it was being sent, and the manager before this one stopped before the answer: the task's",
-			h.id, h.key[0], short(h.key[1]))
 		s.tasks.completionMu.Lock()
-		s.sendsSettle(ctx, h.key, h.id, h.doneAt, h.from, true, true)
+		s.tasks.mu.Lock()
+		o := s.tasks.sendsOut[h.key]
+		pending, answered := o.asking(h.id, h.doneAt, time.Now())
+		take := o.holds(h.id, h.doneAt) && !pending && answered // still as read above: a turn start may have taken it since
+		if take {
+			o.settling = true
+		}
+		s.tasks.mu.Unlock()
+		if take {
+			s.logf("task %s: its agent %s/%s started a turn while more for it was being sent, and the manager before this one stopped before the answer: the task's",
+				h.id, h.key[0], short(h.key[1]))
+			s.sendsSettle(ctx, h.key, h.id, h.doneAt, h.from, true, true)
+			settled = true
+		}
 		s.tasks.completionMu.Unlock()
 	}
-	if len(turns) == 0 {
+	if !settled {
 		s.saveSendsOut(ctx) // what stopped counting meanwhile is forgotten
 	}
 }
