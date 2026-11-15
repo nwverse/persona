@@ -391,7 +391,8 @@ for path in sorted((root / 'spec/fixtures/lines').glob('*.json')) + ios_only:
         assert bool(case.get('from_test')) != bool(case.get('derived'))
         assert case['description'] and case['source']
         check_source(case['source'])
-        assert any(case.get('from_test', '') in (root / s.partition(': ')[0]).read_text() for s in case['source'])
+        if case.get('from_test'):  # a derived case names no test; its sources are still checked above
+            assert any(case['from_test'] in (root / s.partition(': ')[0]).read_text() for s in case['source'])
         all_cases[case['name']] = case
         for state in case['expected'].get('checkpoints', [case['expected']]):
             check_lines(state['lines'])
