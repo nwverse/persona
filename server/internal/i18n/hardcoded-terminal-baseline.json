@@ -11,7 +11,6 @@
   "cmd/persona-link/status.go": 91,
   "cmd/persona-link/supervise_other.go": 1,
   "cmd/persona-link/winservice.go": 21,
-  "internal/hubcli/hubcli.go": 6,
   "internal/link/client.go": 14,
   "internal/link/client_link.go": 5,
   "internal/link/client_pair.go": 14,
@@ -19,10 +18,5 @@
   "internal/link/link.go": 3,
   "internal/link/listen.go": 14,
   "internal/link/local.go": 1,
-  "internal/link/passive.go": 12,
-  "internal/manager/join.go": 24,
-  "internal/manager/run.go": 12,
-  "internal/manager/service.go": 42,
-  "internal/node/doctor.go": 94,
-  "internal/node/preflight.go": 48
+  "internal/link/passive.go": 12
 }
