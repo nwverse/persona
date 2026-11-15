@@ -125,16 +125,19 @@ object Workouts {
         } catch (e: SecurityException) {
             throw e  // a refused read is not a missing workout
         } catch (e: Exception) {
-            unavailable("No workout with id $id in Health Connect (deleted, or Persona may not read it).")
+            unavailable("Workout $id could not be read from Health Connect (it may be deleted, or Persona may not read it).")
         }
         val fields = row(c, access, session).toMutableMap()
-        val splits = splits(access, session)
+        // A transient read failure here only drops these fields, as totals do; a refused read is still reported.
+        val splits = try { splits(access, session) } catch (e: CancellationException) { throw e }
+            catch (e: SecurityException) { throw e } catch (e: Exception) { emptyList() }
         if (splits.isNotEmpty()) {
             fields["splits"] = buildJsonArray {
                 splits.forEach { add(buildJsonObject { put("km", it.km); put("seconds", it.seconds) }) }
             }
         }
-        val rates = heartRates(access, session)
+        val rates = try { heartRates(access, session) } catch (e: CancellationException) { throw e }
+            catch (e: SecurityException) { throw e } catch (e: Exception) { emptyList() }
         if (rates.isNotEmpty()) {
             fields["heart_rate"] = buildJsonArray {
                 rates.forEach { add(buildJsonObject { put("minute", it.first); put("bpm", it.second) }) }
@@ -289,12 +292,24 @@ internal object WorkoutMath {
     fun active(a: Instant, b: Instant, paused: List<Pair<Instant, Instant>>): Double {
         if (b <= a) return 0.0
         var time = Duration.between(a, b).toNanos() / 1e9
-        for ((ps, pe) in paused) {
+        // Overlapping pauses are merged first, so time they share is taken off once.
+        for ((ps, pe) in mergedPauses(paused)) {
             val lo = maxOf(a, ps)
             val hi = minOf(b, pe)
             if (hi > lo) time -= Duration.between(lo, hi).toNanos() / 1e9
         }
         return maxOf(time, 0.0)
+    }
+
+    private fun mergedPauses(paused: List<Pair<Instant, Instant>>): List<Pair<Instant, Instant>> {
+        val out = mutableListOf<Pair<Instant, Instant>>()
+        for ((start, end) in paused.filter { it.second > it.first }.sortedBy { it.first }) {
+            val last = out.lastOrNull()
+            if (last != null && start <= last.second) {
+                if (end > last.second) out[out.size - 1] = last.first to end
+            } else out += start to end
+        }
+        return out
     }
 
     /** Seconds per kilometre over the active time, for the activities that have one, from at least 500 m. */

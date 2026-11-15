@@ -45,6 +45,11 @@ class WorkoutMathTest {
         assertEquals(0.0, WorkoutMath.active(at(30), at(5), pause), 0.0)
     }
 
+    @Test fun overlappingPausesAreTakenOffOnce() {
+        // 0–300 s window; pauses 100–200 and 150–250 merge to 100–250 (150 s), so 150 s are active.
+        assertEquals(150.0, WorkoutMath.active(at(0), at(300), listOf(at(100) to at(200), at(150) to at(250))), 0.0)
+    }
+
     @Test fun paceNeedsAtLeast500MetresAndAKilometreActivity() {
         assertEquals(300.0, WorkoutMath.pace(1000.0, 300.0, "running")!!, 0.0)
         assertNull(WorkoutMath.pace(499.0, 300.0, "running"))
