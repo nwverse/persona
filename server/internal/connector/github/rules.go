@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -464,7 +465,7 @@ func (c *Connector) Settle(ctx context.Context, threads []string) map[string]str
 		if why := c.over(t, o); why != "" {
 			out[t] = why
 		} else if closing && st.things[t] == nil {
-			out[t] = "GitHub：换了账号，这条是之前那个账号的"
+			out[t] = i18n.T(i18n.From(ctx), "hub-connectors.github_account_before")
 		}
 	}
 	if closing {
