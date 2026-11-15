@@ -25,7 +25,7 @@ func TestArchivedCodexResumeRestoresBeforeOpeningTerminal(t *testing.T) {
 			n, f, cwd := codexHistoryNode(t)
 			provenanceHerdr(n)
 			listSessions(t, n)
-			home := n.codexHome()
+			home := canonicalCodexHome(n.codexHome(), n.home)
 			n.state.put(startThread, sessionState{Launcher: "cx", Cwd: cwd, Model: "gpt-7",
 				AppMode: "plan", StopCause: proto.StopTaskCompleted})
 			command := stubCodexArchiveCommand(t)
