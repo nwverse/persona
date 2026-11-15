@@ -1,11 +1,13 @@
 package node
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -382,5 +384,49 @@ func TestLarkKnownReadsDoNotOverrideReportedRisk(t *testing.T) {
 		if len(v.calls) != 1 || v.calls[0].Risk != tc.want {
 			t.Fatalf("risk %q: verdict = %+v", tc.risk, v)
 		}
+	}
+}
+
+// A gated call's @file body is read from the conversation's directory, which a cd in the command leaves behind:
+// after one a relative body file may be another file than the one read, so a body-conditioned allow rule cannot
+// stand on it (#8404). The default mode, where those rules decide; an absolute @file still resolves.
+func TestLarkRelativeBodyFileAfterCd(t *testing.T) {
+	cwd, other := t.TempDir(), t.TempDir()
+	_ = os.WriteFile(filepath.Join(cwd, "body.json"), []byte(`{"type":"p2p"}`), 0o644)
+	_ = os.WriteFile(filepath.Join(other, "body.json"), []byte(`{"type":"group"}`), 0o644)
+	script := "/opt/skills/example/scripts/ex.sh"
+	for _, tc := range []struct {
+		name, command string
+		cards         int
+	}{
+		{"no cd", `ex POST /conversations @body.json`, 0},
+		{"no cd, timeout", `timeout 20 ex POST /conversations @body.json | jq .`, 0},
+		{"absolute after cd", `cd ` + other + `; ex POST /conversations @` + cwd + `/body.json`, 0},
+		{"absolute after cd, other body", `cd ` + other + `; ex POST /conversations @` + other + `/body.json`, 1},
+		{"bare after cd", `cd ` + other + `; ex POST /conversations @body.json`, 1},
+		{"variable after cd", `cd ` + other + `; G=` + script + `; $G POST /conversations @body.json`, 1},
+		{"after cd in a loop", `for d in a; do cd ` + other + `; ex POST /conversations @body.json; done`, 1},
+		{"cd later in a loop", `for d in a b; do ex POST /conversations @body.json; cd ` + other + `; done`, 1},
+		{"pushd", `pushd ` + other + `; ex POST /conversations @body.json`, 1},
+		{"cd in bash -c", `bash -c 'cd ` + other + `; ex POST /conversations @body.json'`, 1},
+		{"cd and &&", `cd ` + other + ` && ex POST /conversations @./body.json`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := codexTestNode(t)
+			fh := withFakeHub(t, n)
+			p, c, _ := newFakeCodex(t, n, cwd)
+			p.id, c.threadID = testThread, testThread
+			n.procs[testThread] = p
+			n.larkCfg, n.larkCfgAt = olCfg(), time.Now().Add(time.Hour)
+			n.noteModes(testThread, "default", "")
+			fh.answer = func(proto.Interaction) proto.Resolution { no := false; return proto.Resolution{Allow: &no} }
+			decision, _, err := n.larkCheck(context.Background(), testThread, cwd, tc.command, proto.Interaction{SessionID: testThread, ExpiresAt: time.Now().Add(time.Minute)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(fh.interactions()); got != tc.cards || tc.cards == 0 && decision != "allow" {
+				t.Fatalf("decision=%q cards=%d; want %d", decision, got, tc.cards)
+			}
+		})
 	}
 }

@@ -26,8 +26,17 @@ var (
 // classifyLark reads a Bash command against the command gates (curl / wget aimed at one's API is refused); cwd
 // resolves @file bodies; risk supplies CLI metadata when configured. Known read commands also have a static fallback.
 func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk) larkVerdict {
-	return classifyLarkDepth(cmd, gates, cwd, risk, 0)
+	v := classifyLarkDepth(cmd, gates, cwd, risk, 0)
+	// A relative @file body is read from cwd; after a cd anywhere in the command (a loop may come back to an earlier
+	// call, a shell -c runs its own) it may be another file than the one sent: its body is not known (#8404).
+	if larkDirChangeRe.MatchString(cmd) && slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.relBody }) {
+		v.other, v.unknown = true, true
+	}
+	return v
 }
+
+// larkDirChangeRe: a word that changes the shell's directory, anywhere in a command (text, so also inside quotes).
+var larkDirChangeRe = lazyre.New("(^|[\\s;&|(){}'\"`])(cd|pushd|popd)([\\s;&|(){}'\"`]|$)")
 
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
 	return classifyLarkAt(cmd, gates, cwd, risk, depth, false)
@@ -694,7 +703,7 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	if len(rest) > 0 && (strings.HasPrefix(rest[0], "{") || strings.HasPrefix(rest[0], "[")) {
 		c.Body, rest = rest[0], rest[1:]
 	} else if len(rest) > 0 && strings.HasPrefix(rest[0], "@") {
-		c.Body, rest = readBodyFile(rest[0][1:], cwd), rest[1:]
+		c.Body, c.relBody, rest = readBodyFile(rest[0][1:], cwd), !filepath.IsAbs(rest[0][1:]), rest[1:]
 	}
 	for i := 0; i < len(rest); i++ {
 		f := rest[i]
