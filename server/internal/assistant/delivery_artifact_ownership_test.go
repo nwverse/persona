@@ -358,3 +358,21 @@ func TestLegacyProgressWithoutAnAuthoritativeCloseout(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentNumberedArtifactKeepsOfflineDeploymentProof(t *testing.T) {
+	for _, ref := range []string{"#9", "9", "o/r#9"} {
+		t.Run(ref, func(t *testing.T) {
+			forge := &fakeForge{err: fmt.Errorf("the forge is offline")}
+			s, todo := deliveryReviewService(t, forge, &runningHub{commit: oldHub}, false)
+			writeDeployed(t, s, oldHub, mergeSHA+" fix: the task's delivery (#9)")
+			s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText,
+				Text: "<closeout status=\"done\" merged=\"yes\" deployed=\"yes\">\nartifact: pr " + ref + "\n</closeout>"})
+			if _, err := acceptReview(s, todo.ID, nil); err != nil {
+				t.Fatalf("an already-recorded delivery lost its local deployment proof: %v", err)
+			}
+			if got := todoNow(s, todo.ID); got.DoneAt == nil || forge.calls != 0 {
+				t.Fatalf("local delivery was not accepted without forge access: done=%v, calls=%d", got.DoneAt, forge.calls)
+			}
+		})
+	}
+}

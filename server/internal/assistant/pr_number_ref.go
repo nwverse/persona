@@ -279,9 +279,14 @@ func (s *Service) reportedTaskPR(ctx context.Context, t Todo, current string) (p
 		noPR = false
 		pr = prLink.FindString(ref)
 		if pr == "" {
-			pr, err = s.numberedPR(ctx, t, a.MachineID, a.SessionID, text)
-			if err != nil {
-				return "", false, fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
+			m, qualified := ciPRURL.FindStringSubmatch(current), ciArtifactRepo.FindStringSubmatch(ref)
+			if m != nil && prNumberIn(text) == m[2] && (qualified == nil || strings.EqualFold(qualified[1], m[1])) {
+				pr = current // let the existing gate use local deployment proof without an extra forge dependency
+			} else {
+				pr, err = s.numberedPR(ctx, t, a.MachineID, a.SessionID, text)
+				if err != nil {
+					return "", false, fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
+				}
 			}
 		} else if m := ciPRURL.FindStringSubmatch(pr); pr != current && m != nil {
 			number, err := strconv.Atoi(m[2])
