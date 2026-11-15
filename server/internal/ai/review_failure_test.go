@@ -33,12 +33,44 @@ func TestDirectTypedCodesBypassGateStatuses(t *testing.T) {
 				if reason, _, _ := classify(err); reason != "" {
 					t.Fatalf("gate reason = %q, want no gate classification", reason)
 				}
-				if wantTransient := status >= 500; Transient(err) != wantTransient {
-					t.Fatalf("Transient(%v) = %v, want %v", err, Transient(err), wantTransient)
+				if Transient(err) {
+					t.Fatalf("Transient(%v) = true, want recognized non-limit code to suppress retries", err)
 				}
 			})
 		}
 	}
+}
+
+func TestDirectMessagesTypedCodesSuppressTransience(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want FailureKind
+	}{
+		{"model_not_found", FailureModelUnavailable},
+		{"context_length_exceeded", FailureContextTooLong},
+		{"unsupported_endpoint", FailureOther},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			body := fmt.Sprintf(`data: {"type":"error","error":{"type":"api_error","code":%q,"message":"request rejected"}}`, tc.code) + "\n\n"
+			err, requests := directAPIError(t, "", 200, body)
+			if requests != 1 || err == nil || err.Error() != "ai: error: api_error: request rejected" {
+				t.Fatalf("requests = %d, error = %v; want unchanged stream error text", requests, err)
+			}
+			if got := FailureKindOf(err); got != tc.want {
+				t.Fatalf("failure kind = %v, want %v", got, tc.want)
+			}
+			if Transient(err) {
+				t.Fatalf("Transient(%v) = true, want typed code to suppress api_error transience", err)
+			}
+		})
+	}
+	t.Run("unknown api_error stays transient", func(t *testing.T) {
+		body := `data: {"type":"error","error":{"type":"api_error","code":"future_code","message":"request rejected"}}` + "\n\n"
+		err, requests := directAPIError(t, "", 200, body)
+		if requests != 1 || err == nil || FailureKindOf(err) != FailureOther || !Transient(err) {
+			t.Fatalf("requests = %d, error = %v, kind = %v; want unknown api_error to stay transient", requests, err, FailureKindOf(err))
+		}
+	})
 }
 
 func TestDirectNoRetryWithoutValidCooldownReturnsRaw(t *testing.T) {
@@ -51,6 +83,7 @@ func TestDirectNoRetryWithoutValidCooldownReturnsRaw(t *testing.T) {
 		{"503 without cooldown", 503, ""},
 		{"529 without cooldown", 529, ""},
 		{"malformed cooldown", 429, "soon"},
+		{"negative cooldown", 429, "-1"},
 		{"503 cooldown is not a quota reset", 503, "10"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
