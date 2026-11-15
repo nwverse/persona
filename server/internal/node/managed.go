@@ -263,11 +263,7 @@ const artifactsOff = "CLAUDE_CODE_DISABLE_ARTIFACT=1"
 // The reply limit Persona works out is left to the process env, which `personad launch` sets for the model the
 // session runs (sessionOutput); one the provider's own environment sets is pinned like the rest of it.
 func managedSettingsEnv(l proto.ManagedLauncher) map[string]string {
-	env := pinnedEnv(providerEnv(l, "", "", false))
-	if outputLimits(l) != nil {
-		delete(env, maxOutputEnv)
-	}
-	return env
+	return unpinnedOutput(pinnedEnv(providerEnv(l, "", "", false)))
 }
 
 var (
@@ -402,6 +398,7 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 			resp.Clear = legacyEnvClear
 		}
 		resp.Env, resp.Clear = sessionOutput(resp.Env, resp.Clear, resp.MaxOutput, sessionModel(args, resp.Args, resp.Env))
+		resp.Clear = inheritedOutputClear(resp.Clear, resp.Env, os.Getenv) // a session Persona launched runs this one
 		resp.Clear, resp.Env = launchEnvFor(resp.Clear, resp.Env, os.Getenv("PERSONA_ASSISTANT") == "1")
 		if resp.NoProxyMerge != nil { // the inherited bypasses still hold for what claude runs
 			resp.Env = withInheritedNoProxy(resp.Env, func(k string) string { return cmp.Or(resp.NoProxyMerge[k], os.Getenv(k)) })
@@ -430,8 +427,10 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
 	catalog := resp.CodexCatalogURL
-	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(ctx, exe)) {
-		catalog = "" // the node checked another codex than this one (another PATH), and this one would not read it
+	// The node checked another codex than this one (another PATH): this one is asked, within codexVersionTimeout. That
+	// is after the node answered (not part of LaunchNodeWait), and a fresh process has no version kept.
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(context.Background(), exe)) {
+		catalog = ""
 	}
 	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
@@ -640,7 +639,7 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	if limits := outputLimits(l); limits != nil && l.AgentType() == "claude" { // the session model's limit (sessionOutput)
 		out["max_output_tokens"] = limits
 	}
-	if catalog, codex := n.codexCatalog(context.Background(), l); catalog != "" {
+	if catalog, codex := n.codexCatalogFor(l); catalog != "" { // waited for briefly: it never holds a start long
 		out["codex_catalog_url"], out["codex_catalog_codex"] = catalog, codex
 	}
 	if mergesNoProxy(l) {

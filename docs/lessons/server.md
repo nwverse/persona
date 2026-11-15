@@ -62,6 +62,25 @@ Go marshals a nil slice as `null`, so lifting the last blocked pattern stored no
 the directory, and its sessions stayed hidden. A field where null means "leave it" must be sent as `[]` when it is
 empty, and a fake peer in a test must read null the way the real one does, or it hides exactly this.
 
+## Nothing on a handshake path may wait on system_profiler (2026-11-13, #6028)
+
+`sysmon.ReadSystem` ran `system_profiler SPHardwareDataType` for the Mac's model name, under a 10 s timeout, on the
+assumption that it takes half a second. On a Mac whose Activation Lock check does not answer (macOS 26.6.2) it prints
+"Timed out waiting for the Activation Lock Capable check" and returns after 10.2-11 s, using 0.2 s of CPU: it waits,
+so load does not explain it and a faster machine does not help. It was killed just before it answered, every time,
+and `node.info` paid the 10 s on each hub connection, since a resident node makes a new `Node` per connection and the
+hub shows the computer online only after `node.info`. Per-`Node` caches (`sync.Once` on the Node) start over with each
+connection: anything slow a handshake needs must be cached per process, or not be on the handshake at all.
+
+On Apple silicon the IORegistry's `product` entry has the same name in about 20 ms (`ioreg -p IODeviceTree -rd1 -n
+product`); system_profiler remains for Intel Macs, run in the background, and a read waits only a second for it.
+A per-process cache must not also keep a failure: the first version cached an empty result with `sync.Once`, so one
+system_profiler that failed or was cut off (a machine busy right after login) left the identifier until the node
+restarted, where the per-connection read had at least tried again. Keep only a found name; let a later read retry an
+empty one after a backoff (five minutes), so a Mac where it always fails does not run it on every connection. Its
+output, like ioreg's, holds serial numbers: read only the one line. Tests fake both commands (`newModelLookup` takes
+the runner) and use `synctest`; a node-level test puts hanging fakes first on `PATH`.
+
 ## A node binary's name does not prove its platform (2026-11-14, #7206)
 
 The local node package lookup trusted `personad-<os>-<arch>` and `persona-node-<os>-<arch>` filenames without reading the executable, so one misnamed Hub build could be sent to every node of that named platform. Check the Go build info before selecting a local or bundled candidate and ignore a mismatch, allowing the normal release lookup to supply the right build; do not run a cross-platform binary on the Hub. The install path needs its own failure boundary too: verify `.new` before renaming it over the active binary, through direct and nested SSH, and remove it when the check fails. A test that only checks an error message misses whether the old executable survived.
@@ -522,6 +541,9 @@ A working inference base need not expose model discovery beneath it: DeepSeek do
 - **An empty list is an answer.** `reasoning_levels: []`, `reasoning: false` or a capability status `unsupported` say the model takes no level, while a missing field says nothing. `efforts` alone cannot carry that difference (empty there has always meant "unknown, offer every level", and older clients still read it so), hence `no_effort`. Catalog enrichment must check it before filling levels, and a catalog default must be one of the levels the gateway reported, or saving refuses the model.
 - **`max_tokens` is not an output limit everywhere.** Some lists use it for the whole context; one that pairs it with `max_input_tokens` may fill both with stand-ins for a model it doesn't know, which the list can't tell apart from real values. Read only names that mean one thing (`max_output_tokens`, `max_completion_tokens`, `limit.output`).
 - **An extra request breaks request-counting tests.** Adding the capability report changed the calls and headers several existing tests counted or asserted per path; route the new path explicitly in fixtures instead of loosening the counts.
+- **`null` decodes into a Go `bool` without an error** (#8796). `json.Unmarshal([]byte("null"), &b)` leaves `b` false and returns nil, so a field a gateway left empty read as an explicit `false`: models became "no thinking level" and "no images". Decode into `*bool` and treat nil as unsaid. The same goes for lists: a list read only in part (an entry of an unknown shape skipped) must say nothing rather than less, and an empty list is a statement only where the gateway means it (`reasoning_levels: []`, `protocols: []`), not where it is just unfilled (`supported_parameters: []`).
+- **Guesses must lose to knowledge when the consumers act on them.** "No reasoning parameter listed" is a guess; once the launch paths skip `--effort` and pi's reasoning for `no_effort`, a wrong guess costs more than "unknown". Take it only from a whole parameter list, settle it after every other source (repeated entries, the capability report) and let the catalog's known levels win over it: applied while parsing one entry, it beat real levels that came later.
+- **Tell a client that omits a field from one that never knew it by the key, not the value.** Restoring stored metadata for any model sent without it kept the web from ever clearing a stale report; decode the request's keys (present even as `false` / `null`) to keep stored values only for older apps, and have the new client name a key for every model.
 
 ## Battery investigations need attributed transport counts (#1633)
 
@@ -1228,6 +1250,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Gateways return `HTTP 429 account_quota_exhausted` for exhausted quota and `HTTP 503 account_concurrency_full` for full concurrency. Previously each caller treated these as ordinary failures: knowledge processing and Inbox sorting retried item by item, producing 429 requests and log lines in 15 minutes; Inbox items were marked sorted "by rules" and weren't reprocessed after quota recovery.
   Handle rate limits per connection in the shared client (`ai/limit.go`, `docs/assistant/model-config.md` ("Upstream rate limits")): while paused, return `ai.PausedError` without sending; callers seeing `ai.IsPaused` stop the round, don't log, and don't mark items processed. New model-calling loops must do the same.
+- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`; a recognized code wins over wording, while an unknown code must retain the previous fallback. `X-Should-Retry: false` overrides status-based transience. A 429 carrying it together with `Retry-After` is a quota pause until the reset, not busy backoff; HTTP 402 and explicit budget-exhaustion codes are quota pauses too. Keep model-unavailable, missing-endpoint and excess-context classifications separate, and never infer an automatic model switch from any of them (#8776).
 - Thinking models (e.g. `claude-haiku-5-5` thinks by default) count thinking tokens toward `max_tokens` too (2026-11-03, #1000): a project profile of about 2000 Chinese characters needs 3.7–4.7K,
   so `kb.project`'s old 4000 cap often truncated into thinking plus half a JSON object, reported as "unterminated JSON object", retrying every 2 minutes.
   Inspect Messages `stop_reason`: if `ai.JSONMax` lacks a complete object and stopped on `max_tokens`, double the cap and retry once; if still truncated, return `ai.ErrTruncated`.

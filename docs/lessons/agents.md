@@ -345,6 +345,15 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   node's env and the settings file are written for: a value pinned in the settings file would beat the one worked out
   for the start, so `personad launch` works it out again and the settings file leaves it out (`sessionOutput`,
   `docs/integrations/claude-integration.md`, "What a gateway reports about a model").
+- **What Persona puts in the environment reaches the commands Claude runs** (#8816): Claude Code passes its environment
+  to Bash, so a `personad launch` inside a session inherits every value the outer launch set. A rule "clear it only
+  when this launch sets it" then hands the outer session's reply limit to a provider that reports none. Clearing it
+  always would also drop a value the user exported; mark the value Persona writes (`PERSONA_MAX_OUTPUT_TOKENS`) and
+  clear an inherited one only while it still equals the mark.
+- **A larger reply is also a smaller room for input**: a gateway that counts input plus `max_tokens` against the window
+  refuses long before Claude Code compacts once the reply asked for passes the 20,000 it reserves. Claude Code recovers
+  only from Anthropic's wording of the refusal; an OpenAI-compatible wording ends the turn and, behind a gateway,
+  triggers a compaction. Bound the reply by the window (an eighth, `outputLimit`), not only by what the model writes.
 - **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.
@@ -585,6 +594,14 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   its codex started a TUI on a pipe ("stdin is not a terminal"): put the subcommand in the launch's own arguments.
   Reproduce with a fake `personad` that is an app-server only when it gets `app-server`
   (`TestManagedCodexModelsAskTheAppServer`).
+- Whatever the node does while `launcher.env` waits counts against the 10 seconds `personad launch` waits for the
+  node (`LaunchNodeWait`), and those steps add up: finding codex can run a login shell for 15 seconds, a `codex
+  --version` whose wrapper's child keeps stdout open outlives its timeout without `WaitDelay`, and the probe takes 5
+  more. Bound the wait itself (`codexCatalogWait`), let the lookup go on behind it, and keep failures for a while (#8814).
+- Judge a catalog by every field Codex requires, not a few: one entry short of them fails Codex's whole list, and the
+  start then runs on fallback metadata with no list at all. A 200 whose body does not arrive whole says nothing about
+  the catalog. `$CODEX_HOME/models_cache.json` is one file for every provider in that home, used only for its writer,
+  the same version and 5 minutes (#8814).
 - Observe Codex against a local fake gateway with a temporary `CODEX_HOME`: the requests it makes (path, query,
   `Authorization`), what `model/list` returns and whether `codex exec` warns about fallback metadata. Never point the
   experiment at a real gateway with the user's key. See `docs/integrations/codex.md` ("Gateway model catalog").

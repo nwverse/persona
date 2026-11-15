@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/url"
@@ -71,6 +72,31 @@ type launcherInput struct {
 	// keyRefSealed and machineRefsSealed are the references above, checked and sealed (sealKeyReferences).
 	keyRefSealed      string
 	machineRefsSealed map[string]string
+	// modelsNamed: for each of Models, whether the body named any of reportedKeys for it (false or null too), as the
+	// web does and older apps never do (keepReported).
+	modelsNamed []bool
+}
+
+// UnmarshalJSON decodes the body as usual and notes which models name a field of a gateway's report (modelsNamed).
+func (in *launcherInput) UnmarshalJSON(b []byte) error {
+	type plain launcherInput
+	if err := json.Unmarshal(b, (*plain)(in)); err != nil {
+		return err
+	}
+	var raw struct {
+		Models []map[string]json.RawMessage `json:"models"`
+	}
+	in.modelsNamed = nil
+	if json.Unmarshal(b, &raw) == nil {
+		for _, m := range raw.Models {
+			named := false // the keys as encoding/json matches them, in any case
+			for k := range m {
+				named = named || slices.ContainsFunc(reportedKeys, func(r string) bool { return strings.EqualFold(k, r) })
+			}
+			in.modelsNamed = append(in.modelsNamed, named)
+		}
+	}
+	return nil
 }
 
 // checkEffort: a thinking level Claude Code takes (CLAUDE_CODE_EFFORT_LEVEL), or none. whose is the error's key
@@ -227,9 +253,9 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 	}
 	if in.Models != nil {
 		var models []proto.ProviderModel
-		for _, m := range *in.Models {
+		for i, m := range *in.Models {
 			m.ID, m.Name = strings.TrimSpace(m.ID), strings.TrimSpace(m.Name)
-			models = append(models, keepReported(m, s.Models))
+			models = append(models, keepReported(m, s.Models, i < len(in.modelsNamed) && in.modelsNamed[i]))
 		}
 		s.Models = models
 	}
