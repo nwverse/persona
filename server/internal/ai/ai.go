@@ -161,7 +161,7 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	// Every client of one address and key goes through the same gate, which holds requests back while the upstream
 	// is out of quota or busy (limit.go).
 	g := gateFor(c.cfg.BaseURL, key)
-	probe, err := g.admit(ctx)
+	t, err := g.admit(ctx)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -172,12 +172,24 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 		hc = &copied
 	}
 	var found *probeAnswer // this request finds out whether a pause is over: the gate goes at its 200 (limit.go)
-	if probe && hc != nil {
+	if t.probe && hc != nil {
 		found = &probeAnswer{next: hc.Transport, g: g}
 		copied := *hc
 		copied.Transport = found
 		hc = &copied
 	}
+	finding := func() bool { return t.probe && !(found != nil && found.let.Load()) } // still the one finding out
+	// The turn goes back however the exchange ends, a panic included. One that unwound through here used to skip
+	// done, and where its caller recovers and carries on (the knowledge base loop's kbRun, its job pool) the gate
+	// kept counting the request as out for good: under a cap its slot was never free again, and as the request
+	// finding out nobody found out after it. Every later request on the connection was then put off as busy with
+	// nothing sent, until the process restarted (#6698). It is told as a failure that says nothing of the upstream.
+	returned := false
+	defer func() {
+		if !returned {
+			_ = g.done(t, finding(), false, errUnwound)
+		}
+	}()
 	var reply Reply
 	var answered bool
 	switch c.cfg.API {
@@ -188,11 +200,15 @@ func (c *Client) Chat(ctx context.Context, r Request) (Reply, error) {
 	default:
 		reply, answered, err = c.messages(ctx, hc, key, r)
 	}
+	returned = true
 	if reply.Model == "" {
 		reply.Model = c.cfg.Model
 	}
-	return reply, g.done(probe && !(found != nil && found.let.Load()), answered, err)
+	return reply, g.done(t, finding(), answered, err)
 }
+
+// errUnwound is what the gate is told of a request a panic unwound through: it ended, with no answer to read.
+var errUnwound = errors.New("ai: the request did not return")
 
 // apiEndpoint preserves deployment prefixes and accepts bases with or without /v1.
 func apiEndpoint(base, path string) string {
@@ -213,24 +229,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	bodyMap := map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns, "stream": true}
-	if c.cfg.ReasoningEffort != "" {
-		switch strings.ToLower(strings.TrimSpace(c.cfg.ReasoningEffort)) {
-		case "off", "none", "disabled":
-			switch {
-			case strings.Contains(strings.ToLower(c.cfg.Model), "sonnet-5-5"):
-				// Sonnet 5.5 disables up-front thinking with between_tools; low also limits any between-tool work.
-				bodyMap["thinking"] = map[string]any{"type": "between_tools"}
-				bodyMap["output_config"] = map[string]any{"effort": "low"}
-			case messagesThinkingDisabledUnsupported(c.cfg.Model):
-				// These models reject thinking.disabled; the issue's off-or-lowest contract uses low effort instead.
-				bodyMap["output_config"] = map[string]any{"effort": "low"}
-			default:
-				bodyMap["thinking"] = map[string]any{"type": "disabled"}
-			}
-		case "low", "medium", "high", "xhigh", "max":
-			bodyMap["output_config"] = map[string]any{"effort": c.cfg.ReasoningEffort}
-		}
-	}
+	ApplyReasoningEffort(bodyMap, "messages", c.cfg.Model, c.cfg.ReasoningEffort)
 	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
@@ -480,6 +479,42 @@ func messagesThinkingDisabledUnsupported(model string) bool {
 	return false
 }
 
+// ApplyReasoningEffort keeps connection probes and runtime calls on the same wire format.
+// False means this protocol cannot express the requested effort; Responses validates model-specific levels upstream.
+func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
+	if effort == "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(effort))
+	switch api {
+	case "chat":
+		return false
+	case "responses":
+		if normalized == "off" || normalized == "none" || normalized == "disabled" {
+			effort = "none"
+		}
+		body["reasoning"] = map[string]any{"effort": effort}
+	default:
+		switch normalized {
+		case "off", "none", "disabled":
+			switch {
+			case strings.Contains(strings.ToLower(model), "sonnet-5-5"):
+				body["thinking"] = map[string]any{"type": "between_tools"}
+				body["output_config"] = map[string]any{"effort": "low"}
+			case messagesThinkingDisabledUnsupported(model):
+				body["output_config"] = map[string]any{"effort": "low"}
+			default:
+				body["thinking"] = map[string]any{"type": "disabled"}
+			}
+		case "low", "medium", "high", "xhigh", "max":
+			body["output_config"] = map[string]any{"effort": effort}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
 // stream=false, and the text is just the concatenated output_text deltas. The system prompt goes in as a developer
 // message rather than `instructions`, which those relays replace with their own. Events are framed as SSE
@@ -494,14 +529,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if r.BoundOutput && r.MaxTokens > 0 {
 		req["max_output_tokens"] = r.MaxTokens
 	}
-	if c.cfg.ReasoningEffort != "" {
-		effort := c.cfg.ReasoningEffort
-		switch strings.ToLower(strings.TrimSpace(effort)) {
-		case "off", "none", "disabled":
-			effort = "none"
-		}
-		req["reasoning"] = map[string]any{"effort": effort}
-	}
+	ApplyReasoningEffort(req, "responses", c.cfg.Model, c.cfg.ReasoningEffort)
 	body, _ := json.Marshal(req)
 	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {
