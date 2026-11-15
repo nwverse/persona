@@ -72,8 +72,8 @@ type PlanTask struct {
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
 	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
-	// the agent must not do. Continues: the to-do this task takes over from (a retry on another computer, a rework
-	// round, a task split off it), for ContinuesWhy: it then works for that to-do's brief instead of a new one. Brief is
+	// the agent must not do. Continues: the to-do this task carries on in (a retry on another computer or a rework
+	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
 	Goal         string   `json:"goal,omitempty"`
@@ -525,12 +525,12 @@ func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*T
 }
 
 // planStartsAtOnce: every task only reads, was asked for by the user in this turn (while start_requested_tasks is on),
-// or is a kind the user said to start without asking.
+// or is a kind the user said to start without asking (its directory or one it is under, task_trust_scope.go).
 func (s *Service) planStartsAtOnce(ctx context.Context, tasks []PlanTask) bool {
-	trusted := s.trustedKinds(ctx)
+	trusted := s.trustCover(ctx)
 	requested := s.startRequestedTasks(ctx)
 	for _, t := range tasks {
-		if !t.Readonly && !(requested && t.UserRequested) && !trusted[trustKey(t)] {
+		if !t.Readonly && !(requested && t.UserRequested) && !trusted(trustKey(t)) {
 			return false
 		}
 	}

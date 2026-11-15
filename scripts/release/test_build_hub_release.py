@@ -150,7 +150,9 @@ class ManagerPackageScopeTests(unittest.TestCase):
     def test_web_client_is_scanned_as_built_then_precompressed_before_go_build(self):
         out, calls, _ = self.build()
         args = [args for args, _ in calls]
-        webdist = str(out.parent / 'server/internal/hub/webdist')
+        # The builder resolves its root (Path(__file__).resolve()): resolve here too, or macOS's /var → /private/var
+        # temporary directory reads as another path.
+        webdist = str((out.parent / 'server/internal/hub/webdist').resolve())
         scan = args.index(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', webdist])
         precompress = args.index(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'])
         build = next(i for i, a in enumerate(args) if a[:2] == ['go', 'build'])
