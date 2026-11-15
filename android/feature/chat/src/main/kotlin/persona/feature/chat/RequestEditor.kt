@@ -18,6 +18,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.sort.canApprove
+import persona.core.domain.sort.fromSide
 import persona.core.domain.answer.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -88,6 +89,18 @@ internal fun requestApprovalBlockedReason(request: Interaction, child: Session?,
         if (child.canApprove) null else blocked(child)
     } else fallback
 
+/** The card editor and its close action both follow the session that owns the request. */
+@Composable
+internal fun resolveRequestApprovalBlockedReason(request: Interaction, fallback: String?): String? {
+    val context = LocalContext.current.applicationContext
+    val children = LocalChatChildren.current
+    val side = children?.sides?.takeIf { request.fromSide }?.firstOrNull { it.key == request.sessionKey }
+    val child = children?.rows?.get(request.sessionId) ?: side
+    return requestApprovalBlockedReason(request, child, fallback) {
+        approvalBlockedReason(context.resources, it)
+    }
+}
+
 /** Both request inbox and conversation use the same form, journal and validation. */
 @Composable
 fun RequestEditor(
@@ -102,13 +115,13 @@ fun RequestEditor(
     onAnswer: (AnswerAction, AnswerDraft, Boolean) -> Unit,
 ) {
     val context = LocalContext.current.applicationContext
-    val childRows = LocalChatChildren.current?.rows
-    val child = childRows?.get(request.sessionId)
-    val requestBlock = requestApprovalBlockedReason(request, child, blockedReason) {
-        approvalBlockedReason(context.resources, it)
-    }
+    // A side session's own card in its parent's chat (#7944) follows that side's capabilities and title.
+    val side = LocalChatChildren.current?.sides?.takeIf { request.fromSide }?.firstOrNull { it.key == request.sessionKey }
+    val requestBlock = resolveRequestApprovalBlockedReason(request, blockedReason)
+    val stoppedWork = requestBlock != null && request.isManagerWorkCard
     val shown = if (!request.foldedUnder.isNullOrBlank() && request.sessionTitle.isNullOrBlank())
-        request.copy(sessionTitle = stringResource(R.string.chat_subagent_untitled)) else request
+        request.copy(sessionTitle = side?.displayTitle
+            ?: stringResource(if (request.fromSide) R.string.chat_side_session_untitled else R.string.chat_subagent_untitled)) else request
     val services = remember(context) { EntryPointAccessors.fromApplication(context, RequestEditorServices::class.java) }
     val store = remember(services) { services.requestDrafts() }
     val local by store.storage.collectAsStateWithLifecycle()
@@ -139,7 +152,7 @@ fun RequestEditor(
         .collectAsStateWithLifecycle(ChatSnapshot())
     InteractionForm(shown, machine, draft, update, busy || !online, uncertain, full,
         { action, submitted, read ->
-            if (requestBlock == null) {
+            if (requestBlock == null || stoppedWork) {
                 storageScope?.let { store.clear(it, request) }
                 transient = AnswerDraft()
                 onAnswer(action, submitted, read)
