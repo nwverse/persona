@@ -800,6 +800,19 @@ shrinking stays off (below), and debug builds are not shrunk.
     app/build/outputs/mapping/release
   ```
 
+- **Method size**: ART compiles a method up to 10,000 dex code units (16-bit) and leaves a bigger one interpreted, which
+  is much slower. The same check reads each method's `insns_size` from the dex's `code_item` and fails when a method
+  passes 10,000, naming it with its size; a method between 9,000 and 10,000 only warns, so the split happens before it
+  passes. Every class counts, the libraries' too: R8 merges classes across packages (`mapping.txt` shows a release
+  moving `persona.platform.phonetools.PhoneToolRegistry` into `androidx.compose.animation.TransformScopeImpl`), so the
+  class holding a method says nothing about who wrote it, and a rule that skipped library classes would miss the app's
+  methods that ended up in one. `scripts/release/known_oversized_methods.txt` holds the methods that are already over
+  the limit and may only shrink, one full signature per line (`Class.method(descriptor) size`, with `#` comments), so an
+  overload is judged on its own size: a listed one warns while it is over the limit, fails once it grows past its
+  recorded size, and is only noted (so its line can go) when it drops to at most 10,000 or leaves the dex. Do not add a
+  line to get a release through; split the method, unless it is a library's. It currently holds only zxing's
+  `PDF417Common.<clinit>` (11,178, generated data).
+
 - **Rollback**: `-dontoptimize` in `proguard-rules.pro` goes back to shrinking only (a 33 MB APK; the name rules can
   stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off. Either way, change the assertion that
   pins it in `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
@@ -1755,6 +1768,7 @@ Ported from old main-line App chat code (d2d484ef, 4588285d) on 2026-11-02, redr
   Manual expand/collapse works during the run and after completion. Historical expansion choices are stored with the chat's reading position; restored open lines fetch hub folds on demand (`openFoldsToFetch`). A running line's completion resets only that line, not historical choices (`WorkOpenState`, `toggleWork`, `settleWorkOpen` in `WorkLineOpen.kt`). Expanded traces retain usable Workflow, sub-Agent and plan cards; pending question, permission and plan-approval panels remain directly actionable outside the transcript fold. Wake notices stay in the same exchange's normal trace, including trailing calls before any new text arrives; they never divert calls into an inaccessible wake drawer. Compaction dividers retain their existing presentation. Native JVM screenshots and transition regressions: `AssistantLiveWorkShotsTest`, both conversation types × three styles × light/dark, in `feature/chat/build/assistant-live-work-shots/`.
   While the session waits on you, an Agent chat's running summary reads Waiting for you, as the header does, with no elapsed time or spinner (`workSummary(waiting = true)`, #2483); the turn stays the live one and folds and opens as before. It waits on you when the hub's unified state says needs you (a question, plan or permission a hook holds while herdr's status stays `working`), the status says `blocked`, or one of the session's own requests is pending on the phone; the header goes by the same state (`turnWaitsOnYou`, `needsYou` in `ChatState.kt`). A task agent's request alone puts Waiting for you in the header but leaves this turn working.
   Codex commentary is assistant text as in `docs/integrations/codex.md` (#5853). `ItemsDatabase` 5 (`MIGRATION_4_5`, registered in both cache builders) drops cache rows written when those items were thinking; no schema or user data is migrated. `ContinuityNarrationTest` covers expanded narration being replaced by a folded page without losing the final answer outside its seq + block range.
+  Paseo's input to an agent (another agent's message, a child's notice, a schedule's run) is a message from another session, a subagent's task note or a notice, as in `docs/integrations/paseo.md` (#8220). `ItemsDatabase` 6 (`MIGRATION_5_6`, registered in both cache builders) drops cache rows that still hold the raw `<paseo-system>` envelopes as the user's messages; no schema or user data is migrated.
 - Tool naming follows iOS `ToolViews.swift` / `PersonaToolNames.swift` (#2753): Persona tools, `conversation_*`, `computer_*` / `browser_*`, `phone_*`, `mail_*` use names stripped of `mcp__x__`, localized verbs (Rename chat, Control computer, Phone, Read Agent chat…), icon and subject. Work row "Control computer macbook"; no app on `computer_state` gives "macbook · Whole screen" localized; `ask_user` first question; `Monitor` description or command first line. Unknown Persona-server tools "Call Persona · github read", others raw name (`namedToolVerb` in `core/domain`, `ToolVerbTest`, `ToolPresentationTest` in `feature/chat`).
 - TodoWrite plan uses `PlanCard`: title completed/total and current item (activeForm while in progress), right Step N/M or checkmark when done;
   tap title collapses to progress hairline. Completed dim/check, running current spinner, pending hollow circle; failed update shows Update failed even collapsed (`planProgress`).
