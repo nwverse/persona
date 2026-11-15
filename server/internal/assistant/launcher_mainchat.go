@@ -256,6 +256,29 @@ func (s *Service) mainChatUnavailable(ctx context.Context, machine string, picke
 	return out
 }
 
+// ownServiceSkipped lists what New Agent's picker shows as unavailable on machine, with why in lang (#8109): the
+// Persona-managed providers in the computer's scope that its own-service rule leaves out there, where the node said
+// the harness has a service of its own. A provider added with the defaults (own_service skip) would otherwise just be
+// missing from the picker on a computer where Claude Code is signed in. Those out of scope stay out (the scope is
+// what the user chose for the provider), and so do hidden names, direct API connections (never in this picker) and
+// what the picker lists already (a launcher of the computer's own by the same name).
+func (s *Service) ownServiceSkipped(ctx context.Context, machine string, listed []ConfiguredLauncher, lang i18n.Lang) []unavailableLauncher {
+	hidden := s.hiddenLaunchers(ctx)
+	out := []unavailableLauncher{}
+	for _, l := range s.storedLaunchers(ctx) {
+		if l.Kind == "api" || !l.SkipsOwnService() || slices.Contains(hidden, l.Name) ||
+			slices.ContainsFunc(listed, func(c ConfiguredLauncher) bool { return c.Name == l.Name }) {
+			continue
+		}
+		if s.scopeReason(l, machine) != "" || s.usableOn(ctx, l, machine) {
+			continue
+		}
+		out = append(out, unavailableLauncher{Name: l.Name, DisplayName: l.DisplayName, Kind: "launcher", Agent: l.Agent,
+			Code: proto.CodeLauncherOwnService, Reason: s.ownServiceErr(ctx, lang, l, machine).Error()})
+	}
+	return out
+}
+
 // apiProtocolText says in lang why a direct API provider speaking api can't run the assistant's conversations.
 func apiProtocolText(lang i18n.Lang, api string) string {
 	switch api {
