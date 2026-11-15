@@ -8838,6 +8838,24 @@ if MOCK_TASKS:
             TASK_FEED[ASK1].append(_feed("feed_receipt_review_%d" % _n, 0.2 - _n / 100, "receipt", _tid,
                                         {"title": _title, "state": "done", "summary": "检查结果已整理好，等待验收。",
                                          "review": {"state": "awaiting", "criteria": _n}}))
+    # MOCK_TASKS_FINISHED=1 (#8237): two handed-out tasks closed in the last hour and not looked at since, so In Progress
+    # lists them under Just Finished: one the hub closed with its reason, one its review accepted, each with its receipt.
+    if os.environ.get("MOCK_TASKS_FINISHED") == "1":
+        for _tid, _title, _min, _extra, _summary in [
+            ("todo_done_login", "修复登录页闪退", 12, {"done_by": "auto", "done_reason": "改好了：登录页不再闪退，PR #43 已合并"},
+             "改好了：登录页不再闪退，补了两条测试，PR #43 已合并。"),
+            ("todo_done_notes", "整理本周发布说明", 40, {"done_by": "review", "supervision": {
+                "supervisor": ASK1, "state": "accepted", "round": 0, "done_when": [], "updated_at": ago(minutes=40),
+                "reviews": [{"at": ago(minutes=40), "verdict": "accepted", "note": "写好了：7 个 PR 分成新功能、修复和其他三组"}]}},
+             "发布说明分好了三组，放在 docs/release-notes.md。"),
+        ]:
+            _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 30, ""), agents=[],
+                         done_at=ago(minutes=_min), **_extra)
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+            TASK_FEED[ASK1].append(_feed("feed_finished_" + _tid, _min, "receipt", _tid,
+                                        {"title": _title, "state": "done", "machine": "MacBook", "summary": _summary}))
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
 
 
 # MOCK_USAGE_LIMIT=1: two agents stopped on a subscription usage limit (docs/assistant/agent-work.md "Usage limits").
@@ -20941,7 +20959,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 # browser without HEVC offers only H.264), round and round at 30 fps:
 # `hello`, `format`, then its frames, numbered on and stamped with this clock. Only for a pair a 5900 connection carried
 # (else 403, as the node's not_signed_in). GET /mock/screen-video says what the phone sent (`start`s, report count) and
-# how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?pause=locked
+# how many streams are open; …?drop=1 closes them all, ?refuse=1 refuses new ones (503, ?refuse=0 back), ?refuse=busy
+# as the node's busy (#8320: two streams already open): 429, or with the page's refusals=close a WebSocket that closes at
+# once with 4429 "busy", as the hub answers a browser; ?pause=locked
 # sends `paused` with that reason (no frames and no heartbeats, as the helper), ?resume=1 sends `resumed` and starts over
 # with `hello`, `format` and the keyframe. Once a second while frames go out it sends `timing` as the helper does: capture
 # 0 and encode 4.8 ms (made up: nothing is encoded here), the network as half the real round trip from a frame going out
@@ -20982,7 +21002,7 @@ def screen_video_fixture(codec="hevc"):
 def screen_video_control(h, q):
     if q.get("drop", ["0"])[0] == "1":
         for st in list(SCREEN_VIDEO["streams"]): st["open"] = False
-    if "refuse" in q: SCREEN_VIDEO["refuse"] = q["refuse"][0] == "1"
+    if "refuse" in q: SCREEN_VIDEO["refuse"] = "busy" if q["refuse"][0] == "busy" else q["refuse"][0] == "1"
     if "pause" in q:
         for st in SCREEN_VIDEO["streams"]: st["pause"] = q["pause"][0]
     if q.get("resume", ["0"])[0] == "1":
@@ -20993,10 +21013,23 @@ def screen_video_control(h, q):
 
 def screen_video_connect(h, mid):
     """…/screen/video/connect?pair=…: the helper's side of the video channel, from the fixture (see MOCK_SCREEN_VIDEO)."""
-    pair = parse_qs(urlparse(h.path).query).get("pair", [""])[0]
+    query = parse_qs(urlparse(h.path).query)
+    pair = query.get("pair", [""])[0]
     if not pair: return h.send_json({"error": "a pair is required"}, 400)
     if pair not in SCREEN_VIDEO["pairs"]:
         return h.send_json({"error": "the paired screen-sharing stream has not signed in"}, 403)
+    if SCREEN_VIDEO["refuse"] == "busy":
+        if query.get("refusals", [""])[0] != "close":
+            return h.send_json({"error": "two live-screen video streams are already open"}, 429)
+        key = h.headers.get("Sec-WebSocket-Key", "")
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        h.send_response(101, "Switching Protocols")
+        h.send_header("Upgrade", "websocket"); h.send_header("Connection", "Upgrade")
+        h.send_header("Sec-WebSocket-Accept", accept); h.end_headers()
+        body = struct.pack(">H", 4429) + b"busy"
+        h.wfile.write(bytes([0x88, len(body)]) + body); h.wfile.flush()
+        time.sleep(0.2)  # the page's close answer; the connection ends with the handler
+        return
     if SCREEN_VIDEO["refuse"] or SCREEN_VIDEO["mode"] in ("missing", "denied"):
         return h.send_json({"error": "no live-screen video helper on this node"}, 503)
     key = h.headers.get("Sec-WebSocket-Key", "")
