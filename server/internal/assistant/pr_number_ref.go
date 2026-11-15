@@ -163,11 +163,26 @@ func (s *Service) reportedTaskPR(ctx context.Context, t Todo, wrong string) (str
 			continue
 		}
 		pr := prLink.FindString(ref)
+		if pr == wrong {
+			continue
+		}
 		if pr == "" {
 			var err error
 			pr, err = s.numberedPR(ctx, t, a.MachineID, a.SessionID, text)
 			if err != nil {
 				return "", fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
+			}
+		} else if m := ciPRURL.FindStringSubmatch(pr); m != nil {
+			number, err := strconv.Atoi(m[2])
+			if err != nil {
+				return "", err
+			}
+			isPR, err := s.forge().IsPR(ctx, m[1], number)
+			if err != nil {
+				return "", fmt.Errorf("the reported delivery PR could not be confirmed: %w", err)
+			}
+			if !isPR {
+				continue // do not cycle between several misreported issue URLs
 			}
 		}
 		if pr != "" && pr != wrong {

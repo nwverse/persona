@@ -84,20 +84,22 @@ func TestAcceptedResearchWithIssueOnlyCloseout(t *testing.T) {
 
 func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		ref    string
-		merged bool
-		status int
-		want   string
-		refuse bool
+		name       string
+		ref        string
+		merged     bool
+		status     int
+		kindStatus int
+		want       string
+		refuse     bool
 	}{
-		{"full PR URL", "https://github.com/o/r/pull/5", true, 200, "5", false},
-		{"numbered artifact", "#5", true, 200, "5", false},
-		{"plain number artifact", "5", true, 200, "5", false},
-		{"repository-qualified artifact", "o/r#5", true, 200, "5", false},
-		{"recovered PR still unmerged", "https://github.com/o/r/pull/5", false, 200, "5", true},
-		{"recovered PR unavailable", "https://github.com/o/r/pull/5", true, 503, "5", true},
-		{"numbered artifact cannot be confirmed", "#5", true, 403, "4", true},
+		{"full PR URL", "https://github.com/o/r/pull/5", true, 200, 200, "5", false},
+		{"numbered artifact", "#5", true, 200, 200, "5", false},
+		{"plain number artifact", "5", true, 200, 200, "5", false},
+		{"repository-qualified artifact", "o/r#5", true, 200, 200, "5", false},
+		{"recovered PR still unmerged", "https://github.com/o/r/pull/5", false, 200, 200, "5", true},
+		{"recovered PR unavailable", "https://github.com/o/r/pull/5", true, 503, 200, "5", true},
+		{"numbered artifact cannot be confirmed", "#5", true, 403, 403, "4", true},
+		{"full PR URL cannot be confirmed", "https://github.com/o/r/pull/5", true, 403, 403, "4", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, todo := deliveryReviewService(t, &fakeForge{}, &runningHub{commit: oldHub}, false)
@@ -116,7 +118,7 @@ func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 				case "/repos/o/r/issues/4":
 					_, _ = w.Write([]byte(`{"number":4}`))
 				case "/repos/o/r/issues/5":
-					w.WriteHeader(tc.status)
+					w.WriteHeader(tc.kindStatus)
 					_, _ = w.Write([]byte(`{"number":5,"pull_request":{}}`))
 				case "/repos/o/r/pulls/5":
 					w.WriteHeader(tc.status)
@@ -145,6 +147,24 @@ func TestAcceptedRecoversActualPRFromCloseout(t *testing.T) {
 				t.Fatal("false issue record survived in PR history")
 			}
 		})
+	}
+}
+
+func TestReportedTaskPRDoesNotRecoverAnotherIssue(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "<closeout status=\"done\">\n" +
+		"artifact: pr https://github.com/o/r/pull/5\n</closeout>"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/o/r/issues/5" {
+			_, _ = w.Write([]byte(`{"number":5}`))
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	s.deploy.forge = githubForge{base: server.URL, client: server.Client()}
+	if pr, err := s.reportedTaskPR(context.Background(), todo, "https://github.com/o/r/pull/4"); pr != "" || err != nil {
+		t.Fatalf("recovered another ordinary issue as a PR: %q, %v", pr, err)
 	}
 }
 
