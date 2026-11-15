@@ -8,7 +8,7 @@ vi.hoisted(() => {
 });
 vi.mock("./ConfigurationManager", () => ({ ConfigurationManager: ({ children }: { children: (id: string) => unknown }) => children("test-manager") }));
 vi.mock("./ModelProfiles", () => ({ ModelProfiles: () => null }));
-vi.mock("../../lib/store", () => ({ useStore: (select: (state: { machines: [] }) => unknown) => select({ machines: [] }) }));
+vi.mock("../../lib/store", () => ({ useStore: (select: (state: { machines: []; features: [] }) => unknown) => select({ machines: [], features: [] }) }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 import { initI18n, t } from "../../i18n";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
