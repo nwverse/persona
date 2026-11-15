@@ -45,8 +45,11 @@ func githubCLIGet(ctx context.Context, path string, out any) error {
 	log.Printf("deploy verification: authenticated GitHub CLI GET %s: status=%d limit=%s remaining=%s request_id=%s",
 		path, resp.StatusCode, githubDiagnostic(resp.Header.Get("X-RateLimit-Limit")),
 		githubDiagnostic(resp.Header.Get("X-RateLimit-Remaining")), githubDiagnostic(resp.Header.Get("X-GitHub-Request-Id")))
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity {
+	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("%w: %w", errForgeNotFound, githubResponseError(resp))
+	}
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		return fmt.Errorf("%w: %w", errForgeUnprocessable, githubResponseError(resp))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return githubResponseError(resp)
