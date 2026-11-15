@@ -521,6 +521,7 @@ struct FileAttachmentCard: View {
         .overlay(alignment: .topTrailing) {
             Button { files.remove(item.id) } label: {
                 ThemedIcon(Theme.Icon.clear).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
+                    .tapTargetOutset(.all) // drawn small at the corner, hit over the card around it
             }
             .offset(x: 5, y: -5)
             .accessibilityLabel(item.file == nil && !failed ? String(localized: "Cancel upload of \(item.name)")

@@ -380,7 +380,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   a `well`-sized tile of the file's kind (`FileViewer.symbol`, accent tint; `danger` and the error mark once failed), its
   name on one line truncated in the middle, and under it how far it got ("1.3 MB / 2.4 MB"), Waiting, its size, or
   Failed · Tap to Retry, a thin accent bar along the bottom while it waits or uploads, and the photos' ✕ at the top
-  corner. Up to 10, three uploading at once; a tap on a failed card tries again. Send waits for them as for a video.
+  corner (hit through `tapTargetOutset(.all)`). Up to 10, three uploading at once; a tap on a failed card tries again. Send waits for them as for a video.
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -513,7 +513,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
   right-aligned, one card each, at most `box280` wide: a video or a recording plays (`AttachedVideoCard`), any other file
   opens the file viewer (`AttachedDocumentCard`: an `avatarL` tile of its kind in the accent's tint, the name in
   `secondaryMedium` truncated in the middle, its size in `label`; Copy Path on a long press). More than four show three and
-  an "N More Files" row in the accent color that opens the rest in place (Show Less folds them). A file the computer no
+  an "N More Files" row (`tapTarget` tall) in the accent color that opens the rest in place (Show Less folds them). A file the computer no
   longer has is dimmed to 0.6 with the missing-file mark and "No longer on the computer", and takes no tap.
 - The images a turn's work looked at (iOS `ViewedImagesRow`, docs/protocol/protocol.md "Images viewed this turn"): bare
   thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each

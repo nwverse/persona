@@ -40,7 +40,7 @@ struct AttachedFileCards: View {
                     }
                     .font(Theme.Font.secondary)
                     .foregroundStyle(Theme.accent)
-                    .padding(.vertical, Theme.Space.s)
+                    .tapTargetHeight()
                     .scaledFrame(maxWidth: Theme.Size.box280)
                     .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                     .contentShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
