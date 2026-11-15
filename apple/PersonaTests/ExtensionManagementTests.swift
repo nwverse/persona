@@ -170,6 +170,21 @@ struct ExtensionManagementTests {
         }
     }
 
+    @Test func switchingAPackOnNeverAsksEvenWithAMemberOn() async throws {
+        // The pack is off and one member was turned on by hand, so `pack_on` is not empty: the question is only for off.
+        let hub = FakeHub()
+        hub.on("GET", packPath, json: try packJSON(enabled: false, follow: true, on: [["id": "helper", "name": "Example Helper"]], off: ["notes"]))
+        hub.on("PUT", packPath + "enabled", json: try packJSON(follow: true, on: enabledPackMembers))
+        let m = ExtensionModel(id: "pack", deps: .init(api: { hub.client }))
+        await m.load()
+        await m.requestEnabled(true)
+        #expect(!m.packDisablePresented && !m.disableDialogPresented && m.detail?.plugin.enabled == true)
+        let writes = hub.sent("PUT", packPath + "enabled")
+        #expect(writes.count == 1)
+        let enable = try JSON.decoder.decode(JSONValue.self, from: try #require(writes.first?.body))
+        #expect(enable == .object(["enabled": .bool(true)]))
+    }
+
     @Test func packConfirmationStillAllowsTheOutsideDependentQuestion() async throws {
         let hub = FakeHub()
         hub.on("GET", packPath, json: try packJSON(follow: true, on: enabledPackMembers))
