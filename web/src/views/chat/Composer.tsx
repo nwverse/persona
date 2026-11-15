@@ -223,6 +223,11 @@ export const Composer = memo(function Composer({
     const timer = setTimeout(() => setNudge(0), NUDGE_MS);
     return () => clearTimeout(timer);
   }, [nudge]);
+  const nudgeBlocked = (repeat: boolean) => {
+    setNudge((n) => n + 1);
+    // held down, the key repeats: one fresh ask, not one per repeat
+    if (!repeat) blocked?.onNudge?.();
+  };
   const input = useRef<HTMLTextAreaElement>(null);
   const lastEscape = useRef<number | null>(null);
   // the edit now, for the draft events' and the send's closures
@@ -920,6 +925,8 @@ export const Composer = memo(function Composer({
               if (e.key === "Escape") e.stopPropagation();
               return;
             }
+            // The window owns these chords even while a slash or @ palette is open; do not pick a row instead.
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && (e.altKey || e.shiftKey)) return;
             // `/model` alone opens the model panel instead of sending (where the agent switches models)
             if (enterSends(e, hasFinePointer()) && isModelCommand(draft) && requestModelPicker(draftKey)) {
               e.preventDefault();
@@ -997,11 +1004,8 @@ export const Composer = memo(function Composer({
             if (enterSends(e, hasFinePointer())) {
               e.preventDefault();
               // any Enter while blocked says why (also an empty box or attachments only): submit() would do nothing
-              if (blocked) {
-                setNudge((n) => n + 1);
-                // held down, the key repeats: one fresh ask, not one per repeat
-                if (!e.repeat) blocked.onNudge?.();
-              } else void submit();
+              if (blocked) nudgeBlocked(e.repeat);
+              else void submit();
             }
           }}
           placeholder={pill && hasFinePointer() ? t("chat-composer.suggestion", { suggestion: pill }) : placeholder}
@@ -1129,10 +1133,12 @@ export const Composer = memo(function Composer({
             setExpanded(false);
           }}
           canSend={Boolean(canSend) && !blocked}
-          onSend={(sel) => {
+          blocked={Boolean(blocked)}
+          onSend={(sel, repeat = false) => {
             collapsedSel.current = sel;
             setExpanded(false);
-            void submit();
+            if (blocked) nudgeBlocked(repeat);
+            else void submit();
           }}
         />
       )}
@@ -1182,14 +1188,15 @@ function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => vo
 
 /** The draft full screen on a phone (#5688): collapse at the top right, the text filling the visible height, send at the
  *  bottom right. It edits the box's own draft; closing hands back the caret so the box picks up where this left off. */
-function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, onSend }: {
+function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse, canSend, blocked, onSend }: {
   value: string;
   placeholder: string;
   selection: [number, number];
   onChange: (v: string) => void;
   onCollapse: (sel: [number, number]) => void;
   canSend: boolean;
-  onSend: (sel: [number, number]) => void;
+  blocked: boolean;
+  onSend: (sel: [number, number], repeat?: boolean) => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -1236,6 +1243,13 @@ function ExpandedComposer({ value, placeholder, selection, onChange, onCollapse,
         ref={field}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+          // The full editor always keeps plain Enter as a newline; an explicit Mod+Enter sends on any pointer.
+          if (!enterSends(e, false)) return;
+          e.preventDefault();
+          if (canSend || blocked) onSend(sel(), e.repeat);
+        }}
         placeholder={placeholder}
         aria-label={t("chat-composer.message")}
         className="min-h-0 w-full flex-1 resize-none bg-transparent px-5 py-1 text-[16px] leading-[24px] text-ink outline-none [overflow-wrap:anywhere] placeholder:text-ink-3"

@@ -75,17 +75,58 @@ function mediaList(q: string): MediaQueryList | undefined {
 const matches = (q: string) => Boolean(mediaList(q)?.matches);
 
 const FINE = "(any-pointer: fine)";
+const MOUSE_EVENTS = ["pointermove", "pointerdown"] as const;
+let sawMouse = false;
+let watchingMouse = false;
+const fineListeners = new Set<() => void>();
 
-/** Some pointer is precise (a mouse, a trackpad; an iPad with its keyboard and trackpad): Enter sends there. */
+function stopMouseWatch() {
+  if (!watchingMouse) return;
+  watchingMouse = false;
+  MOUSE_EVENTS.forEach((type) => window.removeEventListener(type, mousePointer, true));
+  mediaList(FINE)?.removeEventListener("change", mouseMediaChanged);
+}
+
+function mouseMediaChanged() {
+  // An imperative hasFinePointer() caller may have started the watch without any hook being mounted.
+  if (matches(FINE)) stopMouseWatch();
+}
+
+function mousePointer(e: PointerEvent) {
+  // Only a mouse proves the query wrong. A stylus already matches any-pointer:fine where reported correctly; promoting
+  // pen would change the keyboard on a pen-only touch device, and touch's compatibility mouse events are not pointer events.
+  if (e.pointerType !== "mouse") return;
+  sawMouse = true;
+  stopMouseWatch();
+  fineListeners.forEach((listener) => listener());
+}
+
+function watchMouse() {
+  if (sawMouse || watchingMouse || matches(FINE) || typeof window === "undefined") return;
+  watchingMouse = true;
+  // A click need not move the mouse first. Capture before a surface stops propagation; passive because this only observes.
+  MOUSE_EVENTS.forEach((type) => window.addEventListener(type, mousePointer, { capture: true, passive: true }));
+  mediaList(FINE)?.addEventListener("change", mouseMediaChanged);
+}
+
+/** Some pointer is precise (a mouse, a trackpad; an iPad with its keyboard and trackpad): Enter sends there. Once a real
+ *  mouse pointer is seen it stays true for this page, even on Windows browsers that misreport the media query. */
 export function hasFinePointer(): boolean {
-  return matches(FINE);
+  if (sawMouse) return true;
+  if (matches(FINE)) {
+    stopMouseWatch();
+    return true;
+  }
+  watchMouse();
+  return false;
 }
 
 /** Whether Enter (without Shift) sends: with a precise pointer, yes; on a touch screen alone it is a new line there and
- *  only the button sends. Mod+Alt+Enter is left out: that is the waiting-card shortcut (lib/shortcuts.ts), and the
- *  composer must not swallow the key before the shortcut dispatcher sees it. */
+ *  only the button sends. Mod+Enter always sends, but Mod+Alt+Enter is left out: that is the waiting-card shortcut
+ *  (lib/shortcuts.ts), and the composer must not swallow the key before the shortcut dispatcher sees it. */
 export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, fine: boolean): boolean {
-  return e.key === "Enter" && !e.shiftKey && !(e.altKey && (e.ctrlKey || e.metaKey)) && fine;
+  const mod = Boolean(e.ctrlKey || e.metaKey);
+  return e.key === "Enter" && !e.shiftKey && (mod ? !e.altKey : fine);
 }
 
 /** The narrow layout (below lg: the sidebar is a drawer, the side panel covers the page): Tailwind's `max-lg:`, kept in step. */
@@ -109,5 +150,22 @@ export function useMedia(query: string): boolean {
   return useSyncExternalStore(subscribe, () => matches(query), () => false);
 }
 
-/** Whether a precise pointer is there, following it (a trackpad attached to an iPad). */
-export const useFinePointer = () => useMedia(FINE);
+/** Whether a precise pointer is there, following the media query and the one-time mouse promotion. */
+export function useFinePointer(): boolean {
+  const subscribe = useCallback((listener: () => void) => {
+    fineListeners.add(listener);
+    const query = mediaList(FINE);
+    const changed = () => {
+      if (matches(FINE)) stopMouseWatch();
+      else watchMouse();
+      listener();
+    };
+    query?.addEventListener("change", changed);
+    hasFinePointer();
+    return () => {
+      fineListeners.delete(listener);
+      query?.removeEventListener("change", changed);
+    };
+  }, []);
+  return useSyncExternalStore(subscribe, hasFinePointer, () => false);
+}
