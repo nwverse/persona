@@ -709,11 +709,13 @@ export function createRuntime(driver, options) {
 
   function phoneFirst(sessionId) {
     // No hub: nobody can answer on the phone now. The local UI asks (a card already on the phone waits for the hub).
-    if (!peer || !hubConnected || !listed.has(sessionId)) return false
+    if (!peer || !hubConnected) return false
     if (answerFirst === 'phone') return true
     if (answerFirst === 'local') return false
     const at = phoneDriven.get(sessionId)
     if (at !== undefined && Date.now() - at < PHONE_DRIVEN_FOR) return true
+    // Only the no-local-client inference for an otherwise unknown automatic session depends on inventory membership.
+    if (!listed.has(sessionId)) return false
     return typeof driver.hasLocalClient === 'function' && driver.hasLocalClient(sessionId) === false
   }
 
@@ -858,11 +860,23 @@ export function createRuntime(driver, options) {
         schedulePush()
         return { ok: true }
       case 'session.start': {
-        const res = await need(driver.start, 'start')(params)
-        const id = res?.session?.session_id
-        if (id) drivenBy(id)
-        schedulePush()
-        return res
+        const early = new Set()
+        try {
+          // A driver whose initial prompt can need an answer before start returns names the session as soon as it exists.
+          const res = await need(driver.start, 'start')(params, (id) => {
+            if (typeof id !== 'string' || !id) return
+            early.add(id)
+            drivenBy(id)
+          })
+          const id = res?.session?.session_id
+          if (id) drivenBy(id)
+          schedulePush()
+          return res
+        } catch (err) {
+          // Early routing is provisional until the start succeeds; do not admit an unknown session after a failed start.
+          for (const id of early) phoneDriven.delete(id)
+          throw err
+        }
       }
       case 'workspace.prepare':
         return need(keepsWorkspaces && driver.prepareWorkspace, 'workspaces')(params)
