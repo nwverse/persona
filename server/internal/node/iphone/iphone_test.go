@@ -165,25 +165,27 @@ func TestIPhoneReadyWithoutElementTree(t *testing.T) {
 func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 	ctx := context.Background()
 	useIPhones(t, &fakeIPhones{}, nil)
-	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Devices == nil || p.Checked.IsZero() {
+	if p := Status(ctx); p.Installed || p.Note != iphoneNoteNoBridge || p.Code != "bridge_missing" || p.Devices == nil || p.Checked.IsZero() {
 		t.Fatalf("no bridge: %+v", p)
 	}
 	useIPhones(t, &fakeIPhones{installed: true, links: []iphoneLink{{ID: "u1", Name: "Phone", USB: true}}}, nil)
-	if p := Status(ctx); p.Note != iphoneNoteNonePaired || len(p.Devices) != 1 || p.Devices[0].Note != iphoneNoteUSB || p.Version != "0.1.0" {
+	if p := Status(ctx); p.Note != iphoneNoteNonePaired || p.Code != "none_paired" || len(p.Devices) != 1 || p.Devices[0].Note != iphoneNoteUSB ||
+		p.Devices[0].Code != "usb_unpaired" || p.Version != "0.1.0" {
 		t.Fatalf("plugged in, nothing paired: %+v", p)
 	}
 
+	off := false
 	f := &fakeIPhones{installed: true, links: []iphoneLink{
 		{ID: "ready", Paired: true, State: "connected", Transport: "network"},
 		{ID: "locked", Paired: true, State: "connected"},
 		{ID: "devmode", Paired: true, State: "connected"},
 		{ID: "backoff", Paired: true, State: "backoff", ErrorCode: "pairing_rejected"},
 		{ID: "connecting", Paired: true, State: "connecting", ErrorCode: "unreachable"},
-		{ID: "idle", Paired: true, State: "idle"},
+		{ID: "idle", Paired: true, State: "idle", DeveloperMode: &off},
 	}, info: map[string]string{
 		"ready":   readyInfo,
 		"locked":  strings.Replace(readyInfo, `"locked":false`, `"locked":true`, 1),
-		"devmode": `{"locked":false,"capabilities":{"screenshot":true,"ax_tree":true,"input":false},"notes":{"input":"developer_mode_off"}}`,
+		"devmode": `{"locked":false,"developer_mode":false,"capabilities":{"screenshot":true,"ax_tree":true,"input":false},"notes":{"input":"developer_mode_off"}}`,
 	}}
 	useIPhones(t, f, nil)
 	p := Status(ctx)
@@ -194,23 +196,25 @@ func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 	for _, d := range p.Devices {
 		byID[d.ID] = d
 	}
-	if d := byID["ready"]; !d.Ready || !d.Connected || d.Note != "" || d.ProductType != "iPhone16,2" || d.IOS != "18.1" || !d.Capabilities["input"] || d.Transport != "network" {
+	if d := byID["ready"]; !d.Ready || !d.Connected || d.Note != "" || d.Code != "" || d.ProductType != "iPhone16,2" || d.IOS != "18.1" || !d.Capabilities["input"] || d.Transport != "network" {
 		t.Fatalf("ready: %+v", d)
 	}
-	if d := byID["locked"]; d.Ready || !d.Locked || d.Note != iphoneNotes["locked"] {
+	if d := byID["locked"]; d.Ready || !d.Locked || d.Note != iphoneNotes["locked"] || d.Code != "locked" {
 		t.Fatalf("locked: %+v", d)
 	}
-	if d := byID["devmode"]; d.Ready || d.Note != iphoneNotes["developer_mode_off"] {
+	if d := byID["devmode"]; d.Ready || d.Note != iphoneNotes["developer_mode_off"] || d.Code != "developer_mode_off" ||
+		d.DeveloperMode == nil || *d.DeveloperMode {
 		t.Fatalf("developer mode off: %+v", d)
 	}
-	if d := byID["backoff"]; d.Connected || d.Note != iphoneNotes["pairing_rejected"] {
+	if d := byID["backoff"]; d.Connected || d.Note != iphoneNotes["pairing_rejected"] || d.Code != "pairing_rejected" {
 		t.Fatalf("rejected: %+v", d)
 	}
-	if d := byID["connecting"]; d.Note != iphoneNoteConnecting {
+	if d := byID["connecting"]; d.Note != iphoneNoteConnecting || d.Code != "connecting" {
 		t.Fatalf("connecting: %+v", d)
 	}
-	if d := byID["idle"]; d.Note != iphoneNoteConnecting || strings.Join(f.connected, ",") != "idle" {
-		t.Fatalf("an idle session is started: %+v %v", d, f.connected)
+	if d := byID["idle"]; d.Note != iphoneNoteConnecting || d.Code != "connecting" || strings.Join(f.connected, ",") != "idle" ||
+		d.DeveloperMode == nil || *d.DeveloperMode {
+		t.Fatalf("an idle session is started, saying what the record knows: %+v %v", d, f.connected)
 	}
 	if strings.Count(strings.Join(f.calls, "\n"), "device_info") != 3 {
 		t.Fatalf("only connected ones are probed: %v", f.calls)
@@ -230,12 +234,12 @@ func TestIPhoneStatusSaysWhatIsMissing(t *testing.T) {
 
 	useIPhones(t, &fakeIPhones{installed: true, links: []iphoneLink{{ID: "a", Paired: true, State: "connected"}},
 		infoErr: &rpc.Error{Code: "ddi_not_mounted", Message: "x"}}, nil)
-	if d := Status(ctx).Devices[0]; d.Connected || d.Ready || d.Note != iphoneNotes["ddi_not_mounted"] {
+	if d := Status(ctx).Devices[0]; d.Connected || d.Ready || d.Note != iphoneNotes["ddi_not_mounted"] || d.Code != "ddi_not_mounted" {
 		t.Fatalf("the probe failed: %+v", d)
 	}
 	useIPhones(t, &fakeIPhones{installed: true, links: []iphoneLink{{ID: "a", Paired: true, State: "connected"}},
 		infoErr: errors.New("odd")}, nil)
-	if d := Status(ctx).Devices[0]; d.Note != iphoneNoteFailed {
+	if d := Status(ctx).Devices[0]; d.Note != iphoneNoteFailed || d.Code != "failed" {
 		t.Fatalf("an error without a code: %+v", d)
 	}
 }
@@ -408,8 +412,19 @@ func TestIPhonePairStartsAJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := out; p.Job == nil || p.Job.Kind != "pair" || p.Job.Error != iphoneNotes["trust_pending"] {
+	if p := out; p.Job == nil || p.Job.Kind != "pair" || p.Job.Error != iphoneNotes["trust_pending"] || p.Job.Code != "trust_pending" {
 		t.Fatalf("status %+v", p.Job)
+	}
+	// While it runs: the step in words the hub translates, what it waits for at the phone, the iPhone it is for.
+	for waiting, step := range map[string]string{"": iphoneNotePairing, "trust_pending": iphoneNotePairTrust, "locked": iphoneNotePairUnlock} {
+		f.job = &iphoneJob{Kind: "pair", State: "running", Step: "waiting for the phone", Waiting: waiting, Device: "u1"}
+		if j := Status(context.Background()).Job; j.Step != step || j.Code != waiting || j.Device != "u1" || j.Error != "" {
+			t.Fatalf("running, waiting %q: %+v", waiting, j)
+		}
+	}
+	f.job = &iphoneJob{Kind: "pair", State: "failed", Error: "odd", Device: "u1"}
+	if j := Status(context.Background()).Job; j.Code != "failed" || j.Error != "odd" {
+		t.Fatalf("failed without a code: %+v", j)
 	}
 	if _, err := Pair(context.Background(), "forget", json.RawMessage(`{"device":"u1"}`)); err != nil {
 		t.Fatal(err)

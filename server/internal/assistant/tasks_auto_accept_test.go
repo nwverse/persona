@@ -165,3 +165,36 @@ func TestPersonsStartOnAnAutoAcceptProviderKeepsItsMode(t *testing.T) {
 		}
 	}
 }
+
+// On a computer whose engine is Paseo, every start's launcher is one of Paseo's providers (launcher_fit_engine.go,
+// #8140): Grok's Agents that Persona starts run with Allow all there too, its plan card says so, and a launcher Paseo
+// lacks that stands in on Paseo's Codex keeps the settled mode as Codex does in a terminal.
+func TestAutoAcceptOnAPaseoEngineComputer(t *testing.T) {
+	s, f := paseoFitHub(t)
+	f.hostLaunchers["pbox"] = append(f.hostLaunchers["pbox"], proto.Launcher{Name: "grok", Source: "paseo", Agent: "paseo", AutoAccept: true})
+	ctx := context.Background()
+	if _, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"pbox","cwd":"/home/me/code","prompt":"Reply with pong","launcher":"grok"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"pbox","cwd":"/home/me/code","prompt":"Reply with pong","launcher":"codex-cpa"}`)); err != nil {
+		t.Fatal(err)
+	}
+	starts := startsOf(f)
+	if len(starts) != 2 || starts[0]["launcher"] != "grok" || starts[0]["permission_mode"] != "bypassPermissions" || starts[0]["session_id"] != nil {
+		t.Fatalf("grok's start: %v", starts)
+	}
+	if starts[1]["launcher"] != "codex-cpa" || starts[1]["permission_mode"] != nil {
+		t.Fatalf("codex-cpa's start: %v", starts[1])
+	}
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"Ping","prompt":"Reply with pong","machine":"pbox","cwd":"~/code/app","launcher":"grok","why":"A quick check"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.loadPlan(ctx, planID(t, res))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Tasks[0].Launcher != "grok" || p.Tasks[0].Permission != "bypassPermissions" {
+		t.Fatalf("grok's card: %+v", p.Tasks[0])
+	}
+}

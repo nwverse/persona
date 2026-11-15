@@ -19,10 +19,13 @@ import (
 // computer without a models.json runs pi (#8194: 455,573 B over main's 452,848 B, with main's 290 B of headroom). Raised
 // by 1,337 B for the Paseo bridge's rows of closed and archived agents: Unread kept across an unload, archived rows'
 // capabilities, the features last seen, efforts, its own words named for the hub (#8133: 456,910 B over main's 455,573 B,
-// with main's 290 B of headroom). Raised by 468 B for the Paseo bridge answering Persona's own tools on every provider
-// and marking Auto Accept launchers (#8141: 457,378 B over main's 456,910 B, with main's 290 B of headroom).
+// with main's 290 B of headroom). Raised by 2,149 B for the Paseo bridge's same-kind starts and the SDK's
+// caps.same_kind (#8140: a launcher Paseo lacks runs on its provider of the same kind or is refused, an effort the
+// model lacks goes down to one it offers, and the answer says both; 459,059 B over main's 456,910 B, with main's 290 B
+// of headroom). Raised by 451 B for the Paseo bridge answering Persona's own tools on every provider and marking Auto
+// Accept launchers (#8141: 459,765 B over main's 459,314 B, with main's 35 B of headroom).
 func TestDistBudget(t *testing.T) {
-	const budget = 457_668
+	const budget = 459_800
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

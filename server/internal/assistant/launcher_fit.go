@@ -69,6 +69,13 @@ func (a startAgent) allowAll() bool { return a.agent == "claude" || a.autoAccept
 // same list, so a caller changing permissions by it does not have to ask for it again.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note string, agent startAgent, err error) {
 	name, _ := params["launcher"].(string)
+	asked, _ := params["host"].(string)
+	if host := agentStartHost(m, asked); host != "" {
+		// Where the start's engine runs only its own launchers, plain claude and a managed launcher do not run either.
+		if note, agent, err, done := s.fitEngineLauncher(ctx, m, host, params); done {
+			return note, agent, err
+		}
+	}
 	if s.launcherEverywhere(ctx, name) {
 		if name == "" || name == "claude" {
 			return "", startAgent{agent: "claude"}, nil
