@@ -26,12 +26,13 @@ function probeFailure(detail: string, code?: string, status?: number): Failure {
 }
 
 /** Draft-only probes reuse the saved provider's connection, never its purpose settings. */
-export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, onChange }: {
+export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, effortAllowed = false, onChange }: {
   manager: string;
   purpose: ModelPurpose;
   provider: ModelProvider;
   draft: ModelDraft;
   disabled: boolean;
+  effortAllowed?: boolean;
   onChange: (patch: Partial<Pick<ModelDraft, "model" | "effort">>) => void;
 }) {
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -152,7 +153,7 @@ export function DirectAPIEditor({ manager, purpose, provider, draft, disabled, o
         <button type="button" disabled={disabled || listing} onClick={() => setReload((value) => value + 1)} className="shrink-0 whitespace-nowrap font-medium text-accent-ink hover:underline">{t("settings-modelconfiguration.retry")}</button>
       </div>}
     </div>}
-    {supportsField(purpose, "effort") && <label className="block">
+    {(supportsField(purpose, "effort") || effortAllowed) && <label className="block">
       <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.effort")}</span>
       <select className={inputClass} value={draft.effort} disabled={disabled || (unsupported && !draft.effort)} onChange={(event) => change({ effort: event.target.value })}>
         <option value="">{inheritedEffort ? t("settings-modelconfiguration.api_effort_inherit", { effort: effortLabel(inheritedEffort) }) : t("settings-modelconfiguration.follow_default")}</option>

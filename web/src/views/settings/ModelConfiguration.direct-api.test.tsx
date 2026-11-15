@@ -146,6 +146,32 @@ describe.each(["kb", "inbox.triage", "agent.delegate"])("%s Direct API editor", 
     expect(writes()).toEqual([]);
   });
 
+  it.each(["messages", "responses"])("offers and saves effort when switching from Chat to %s without an original effort field", async (api) => {
+    current.fields = ["provider", "model"];
+    current.override = { provider: "launcher.chat", model: "chat-default" };
+    current.effective = { ...current.override };
+    await render();
+    expect(select(t("settings-modelconfiguration.effort"))).toBeUndefined();
+
+    await choose(select(t("settings-modelconfiguration.model_provider")), `launcher.${api}`);
+    const effort = select(t("settings-modelconfiguration.effort"));
+    expect(effort).toBeDefined();
+    expect(effort.disabled).toBe(false);
+    expect(options(effort)).toContain("high");
+    await choose(select(t("settings-modelconfiguration.api_models")), `${api}-new`);
+    await choose(effort, "high");
+    await testConnection();
+    expect(probes().at(-1)?.body).toEqual({ name: api, model: `${api}-new`, effort: "high" });
+    expect(writes()).toEqual([]);
+
+    await act(async () => button(t("common.save"), dialog()).click());
+    await flush();
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0].body).toEqual({
+      revision: current.revision, provider: `launcher.${api}`, model: `${api}-new`, effort: "high",
+    });
+  });
+
   it("tests the draft provider, raw model ID and effort without saving, including cancel/reopen", async () => {
     const saved = structuredClone(current);
     await render();

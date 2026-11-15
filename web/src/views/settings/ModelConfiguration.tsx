@@ -229,7 +229,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const directAPI = !!p && p.kind === "api" && !ownRecord(p) && chosen?.kind === "api" && writable;
   const effectiveProvider = data?.providers.find((v) => v.id === p?.effective?.provider);
   // by the provider the draft runs on, not only by the fields the hub sent for the one in effect
-  const effortAllowed = !!p && !directAPI && effortOffered(p, chosen, effectiveProvider, followsAgents);
+  const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents);
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
   useEffect(() => {
     const refresh = refreshNext.current;
@@ -319,7 +319,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
         </div>}
         {previewForm && <div data-execution-preview><Pill wrap>{previewForm.label} · {previewForm.backend}</Pill></div>}
         {directAPI && <DirectAPIEditor key={`${manager}:${chosen.id}:${draft.provider}`} manager={manager} purpose={p} provider={chosen} draft={draft}
-          disabled={busy} onChange={(patch) => setDraft((value) => ({ ...value, ...patch }))} />}
+          disabled={busy} effortAllowed={effortAllowed} onChange={(patch) => setDraft((value) => ({ ...value, ...patch }))} />}
         {!directAPI && supportsField(p, "model") && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.specific_model")}</span>
           {p.kind === "plugin" ? <select aria-label={t("settings-modelconfiguration.specific_model")} className={inputClass} value={draft.model} disabled={busy || (!!modelsError && models.length === 0)} onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}>
@@ -359,7 +359,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             </span>
           )}
         </div>}
-        {effortAllowed && <label className="block">
+        {!directAPI && effortAllowed && <label className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.effort")}</span>
           <input className={inputClass} value={draft.effort} disabled={busy} placeholder={(following && !draft.provider ? parent?.effective?.effort : p.effective?.effort) || t("settings-modelconfiguration.follow_default")} list="model-efforts"
             onChange={(e) => setDraft((d) => ({ ...d, effort: e.target.value }))} />
