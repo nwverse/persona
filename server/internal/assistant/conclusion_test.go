@@ -489,7 +489,7 @@ func TestLateTaskDecisionDoesNotSendAfterCompletion(t *testing.T) {
 	}
 }
 
-// The automatic-send guard must not change a deliberate user message from a task card.
+// A task-card message still goes through, but an unknown stop needs a successor, not an implicit resume.
 func TestCompletedTaskDirectMessageStillReachesAgent(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	c := idleAgent(time.Now().Add(-time.Hour))
@@ -498,11 +498,18 @@ func TestCompletedTaskDirectMessageStillReachesAgent(t *testing.T) {
 	e := &todoEnv{t: t, s: s, f: f}
 	e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
 	sent := len(sentToAgent(f))
+	started := len(startCalls(f))
 	if _, err := s.routeToTask(context.Background(), todo.Origin, todo.ID, "Check one more case"); err != nil {
 		t.Fatal(err)
 	}
-	if got := sentToAgent(f)[sent:]; len(got) != 1 || got[0] != "Check one more case" {
-		t.Fatalf("direct user message: %v", got)
+	starts := startCalls(f)[started:]
+	prompt := ""
+	if len(starts) == 1 {
+		prompt, _ = starts[0]["prompt"].(string)
+	}
+	if len(sentToAgent(f)) != sent || len(starts) != 1 || starts[0]["resume_session_id"] != nil ||
+		!strings.HasSuffix(prompt, "Check one more case") {
+		t.Fatalf("unknown stop was resumed or lost the user's message: %v", starts)
 	}
 	s.taskWorking(context.Background(), "box", "s1")
 	if todoNow(s, todo.ID).DoneAt == nil {
@@ -617,5 +624,48 @@ func TestAcceptRouteNotTakenReadsInTheRequestLanguage(t *testing.T) {
 		if status != http.StatusBadGateway || body["error"] != want {
 			t.Fatalf("bot %s, request %s: %d %v, want %q", tc.bot, tc.request, status, body, want)
 		}
+	}
+}
+
+// A decision answered in words on Lark is made even when its agent cannot take it now: recorded, out of needs_user,
+// its ask answered, and its supervisor told what to pass on. The hub does not resend it, so a later reply to the same
+// card finds it answered and nothing reaches the agent twice.
+func TestDecisionAnsweredInWordsStaysDecidedWhenTheSendFails(t *testing.T) {
+	s, f, todo, _, notes := conclusionService(t, false)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%"})
+	a := askOf(s, todo.ID)
+	f.mu.Lock()
+	f.failSend = errors.New("a dialog is open")
+	f.mu.Unlock()
+	sent := len(sentToAgent(f))
+	if !s.acceptReply(ctx, "om_words", "直接全量吧", false, a.MessageID) {
+		t.Fatal("reply not taken")
+	}
+	if got := todoNow(s, todo.ID).Supervision.State; got == reviewNeedsUser {
+		t.Fatalf("still waits on the owner: %q", got)
+	}
+	if got := askOf(s, todo.ID); got.AcceptedAt.IsZero() {
+		t.Fatalf("ask not answered: %+v", got)
+	}
+	want := i18n.T(s.botLang(ctx), "assistant-reports.accept_decided_not_sent", i18n.Args{"error": "a dialog is open"})
+	if n := notes(); len(n) == 0 || n[len(n)-1] != want {
+		t.Fatalf("reply note %q", n)
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if !(pending && g.Key == key && strings.Contains(g.Detail, "直接全量") && strings.Contains(g.Detail, "a dialog is open")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+	}
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	s.acceptReply(ctx, "om_again", "直接全量吧", false, a.MessageID)
+	if n := len(sentToAgent(f)); n != sent {
+		t.Fatalf("%d sends after the failed one: the hub resent it", n-sent)
 	}
 }

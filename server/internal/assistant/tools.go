@@ -35,7 +35,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
@@ -155,6 +155,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 		}
 		return res, err
+	case "todo_repository_links_add":
+		return s.toolTodoRepositoryLinksAdd(ctx, machine, self, name, args)
+	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set":
+		return s.toolTodoRepositories(ctx, machine, self, name, args)
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "direction_name":
@@ -219,11 +223,19 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err != nil {
 			return "", err
 		}
-		// The Feishu bot and the channels with pushes on (channels_handler.go).
-		s.channelsPushed(machine, self, a.Title, a.Body)
+		// The Feishu bot and the channels with pushes on (channels_copies.go), unless the hub's low-distraction mode held
+		// the notice for the briefing (a P1 one, or a repeat of a related key within 12 hours): a copy there would
+		// interrupt where the phone does not, as a conclusion's card would (push_quiet.go). A held notice marks no
+		// channel pushed, so a turn-end mirror goes as it would without it (#8268).
+		var copies *copyReport
+		if res.Held {
+			s.logf("assistant: notify_user held by low-distraction mode (%s): no copy to the chat channels", res.Reason)
+		} else {
+			copies = s.channelsCopied(machine, self, a.Title, a.Body)
+		}
 		s.recordNotify(ctx, machine, self, notifyMissed(res)) // an interruption when a device took it (north_star.go)
 		s.promoteSupervision(self)
-		return notifyAnswerText(s.lang(ctx), res), nil
+		return notifyAnswerText(s.lang(ctx), res, copies.wait(notifyCopyWait)), nil
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
 	case "conversation_read":
@@ -313,7 +325,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if c.Assistant {
 			return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
 		}
-		if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) {
+		if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) && !stoppedAgent(c) {
 			// i18n-ignore: original MCP refusal for the model, not API error, push or approval-card copy; keep the source reason verbatim.
 			return "", fmt.Errorf("这个 Agent 仅支持查看：%s", c.ReadOnlyReason)
 		}
@@ -511,6 +523,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Effort, _ = run["effort"].(string)
 			tier, runs = "", "" // the tier's launcher is not what runs
 		}
+		// traex, omp…: no effort (launcher_modes.go). One this call names is refused before the user is asked, rather
+		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor, agy: dropped either way.
+		if !startTakesModes(fit.agent) {
+			launcher, _ := run["launcher"].(string)
+			if err := startModesRefused(launcher, fit.agent, "", own.effort); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			a.Effort = ""
+		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		if err := s.checkAgentStart(ctx, am.ID); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
@@ -574,6 +595,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Allow all for Claude Code and for a provider whose approval is an Auto Accept switch (startAgent.allowAll, #8141).
 		if fit.allowAll() {
 			params["permission_mode"] = "bypassPermissions"
+		}
+		if !startTakesModes(fit.agent) { // the machine a health detour landed on may run another agent under this name
+			if err := startModesRefused(picked, fit.agent, "", own.effort); err != nil {
+				return "", fmt.Errorf("%w; no agent was started", err)
+			}
+			delete(params, "effort") // Model configuration's, not this call's
 		}
 		if note != "" {
 			note = " Note: " + note + "."
