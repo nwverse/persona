@@ -90,10 +90,14 @@ func (n *Node) gatewayModels(ctx context.Context, l proto.ManagedLauncher) []pro
 	}
 	env := n.gatewayEnv(l)
 	base := strings.TrimRight(env["ANTHROPIC_BASE_URL"], "/")
-	if !envOn(env[gatewayDiscoveryVar]) || base == "" {
+	if !envOn(env[gatewayDiscoveryVar]) || base == "" || firstPartyHost(base) {
 		return nil
 	}
-	token, key := env["ANTHROPIC_AUTH_TOKEN"], env["ANTHROPIC_API_KEY"]
+	// Only the provider's own credential (its key, or one its env sets): before a withheld provider's pull it has
+	// none, and the one the user's settings or the shell carry belongs to another gateway, which a launch never sends
+	// here (it pins the provider's key over it).
+	ours := providerEnv(l, "", "", false)
+	token, key := ours["ANTHROPIC_AUTH_TOKEN"], ours["ANTHROPIC_API_KEY"]
 	if token == "" && key == "" {
 		return nil
 	}
@@ -144,6 +148,16 @@ func (n *Node) gatewayModels(ctx context.Context, l proto.ManagedLauncher) []pro
 			Description: cmp.Or(strings.TrimSpace(m.Description), "From gateway")})
 	}
 	return out
+}
+
+// firstPartyHost: Anthropic's own API, whose list Claude Code does not ask for (it is not a gateway).
+func firstPartyHost(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "anthropic.com" || strings.HasSuffix(h, ".anthropic.com")
 }
 
 // gatewayClient sends the request through the proxy env names for it (lower case first, as the runtime under Claude

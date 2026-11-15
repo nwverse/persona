@@ -97,6 +97,9 @@ func TestGatewayModelsOnlyWhenDiscoveryIsOn(t *testing.T) {
 		{"provider env turns it off", `{"env":{"` + gatewayDiscoveryVar + `":"1"}}`,
 			proto.ManagedLauncher{Name: "gw", BaseURL: srv.URL, APIKey: "sk-test", Env: gatewayDiscoveryVar + "=0"}},
 		{"no key", `{"env":{"` + gatewayDiscoveryVar + `":"1"}}`, proto.ManagedLauncher{Name: "gw", BaseURL: srv.URL}},
+		// The user's settings carry another gateway's token: never sent to this one.
+		{"only another gateway's key", `{"env":{"` + gatewayDiscoveryVar + `":"1","ANTHROPIC_AUTH_TOKEN":"theirs","ANTHROPIC_API_KEY":"theirs"}}`,
+			proto.ManagedLauncher{Name: "gw", BaseURL: srv.URL}},
 		{"codex", `{"env":{"` + gatewayDiscoveryVar + `":"1"}}`,
 			proto.ManagedLauncher{Name: "gw", BaseURL: srv.URL, APIKey: "sk-test", Agent: "codex"}},
 	} {
@@ -142,5 +145,15 @@ func TestWithGatewayModelsAddsWhatIsMissing(t *testing.T) {
 	}
 	if got := withGatewayModels(cli, nil); len(got) != len(cli) {
 		t.Fatalf("nothing from the gateway: %v", modelIDs(got))
+	}
+}
+
+// Anthropic's own API is not a gateway: Claude Code asks it for no list, and neither does the node.
+func TestGatewayModelsSkipsAnthropicsOwnAPI(t *testing.T) {
+	for base, want := range map[string]bool{"https://api.anthropic.com": true, "https://API.Anthropic.com/v1": true,
+		"https://gw.example.com": false, "https://anthropic.example.com": false} {
+		if got := firstPartyHost(base); got != want {
+			t.Errorf("%s: %v", base, got)
+		}
 	}
 }
