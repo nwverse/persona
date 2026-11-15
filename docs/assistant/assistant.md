@@ -15,6 +15,23 @@ Claude CLI and Agent SDK assistant starts explicitly select a config directory p
 
 Coverage: `TestAssistantProfileCompatibility` runs CLI and SDK fixture processes for old service/home/machine/discovered/missing/recorded sessions, new defaults and explicit/legacy selections, including a changed service default after a process restart. `TestAssistantProfileSelectionBoundaries` covers wrappers, scoped nodes and warm spares; `TestAssistantProfileCannotMoveExistingConversation` refuses relocation; `TestAssistantProfileRollbackKeepsTheOriginalTranscript` exercises the old env-only lookup. `TestNodeConfigDirIsPersisted` verifies the real Postgres metadata round trip; `TestMachineCallGatesAssistantConfigDir` verifies old-node refusal. These fixtures do not claim credentialed live-model or deployed downgrade verification.
 
+**What a private profile takes of `~/.claude` (#7318).** A conversation in a profile Persona created (below
+`<data dir>/profiles`, where new conversations start) reads that profile's settings and instructions, not the user's.
+Its directory below the home still makes Claude Code read `~/.claude/CLAUDE.md` and every `~/.claude/rules` file as
+the home's project instructions, which are written for coding Agents, so its start settings exclude both
+(`claudeMdExcludes`, for the home as written and as its symlinks resolve, merged with any excludes already there). The
+assistant's own `CLAUDE.md` and the profile's are kept. Instructions from the global file that the assistant still
+needs belong in Settings › Assistant › About me, which its instructions carry. The skills the user turned off in their
+own `settings.json` (`skillOverrides` set to `"off"`) stay off; their own is the profile plain `claude` starts in on
+that machine (`machines[].claude_start_dir`, else the node's `CLAUDE_CONFIG_DIR`, else `~/.claude`). A name the
+conversation's own settings set keeps its value, and nothing else of that file (env, hooks, permissions, plugins) comes
+along. The skill picker reads the same list. Every other profile is one the user or a launcher set up (`~/.claude`,
+the node's `CLAUDE_CONFIG_DIR`, `claude_start_dir`, a wrapper's `CLAUDE_CONFIG_DIR`, an explicit `config_dir`
+elsewhere) and nothing changes there; choosing `default` or `legacy` for a new conversation keeps the global file.
+Guests keep their own isolation (`node/assistant_user_setup.go`; `TestPrivateProfileExcludesTheHomeClaudeInstructions`,
+`TestPrivateProfileCarriesTheUserSkillSwitchesOff`, `TestClaudeStartDirIsTheUserProfile`,
+`TestSkillCatalogMatchesThePrivateProfileSettings`, `TestGuestSettingsIgnoreThePrivateProfileAdditions`).
+
 ## Work computers and personal context
 
 Set `machines[].trust` to `"work"` in `hub.json` to keep personal assistant data off that computer (see [config.md](../operations/config.md)).
@@ -719,6 +736,7 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
   Done agents (24 hours) and muted agents always render only their counts and the exact `agents_list` filter (`state=done` / `state=muted`) that lists them on demand; their names, conclusions and session ids never occupy the snapshot. Needs-you and awaiting-reply agents, results waiting for acceptance, delivery approvals and today's meetings stay detailed.
   Free text is clipped where the snapshot is taken (an agent's line 160 characters, a plan step 60, a task's title 60 and current step 80, a report 160, an approval's title and gate 60, scheduled follow-ups the next eight and Inbox follow-ups the next five). Past the budget, whole sections are left out, least needed first: waiting agents, daily routines, Inbox follow-ups, scheduled follow-ups, other unread chats, the working list, the knowledge digest, unanswered questions, results waiting for verification, tasks, unread agents, approvals.
   A section left out keeps its heading and its count and names the tool that lists it (`assistant/snapshot_omitted.md`), or says to open the Inbox in the App for Inbox follow-ups: never "none", never missing, since the node sends only changed sections and a missing one would read as unchanged. Never left out: agents waiting for the user or for a reply, running workflows, plan cards waiting for "Start", failed scheduled runs, the calendar and @me chats. If that is still too long, the block is cut and ends with `assistant/snapshot_cut.md`.
+- The live snapshot puts the open-to-do total and `todo_list` entrance immediately after the time, before Agent details, so a hard cut still leaves a way to find the work. After the urgent Agent lists it carries an ID/title index of up to 100 open to-dos, regardless of origin or age (a question to-do is left to its own snapshot line only while that line shows it; once its ask record is pruned it is listed like any other); beyond that it keeps the total and points to `todo_list`. Under budget pressure titles and links are dropped from this index before the separate task-detail section is omitted. Full task details remain limited to 12, with open work ahead of recent closed conversation tasks. Showing a personal to-do does not enroll it for supervision or start an Agent.
 
 ## Compaction
 
