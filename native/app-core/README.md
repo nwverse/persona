@@ -40,7 +40,10 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `#[napi]` functions: napi-derive does not expand Rust type aliases into their TypeScript callback signatures.
 
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. Android's `:core:rustcore` tests build a host copy of
-the library and replay the same fixtures through the real JNI binding:
+the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
+turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
+Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
+lines, execute Swift or connect a production Android adapter.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test

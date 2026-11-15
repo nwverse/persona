@@ -140,8 +140,20 @@ type gate struct {
 	strikes  int       // busy answers in a row
 	cap      int       // requests in flight at most, 0 for no cap
 	inflight int
+	out      []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
 	fine     int           // successes since the cap last changed
 	wake     chan struct{} // closed on every change, for requests waiting under the cap
+	// The requests put off for want of a turn since the last log line about them (noTurn): how many, since when,
+	// and when that line was written.
+	noTurns      int
+	noTurnSince  time.Time
+	noTurnLogged time.Time
+}
+
+// turn is a request the gate let out: probe says it is the one finding out whether a pause is over, at when it went.
+type turn struct {
+	probe bool
+	at    time.Time
 }
 
 var gates sync.Map // gateKey → *gate
@@ -168,7 +180,7 @@ func gateFor(baseURL, key string) *gate {
 // the cap, and, once a pause is over, the answer to the one request finding out whether it is (probe: this request
 // is that one). The others used to be put off at once while it was out, so a round of Inbox triage that came right
 // after a pause sorted one item and reported every other as held, with nothing in flight, until a later round (#6698).
-func (g *gate) admit(ctx context.Context) (probe bool, err error) {
+func (g *gate) admit(ctx context.Context) (t turn, err error) {
 	var giveUp <-chan time.Time // a background request's, set on its first wait (nil: none)
 	waited := false
 	for {
@@ -177,7 +189,7 @@ func (g *gate) admit(ctx context.Context) (probe bool, err error) {
 			g.putOff++
 			p := g.pause
 			g.mu.Unlock()
-			return false, &PausedError{p}
+			return turn{}, &PausedError{p}
 		}
 		if g.held && g.probing || g.cap > 0 && g.inflight >= g.cap {
 			wake := g.wake
@@ -193,20 +205,21 @@ func (g *gate) admit(ctx context.Context) (probe bool, err error) {
 			select {
 			case <-ctx.Done():
 				// Out of time waiting for its turn: nothing was sent, so it is put off like a paused one.
-				return false, g.notSent()
+				return turn{}, g.notSent()
 			case <-giveUp:
 				// A background request waited its while: put off the same way, so the caller's loop moves on and asks
 				// again later.
-				return false, g.notSent()
+				return turn{}, g.notSent()
 			case <-wake:
 			}
 			continue
 		}
-		probe = g.held
-		g.probing = g.probing || probe
+		t = turn{probe: g.held, at: now()}
+		g.probing = g.probing || t.probe
 		g.inflight++
+		g.out = append(g.out, t.at)
 		g.mu.Unlock()
-		return probe, nil
+		return t, nil
 	}
 }
 
@@ -215,11 +228,55 @@ func (g *gate) admit(ctx context.Context) (probe bool, err error) {
 func (g *gate) notSent() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.noTurn()
 	if g.held {
 		g.putOff++
 		return &PausedError{g.pause}
 	}
 	return &PausedError{Pause{Reason: ReasonBusy, Until: now()}}
+}
+
+// noTurnEvery is the least time between two log lines about requests put off for want of a turn (noTurn).
+const noTurnEvery = 10 * time.Minute
+
+// noTurn counts a request put off for want of its turn and says so in the log, at most once every noTurnEvery: how
+// many were, how many requests are out, under what cap, and for how long the longest of them has been. Nothing said
+// it before: a request put off for want of a slot left no line at all, so a connection whose every request was put
+// off looked the same in the log whether the upstream was at its limit or a slot had been lost (#6698). The time
+// tells them apart: no request stays out past its caller's deadline (minutes), so one out for hours is not out.
+// Under g.mu.
+func (g *gate) noTurn() {
+	at := now()
+	if g.noTurns == 0 {
+		g.noTurnSince = at
+	}
+	g.noTurns++
+	if !g.noTurnLogged.IsZero() && at.Sub(g.noTurnLogged) < noTurnEvery {
+		return
+	}
+	what := "none out"
+	if len(g.out) > 0 {
+		what = fmt.Sprintf("%d out", len(g.out))
+		if g.cap > 0 {
+			what += fmt.Sprintf(" under a cap of %d", g.cap)
+		}
+		// g.out is in the order they went out (admit), so its first is the one out longest.
+		what += fmt.Sprintf(", the longest for %s", at.Sub(g.out[0]).Round(time.Second))
+		if g.held && g.probing {
+			what += "; one is finding out whether the pause is over"
+		}
+	}
+	logf("ai: %s: %d request(s) put off for want of a turn since %s: %s", g.host, g.noTurns, clockText(g.noTurnSince), what)
+	g.noTurns, g.noTurnLogged = 0, at
+}
+
+// clockText is a moment for the log: its time, with its day when that is not today (a Retry-After of hours runs
+// past midnight, and "until 14:03:22" read as a pause already over).
+func clockText(t time.Time) string {
+	if t.Format(time.DateOnly) != now().In(t.Location()).Format(time.DateOnly) {
+		return t.Format(time.DateTime)
+	}
+	return t.Format(time.TimeOnly)
 }
 
 // answers lets the connection go once the upstream said 200 to the request finding out, rather than when its answer
@@ -266,11 +323,18 @@ func (p *probeAnswer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // done records how a request that went out ended (answered: the upstream said 200) and returns the error for the
-// caller: an answer that holds the connection becomes a PausedError.
-func (g *gate) done(probe, answered bool, err error) error {
+// caller: an answer that holds the connection becomes a PausedError. probe: it is still the one finding out (the
+// gate did not go at its 200, answers).
+func (g *gate) done(t turn, probe, answered bool, err error) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.inflight--
+	for i, at := range g.out {
+		if at.Equal(t.at) {
+			g.out = append(g.out[:i], g.out[i+1:]...)
+			break
+		}
+	}
 	defer g.changed()
 	if probe {
 		g.probing = false
@@ -324,7 +388,7 @@ func (g *gate) done(probe, answered bool, err error) error {
 		if reason == ReasonQuota {
 			what = "is out of quota"
 		}
-		logf("ai: %s %s (%s); requests are put off until %s", g.host, what, detail, until.Format("15:04:05"))
+		logf("ai: %s %s (%s); requests are put off until %s", g.host, what, detail, clockText(until))
 	} else {
 		if until.After(g.pause.Until) {
 			g.pause.Until = until

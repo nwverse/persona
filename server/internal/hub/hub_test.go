@@ -214,6 +214,7 @@ func TestPairURLRoundTrips(t *testing.T) {
 
 // The Mac has no camera to scan with: `personad hub pair` prints the link too, to paste into "Connect hub".
 func TestPairPrintsTheLinkForTheMac(t *testing.T) {
+	setPairLanguage(t, "en")
 	cfg := &Config{PublicURL: "http://hub.example.com:18660", Token: "tok"}
 	var b strings.Builder
 	writePair(&b, cfg)
@@ -239,6 +240,15 @@ func removeTestClient(h *Hub, c *client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.clients, c)
+}
+
+// addCfgMachines adds hub.json entries to a test hub whose managers are already connected. Until startDevices, which
+// most test hubs never call, entryOwner and cfgEntries read h.cfg.Machines under h.devices.mu from the hub's goroutines
+// (a manager's bus event, an HTTP handler), so the write takes the same lock (#8639).
+func addCfgMachines(h *Hub, machines ...MachineConfig) {
+	h.devices.mu.Lock()
+	defer h.devices.mu.Unlock()
+	h.cfg.Machines = append(h.cfg.Machines, machines...)
 }
 
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
