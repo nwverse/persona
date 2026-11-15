@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,9 +87,14 @@ func TestProviderProbesUserAgent(t *testing.T) {
 			{"custom", "uSeR-aGeNt: custom-client/1", "custom-client/1"},
 		} {
 			t.Run(operation.name+"/"+header.name, func(t *testing.T) {
-				var gotMethod, gotPath, gotAgent string
+				var sawPrimary atomic.Bool
 				gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					gotMethod, gotPath, gotAgent = r.Method, r.URL.Path, r.Header.Get("User-Agent")
+					if r.Method != operation.method || r.UserAgent() != header.want {
+						t.Errorf("request: %s %s User-Agent %q, want method %s and User-Agent %q", r.Method, r.URL.Path, r.UserAgent(), operation.method, header.want)
+					}
+					if r.URL.Path == operation.path {
+						sawPrimary.Store(true)
+					}
 					_, _ = w.Write([]byte(operation.response))
 				}))
 				defer gw.Close()
@@ -100,8 +106,8 @@ func TestProviderProbesUserAgent(t *testing.T) {
 				if out["error"] != nil || (operation.name == "test" && out["ok"] != true) {
 					t.Fatalf("probe failed: %v", out)
 				}
-				if gotMethod != operation.method || gotPath != operation.path || gotAgent != header.want {
-					t.Fatalf("request: %s %s User-Agent %q, want %s %s %q", gotMethod, gotPath, gotAgent, operation.method, operation.path, header.want)
+				if !sawPrimary.Load() {
+					t.Fatalf("did not request %s", operation.path)
 				}
 			})
 		}

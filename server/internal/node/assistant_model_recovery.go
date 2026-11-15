@@ -466,10 +466,10 @@ func (n *Node) launcherGateway(ctx context.Context, launcher string) (base, key,
 		user = settingsEnv(s)
 	}
 	get := func(k string) string {
-		if v := flag[k]; v != "" {
+		if v, ok := flag[k]; v != "" || (k == "ANTHROPIC_CUSTOM_HEADERS" && ok) {
 			return v
 		}
-		if v := user[k]; v != "" {
+		if v, ok := user[k]; v != "" || (k == "ANTHROPIC_CUSTOM_HEADERS" && ok) {
 			return v
 		}
 		return p.Env[k]

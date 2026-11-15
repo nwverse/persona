@@ -23,11 +23,14 @@ func TestLauncherModelProbeUserAgent(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, launcherHeaders, userHeaders, flagHeaders, want string
+		userHeadersSet, flagHeadersSet                        bool
 	}{
 		{name: "default", want: modelhttp.UserAgent()},
 		{name: "launcher", launcherHeaders: "User-Agent: launcher", want: "launcher"},
 		{name: "user settings override launcher", launcherHeaders: "User-Agent: launcher", userHeaders: "user-agent: user", want: "user"},
 		{name: "flag overrides user", launcherHeaders: "User-Agent: launcher", userHeaders: "User-Agent: user", flagHeaders: "X-Unrelated: private\nUSER-AGENT: flag\nx-api-key: wrong", want: "flag"},
+		{name: "empty user headers override launcher", launcherHeaders: "User-Agent: launcher", userHeadersSet: true, want: modelhttp.UserAgent()},
+		{name: "empty flag headers override user and launcher", launcherHeaders: "User-Agent: launcher", userHeaders: "User-Agent: user", flagHeadersSet: true, want: modelhttp.UserAgent()},
 		{name: "empty user agent suppresses default", flagHeaders: "uSeR-aGeNt:   ", want: ""},
 		{name: "no user agent in selected headers", launcherHeaders: "User-Agent: launcher", flagHeaders: "X-Unrelated: private", want: modelhttp.UserAgent()},
 	} {
@@ -40,9 +43,9 @@ func TestLauncherModelProbeUserAgent(t *testing.T) {
 			defer gw.Close()
 
 			home := t.TempDir()
-			writeSettings := func(path, headers string) {
+			writeSettings := func(path, headers string, set bool) {
 				t.Helper()
-				if headers == "" {
+				if headers == "" && !set {
 					return
 				}
 				data, err := json.Marshal(map[string]any{"env": map[string]string{"ANTHROPIC_CUSTOM_HEADERS": headers}})
@@ -51,9 +54,9 @@ func TestLauncherModelProbeUserAgent(t *testing.T) {
 				}
 				writeFile(t, path, string(data))
 			}
-			writeSettings(filepath.Join(home, ".claude", "settings.json"), tc.userHeaders)
+			writeSettings(filepath.Join(home, ".claude", "settings.json"), tc.userHeaders, tc.userHeadersSet)
 			flagPath := filepath.Join(home, "launcher-settings.json")
-			writeSettings(flagPath, tc.flagHeaders)
+			writeSettings(flagPath, tc.flagHeaders, tc.flagHeadersSet)
 			scriptPath := filepath.Join(home, "launcher")
 			script := fmt.Sprintf("#!/bin/sh\nexport ANTHROPIC_BASE_URL=%q\nexport ANTHROPIC_API_KEY=probe-key\nexport ANTHROPIC_CUSTOM_HEADERS=%q\nexec claude --settings %q \"$@\"\n", gw.URL, tc.launcherHeaders, flagPath)
 			writeScript(t, scriptPath, script, 0o755)

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +55,43 @@ func New(cfg Config) *Client {
 
 // NewWith is New sending its requests through transport (nil: this machine's network).
 func NewWith(cfg Config, transport http.RoundTripper) *Client {
-	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport}}
+	return &Client{cfg: cfg, http: &http.Client{Timeout: 60 * time.Second, Transport: transport, CheckRedirect: checkRedirect}}
+}
+
+// net/http copies headers from the first request on every redirect, so check the entire chain before retaining its
+// potentially private User-Agent. Once a chain leaves its original origin, all later hops use Persona's identity.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	origin := via[0].URL
+	if !sameOrigin(origin, req.URL) {
+		req.Header.Set("User-Agent", modelhttp.UserAgent())
+		return nil
+	}
+	for _, previous := range via[1:] {
+		if !sameOrigin(origin, previous.URL) {
+			req.Header.Set("User-Agent", modelhttp.UserAgent())
+			break
+		}
+	}
+	return nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	port := func(u *url.URL) string {
+		if p := u.Port(); p != "" {
+			return p
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "http":
+			return "80"
+		case "https":
+			return "443"
+		}
+		return ""
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
 // NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a

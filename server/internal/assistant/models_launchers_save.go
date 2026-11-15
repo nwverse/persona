@@ -153,6 +153,9 @@ func (in launcherInput) checkProvider() error {
 			if m.ContextWindow < 0 {
 				return i18n.Err("assistant-models_launchers.err_model_context_negative", i18n.Args{"model": id})
 			}
+			if m.MaxOutputTokens < 0 {
+				return i18n.Err("assistant-models_launchers.err_model_output_negative", i18n.Args{"model": id})
+			}
 			for _, e := range m.Efforts {
 				if e == "" {
 					return i18n.Err("assistant-models_launchers.err_model_effort_empty", i18n.Args{"model": id})
@@ -226,7 +229,7 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 		var models []proto.ProviderModel
 		for _, m := range *in.Models {
 			m.ID, m.Name = strings.TrimSpace(m.ID), strings.TrimSpace(m.Name)
-			models = append(models, m)
+			models = append(models, keepReported(m, s.Models))
 		}
 		s.Models = models
 	}
@@ -242,6 +245,13 @@ func (in launcherInput) applyProvider(s *storedLauncher) {
 	num(&s.MaxContext, in.MaxContext)
 	if in.SubagentForce != nil {
 		s.SubagentForce = *in.SubagentForce
+	}
+	// thinking levels in the words this provider's agent or API takes, kept with the models or not: the kind or agent
+	// may have changed
+	vocab := providerEffortVocab(s.Kind, s.AgentType())
+	s.Models = slices.Clone(s.Models) // an update's are the stored record's until now
+	for i := range s.Models {
+		s.Models[i] = settleSavedEfforts(s.Models[i], vocab)
 	}
 }
 
