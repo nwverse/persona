@@ -69,6 +69,67 @@ func TestTypedHandleParamsDecodeAsTheSharedStructDid(t *testing.T) {
 				return reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(fsFindParams{})).Interface() == *n.(*fsFindParams)
 			},
 		},
+		{
+			name:   methodGitStatus,
+			sample: `{"cwd":"/repo","identity_only":true,"path":"x"}`,
+			legacy: &struct {
+				Cwd          string `json:"cwd"`
+				IdentityOnly bool   `json:"identity_only"`
+			}{},
+			typed: &gitStatusParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(gitStatusParams{})).Interface(), *n.(*gitStatusParams))
+			},
+		},
+		{
+			name:   methodGitPull,
+			sample: `{"cwd":"/repo","hash":"abc","session_id":"s"}`,
+			legacy: &struct {
+				Cwd string `json:"cwd"`
+			}{},
+			typed: &gitCwdParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(gitCwdParams{})).Interface(), *n.(*gitCwdParams))
+			},
+		},
+		{
+			name:   methodGitDiff,
+			sample: `{"cwd":"/repo","path":"a.go","staged":true,"hash":"abc"}`,
+			legacy: &struct {
+				Cwd    string `json:"cwd"`
+				Path   string `json:"path"`
+				Staged bool   `json:"staged"`
+			}{},
+			typed: &gitDiffParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(gitDiffParams{})).Interface(), *n.(*gitDiffParams))
+			},
+		},
+		{
+			name:   methodGitShow,
+			sample: `{"cwd":"/repo","hash":"abc123","staged":true}`,
+			legacy: &struct {
+				Cwd  string `json:"cwd"`
+				Hash string `json:"hash"`
+			}{},
+			typed: &gitShowParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(gitShowParams{})).Interface(), *n.(*gitShowParams))
+			},
+		},
+		{
+			name:   methodGitLog,
+			sample: `{"cwd":"/repo","skip":50,"limit":25,"hash":"abc"}`,
+			legacy: &struct {
+				Cwd   string `json:"cwd"`
+				Skip  int    `json:"skip"`
+				Limit int    `json:"limit"`
+			}{},
+			typed: &gitLogParams{},
+			same: func(l, n any) bool {
+				return reflect.DeepEqual(reflect.ValueOf(l).Elem().Convert(reflect.TypeOf(gitLogParams{})).Interface(), *n.(*gitLogParams))
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

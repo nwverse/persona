@@ -672,7 +672,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		CreationID       string        `json:"creation_id"`
 		Incarnation      string        `json:"incarnation"`
 		Cwd              string        `json:"cwd"`
-		IdentityOnly     bool          `json:"identity_only"`
 		Launcher         string        `json:"launcher"`
 		AgentType        string        `json:"agent_type"`
 		Model            string        `json:"model"`
@@ -696,9 +695,6 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		SinceSeq         int           `json:"since_seq"`
 		Source           string        `json:"source"`
 		Format           string        `json:"format"`
-		Staged           bool          `json:"staged"`
-		Hash             string        `json:"hash"`
-		Skip             int           `json:"skip"`
 		Turns            int           `json:"turns"`
 		LazyImages       bool          `json:"lazy_images"`
 		UserInputs       bool          `json:"user_inputs"`
@@ -1775,7 +1771,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		return n.readFileChunk(chunk)
-	case "git.blob":
+	case methodGitBlob:
 		var b proto.GitBlobRequest
 		if err := json.Unmarshal(params, &b); err != nil {
 			return nil, err
@@ -1855,27 +1851,47 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.findFiles(ctx, in.Cwd, in.Limit)
 	case methodFsWatch: // the folders and Git directories the web panels have open (fswatch.go)
 		return n.fsWatch(params)
-	case "git.status":
-		if p.IdentityOnly {
-			return n.gitIdentity(ctx, p.Cwd)
+	case methodGitStatus:
+		var in gitStatusParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
 		}
-		return n.gitStatus(ctx, p.Cwd)
-	case "git.pull":
-		return n.gitPull(ctx, p.Cwd)
-	case "git.diff":
-		return n.gitDiff(ctx, p.Cwd, p.Path, p.Staged)
-	case "git.show":
-		return n.gitShow(ctx, p.Cwd, p.Hash)
-	case "git.review": // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
+		if in.IdentityOnly {
+			return n.gitIdentity(ctx, in.Cwd)
+		}
+		return n.gitStatus(ctx, in.Cwd)
+	case methodGitPull:
+		var in gitCwdParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitPull(ctx, in.Cwd)
+	case methodGitDiff:
+		var in gitDiffParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitDiff(ctx, in.Cwd, in.Path, in.Staged)
+	case methodGitShow:
+		var in gitShowParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		return n.gitShow(ctx, in.Cwd, in.Hash)
+	case methodGitReview: // every file a scope changed, with its hunks, for the web's Review panel (gitreview.go)
 		var rv proto.GitReviewRequest
 		if err := json.Unmarshal(params, &rv); err != nil {
 			return nil, err
 		}
 		return n.gitReview(ctx, rv)
-	case "git.log":
-		list, err := n.gitLog(ctx, p.Cwd, p.Skip, p.Limit)
+	case methodGitLog:
+		var in gitLogParams
+		if err := json.Unmarshal(params, &in); err != nil {
+			return nil, fmt.Errorf("bad params: %w", err)
+		}
+		list, err := n.gitLog(ctx, in.Cwd, in.Skip, in.Limit)
 		return map[string]any{"commits": list}, err
-	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
+	case methodGitStage, methodGitCommit, methodGitPush, methodGitBranches, methodGitSwitch, methodGitStash, methodGitPR, methodGitPRCreate, methodGitPRMerge:
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
 	case "skills.import":
 		return n.importSkill(ctx, params)
