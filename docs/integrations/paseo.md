@@ -154,7 +154,8 @@ and the engine's note under Settings › Machines asks to update it.
     worktree's guards (below).
   - **Terminals for a Paseo Agent's folder**: a Paseo workspace has no terminal, so Open Terminal Here and a dev server's Start for one of its
     Agents open in the terminal engine's workspace that holds the folder, else in a new workspace there, never in one that only happens to be first;
-    the web and iOS offer Start only for sessions with a terminal.
+    the web and iOS offer Start only for sessions with a terminal. For that, Open Terminal Here sends the Agent's Paseo workspace with the folder
+    (the web did not, and its tab went to the first workspace, #8135).
   - **Rename and delete** (#6297; on the web, a Paseo row's ⋯ in By repository, and Rename space in the Agents space menu): Rename sets the
     workspace's title in Paseo (`workspace.title.set.request`); its branch, folder and Agents keep their names. Rename space renames the Paseo
     project (`project.rename.request`, its custom name), by the project's id or by one of its workspaces' (Android names a space that way),
