@@ -550,6 +550,9 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 	}
 	d, m, err := h.iphoneTarget(ctx, a.Phone)
 	if err != nil {
+		if !h.iphoneSomeAllowed() { // none allowed at all: the setup isn't done, not a wrong name
+			return proto.TextResult(err.Error()+" "+iphoneSetupHint, true)
+		}
 		return proto.TextResult(err.Error(), true)
 	}
 	in := map[string]any{}
@@ -676,8 +679,12 @@ func (h *Manager) iphoneStatus(ctx context.Context, session string) proto.ToolRe
 	out := struct {
 		Phones     []phone `json:"phones"`
 		NotAllowed int     `json:"not_allowed,omitempty"`
+		Setup      string  `json:"setup,omitempty"`
 	}{Phones: []phone{}}
 	for _, d := range h.iphoneDevices() {
+		if iphoneSetupUnfinished(d) {
+			out.Setup = iphoneSetupHint
+		}
 		if !d.Allowed {
 			out.NotAllowed++
 			continue
@@ -883,12 +890,42 @@ func iphoneSentOf(err error) string {
 	return proto.IPhoneMaybeSent
 }
 
-// iphoneFailure is a failed call for the model: what went wrong, and whether to try again or look first.
+// iphoneFailure is a failed call for the model: what went wrong, and whether to try again or look first; when the
+// reason is a setup the user hasn't finished, where to finish it (iphoneSetupHint).
 func iphoneFailure(err error) proto.ToolResult {
-	if iphoneSentOf(err) == proto.IPhoneNotSent {
-		return proto.TextResult(err.Error()+" (nothing was sent to the iPhone)", true)
+	hint := ""
+	if iphoneSetupCodes[iphoneCode(err)] {
+		hint = " " + iphoneSetupHint
 	}
-	return proto.TextResult(err.Error()+" (some of it may have happened on the iPhone: look at its screen with iphone_look before anything else, and do not repeat the steps blindly)", true)
+	if iphoneSentOf(err) == proto.IPhoneNotSent {
+		return proto.TextResult(err.Error()+" (nothing was sent to the iPhone)"+hint, true)
+	}
+	return proto.TextResult(err.Error()+" (some of it may have happened on the iPhone: look at its screen with iphone_look before anything else, and do not repeat the steps blindly)"+hint, true)
+}
+
+// iphoneSetupHint goes with an iPhone tool's result when the iPhone isn't set up yet (#8199): the user finishes that on
+// the iPhone, in the app's guided setup, which this link opens. Only in results, never in the tools' descriptions or the
+// assistant's prompt.
+const iphoneSetupHint = "iPhone control isn't fully set up: give the user the link [Set up iPhone control](persona://iphone/setup), its words in their language, to finish it on their iPhone (a few minutes)."
+
+// iphoneSetupCodes are the failures a finished setup ends: the extension or the computer off, the iPhone not allowed,
+// not paired (any more), Developer Mode off, not prepared, no bridge on the computer.
+var iphoneSetupCodes = map[string]bool{
+	"iphone_off": true, "not_enabled": true, "not_allowed": true, "not_paired": true, "pairing_missing": true,
+	"pairing_rejected": true, "developer_mode_off": true, "ddi_not_mounted": true, "bridge_missing": true,
+}
+
+// iphoneSetupUnfinished says whether a device's state is one the guided setup finishes (iphone_status).
+func iphoneSetupUnfinished(d iphoneSeen) bool { return !d.Allowed || iphoneSetupCodes[d.Code] }
+
+// iphoneSomeAllowed says whether some iPhone is allowed now: the assistant can operate it.
+func (h *Manager) iphoneSomeAllowed() bool {
+	for _, d := range h.iphoneDevices() {
+		if d.Allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // iphoneLogWhat is the log's account of a call: look, or the steps' actions, never what is typed or tapped.

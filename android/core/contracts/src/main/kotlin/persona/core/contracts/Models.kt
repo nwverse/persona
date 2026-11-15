@@ -17,6 +17,22 @@ import java.time.OffsetDateTime
 
 // Wire types mirror docs/protocol/protocol.md and tolerate optional enhancements according to D5.
 
+/** How long past its reset a usage-limit wait still counts (the hub's limitResumeGrace). */
+internal const val USAGE_LIMIT_GRACE_MS = 10 * 60 * 1000L
+
+/**
+ * The time half of a usage-limit line (iOS `usageLimitWhen`): "Resets <time>", "Resumes <time>", or "Resumes after
+ * the reset". The assistant's rows and card format it; the shared [Session.interrupted] flag does not.
+ */
+sealed class UsageLimitWhen {
+    /** "Resets <time>": nothing continues the turn on its own. */
+    data class Resets(val at: Instant) : UsageLimitWhen()
+    /** "Resumes <time>": the Agent or the hub continues it. */
+    data class Resumes(val at: Instant) : UsageLimitWhen()
+    /** No reset time, and something continues it after the reset. */
+    data object AfterReset : UsageLimitWhen()
+}
+
 val JsonCodec = Json {
     ignoreUnknownKeys = true
     explicitNulls = false
@@ -250,6 +266,12 @@ data class SessionCapabilities(
     val rewind: Boolean? = null,
     /** A rewind may put the files back too ("Code and conversation"); null from an older node: as its [rewind] rule says. */
     @SerialName("rewind_code") val rewindCode: Boolean? = null,
+    /**
+     * The permission modes it takes when its agent is not Claude Code (#8261, Paseo's Grok, OpenCode or Codex): `default`,
+     * its own approval, and `bypassPermissions` where it has an Allow everything. With two the chat offers a switch
+     * between them (`persona.core.domain.sort.listedModes`); null from an older node and wherever Claude Code's modes stand.
+     */
+    @SerialName("permission_modes") val permissionModes: List<String>? = null,
 )
 
 /**
@@ -265,6 +287,8 @@ data class WorkState(
     val wait: String? = null,
     val then: String? = null,
     @WireTime @SerialName("wake_at") val wakeAt: String? = null,
+    /** When a usage limit that blocked this turn resets, if the session's own time is absent. */
+    @WireTime @SerialName("resets_at") val resetsAt: String? = null,
     val attempts: Int? = null,
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
@@ -383,8 +407,19 @@ data class Session(
     @SerialName("asking_parent_session_id") val askingParentSessionId: String? = null,
     /** The listed ancestor whose chat owns this child (sessions_hierarchy). */
     @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Why a row that is no child folds: [FoldedAs.WORKER] (a tab's worker, #5180) or [FoldedAs.SIDE] (#7944). */
     @SerialName("folded_as") val foldedAs: String? = null,
+    /**
+     * The nearest side session a folded row belongs to when it folds through one and is not that side itself (a side's
+     * own Codex children, #7944): its card and child card are that side's chat's, not the topmost parent's.
+     */
+    @SerialName("folded_side") val foldedSide: String? = null,
     val children: SessionChildren? = null,
+    /**
+     * The session on the same machine this one was started from while staying a conversation of its own (a Claude
+     * desktop app's side chat or /btw question, #5935). Whether it folds is the hub's [foldedAs], never this.
+     */
+    @SerialName("parent_agent_id") val parentAgentId: String? = null,
     @WireTime @SerialName("started_at") val startedAt: String? = null,
     /** Why the source only lets the phone read this session. */
     @SerialName("read_only_reason") val readOnlyReason: String? = null,
@@ -468,6 +503,15 @@ data class Session(
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
     /**
+     * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
+     * until it resets, not a turn to continue as an interruption. Older hubs never send it.
+     */
+    @SerialName("turn_error_kind") val turnErrorKind: String? = null,
+    /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */
+    @WireTime @SerialName("turn_error_resets_at") val turnErrorResetsAt: String? = null,
+    /** The CLI goes on by itself once a usage limit resets. Absent or false: nothing of the CLI will. */
+    @SerialName("turn_error_resumes") val turnErrorResumes: Boolean? = null,
+    /**
      * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
      * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:
      * "Continue" would only go to it again). Older hubs never send it.
@@ -493,6 +537,8 @@ data class Session(
     @SerialName("can_fork") val canFork: Boolean = false,
     @SerialName("rev") val rev: Long? = null,
     @SerialName("suggestion") val suggestion: String? = null,
+    /** The suggested message must be reviewed in the composer, never sent in one action; absent on older hubs. */
+    @SerialName("suggestion_risky") val suggestionRisky: Boolean = false,
     /** Persona is still opening its tab and starting the agent (docs/protocol/protocol.md "New session"); sends wait for it. */
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
@@ -579,15 +625,55 @@ data class Session(
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
     val agentState: AgentState get() = AgentState.of(state, status)
-    /** The list state of this session and its folded children; its own wire state stays intact. */
+    /**
+     * The list state of this session and its folded children; its own wire state stays intact. A side session's result
+     * not looked at yet makes it unread (`sides_unread`, #7944: sides only; Codex children and workers do not), unless it
+     * works itself.
+     */
     val foldedState: AgentState get() = when {
         agentState == AgentState.NeedsYou || (children?.needsYou ?: 0) > 0 -> AgentState.NeedsYou
         (children?.working ?: 0) > 0 && agentState != AgentState.Unread &&
             !(agentState == AgentState.Idle && awaitsReply) -> AgentState.Working
+        agentState != AgentState.Working && (children?.sidesUnread ?: 0) > 0 -> AgentState.Unread
         else -> agentState
     }
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
+
+    /**
+     * Stopped on a subscription usage limit whose reset is still ahead, or not known (#8237). A known reset more than
+     * [USAGE_LIMIT_GRACE_MS] ago is over: the turn reads as interrupted again. [now] is epoch millis.
+     */
+    fun isUsageLimited(now: Long = System.currentTimeMillis()): Boolean {
+        if (turnError.isNullOrBlank() || turnErrorKind != "usage_limit") return false
+        if (agentState != AgentState.Unread && agentState != AgentState.Idle) return false
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)?.toEpochMilli() ?: return true
+        return now <= at + USAGE_LIMIT_GRACE_MS
+    }
+
+    /** The CLI said it goes on by itself, or the hub scheduled this limit's continuation. */
+    fun usageLimitContinues(): Boolean {
+        if (turnErrorResumes == true) return true
+        val waiting = work ?: return false
+        return waiting.phase == "blocked" && parseTime(waiting.resetsAt) != null && parseTime(waiting.wakeAt) != null
+    }
+
+    /**
+     * Only the time half of a usage-limit line (iOS `usageLimitWhen`), for a row that already says "Usage Limit".
+     * Null when this is not a usage-limit wait, or nothing says when. [now] is epoch millis: callers pass the
+     * minute tick, so the line changes at the grace boundary.
+     */
+    fun usageLimitWhen(now: Long = System.currentTimeMillis()): UsageLimitWhen? {
+        if (!isUsageLimited(now)) return null
+        val goesOn = usageLimitContinues()
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)
+        return when {
+            at == null && goesOn -> UsageLimitWhen.AfterReset
+            at == null -> null
+            goesOn -> UsageLimitWhen.Resumes(at)
+            else -> UsageLimitWhen.Resets(at)
+        }
+    }
     val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
@@ -655,7 +741,22 @@ data class SessionChildren(
     val working: Int = 0,
     @SerialName("needs_you") val needsYou: Int = 0,
     val workers: Int = 0,
+    /**
+     * The side sessions among them (`folded_as: "side"`, sessions_side_fold, #7944), by their own states, also counted in
+     * the fields above. The app reads them only for a row whose sides it does not hold (core:domain `foldRows`).
+     */
+    val sides: Int = 0,
+    @SerialName("sides_working") val sidesWorking: Int = 0,
+    @SerialName("sides_needs_you") val sidesNeedsYou: Int = 0,
+    @SerialName("sides_unread") val sidesUnread: Int = 0,
 )
+
+/** The hub's `folded_as` values. */
+object FoldedAs {
+    const val WORKER = "worker"
+    /** A side session (a Claude desktop app's side chat or /btw question), folded under its topmost listed parent (#7944). */
+    const val SIDE = "side"
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = SessionCompactionSerializer::class)
@@ -769,6 +870,12 @@ data class Item(
  * A Claude Code model_refusal_* record as the hub gives it (server proto.ModelRefusal, #2528): its known fields with
  * values as recorded (unknown ones included) and [text], the refusal's own words. Never the record's line: older hubs
  * also sent it as `raw`, which is not decoded, so it is never shown or kept.
+ *
+ * The recovery fields are present only when the node projects its own bounded recovery onto this shape (#7824): a
+ * runtime-written record never sets them, so they decode to their defaults and older records render unchanged.
+ * [recoveryReset] says when the configured model is available again; [recoveryExhausted] marks an exhausted chain
+ * (then [fallbackModel] is empty); [recoveryReturning] that the configured model answered a probe and the next request
+ * runs on it again; [recoveryTried] lists every model tried, in order, joined by arrows.
  */
 @KeepGeneratedSerializer
 @Serializable(with = ModelRefusalSerializer::class)
@@ -780,6 +887,10 @@ data class ModelRefusal(
     val scope: String? = null,
     val explanation: String? = null,
     val text: String? = null,
+    @WireTime @SerialName("recovery_reset") val recoveryReset: String? = null,
+    @SerialName("recovery_exhausted") val recoveryExhausted: Boolean = false,
+    @SerialName("recovery_returning") val recoveryReturning: Boolean = false,
+    @SerialName("recovery_tried") val recoveryTried: String? = null,
 )
 
 object ModelRefusalSerializer : WireSerializer<ModelRefusal>(ModelRefusal.generatedSerializer())
@@ -895,7 +1006,12 @@ object TurnDurationSerializer : WireSerializer<TurnDuration>(TurnDuration.genera
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionOptionSerializer::class)
-data class QuestionOption(@SerialName("label") val label: String = "", @SerialName("description") val description: String? = null)
+data class QuestionOption(
+    @SerialName("label") val label: String = "",
+    @SerialName("description") val description: String? = null,
+    /** A manager-local answer (`defer`); absent from older hubs and from choices that message the Agent. */
+    @SerialName("action") val action: String? = null,
+)
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionSerializer::class)
@@ -957,6 +1073,8 @@ data class Interaction(
     @SerialName("session_title") val sessionTitle: String? = null,
     @SerialName("folded_under") val foldedUnder: String? = null,
     @SerialName("folded_as") val foldedAs: String? = null,
+    /** The side session whose chat this card belongs to when it comes from a row folded through one (#7944). */
+    @SerialName("folded_side") val foldedSide: String? = null,
     /** The task its agent works for (docs/assistant/unified-entry.md), named by the hub. */
     @SerialName("task_title") val taskTitle: String? = null,
     @SerialName("cwd") val cwd: String? = null,
