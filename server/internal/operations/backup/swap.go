@@ -247,8 +247,13 @@ type partOutcome struct {
 	// bundleLive: it surely does.
 	bundleMayBeLive, bundleLive bool
 	// stage: a staged copy of the bundle's database that may remain under this
-	// name. It is not in use.
+	// name. It is not in use: the name holds that copy or nothing.
 	stage string
+	// unconfirmed: the staged name of a part whose checks contradicted every
+	// layout (something outside the restore changed its databases). It may
+	// remain, but what it holds could not be confirmed: it is never called
+	// safe to drop.
+	unconfirmed string
 }
 
 type swapOutcome [2]partOutcome
@@ -263,7 +268,11 @@ func (p *swapPart) outcome() partOutcome {
 	}
 	out.bundleMayBeLive = p.known.may(bundleAt(atTarget))
 	out.bundleLive = !p.confused && p.known.surely(bundleAt(atTarget))
-	if !p.stageDropped && (p.confused || p.known.may(bundleAt(atStage))) {
+	switch {
+	case p.stageDropped:
+	case p.confused:
+		out.unconfirmed = p.stage
+	case p.known.may(bundleAt(atStage)):
 		out.stage = p.stage
 	}
 	return out
@@ -279,7 +288,7 @@ func (e *swapError) Unwrap() []error { return []error{e.cause, e.undo} }
 
 func (e *swapError) Error() string {
 	message := e.cause.Error() + "; rollback: " + e.undo.Error()
-	var live, stages []string
+	var live, stages, unconfirmed []string
 	for _, part := range e.outcome {
 		switch {
 		case part.bundleLive:
@@ -290,6 +299,9 @@ func (e *swapError) Error() string {
 		if part.stage != "" {
 			stages = append(stages, part.stage)
 		}
+		if part.unconfirmed != "" {
+			unconfirmed = append(unconfirmed, part.unconfirmed)
+		}
 	}
 	if len(live) > 0 {
 		message += "; " + strings.Join(live, ", ")
@@ -298,6 +310,10 @@ func (e *swapError) Error() string {
 		nameOrNone(e.outcome[0].parked), nameOrNone(e.outcome[1].parked))
 	if len(stages) > 0 {
 		message += "; staged copies of the bundle's databases that may remain, not in use and safe to drop: " + strings.Join(stages, ", ")
+	}
+	if len(unconfirmed) > 0 {
+		message += "; something outside the restore changed these databases, so what these staged names hold could not be confirmed (they may remain, and may not be the bundle's copy): " +
+			strings.Join(unconfirmed, ", ") + "; check what each holds before dropping it"
 	}
 	return message
 }

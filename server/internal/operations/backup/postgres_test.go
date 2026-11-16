@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -378,5 +379,84 @@ func TestPreflightMissingDockerForTheDefaultContainerNamesBoth(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "pg_dump and") || strings.Contains(err.Error(), "and pg_restore") {
 		t.Errorf("error names a program that is present: %v", err)
+	}
+}
+
+// pgx tries every host of a multi-host URL in order (cfg.Fallbacks); the
+// command-line clients must be given the same list, each host with its own
+// port, or a backup fails whenever the first host is down or is not the one
+// target_session_attrs wants.
+func TestClientEnvironmentKeepsEveryHostOfAMultiHostURL(t *testing.T) {
+	isolateLibpqEnvironment(t)
+	target := Target{URL: "postgres://persona:pw@db-a.example:5433,db-b.example:6544,db-c.example:7655/persona?target_session_attrs=read-write&sslmode=disable"}
+	values := environmentMap(t, clientEnvironment(target, "persona", false))
+	if values["PGHOST"] != "db-a.example,db-b.example,db-c.example" || values["PGPORT"] != "5433,6544,7655" || values["PGTARGETSESSIONATTRS"] != "read-write" {
+		t.Fatalf("multi-host environment = %#v", values)
+	}
+	values = environmentMap(t, clientEnvironment(Target{URL: "postgres://persona@/persona?host=/run/pg-a,/run/pg-b&port=5433,5434"}, "persona", false))
+	if values["PGHOST"] != "/run/pg-a,/run/pg-b" || values["PGPORT"] != "5433,5434" {
+		t.Fatalf("multi-socket environment = %#v", values)
+	}
+	// Inside the container the server is the container's own loopback.
+	values = environmentMap(t, clientEnvironment(target, "persona", true))
+	if values["PGHOST"] != "127.0.0.1" || values["PGPORT"] != "5432" {
+		t.Fatalf("docker environment = %#v", values)
+	}
+}
+
+// pgx decrypts an encrypted TLS client key with sslpassword. libpq has no
+// environment variable for it (its PQconninfoOptions entry names none), so the
+// clients get it in a private service file: never in their arguments or
+// environment, the file gone once they exit, and the value kept out of every
+// error.
+func TestRunClientPassesTheTLSKeyPasswordPrivately(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX test executable")
+	}
+	isolateLibpqEnvironment(t)
+	directory := t.TempDir()
+	report := filepath.Join(directory, "report")
+	secret := "key-passphrase-secret"
+	rawURL := "postgres://persona@db.example:5432/persona?sslmode=verify-full&sslkey=/etc/persona/client.key&sslcert=/etc/persona/client.crt&sslpassword=" + secret
+	script := "#!/bin/sh\n{ echo \"ARGS $*\"; env | grep '^PG'; echo SERVICE; cat \"$PGSERVICEFILE\"; echo \"FILE $PGSERVICEFILE\"; } > '" + report + "'\n" +
+		"echo \"could not decrypt with sslpassword=" + secret + " (" + secret + ")\" >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(directory, "pg_dump"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+"/usr/bin:/bin")
+	err := newPostgresBackend().runClient(context.Background(), Target{URL: rawURL}, "persona", nil, io.Discard, "pg_dump", "--format=custom")
+	if err == nil {
+		t.Fatal("expected the fake client failure")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the error leaks the key password: %q", err)
+	}
+	raw, readErr := os.ReadFile(report)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	before, service, _ := strings.Cut(string(raw), "\nSERVICE\n")
+	if strings.Contains(before, secret) {
+		t.Errorf("the key password is in the client's arguments or environment:\n%s", before)
+	}
+	if !strings.Contains(before, "PGSERVICE=persona-backup") || !strings.Contains(service, "[persona-backup]\nsslpassword="+secret+"\n") {
+		t.Fatalf("the client was not given the key password through its service file:\n%s", raw)
+	}
+	_, file, _ := strings.Cut(service, "FILE ")
+	if _, statErr := os.Stat(strings.TrimSpace(file)); !os.IsNotExist(statErr) {
+		t.Errorf("the service file %s remains: %v", strings.TrimSpace(file), statErr)
+	}
+	if got := targetError(Target{URL: rawURL}, "dump", errors.New("connect with "+secret+" failed")).Error(); strings.Contains(got, secret) {
+		t.Errorf("a target error leaks the key password: %q", got)
+	}
+	// Without sslpassword no service file is made.
+	if environment, cleanup, err := clientServiceFile(Target{URL: "postgres://persona@db.example/persona"}); err != nil || len(environment) != 0 {
+		t.Errorf("service file for a URL without sslpassword: %v, %v", environment, err)
+	} else {
+		cleanup()
+	}
+	// A value a service file cannot hold is refused, without echoing it.
+	if _, _, err := clientServiceFile(Target{URL: "postgres://persona@db.example/persona?sslpassword=abc%0Axyz"}); err == nil || strings.Contains(err.Error(), "xyz") {
+		t.Errorf("a line break in sslpassword: %v", err)
 	}
 }

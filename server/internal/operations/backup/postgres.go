@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -321,7 +322,17 @@ func targetSecrets(target Target) []string {
 	if cfg, err := parseAddressing(target.URL); err == nil {
 		secrets = append(secrets, cfg.Password)
 	}
-	return secrets
+	return append(secrets, tlsKeyPasswords(target.URL)...)
+}
+
+// tlsKeyPasswords are the URL's sslpassword values (the passphrase of an
+// encrypted TLS client key).
+func tlsKeyPasswords(rawURL string) []string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil
+	}
+	return u.Query()["sslpassword"]
 }
 
 func targetError(target Target, action string, err error) error {
@@ -371,6 +382,7 @@ var libpqQueryEnvironment = map[string]string{
 	"connect_timeout":          "PGCONNECT_TIMEOUT",
 	"target_session_attrs":     "PGTARGETSESSIONATTRS",
 	"passfile":                 "PGPASSFILE",
+	// sslpassword has no libpq environment variable: clientServiceFile.
 }
 
 // parseAddressing parses a database URL for where and as whom to connect. pgx
@@ -397,7 +409,9 @@ func parseAddressing(rawURL string) (*pgx.ConnConfig, error) {
 // clientEnvironment is the libpq environment for pg_dump/pg_restore. libpq
 // expands a URI only as an explicit dbname argument, never in PGDATABASE, so
 // every part is passed as its own variable; the password only in PGPASSWORD.
-// Inside a Docker container the server is the container's own loopback.
+// Every host pgx would try goes into PGHOST, in pgx's order, and its port at the
+// same place in PGPORT. Inside a Docker container the server is the
+// container's own loopback.
 func clientEnvironment(target Target, database string, docker bool) []string {
 	values := map[string]string{"PGDATABASE": database}
 	u, err := url.Parse(target.URL)
@@ -407,7 +421,11 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 	// pgx loads TLS files while parsing; host, port, user and password must
 	// not depend on whether those files are readable here.
 	if cfg, err := parseAddressing(target.URL); err == nil {
-		values["PGHOST"], values["PGPORT"] = cfg.Host, strconv.Itoa(int(cfg.Port))
+		hosts, ports := []string{cfg.Host}, []string{strconv.Itoa(int(cfg.Port))}
+		for _, fallback := range cfg.Fallbacks {
+			hosts, ports = append(hosts, fallback.Host), append(ports, strconv.Itoa(int(fallback.Port)))
+		}
+		values["PGHOST"], values["PGPORT"] = strings.Join(hosts, ","), strings.Join(ports, ",")
 		values["PGUSER"], values["PGPASSWORD"] = cfg.User, cfg.Password
 	}
 	if docker {
@@ -429,6 +447,36 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 	return environment
 }
 
+// clientServiceFile gives the clients the URL's sslpassword, the passphrase of
+// an encrypted TLS client key. libpq reads it from no environment variable and
+// the argument list is visible to every user, so it goes into a libpq service
+// file of its own: mode 0600 in a private directory, named by PGSERVICEFILE and
+// PGSERVICE, and deleted once the client exits. Its other settings come from
+// the environment as before.
+func clientServiceFile(target Target) (environment []string, cleanup func(), err error) {
+	cleanup = func() {}
+	passwords := tlsKeyPasswords(target.URL)
+	if len(passwords) == 0 || passwords[len(passwords)-1] == "" {
+		return nil, cleanup, nil
+	}
+	password := passwords[len(passwords)-1]
+	// A service file holds one value per line, trailing white space dropped.
+	if strings.ContainsAny(password, "\r\n\x00") || strings.TrimRight(password, " \t\v\f") != password {
+		return nil, cleanup, errors.New("the database URL's sslpassword has a line break or trailing white space, which the PostgreSQL client tools cannot be given")
+	}
+	directory, err := os.MkdirTemp("", "persona-backup-libpq-*")
+	if err != nil {
+		return nil, cleanup, err
+	}
+	cleanup = func() { _ = os.RemoveAll(directory) }
+	name := filepath.Join(directory, "pg_service.conf")
+	if err := os.WriteFile(name, []byte("[persona-backup]\nsslpassword="+password+"\n"), 0o600); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return []string{"PGSERVICEFILE=" + name, "PGSERVICE=persona-backup"}, cleanup, nil
+}
+
 func (b *postgresBackend) runClient(ctx context.Context, target Target, database string, stdin io.Reader, stdout io.Writer, program string, args ...string) error {
 	container := target.Container
 	if container == "" {
@@ -437,6 +485,14 @@ func (b *postgresBackend) runClient(ctx context.Context, target Target, database
 		}
 	}
 	environment := clientEnvironment(target, database, container != "")
+	if container == "" {
+		service, cleanup, err := clientServiceFile(target)
+		if err != nil {
+			return fmt.Errorf("%s: %w", program, err)
+		}
+		defer cleanup()
+		environment = append(environment, service...)
+	}
 	var cmd *exec.Cmd
 	if container != "" {
 		dockerArgs := []string{"exec", "--interactive"}

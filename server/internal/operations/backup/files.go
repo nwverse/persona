@@ -253,8 +253,10 @@ type fileTransaction struct {
 	records      []*restoreRecord
 }
 
-// applyFiles stages every target beside itself before renaming anything. The
-// previous files remain in mode-0700 transaction directories after success.
+// applyFiles installs what the bundle has, each copy staged beside its target
+// before the target is renamed aside; what the bundle has no copy of stays as it
+// is. The replaced files remain in mode-0700 transaction directories after
+// success.
 func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, allowExternal bool, id string) (previous, previousExternal string, rollback func() error, returnErr error) {
 	home, err := filepath.Abs(home)
 	if err != nil {
@@ -312,47 +314,34 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", name), target: filepath.Join(home, name), runtime: true})
 	}
 	for _, name := range optionalRootFiles {
-		source := filepath.Join(staging, "runtime", filepath.FromSlash(name))
 		// A Docker install's database password stays: the role's password is
 		// not part of the bundle, so the new or surviving cluster only accepts
 		// the one its own file names, and a bundle's copy (from the cluster it
-		// was taken on) would stop the containers from starting. A bundle
-		// without it (a non-Docker install) must not move it aside either.
-		// Only an install with none gets the bundle's.
+		// was taken on) would stop the containers from starting. Only an install
+		// with none gets the bundle's.
 		if name == "docker/db-password" {
 			if _, err := os.Lstat(filepath.Join(home, filepath.FromSlash(name))); err == nil {
 				continue
 			}
-			if _, err := os.Lstat(source); err != nil {
-				continue
-			}
 		}
-		items = append(items, restoreItem{source: source, target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
+		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", filepath.FromSlash(name)), target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
 	}
-	nextKeys, _ := filepath.Glob(filepath.Join(home, "secret.key.next-*"))
-	for _, name := range nextKeys {
-		base := filepath.Base(name)
-		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", base), target: name, runtime: true})
-	}
+	// A pending rotation key (secret.key.next-<fingerprint>) may be the only copy
+	// of a key: one the install has is never moved, and the bundle's is installed
+	// only under a name the install does not have (the name is the key's
+	// fingerprint, so a file of the same name holds the same key).
 	for _, entry := range manifest.Files {
-		if !strings.HasPrefix(entry.Path, "runtime/") {
+		rel, ok := strings.CutPrefix(entry.Path, "runtime/")
+		if !ok || strings.Contains(rel, "/") || !strings.HasPrefix(rel, "secret.key.next-") {
 			continue
 		}
-		rel := strings.TrimPrefix(entry.Path, "runtime/")
-		if strings.Contains(rel, "/") || rel == "hub.json" || rel == "secret.key" || rel == "secret.key.prev" {
+		target := filepath.Join(home, rel)
+		if _, err := os.Lstat(target); err == nil {
 			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
 		}
-		if strings.HasPrefix(rel, "secret.key.next-") {
-			found := false
-			for _, item := range items {
-				if item.target == filepath.Join(home, rel) {
-					found = true
-				}
-			}
-			if !found {
-				items = append(items, restoreItem{source: filepath.Join(staging, "runtime", rel), target: filepath.Join(home, rel), runtime: true})
-			}
-		}
+		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", rel), target: target, runtime: true})
 	}
 	for _, name := range append([]string{"managers/assistant"}, optionalRuntimeDirectories...) {
 		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", filepath.FromSlash(name)), target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
@@ -388,18 +377,22 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 }
 
 func (t *fileTransaction) apply(item restoreItem) error {
+	// What the bundle has no copy of is not the bundle's to replace: it stays
+	// in the live install, untouched (never moved aside with nothing in its
+	// place).
+	if _, err := os.Lstat(item.source); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
 	record := &restoreRecord{item: item}
 	t.records = append(t.records, record)
-	if _, err := os.Lstat(item.source); err == nil {
-		parent := filepath.Dir(item.target)
-		if err := os.MkdirAll(parent, 0o700); err != nil {
-			return err
-		}
-		record.temporary = filepath.Join(parent, fmt.Sprintf(".%s.persona-new-%s-%d", filepath.Base(item.target), t.id, len(t.records)))
-		if err := copyRecursive(item.source, record.temporary); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	parent := filepath.Dir(item.target)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	record.temporary = filepath.Join(parent, fmt.Sprintf(".%s.persona-new-%s-%d", filepath.Base(item.target), t.id, len(t.records)))
+	if err := copyRecursive(item.source, record.temporary); err != nil {
 		return err
 	}
 	backupRoot := t.backupRoot
@@ -424,15 +417,10 @@ func (t *fileTransaction) apply(item restoreItem) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if record.temporary != "" {
-		if err := os.Rename(record.temporary, item.target); err != nil {
-			return fmt.Errorf("install staged %s: %w", filepath.Base(item.target), err)
-		}
-		record.installed = true
+	if err := os.Rename(record.temporary, item.target); err != nil {
+		return fmt.Errorf("install staged %s: %w", filepath.Base(item.target), err)
 	}
-	if !record.previousMoved && !record.installed {
-		return nil
-	}
+	record.installed = true
 	return secretkey.SyncDir(filepath.Dir(item.target))
 }
 

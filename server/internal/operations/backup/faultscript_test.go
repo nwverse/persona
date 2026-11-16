@@ -272,6 +272,11 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 			t.Fatalf("script %s: %s is named as the previous %s database, but the calls rule that out (err %v)", label, previous[i], part.label, err)
 		}
 		// Every staged copy that may remain is named, and nothing else is.
+		// No script changes the databases behind the restore's back, so no
+		// result contradicts every layout.
+		if got.unconfirmed != "" {
+			t.Fatalf("script %s: the %s outcome is confused without outside interference (err %v)", label, part.label, err)
+		}
 		if truth[part.stage] != "" && got.stage != part.stage {
 			t.Fatalf("script %s: the staged copy %s remains and is not named (err %v)", label, part.stage, err)
 		}
