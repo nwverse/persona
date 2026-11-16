@@ -517,13 +517,14 @@ Phase 3 lands in several PRs.
     boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
     malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
     the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
-  - `persona_core::stream_repair` adds only the open-fence repair and code/text end projection (#9051), with real
+  - `persona_core::stream_repair` adds the open-fence repair and code/text end projection (#9051), with real
     Kotlin/JNI replay of 21 complete source-derived repaired strings and six explicit code/text end cases from
     `StreamRepairTests`. It preserves
     opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
-    Malformed input and a deliberately wrong expected object are rejected. Tables, inline markup, math blocks,
-    `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the #4044
-    performance goal remain open.
+    The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
+    with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
+    are rejected. Tables, inline markup, math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift
+    bindings, production adapters and the #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
