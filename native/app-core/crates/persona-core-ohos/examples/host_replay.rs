@@ -4,7 +4,7 @@
 //! records every callback. `harmony/tests/core-host/replay.test.mjs` and `transport.test.mjs` are its clients. The
 //! transport command also decodes raw payloads directly with `persona_core::transport`. The state command projects
 //! existing session/hub fixtures through `persona_core::state`. The projection command covers answer/display,
-//! stream chunks and task indexes. None loads the NAPI library or proves the NAPI glue itself (argument conversion,
+//! stream chunks, task indexes and turns. None loads the NAPI library or proves the NAPI glue itself (argument conversion,
 //! thread-safe functions), which only a device build links.
 //!
 //! # Framing
@@ -446,6 +446,11 @@ fn projection_json(bytes: &[u8]) -> Result<String, String> {
             let input: persona_core::task_index::Input = serde_json::from_value(input.clone())
                 .map_err(|error| format!("task_index: input does not decode: {error}"))?;
             serde_json::to_string(&persona_core::task_index::project(&input)).map_err(|e| e.to_string())
+        }
+        "turns" => {
+            let input: persona_core::turns::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("turns: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::turns::project(&input)).map_err(|e| e.to_string())
         }
         _ => Err("projection: unknown projection kind".into()),
     }
