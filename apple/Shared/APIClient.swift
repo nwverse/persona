@@ -673,6 +673,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(no_auto_lock: on)))
     }
 
+    /// x264 for this Mac's live screen (#8859; the plugin's screen_x264, asked on the phone first).
+    func setComputerScreenX264(machine: String, _ on: Bool) async throws -> MachineComputer {
+        struct Body: Encodable { var screen_x264: Bool }
+        return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(screen_x264: on)))
+    }
+
     /// The machine page's Install Cua Driver, Grant Access and Cancel: `install`, `grant`, `cancel`.
     func computerJob(machine: String, _ action: String) async throws -> MachineComputer {
         try JSON.decoder.decode(MachineComputer.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/\(action)"))

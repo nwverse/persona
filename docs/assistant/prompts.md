@@ -8,13 +8,90 @@ What counts as a prompt: system / user text sent to a model, CLAUDE.md written t
 and explanatory text that wraps data in a prompt (`<persona-context>` blocks, lines such as "类型：飞书私聊"—"Type: Lark direct message"). The user's own words, collected chat history, and document bodies are **data**, not template content.
 MCP tool descriptions and parameter explanations shown to models are also prompts, in `mcp/` (see "MCP tools" below). Tool-result text returned to models still lives in the respective code.
 
+## Language migration
+
+User- and agent-facing prompts must carry the caller's language through a `Language` or `Lang` field. New or
+changed language-aware templates have en, zh-Hans and ja caller-level goldens. Source quotations, identifiers,
+recorded decisions and the owner's words remain data: do not translate or rewrite them to match the interface.
+
+The migration in #5976 establishes the contract, a wake-message example and a downward-only inventory. It does
+not claim that every historical prompt has been translated. The follow-ups below own the remaining areas; each
+must audit all production callers and any parser before changing the text. Use `answerLanguage(hello.Locale)`
+for the owner's native language name (`English`, `日本語`, empty for zh-Hans), or the existing i18n-code `Lang`
+pattern where the caller already uses it. Instruction-only language hints and fully translated templates are both
+supported; a hint alone is not evidence that user-visible injected instructions have been translated.
+
+### Compatibility and wake messages
+
+`agents/wake.md` is fully rendered in English and Japanese. `agents_work_tick.go` reads the owner's language at
+send time, so a subsequent wake follows a changed language without rewriting a previous message. Empty language
+keeps the complete original Chinese prompt byte for byte, including its approval wording. The four variants
+(timer, another Agent stopping, user-approved step, task-authorized step) have separate en/ja goldens and the
+normal `session.send` fake captures the localized text. The one approved step never authorizes unrelated outward
+actions; localization does not remove or weaken policy. Other supported language names currently use the English
+instruction branch until that language gets a whole-text translation.
+
+New localized wakes start with `<persona-wake>` containing canonical JSON with the waiting subject in `title`,
+followed by `</persona-wake>` on the same line. JSON escapes tags and newlines in that subject. Recognition uses
+this metadata, not translated wording. Malformed metadata is not inferred as a different message. Chinese wakes
+and old transcripts keep the narrow historical header parser: this compatibility exception is needed to preserve
+the empty-language bytes. Pasted user text remains protected by `client_msg_id` or the outer user-authorship
+sentinel. The hub returns the same structured `injected`/`source` fields and localizes the display line for the
+viewer, without changing the model's original text. New localized markers are tested on the hub; the shared
+old-hub fallback fixtures stay unchanged. Older hubs cannot recognize these new markers by text alone.
+
+### Remaining work by area
+
+The tracking issues below implement the migration separately; finishing this umbrella does not imply they are done.
+Each uses the Template rules in this document and keeps existing empty-language output unless its issue explicitly
+records a justified compatibility change. Before claiming any follow-up, recheck ownership and overlapping PRs.
+
+| Area | Tracking issue | Scope |
+| --- | --- | --- |
+| agents | #6268 | Remaining agent event and policy templates; audit source recognition and authorization branches. Wake is already covered here. |
+| assistant | #6269 | Generated instructions, snapshots, supervision and scheduled events; audit parser/role boundaries and preserve policy. |
+| mcp | #6270 | Tool descriptions and schema guidance; thread language through tool-list callers and keep names/arguments stable. |
+| inbox | #6271 | Triage, drafting, grouping and handling templates; preserve original incoming text and test callers. |
+| kb | #6272 | Classify internal data generation versus user-facing output, then migrate applicable prompts; preserve existing knowledge and source names. |
+| todo | #6273 | Task/to-do wording and review context; preserve criteria, decisions and authorization evidence. |
+| tools | #6274 | Remaining tool guidance and generated helper text; keep protocol identifiers and parameters stable. |
+| channel/shared/bot | #6275 | Channel/bot wrappers and shared fragments; inventory all includes and preserve provenance and native message data. |
+
+### Ratchet and acceptance
+
+`scripts/ci/prompt_language_ratchet.py` runs in the repository CI guards. It counts CJK-bearing `.md` templates
+without an actual `if` on `.Language` or `.Lang`, including language handling inherited through a template called
+with the same data. Comments and quoted mentions do not qualify. The baseline records both directory counts and
+filenames: a new omission fails even when another file in that directory was removed. There are no source
+exemptions. The checker also compares the baseline against `CI_BASE_SHA` (otherwise `origin/main`) when it exists
+there, so editing the JSON cannot raise the allowance. Run `--update` only to remove resolved entries; it refuses
+increases. This is a structural guard, not a check of translation quality, caller wiring or model behavior.
+
+The initial inventory is computed from this checkout rather than the issue's earlier audit. A migration needs
+caller-level goldens, synthetic delivery and parser tests where applicable, and unchanged default/Chinese goldens.
+The checker has negative tests for new files/directories, replacing an omission at the same count, quoted/comment
+mentions, include cycles and attempts to raise the baseline. Judge behavior and recording-language live checks
+still follow the rules below when those prompts change.
+
+### Related work and knowledge policy
+
+#5906 shipped recording summaries, minutes and day recaps in the recording's language, with owner-language
+fallback (#6011); #6045 preserves place names as spoken. Those paths are not reimplemented here. Existing knowledge
+content stays in the language in which it was recorded; a UI-language change never rewrites stored pages or quoted
+source data. Other KB templates are migration backlog, not a permanent exemption: their follow-up decides which
+new outputs should use owner language and which preserve source language before changing them.
+
+#5898 and its instruction-placement proposal (#5903) separately address deduplication and policy placement,
+including wake messages. This change translates the existing rules without cutting or moving them. #5750/#6202
+localize Persona Link's client UI; they do not supply the language of model prompts.
+
 ## Directory
 
 | File | Purpose | Used by |
 | --- | --- | --- |
 | `assistant/claude_md.md` | Shared assistant-directory instructions: accessible data, interaction, task planning and working practices; optional machines, About me and notes directories. Detailed supervision handling is not in this shared file. | `assistant/start.go` `claudeMD` |
 | `assistant/view_repair.md` | Repair feedback when assistant Stop first detects a persona-view format error: add fallback, preserve completed actions, never substitute for approval | `hub/assistant_view_check.go` (trusted node requests) |
-| `assistant/snapshot.md`, `snapshot_agents.md`, `snapshot_closeout.md`, `snapshot_following.md`, `snapshot_omitted.md`, `snapshot_cut.md` | Live snapshot: time, computers, Agents, iPhone (including optional offline write queuing), knowledge highlights, unread connector chats, today's meetings, scheduled follow-ups and open Inbox matters being followed (one line per section; node compares by section). An Agent's line ends with what its closeout claims of merging and deploying and the hub's finding where it differs (`snapshot_closeout`; [agent-work.md](agent-work.md)). Done and muted agents always render only a count and their `agents_list` filter. The Inbox follow-up section, including its empty state, appears only when Inbox is enabled and available. At most five Inbox follow-ups appear by check time. Past its size budget a section renders only its heading and count with its lookup (`snapshot_omitted`, or the App for Inbox follow-ups); a block still too long ends with `snapshot_cut` | `assistant/context.go` |
+| `assistant/snapshot.md`, `snapshot_agents.md`, `snapshot_closeout.md`, `snapshot_following.md`, `snapshot_omitted.md`, `snapshot_cut.md`, `snapshot_task.md`, `snapshot_own_tasks.md` | Live snapshot: time, computers, Agents, iPhone (including optional offline write queuing), knowledge highlights, unread connector chats, today's meetings, scheduled follow-ups and open Inbox matters being followed (one line per section; node compares by section). An Agent's line ends with what its closeout claims of merging and deploying and the hub's finding where it differs (`snapshot_closeout`; [agent-work.md](agent-work.md)). Done and muted agents always render only a count and their `agents_list` filter. The Inbox follow-up section, including its empty state, appears only when Inbox is enabled and available. At most five Inbox follow-ups appear by check time. Past its size budget a section renders only its heading and count with its lookup (`snapshot_omitted`, or the App for Inbox follow-ups); a block still too long ends with `snapshot_cut`. One task's line is `snapshot_task`; a leader or side conversation gets its own tasks under `snapshot_own_tasks` instead of the main conversation's task lists (#8666) | `assistant/context.go` |
 | `tools/phone_clipboard_file.md`, `tools/phone_clipboard_file_option.md`, `tools/phone_clipboard_trim_option.md` | `phone_clipboard_set`'s description with its `file` argument (use it for secrets, never put them in `text` or read them back) and the descriptions of `file` and `trim` (`docs/apple/phone-tools.md`, "Copying a file to the clipboard") | `mcpserver/clipboard_file.go` |
 | `tools/phone_queued_write.md`, `tools/phone_queue_option.md` | Hub guidance added to registered confirmed phone write descriptions and their optional `queue_if_offline` parameter: opt into offline persistence and query the queue instead of retrying uncertain writes | `hub/phone_write_queue.go` |
 | `assistant/turn_context.md` | `<persona-context>` at the start of a message: full snapshot, or only sections changed from the previous one | `node/assistant_context.go` |
@@ -50,6 +127,8 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `agents/dispatch_task.md` | First message of an Agent another Agent started on this computer (`dispatch_start`): who handed it the task, that its last reply is the result, no handing on, ask the user before pushing / deploying / sending messages ([plan-agent-dispatch.md](../plans/plan-agent-dispatch.md)) | `assistant/dispatch.go` |
 | `agents/task_leader.md`, `task_worker.md` | What follows the prompt of a task leader's agent (it may hand direct workers to its own task with `task_plan`, how their reports reach it) and of a worker it handed out (no handing on, `report_to_supervisor` reaches the leader), #3656 ([unified-entry.md](unified-entry.md), "Task leaders") | `assistant/tasks_placement.go` |
 | `agents/task_handoff.md` | Scoped `task_spawn` / local CLI handoffs within the existing supervised task; standalone runtime conversations are not tracked handoffs, and hub credentials must not be extracted to bypass tools (#5751) | `assistant/tasks_placement.go`, `assistant/tools.go` |
+| `assistant/task_goal.md` | A task's `done_when` as one checkable condition for a Claude Code `/goal` the node types after the new Agent's first message is in the transcript (a start's `goal`, [agent-goal.md](../integrations/agent-goal.md) "A goal set at the start"); one line, so a newline cannot submit the command early | `assistant/start_defaults.go` `RenderTaskGoal` |
+| `agents/plan_first_task.md` | A self-planning requirement appended to a task's first prompt whenever its start-defaults rule sets `plan_first`: plan and acceptance checks up front, then work and self-check; meant for launches whose model ignores a thinking-effort setting, where the prompt is the only reliable lever | `assistant/start_defaults.go` `RenderPlanFirstTaskConstraint` |
 | `agents/worker_supervise.md` | The supervision message a task leader's agent gets about its workers (reports, stops, stalls, waits for review, did not start): what each needs, its `done_when`, what it said, and how to answer with `task_review` ([unified-entry.md](unified-entry.md), "Task leaders") | `assistant/task_leader.go` `deliverToLeaderAgent` |
 | `agents/answer.md` | Send the user's triage-card answer back to the Agent; assistant answers state that they follow the user's rules, why, and that the user may change the answer | `assistant/agents_triage.go` |
 | `agents/auth_relayed.md` | Tell the Agent that an extension completed the authorization link it stopped at with the user's account: fetch the token / let the waiting program finish, then go on ([auth-relay.md](../operations/auth-relay.md)) | `assistant/agents_auth_relay.go` |
@@ -144,7 +223,7 @@ so layout is arbitrary (short arrays can be one line) and does not affect transm
 | `mcp/assistant/` | `ask_user`, `notify_user`, `supervision_finish` (silent or explicitly visible supervision disposition); `persona_settings` (settings reads/writes with phone confirmation); `secret_run` (commands run with a password the user types into the card in the Persona app; assistant.md "Password card"); `model_profiles_list`, `model_profile_get`, `model_profile_switch`, `model_profile_rollback` (model profiles); `repositories_list`, `repository_get` (current assistant's saved repository references only); `conversations_list`, `conversation_read`, `conversation_rename`, `conversation_archive`, `conversation_unarchive`, `conversation_new`, `conversation_send` (the assistant's own conversations); `view_show`, `view_update`, `view_get` (rich views, only when the client supports PersonaView) | Assistant chats (`toolNames` and `Tools` in `assistant/tools.go`) |
 | `mcp/repositories/` | `repository_add` (save a reference for the current assistant after the user's own confirmation) | Assistant chats (`assistant/tools.go`); shares Settings repository validation and persistence |
 | `mcp/meeting/` | `meeting_lines`, `meeting_earlier`, `meeting_photo_note`, `meeting_topics_set`, `meeting_highlights_set` (a meeting's room conversation, bound to its own recording: what was said between two times, each line as [m:ss · HH:MM] text, its offset and then the clock time a batch gives it; earlier meetings marked not private; the room's note on a photo forwarded to it, 1 to 1000 characters, refused for a photo that is not listed, never went in or was withdrawn; the meeting's topics replaced whole, each done, current or open, at most 20, titles of at most 80 characters and notes of at most 200, a list over a limit refused saying which; the meeting's highlights replaced whole, at most 4, each a text of at most 80 characters and said_at, the HH:MM of a batch line, which the hub turns into the start and end of that minute's lines, a list over a limit or a minute with no line refused saying which, #3862). A room keeps the tools it started with: one started before `meeting_photo_note` existed writes no notes, one started before `meeting_topics_set` sets no topics, one started before `meeting_highlights_set` sets no highlights | A meeting's room only (`meetingRoomTools` in `assistant/meeting_room_tools.go`; the note in `assistant/meeting_photos.go`) |
-| `mcp/schedule/` | `schedule_followup`, `schedule_routine`, `delete_routine`, `list_followups`, `cancel_followup` | Same as above |
+| `mcp/schedule/` | `schedule_followup`, `schedule_routine`, `schedule_state_set`, `delete_routine`, `list_followups`, `cancel_followup` | Same as above |
 | `mcp/phone/` | `phone_write_queue_list`, `phone_write_queue_cancel` (retained phone writes and cancellation before delivery) | Hub phone tool list, for assistant chats and Agents even while phones are offline |
 | `mcp/places/` | `list_places`, `save_place` (the user's saved places for reminders by place, #1598) | Same as above |
 | `mcp/agents/` | `machines_list`, `agents_list`, `agent_read`, `agent_send`, `agent_switch` (moves a running Claude Code agent to another launcher and goes on with it, now or not at all, #5973), `agents_switch` (moves many running Claude Code agents to another launcher at once; busy ones are queued for the end of their turn, #6008), `agent_interrupt`, `agent_start`, `agent_supervise`, `agent_archive`, `agent_unarchive` (reversible Agent session archive, optionally closing the agent after phone confirmation), `agent_autoname` (one session's model-written short title after phone confirmation, #7432), `agent_autoname_receipt` (read-only: this caller's matching confirmation and the target's current naming snapshot, never proof of a particular model call), `interaction_answer`, `ask_escalate` (a supervisor hands its task's waiting cards to the user as one, #3589), `task_plan`, `task_plan_withdraw` (the conversation that put up a plan card takes it down, with a reason, while nothing of it has started, #6739), `task_review`, `task_spawn` (a separate session on its caller's existing supervised task, #5751), `task_scope` (a logged change of a started task's scope, #3822), `task_decided` (records the owner's answer, given in the chat, to a task's waiting decision, #6470), `task_start_screen` / `task_start_keys` / `task_retry` (a task whose agent did not start: read and type into the tab its computer keeps, start again, #2570); `direction_name` (the main conversation names a direction), `leader_progress` (a leader reports its direction's progress to the work log), #3679 | Same as above |
@@ -195,7 +274,7 @@ Descriptions live in iOS `apple/Persona/PhoneTools/*Tool.swift` (collected by `P
 - Where user-facing output instructions say "use Chinese", replace that with a `Language` field (the language's own name, `English`, `日本語`; callers use `assistant.answerLanguage(hello.Locale)`, passing empty for zh-Hans),
   and `{{if .Language}}用{{.Language}}{{else}}用中文{{end}}` in the template ("use [Language]", otherwise "use Chinese"). Empty remains byte-for-byte identical to the original, leaving existing goldens unchanged; en / ja have separate `*.en.golden` / `*.ja.golden`
   (`assistant/claude_md.md`, `inbox/triage.md`, `inbox/group.md`, `inbox/draft.md`, `tools/session_title.md`; `docs/protocol/i18n.md`).
-  Knowledge-base prompts (`kb/`) are Chinese too. Those that write for the user from a recording (`kb/recording.md`, `minutes.md`, `minutes_merge.md`, `day_recap.md`, `day_recap_merge.md`) take `KBOwner.Language`, for the recording's language (else the owner's), and include `kb/write_language.md`, which says to write everything in it whatever languages the transcript mixes (#5906, `docs/assistant/meeting-minutes.md`, "How the hub generates them"). Unlike the rule above, their empty value is not byte-for-byte the old text: the mixed-language rule applies to Chinese output too, so their zh goldens changed on purpose, in the one sentence that asked for Chinese (now the empty branch of `kb/write_language.md`) and nowhere else. Their en / ja goldens come from the engine (`kb/minutes_language_test.go`). The other `kb/` prompts write knowledge-base data and stay Chinese (`docs/protocol/i18n.md`, "Follow-up work").
+  Knowledge-base prompts (`kb/`) are Chinese too. Those that write for the user from a recording (`kb/recording.md`, `minutes.md`, `minutes_merge.md`, `day_recap.md`, `day_recap_merge.md`) take `KBOwner.Language`, for the recording's language (else the owner's), and include `kb/write_language.md`, which says to write everything in it whatever languages the transcript mixes (#5906, `docs/assistant/meeting-minutes.md`, "How the hub generates them"). Unlike the rule above, their empty value is not byte-for-byte the old text: the mixed-language rule applies to Chinese output too, so their zh goldens changed on purpose, in the one sentence that asked for Chinese (now the empty branch of `kb/write_language.md`) and nowhere else. Their en / ja goldens come from the engine (`kb/minutes_language_test.go`). Other `kb/` templates remain in the language-migration inventory until their follow-up classifies generated output and source-preserving data; persisted knowledge is never rewritten just because the UI language changes (`docs/protocol/i18n.md`, "Follow-up work").
 - Voice prompts (all under `voice/` since #3501; `instructions.md`, `target.md`, `agent_message.md`, `status.md`, `folded.md` in #3502, `ask.md`, `needs_you.md`, `answered.md` in #3504, `progress.md`, `observed.md`, `failure.md` in #3503, `nudge.md` in #2297, `read_aloud.md` in #5004, `meeting.md` in #3862 phase 4, `transcribe_caption.md` and `transcribe_verbatim.md` in #3862) have three whole-language versions. `Lang` is an i18n code (`en`, `ja`, otherwise Chinese),
   with `{{if eq .Lang "en"}}…{{else if eq .Lang "ja"}}…{{else}}…{{end}}` in the template. Goldens are `voice/testdata/prompts/<name>.<branch>.<zh-Hans|en|ja>.golden`
   (`go test ./internal/voice -run Golden`, `UPDATE_GOLDEN=1` to update). The fast layer speaks to the user; writing in the user's language makes the model continue in that language.

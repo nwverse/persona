@@ -430,10 +430,12 @@ class AdaptiveRunner:
         expected = step.get("session")
         if expected:
             target = self.fixtures.get(expected, expected)
-            def selected():
-                route, key = self.read_navigation()
-                return True if key == target else None
-            poll("selected session " + target, selected, timeout=float(step.get("timeout", 60)))
+            # Persona embeds assistant conversations outside the root ChatRoute stack.
+            if step.get("conversationKind") != "assistant":
+                def selected():
+                    route, key = self.read_navigation()
+                    return True if key == target else None
+                poll("selected session " + target, selected, timeout=float(step.get("timeout", 60)))
             def draft_ready():
                 probe = self.read_probe(self.pid())
                 now = self.elapsed_nanos()
@@ -530,7 +532,8 @@ class AdaptiveRunner:
             position = json.loads(raw)
         except json.JSONDecodeError as error:
             raise AdaptiveFailure("invalid shell-position.json") from error
-        tab = position.get("tab")
+        # ShellPosition defaults to Persona; JsonCodec omits fields with their default value.
+        tab = position.get("tab", "Persona")
         if not isinstance(tab, str) or not tab:
             raise AdaptiveFailure("shell position has no route tab")
         chats = position.get("chats") if isinstance(position.get("chats"), dict) else {}

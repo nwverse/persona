@@ -11,6 +11,14 @@ import kotlinx.serialization.json.*
 interface AgentCreationService {
     val scope: String
     suspend fun launchers(machineId: String): List<AgentLauncher>
+
+    /**
+     * [launchers] with the rest of the hub's answer (`GET /api/v1/machines/{id}/launchers`): what New Agent's picker lists
+     * off on that computer, with why (#8109: the Persona-managed providers their own-service rule leaves out where the
+     * agent has a sign-in of its own), in the main chat's shape. Its `unavailable` is empty from an older hub; its
+     * `default` is not read (New Agent reads [newAgentModel]).
+     */
+    suspend fun launcherList(machineId: String): AssistantLaunchers = AssistantLaunchers(launchers(machineId))
     suspend fun directories(machineId: String, path: String = ""): AgentDirectories
     suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult
     suspend fun operation(operationId: String): AgentStartResult
@@ -105,9 +113,17 @@ data class WorktreeStatus(
     val unmerged: Int = 0,
 )
 
-/** What `worktree/add` made: the checkout the agent starts in. */
+/**
+ * What `worktree/add` made: the checkout the agent starts in, and [workspaceId] the workspace a runtime engine made for
+ * it (Paseo, #8856), which the start goes into; null for a worktree a terminal host makes, or from an older node.
+ */
 @Serializable
-data class WorktreeAdded(val path: String, val branch: String = "", val root: String? = null)
+data class WorktreeAdded(
+    val path: String,
+    val branch: String = "",
+    val root: String? = null,
+    @SerialName("workspace_id") val workspaceId: String? = null,
+)
 
 /** What `worktree/remove` did. */
 @Serializable
@@ -205,7 +221,9 @@ object AgentLauncherSerializer : JsonTransformingSerializer<AgentLauncher>(Agent
 /**
  * What the assistant's computer lists for Persona chats (`GET /api/v1/machines/{mid}/launchers?purpose=assistant`,
  * docs/protocol/protocol.md): the launchers that can run them, the main chat's default (Model configuration › Main chat)
- * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`).
+ * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`). Without
+ * a purpose (New Agent, [AgentCreationService.launcherList]) the same shape: the computer's launchers and the providers
+ * its own-service rule leaves out there (#8109).
  */
 @Serializable
 data class AssistantLaunchers(
@@ -225,8 +243,9 @@ fun launcherModel(launcher: AgentLauncher): String? = launcher.model
 data class LauncherDefault(val provider: String = "", val model: String? = null, val effort: String? = null)
 
 /**
- * A launcher or provider that can't run Persona chats on that computer (#5033): [kind] `launcher` or `api`, [code] why
- * (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`, `launcher_own_service`) and [reason] in the request's language.
+ * A launcher or provider that can't run Persona chats on that computer (#5033), or, for New Agent, can't start Agents
+ * there (#8109): [kind] `launcher` or `api`, [code] why (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`,
+ * `launcher_own_service`) and [reason] in the request's language.
  */
 @Serializable
 data class UnavailableLauncher(

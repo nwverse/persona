@@ -8,9 +8,11 @@ import PersonaScreenCore
 import VideoToolbox
 
 /// The real capture source for the live-screen video channel (#3954): ScreenCaptureKit captures one display and
-/// VideoToolbox encodes it with the low-latency settings gate ① measured on a real Mac (≈5 ms p50 / ≈10 ms p95 from a
-/// screen change to an encoded frame at 1080p60): `RealTime`, low-latency rate control, no frame reordering,
-/// `MaxFrameDelayCount` 0, and a capture queue depth of 3.
+/// VideoToolbox encodes it with the low-latency settings gate ① measured on a real Mac: `RealTime`, low-latency rate
+/// control, no frame reordering, and a capture queue depth of 3. From a screen change to an encoded frame that is ≈5 ms
+/// p50 / ≈10 ms p95 at 1080p60, because ScreenCaptureKit hands a frame over about 4.5 ms before its display time; the
+/// encode alone (the phone's Connection Stats) is about 7–8 ms on an M1-class media engine, plus about 1 ms for
+/// VideoToolbox to hand the frame back. That is the engine's floor at this quality (#8713).
 ///
 /// It answers `start` with `hello`, then `format` (the parameter sets) and a keyframe, then a `frame` for each screen
 /// change, and a `heartbeat` each second nothing changed. It pauses (`paused`) when it has no Screen Recording
@@ -29,11 +31,32 @@ import VideoToolbox
 /// (`Refinement`). It holds that one picture, so capture gets one more buffer (queue depth 4). Refinement frames' reports
 /// stay out of the rate controller's numbers.
 ///
+/// x264 (#8859): when the node passed `--x264` (on for this Mac, the user's own ffmpeg with libx264 found) and the
+/// phone says the stream is on a direct LAN route, an `X264Session` encodes instead of VideoToolbox: about 1.5–2 ms a
+/// 1080p frame instead of 7–8 ms plus 1, for 0.3–0.5 of a core. Each stream starts at its best encoder (`X264Plan`), and
+/// `hello` says which (`encoder`, and `fallback` for why not x264). When x264 stops for this stream (slow, failed,
+/// congested) or the route leaves the LAN or comes back, capture starts again with a new `hello`, as a new codec does;
+/// a reason x264 stopped holds for the rest of the stream. Refinement is VideoToolbox's alone: x264 already encodes at a
+/// constant quality.
+///
 /// Everything it holds is touched only on `queue`: ScreenCaptureKit delivers frames there, and VideoToolbox's output
 /// and every incoming message hop onto it. That confinement is why it is `@unchecked Sendable`. `generation` counts
 /// (re)starts, so a completion from a capture that has since been replaced does nothing.
 final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     var onMessage: ((ScreenVideoMessage) -> Void)?
+
+    /// What an x264 frame carries through ffmpeg back to `emit`.
+    struct FrameContext {
+        var captured: UInt64
+        var captureMicros: Int64
+    }
+
+    /// `--x264`: the ffmpeg the node found, when x264 is on for this Mac (#8859); nil: VideoToolbox only.
+    private let x264Path: String?
+    /// x264 encoding this stream now; nil while VideoToolbox does.
+    private var x264: X264Session<FrameContext>?
+    /// Why x264 stopped during this stream (slow, failed, congested, or it couldn't start): off for the rest of it.
+    private var x264Failed: X264Plan.Off?
 
     private let queue = DispatchQueue(label: "persona-screen.capture", qos: .userInteractive)
     /// The phone's request, with its updates applied; nil before `start` and after `stop`.
@@ -81,6 +104,17 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// Refinement runs for this request: the phone set a bitrate band (#6396), so it adapts with the tiers.
     private var refining: Bool { request?.tiered == true }
 
+    init(x264: String? = nil) {
+        x264Path = x264
+        super.init()
+    }
+
+    /// The encoder `request` should have now (#8859).
+    private func x264Choice(_ request: StartMessage) -> (encoder: X264Plan.Encoder, off: X264Plan.Off?) {
+        X264Plan.encoder(enabled: x264Path != nil, spawnable: X264Process.canSpawn, codecs: request.codecs,
+                         path: request.path, failed: x264Failed)
+    }
+
     // MARK: ScreenSource
 
     func start(_ start: StartMessage) {
@@ -118,7 +152,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                 setBitrate(kbps)
             }
             // Another route (#6398): its one-way delay is its own, so the queueing delay is measured from it afresh.
-            if update.path != nil { rate.pathChanged() }
+            if let path = update.path {
+                rate.pathChanged()
+                r.path = path
+                // On or off a direct LAN route, x264 starts or stops (#8859): a new capture and `hello`.
+                restart = restart || x264Choice(r).encoder != (x264 != nil ? .x264 : .hardware)
+            }
             request = r
 
             if update.paused == true {
@@ -153,7 +192,10 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             let refinement = refinementFrames.remove(report.lastFrame) != nil
             // A pass that came back queued: the link has no room for more of them now.
             if refinement, let q = rate.queueing(of: report), q > RateController.cutAboveMicros { refiner.queued() }
+            let before = rate.kbps
             let decision = rate.receive(report, now: Self.nowMicros, refinement: refinement)
+            // A queueing link cuts the bitrate, which only VideoToolbox can follow while it runs (#8859).
+            if x264 != nil, decision.skipping || decision.kbps.map({ $0 < before }) == true { return x264Off(.congested) }
             if let kbps = decision.kbps { setBitrate(kbps) }
             if decision.keyframe { wantKeyframe = true }
         }
@@ -207,13 +249,26 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         let size = CapturePlan.size(points: points, pixels: pixels, scale: request.scale, maxSize: request.maxSize)
         let fps = CapturePlan.fps(request.fps)
 
-        var codec = CapturePlan.codec(offered: request.codecs)
-        var encoder = makeEncoder(codec: codec, width: size.width, height: size.height, fps: fps)
-        if encoder == nil, codec == "hevc" {
-            codec = "h264" // no HEVC encoder on this Mac: H.264 High, which the phone decodes too
-            encoder = makeEncoder(codec: codec, width: size.width, height: size.height, fps: fps)
+        let choice = x264Choice(request)
+        var off = choice.off
+        var x264: X264Session<FrameContext>?
+        if choice.encoder == .x264 {
+            x264 = makeX264(width: size.width, height: size.height, fps: fps)
+            if x264 == nil {
+                x264Failed = .unavailable
+                off = .unavailable
+            }
         }
-        guard let encoder else { return pause("busy") }
+        var codec = x264 != nil ? "h264" : CapturePlan.codec(offered: request.codecs)
+        var encoder: VTCompressionSession?
+        if x264 == nil {
+            encoder = makeEncoder(codec: codec, width: size.width, height: size.height, fps: fps)
+            if encoder == nil, codec == "hevc" {
+                codec = "h264" // no HEVC encoder on this Mac: H.264 High, which the phone decodes too
+                encoder = makeEncoder(codec: codec, width: size.width, height: size.height, fps: fps)
+            }
+            guard encoder != nil else { return pause("busy") }
+        }
 
         let config = SCStreamConfiguration()
         config.width = size.width
@@ -230,13 +285,15 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         } catch {
-            VTCompressionSessionInvalidate(encoder)
+            if let encoder { VTCompressionSessionInvalidate(encoder) }
+            x264?.stop()
             warn("stream output: \(error)")
             return pause("busy")
         }
         self.stream = stream
         self.config = config
         self.encoder = encoder
+        self.x264 = x264
         self.codec = codec
         inFlight = 0
         displayPoints = points
@@ -249,7 +306,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         send(.hello(HelloMessage(version: ScreenVideoWire.protocolVersion, codec: codec,
                                  display: Int(display.displayID), width: size.width, height: size.height,
                                  features: CapturePlan.features, points: [points.width, points.height],
-                                 pixels: [pixels.width, pixels.height])))
+                                 pixels: [pixels.width, pixels.height],
+                                 encoder: (x264 != nil ? X264Plan.Encoder.x264 : .hardware).rawValue,
+                                 fallback: off?.rawValue)))
         announced = nil
         announce()
         lastSent = Self.nowMicros
@@ -283,6 +342,8 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             self.encoder = nil
             VTCompressionSessionInvalidate(encoder)
         }
+        x264?.stop()
+        x264 = nil
         inFlight = 0
         encodedSize = nil
         latestImage = nil
@@ -311,10 +372,12 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             warn("\(codec) encoder: \(status)")
             return nil
         }
+        // Low-latency rate control selects VideoToolbox's real-time encoder, which holds no frame back and refuses the
+        // speed settings (`MaxFrameDelayCount`, `PrioritizeEncodingSpeedOverQuality`, `MaximumRealTimeFrameRate`, slice
+        // sizes) with kVTPropertyNotSupportedErr, so none is set (#8713).
         func set(_ key: CFString, _ value: CFTypeRef) { VTSessionSetProperty(session, key: key, value: value) }
         set(kVTCompressionPropertyKey_RealTime, kCFBooleanTrue)
         set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
-        set(kVTCompressionPropertyKey_MaxFrameDelayCount, NSNumber(value: 0))
         set(kVTCompressionPropertyKey_ProfileLevel,
             codec == "hevc" ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
         set(kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps))
@@ -323,6 +386,47 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         set(kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: rate.kbps * 1000))
         VTCompressionSessionPrepareToEncodeFrames(session)
         return session
+    }
+
+    /// x264 for this size and frame rate, its processes started: nil when ffmpeg can't be started.
+    private func makeX264(width: Int, height: Int, fps: Int) -> X264Session<FrameContext>? {
+        guard let x264Path else { return nil }
+        let session = X264Session<FrameContext>(ffmpeg: x264Path, width: width, height: height, fps: fps,
+                                                threads: X264Plan.threads(performanceCores: Self.performanceCores),
+                                                capKbps: rate.cap, queue: queue, clock: { Self.nowMicros }) { [weak self] event in
+            self?.x264Event(event)
+        }
+        guard session.start() else {
+            warn("x264: ffmpeg did not start")
+            return nil
+        }
+        return session
+    }
+
+    /// x264 stops for the rest of this stream: capture starts again on VideoToolbox, `hello` saying why.
+    private func x264Off(_ reason: X264Plan.Off) {
+        warn("x264 off: \(reason.rawValue)")
+        x264?.stop()
+        x264 = nil
+        x264Failed = reason
+        begin()
+    }
+
+    /// What x264 put out, on `queue`: parameter sets, a frame, or that it stopped.
+    private func x264Event(_ event: X264Session<FrameContext>.Event) {
+        switch event {
+        case let .parameterSets(sets):
+            if sets != parameterSets {
+                parameterSets = sets
+                send(.format(FormatMessage(parameterSets: sets)))
+            }
+        case let .frame(sample, keyframe, context, encodeMicros):
+            sendFrame(sample, keyframe: keyframe, captured: context.captured, captureMicros: context.captureMicros,
+                      encodeMicros: encodeMicros, refinement: false)
+        case let .off(reason):
+            x264 = nil // it has stopped itself
+            x264Off(reason)
+        }
     }
 
     private func setBitrate(_ kbps: Int) {
@@ -340,6 +444,21 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         guard stream != nil, let config, let request else { return }
         let fps = CapturePlan.fps(request.fps)
         var changed = fpsChanged
+        if let running = x264, resized || fpsChanged, let points = displayPoints, let pixels = displayPixels {
+            // ffmpeg runs at one size and frame rate: new processes for the new ones, whose first frame is a keyframe.
+            // Frames ScreenCaptureKit still has at the old size are left out (`encodeX264`).
+            let size = CapturePlan.size(points: points, pixels: pixels, scale: request.scale, maxSize: request.maxSize)
+            guard size != (running.width, running.height) || fps != running.fps else { return }
+            running.stop()
+            x264 = makeX264(width: size.width, height: size.height, fps: fps)
+            guard x264 != nil else { return x264Off(.failed) }
+            encodedSize = size
+            config.width = size.width
+            config.height = size.height
+            config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+            if configGate.changed() { applyConfig() }
+            return
+        }
         if resized, let points = displayPoints, let pixels = displayPixels {
             let size = CapturePlan.size(points: points, pixels: pixels, scale: request.scale, maxSize: request.maxSize)
             if encodedSize.map({ $0 != size }) ?? true {
@@ -393,7 +512,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
         // On `queue`.
-        guard type == .screen, stream === self.stream, encoder != nil, sample.isValid,
+        guard type == .screen, stream === self.stream, encoder != nil || x264 != nil, sample.isValid,
               let info = (CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false)
                   as? [[SCStreamFrameInfo: Any]])?.first,
               (info[.status] as? Int) == SCFrameStatus.complete.rawValue, // idle frames: nothing changed
@@ -412,11 +531,27 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             timing.skippedFrame()
             return
         }
+        if x264 != nil { return encodeX264(image, captured: captured, captureMicros: captureMicros) }
         if boosted { // a refinement pass's bitrate ends with it
             boosted = false
             setBitrate(rate.kbps)
         }
         encode(image, at: sample.presentationTimeStamp, captured: captured, captureMicros: captureMicros, refinement: false)
+    }
+
+    /// Hands one picture to x264; its output goes out through `x264Event`. A picture at another size than ffmpeg's
+    /// (ScreenCaptureKit still at the old one after a change) is left out.
+    private func encodeX264(_ image: CVPixelBuffer, captured: UInt64, captureMicros: Int64) {
+        guard let x264, CVPixelBufferGetWidth(image) == x264.width, CVPixelBufferGetHeight(image) == x264.height,
+              CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+              CVPixelBufferGetPlaneCount(image) == 2 else { return }
+        let keyframe = wantKeyframe
+        wantKeyframe = false
+        timing.encoderHolds(x264.inFlight + 1)
+        let picture = Picture(image)
+        x264.encode(context: FrameContext(captured: captured, captureMicros: captureMicros), keyframe: keyframe) { write in
+            picture.write(width: x264.width, height: x264.height, to: write)
+        }
     }
 
     /// Hands one picture to the encoder; its output goes out through `emit`.
@@ -482,6 +617,13 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             }
         }
         guard let block = sample.dataBuffer, let bytes = try? block.dataBytes() else { return }
+        sendFrame(bytes, keyframe: keyframe, captured: captured, captureMicros: captureMicros, encodeMicros: encodeMicros,
+                  refinement: refinement)
+    }
+
+    /// One encoded frame out, from either encoder.
+    private func sendFrame(_ bytes: Data, keyframe: Bool, captured: UInt64, captureMicros: Int64, encodeMicros: Int64,
+                      refinement: Bool) {
         number &+= 1
         let writing = Self.nowMicros
         var flags: VideoFrame.Flags = keyframe ? .keyframe : []
@@ -518,7 +660,10 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
 
         let refine = DispatchSource.makeTimerSource(queue: queue)
         refine.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100), leeway: .milliseconds(20))
-        refine.setEventHandler { [weak self] in self?.refineTick() }
+        refine.setEventHandler { [weak self] in
+            self?.refineTick()
+            self?.x264?.tick() // a frame overdue in ffmpeg ends x264 (#8859)
+        }
         refine.resume()
         refineTimer = refine
     }
@@ -551,6 +696,14 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     private func warn(_ text: String) {
         FileHandle.standardError.write(Data("persona-screen: \(text)\n".utf8))
     }
+
+    /// The performance cores (all cores on a Mac without levels), for x264's threads.
+    private static let performanceCores: Int = {
+        var cores: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        if sysctlbyname("hw.perflevel0.physicalcpu", &cores, &size, nil, 0) == 0, cores > 0 { return Int(cores) }
+        return ProcessInfo.processInfo.activeProcessorCount
+    }()
 
     /// The display's size in pixels (ScreenCaptureKit gives points).
     private static func pixelSize(of display: SCDisplay) -> (width: Int, height: Int) {
@@ -598,6 +751,39 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     /// Why the console session stops capture now, or nil (`ConsoleSession.reason`).
     static func consoleReason() -> String? {
         ConsoleSession.reason(from: CGSessionCopyCurrentDictionary() as? [String: Any])
+    }
+}
+
+/// A captured picture on its way into ffmpeg (#8859): its two NV12 planes, written without row padding, which raw
+/// video in has no room for. Packed rows go in one write; padded ones are packed first (≈0.05 ms for 1080p).
+private struct Picture: @unchecked Sendable {
+    let image: CVPixelBuffer
+
+    init(_ image: CVPixelBuffer) { self.image = image }
+
+    func write(width: Int, height: Int, to write: (UnsafeRawPointer, Int) -> Bool) {
+        guard CVPixelBufferLockBaseAddress(image, .readOnly) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        let planes = [(plane: 0, rows: height), (plane: 1, rows: height / 2)] // luma, then interleaved chroma
+        if planes.allSatisfy({ CVPixelBufferGetBytesPerRowOfPlane(image, $0.plane) == width }) {
+            for p in planes {
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(image, p.plane), write(base, width * p.rows) else { return }
+            }
+            return
+        }
+        let total = width * height * 3 / 2
+        let packed = UnsafeMutableRawPointer.allocate(byteCount: total, alignment: 64)
+        defer { packed.deallocate() }
+        var offset = 0
+        for p in planes {
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(image, p.plane) else { return }
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(image, p.plane)
+            for row in 0 ..< p.rows {
+                (packed + offset).copyMemory(from: base + row * stride, byteCount: width)
+                offset += width
+            }
+        }
+        _ = write(packed, total)
     }
 }
 #endif
