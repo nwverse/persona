@@ -72,10 +72,10 @@ struct MeetingPageBar: View {
     /// The last upload's `200` had no `room`: an older manager took the meeting with Persona off (`RecordingSync`).
     private var roomMissing: Bool { sync.roomMissing.contains(entry.id) }
     /// Persona is off and Just Me is off: there is nobody to ask.
-    private var silenced: Bool { target == .room && !role.attends }
+    private var silenced: Bool { target == .room && !role.answers }
     /// Persona's role attends but it can't be asked now (`MeetingAsk.canAsk`): the hub took the meeting without its room.
     /// Just Me still goes (it needs only a meeting that records).
-    private var unreachable: Bool { target == .room && role.attends && !MeetingAsk.canAsk(entry, roomMissing: roomMissing) }
+    private var unreachable: Bool { target == .room && role.answers && !MeetingAsk.canAsk(entry, roomMissing: roomMissing) }
     /// Why the follow-up can't be written now (after the meeting).
     private var hold: MeetingConversation.FollowupHold? { target == .followup ? conversation.followupHold(entry) : nil }
     /// More words than the route takes (`MeetingConversation.maxText`): Send stays off and the caption says so, rather

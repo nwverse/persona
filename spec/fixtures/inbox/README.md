@@ -128,5 +128,5 @@ Rules the expected values follow:
 - **Counts**: `action` its rows with tone `needs`; `working` and `fyi` their rows with tone `neutral`; `done` and `all` `null`. A count of 0 stays in the data; the badge hides it.
 - **Shown sections**: the chosen one when it has rows (Done also when the day counts name groups); under `all`, every section with rows in `inbox_list`'s order.
 - **Empty**: Done chosen and empty is `filtered` with a source or kind, `no_match` with a search, else `section`. Otherwise nothing shown with rows somewhere else open is `section`; nothing open anywhere is `filtered`, `no_match` or `caught_up`, in that order.
-- **Landing**: the item's section, Done for a done item, and `all` with `open_collapsed` for a collapsed one.
+- **Landing**: the item's section, Done for a done item, and `all` with `open_collapsed` for a collapsed one. When a list applies it (an outside opening, or a list shown beside the item) is the module doc's rule, not part of these cases.
 - **Search**: text appearing saves the choice and shows `all`; a pick narrows; text cleared restores the saved choice (`action` when none). Entering the Inbox shows `action`, or `all` with `saved: action` when a kept search text comes with it.

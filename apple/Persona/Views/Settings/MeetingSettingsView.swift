@@ -16,11 +16,28 @@ struct MeetingSettingsView: View {
 
     var body: some View {
         SettingsForm {
+            if MeetingAttendees.conversation(model) {
+                // Persona is someone a meeting invites (#8731, D3): one switch, off by default, the same hub field
+                // (off, or listener; a participant default stays one and reads as on).
+                Section {
+                    Toggle(isOn: Binding(get: { role?.answers ?? false }, set: { on in Task { await save(on ? .listener : .off) } })) {
+                        Text("Invite Persona Automatically")
+                    }
+                    .accessibilityIdentifier("settings-meeting-invite")
+                    .disabled(role == nil || saving)
+                } header: {
+                    Text("Persona in Meetings")
+                } footer: {
+                    Text(role?.answers == true
+                         ? String(localized: "Every meeting starts with Persona in it, answering on screen. Remove it from a meeting on the Meetings page.")
+                         : String(localized: "A meeting starts with only you. Invite Persona on the Meetings page when you need it; the minutes and highlights come either way."))
+                }
+            } else {
             Section {
                 Picker(String(localized: "Persona in Meetings"), selection: Binding(
                     get: { role ?? .off },
                     set: { role in Task { await save(role) } })) {
-                    ForEach(MeetingAttendance.allCases, id: \.self) { Text($0.title).tag($0) }
+                    ForEach(MeetingAttendance.choices, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
@@ -33,6 +50,7 @@ struct MeetingSettingsView: View {
                     if let role { Text(role.detail) }
                     Text("Each meeting recording starts with this. To change it for one meeting, pick another on the Recordings page before you start.")
                 }
+            }
             }
             if let transcription, transcription.offered, let values = transcription.values {
                 MeetingTranscriptionSettingsSections(settings: transcription, values: values)

@@ -35,8 +35,8 @@ import java.io.File
 
 /**
  * Settings › Extensions in each of the app's languages (docs/protocol/i18n.md): the list, an extension's page (switch, form, secrets,
- * contributions, sandbox, permissions, about), the market, one of its extensions, the markets, and the settings home's
- * "Extensions" section with a card that failed. Every style light and dark, written as PNGs to `build/i18n-shots/` (or
+ * contributions, sandbox, permissions, about), the market, one of its extensions, the markets, and the Extensions page's
+ * slots section with a card that failed. Every style light and dark, written as PNGs to `build/i18n-shots/` (or
  * `-Dpersona.shots=<dir>`). The extensions' own words (names, form labels) are data and stay as the hub sends them.
  */
 @RunWith(AndroidJUnit4::class)
@@ -147,7 +147,7 @@ class ExtensionLanguagesShotsTest {
         }
     }
 
-    /** The settings home's "Extensions" section: a card whose view could not be read ("Retry"), a nav page. */
+    /** Settings › Extensions slots: a card whose view could not be read ("Retry"), a nav page. */
     @Composable
     private fun SlotsSection() {
         val failed = ExtensionViewState(error = ExtensionFailure(R.string.settings_ext_load_failed, "hub"))
