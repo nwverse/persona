@@ -96,8 +96,9 @@ object MachineManagementModule {
             .stateIn(scope, SharingStarted.Eagerly, stacks.selected.value?.id.orEmpty())
         return SelectedGroupStandingAuthorizations(
             current = {
-                val stack = stacks.selected.value ?: throw HubFailure(HubError.NoNetwork)
-                StandingHub(stack.id, stack.names, stack.plainBindings.assistantManagement)
+                stacks.selected.value?.let { stack ->
+                    StandingHub(stack.id, stack.names, stack.plainBindings.assistantManagement)
+                }
             },
             hubIdentity = identity,
         )

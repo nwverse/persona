@@ -29,6 +29,8 @@ import org.robolectric.annotation.Config
 import persona.core.contracts.StandingAuthorizationList
 import persona.core.contracts.api.StandingAuthorizationsSource
 import persona.core.designsystem.PersonaTheme
+import persona.core.hub.HubError
+import persona.core.hub.HubFailure
 
 /**
  * The page keys its list on the hub, and a revoke that was already confirmed stays on the hub that listed the row.
@@ -88,5 +90,40 @@ class StandingAuthorizationsHubTest {
             assertEquals(listOf("hub-a list", "hub-a revoke hub-a", "hub-b list"), calls.toList())
             gate.complete(Unit)
         }
+    }
+
+    @Test fun clearingTheHubShowsTheLoadError() {
+        val identity = MutableStateFlow("hub-a")
+        val source = object : StandingAuthorizationsSource {
+            override val hubIdentity: StateFlow<String> = identity
+            override fun pinned(): StandingAuthorizationsSource {
+                val hub = identity.value
+                return object : StandingAuthorizationsSource {
+                    override val hubIdentity: StateFlow<String> = MutableStateFlow(hub)
+                    override fun pinned(): StandingAuthorizationsSource = this
+                    override suspend fun list(): StandingAuthorizationList {
+                        if (hub.isEmpty()) throw HubFailure(HubError.NoNetwork)
+                        return StandingAuthorizationList(1, listOf(
+                            persona.core.contracts.StandingAuthorization(id = hub, machineId = "mac", directory = "/code/weather", actions = listOf("merge")),
+                        ))
+                    }
+                    override suspend fun revoke(id: String) = error("unused")
+                }
+            }
+            override suspend fun list() = error("the page must pin the hub")
+            override suspend fun revoke(id: String) = error("the page must pin the hub")
+        }
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                Box(Modifier.width(400.dp).height(800.dp)) {
+                    StandingAuthorizationsPage(source, emptyList(), onBack = {})
+                }
+            }
+        }
+        rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag("standing-row-hub-a")).fetchSemanticsNodes().isNotEmpty() }
+        rule.runOnIdle { identity.value = "" }
+        rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag("standing-error")).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("standing-row-hub-a").assertDoesNotExist()
+        rule.onNodeWithText("Couldn't load standing authorizations").assertIsDisplayed()
     }
 }

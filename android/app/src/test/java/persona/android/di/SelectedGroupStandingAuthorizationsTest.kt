@@ -3,7 +3,10 @@ package persona.android.di
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.hub.HubError
+import persona.core.hub.HubFailure
 import persona.core.contracts.SessionKey
 import persona.core.contracts.StandingAuthorization
 import persona.core.contracts.StandingAuthorizationList
@@ -61,5 +64,17 @@ class SelectedGroupStandingAuthorizationsTest {
             MutableStateFlow("hub-a"),
         )
         assertEquals("mac-mini", source.pinned().list().authorizations.single().machineId)
+    }
+
+    @Test fun noSelectedStackPinsAnOfflineSource() = runBlocking {
+        val source = SelectedGroupStandingAuthorizations({ null }, MutableStateFlow(""))
+        val pinned = source.pinned()
+        assertEquals("", pinned.hubIdentity.value)
+        val listed = runCatching { pinned.list() }.exceptionOrNull()
+        val revoked = runCatching { pinned.revoke("sa") }.exceptionOrNull()
+        val direct = runCatching { source.list() }.exceptionOrNull()
+        assertTrue(listed is HubFailure && listed.kind == HubError.NoNetwork)
+        assertTrue(revoked is HubFailure && revoked.kind == HubError.NoNetwork)
+        assertTrue(direct is HubFailure && direct.kind == HubError.NoNetwork)
     }
 }
