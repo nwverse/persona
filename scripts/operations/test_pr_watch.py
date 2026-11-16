@@ -203,6 +203,18 @@ class WatcherTests(unittest.TestCase):
         update.assert_not_called()
         self.assertIn("after 3 repair rounds", self.watcher.state.get("example/one", 7)["failure"])
 
+    def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
+        findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(pr_watch_repair, "repair_with_model", side_effect=pr_watch_common.WatchError("worker timeout")), \
+                patch.object(pr_watch, "checked", return_value=""):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["repair_rounds"], 1)
+        self.assertEqual(state["review_attempts"], 0)
+        self.assertEqual(state["failure"], "worker timeout")
+
     def test_review_infrastructure_is_retried_immediately_then_backed_off(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", side_effect=[pr_watch_common.WatchError("timeout"), []]) as review, \

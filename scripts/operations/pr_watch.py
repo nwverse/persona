@@ -899,7 +899,7 @@ class Watcher:
             # verification failures and semantic findings stay terminal for
             # this exact base/head until the PR changes.
             retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
-            attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + (0 if phase == "semantic" else 1)
+            attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + (0 if phase in ("semantic", "semantic_repair") else 1)
             outcome = ("retry" if retry or phase == "verification" else
                        "merge_failed" if phase == "merge" else "failed")
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
