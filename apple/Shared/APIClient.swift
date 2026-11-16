@@ -2034,6 +2034,11 @@ nonisolated struct APIClient: Sendable {
         /// Why the relay gave no grant, in its words ("403 topic not served", a redirect, a network error): the hub
         /// says it beside this device in Settings › Devices and `hub doctor` (#5998).
         var relayError: String?
+        /// Urgent calls (docs/assistant/urgent-call.md): the PushKit token while calls are on, the relay's grant for it
+        /// (topic `<bundle id>.voip`) and why there is none. An older hub ignores them.
+        var voipToken: String?
+        var voipGrant: String?
+        var voipError: String?
         /// What this app understands beyond the first version's pushes: `withdraw`, a silent push naming the cards that
         /// are over, whose notifications it then removes (#4349). An older hub ignores it.
         var features: [String]?
@@ -2043,13 +2048,24 @@ nonisolated struct APIClient: Sendable {
             case name, kind, topic, locale, features
             case deviceID = "device_id", apnsToken = "apns_token", apnsEnv = "apns_env"
             case pushKey = "push_key", relayURL = "relay_url", relayGrant = "relay_grant", relayError = "relay_error"
+            case voipToken = "voip_token", voipGrant = "voip_grant", voipError = "voip_error"
         }
     }
     /// Registers this device's push token; the hub answers which way its pushes take (nil: an older hub, which does
     /// not say).
     func register(device: DeviceBody) async throws -> PushRoute? {
-        struct Answer: Decodable { var push: PushRoute? }
-        return try await post("/api/v1/devices", body: device, as: Answer.self).push
+        try await registerRoutes(device: device).push
+    }
+
+    /// What a registration answers: the way pushes reach the device, and the way an urgent call's ring does (nil: an
+    /// older hub, which does not say).
+    struct DeviceRoutes: Decodable, Sendable {
+        var push: PushRoute?
+        var call: PushRoute?
+    }
+
+    func registerRoutes(device: DeviceBody) async throws -> DeviceRoutes {
+        try await post("/api/v1/devices", body: device, as: DeviceRoutes.self)
     }
 
     /// The way a hub's pushes reach a device (docs/operations/push-relay.md "Which way a device is pushed").
