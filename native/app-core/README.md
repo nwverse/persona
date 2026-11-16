@@ -227,6 +227,34 @@ workspace tests also exercise frozen-reading identity, explicit folds, filters a
 portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
+## Android answer adapter and shadow (#9143)
+
+`AnswerBuilder.build/display` keeps its existing signatures and delegates to a Kotlin-default `AnswerAdapter`, so every
+existing Agent request and chat panel keeps the same returned Kotlin objects. The separate hub-provided task
+recommendation text (`TodoAsk.recommend`) is not part of this question-option projection. Release compiles only the
+Kotlin path; `RustCoreAnswer`, the observer and its preferences have no Release source-set or JNI entry.
+
+The DEBUG launcher accepts `--es debug.answerShadow on` (then force-stop and relaunch; use `off` to disable it for the
+next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar and is
+also a dependency of the standard root `test`. Kotlin returns before the observer's own bounded FIFO worker converts
+the question-only operation, loads the native library or calls JNI. At most 32 comparisons wait in that queue, repeated
+labels are compared once per adapter after a successful comparison, and a full queue drops only new diagnostic work.
+The DEBUG answer JNI itself uses a bounded Rust channel (one executing job plus at most one waiting job), with a
+one-second result wait on the client's background worker. The main thread never calls it; a native thread that itself
+hangs cannot be forcibly cancelled, but it cannot make the queue unbounded.
+Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
+unsupported, not as parity. Exact answer/display comparisons stay in that worker, including picks and custom-answer
+state for all three supported operations; a report contains only domain, rule and counts/flags/operation enums, never a
+label, question, answer, identifier or exception message. Every 10 completed comparisons logs only
+`answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+
+The replay compares all 15 `questions.json` and 9 `recommended.json` complete expected objects through both the
+current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
+as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
+evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
+both packaged ABIs. The U+200B display boundary was independently fixed by #9189 and is included in the ninth case;
+the retained `other` draft distinction found by the stricter multi-step shadow is #9238 and is not normalized here.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes

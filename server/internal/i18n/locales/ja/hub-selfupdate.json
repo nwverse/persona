@@ -24,6 +24,7 @@
   "why_bad_source": "hub.json の update.url を使えません：{error}",
   "why_dev": "開発版（{version}）",
   "err_no_binary": "このバージョンには{platform}用のバイナリがありません",
+  "err_release_moved": "{version}のダウンロード中に新しいバージョン{newer}が公開されたため、更新しませんでした。もう一度「アップデート」するとインストールします",
   "busy_redeploying": "再デプロイ中",
   "err_no_image": "このハブのイメージがわかりません：composeがPERSONA_IMAGEをコンテナに渡していません",
   "image_private": "新しいイメージを確認できません：{error}。.envでPERSONA_REGISTRY_TOKEN（このイメージを読めるトークン）を設定するか、イメージを公開にしてください",

@@ -54,9 +54,23 @@ data class AnswerResult(
     val nextPage: Int? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class OptionDisplay(val text: String, val recommended: Boolean)
 
+/** Existing production call sites stay exactly as they were. */
 object AnswerBuilder {
+    @JvmStatic fun display(label: String): OptionDisplay = AnswerAdapters.current().display(label)
+
+    @JvmStatic fun build(
+        interaction: Interaction,
+        action: AnswerAction,
+        draft: AnswerDraft = AnswerDraft(),
+        context: AnswerContext = AnswerContext(),
+    ): AnswerResult = AnswerAdapters.current().build(interaction, action, draft, context)
+}
+
+/** The unmodified production behavior behind [AnswerAdapter]. */
+internal object KotlinAnswerBuilder {
     fun display(label: String): OptionDisplay {
         val suffix = listOf("(Recommended)", "（推荐）", "(推荐)").firstOrNull(label::endsWith) // i18n-ignore: marks the agent writes on its options
         return if (suffix == null) OptionDisplay(label, false)
