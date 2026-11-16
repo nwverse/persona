@@ -364,7 +364,7 @@ func (g *gate) done(t turn, probe, answered bool, err error) error {
 	// the connection and the probes count.
 	counts := !g.held || probe
 	pause := after
-	if reason == ReasonQuota && pause <= 0 && !hasExplicitQuotaCooldown(err) {
+	if reason == ReasonQuota && pause <= 0 {
 		pause = quotaPause
 	}
 	if reason == ReasonBusy {
@@ -431,16 +431,9 @@ func NoRetry(header http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
 }
 
-// hasExplicitQuotaCooldown distinguishes an explicit Retry-After of zero from no Retry-After at all. The former
-// pauses only until now; only the latter gets the default quota pause in gate.done.
-func hasExplicitQuotaCooldown(err error) bool {
-	var h *httpError
-	return errors.As(err, &h) && h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven
-}
-
 func (e *httpError) Error() string { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
 func (e *httpError) failureKind() FailureKind {
-	return failureKindFor(e.status, e.code, e.message)
+	return failureKindFor(e.status, e.code, e.message, e.errorType)
 }
 
 // Transient: the same request tried again may get an answer: the call ran out of time, the connection failed (before
@@ -477,7 +470,7 @@ func Transient(err error) bool {
 }
 
 // parseRetryAfter reads digits-only Retry-After seconds or an HTTP date. Malformed and absent values are not a
-// cooldown; valid zero remains distinct so an explicit reset can expire immediately. Large values cap before the
+// cooldown; callers require a positive duration for the 429 quota-reset exception. Large values cap before the
 // duration multiplication can overflow.
 func parseRetryAfter(v string) (time.Duration, bool) {
 	v = strings.TrimSpace(v)
@@ -648,11 +641,12 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		reason = ReasonQuota
 	case h.status == http.StatusPaymentRequired:
 		reason = ReasonQuota
-	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven:
-		// A valid explicit cooldown is a quota reset, not a busy answer to back off from exponentially.
+	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven && h.retryAfter > 0:
+		// Only a valid positive 429 cooldown is a quota reset instead of an ordinary busy answer.
 		reason = ReasonQuota
-	case h.noRetry:
-		// Every other explicit no-retry response returns its raw error without a busy pause, cap or probe.
+	case h.noRetry && h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
+		// No-retry suppresses same-request transience, but 429/503/529 still need the busy gate without a positive
+		// 429 cooldown. Other statuses retain their raw no-retry behavior.
 		return "", 0, ""
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
