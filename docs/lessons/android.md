@@ -844,6 +844,101 @@ inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose 
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
 
+## A failed read over an empty cache is not an empty page
+
+A page that keeps its last answer while it reloads has four things to say, and mixing them up shows wrong facts: a spinner for a first read, the content (with a pull indicator) while it reloads, one line above the kept content when the reload failed, and the whole-page failure with Retry only when there is nothing to show. The trap is the cached empty list: with `value.isEmpty()` and an error, drawing the empty state tells an offline user that they have nothing. `jLoadableContent` treats a loaded empty value that carries a failure as a failure. A retry must also leave the failure state at once: the Hub version page kept its error on screen for the whole retry until the model got a `loading` flag that the page maps back to the spinner.
+
+## A folded diff's rows are not its lines
+
+`DiffView` shows an edit's long runs of unchanged lines as one row each until Show All, so the preview's row index is no
+longer the line's index (it used to be, when the preview was just the first 40 lines). Anything that jumps to a line
+(`DiffNavigation`'s next / previous change) must wait until the list is open in full (`totalItemsCount == lines.size`)
+before `scrollToItem(line index)`, and the lazy list's keys must come from the line's place in the whole diff (`l<index>`,
+`f<first folded index>`), not from the row's position, or a growing diff re-keys its rows and the open state and scroll
+position drift. Word ranges are in the line's own UTF-16 offsets: widen tabs piece by piece (`diffText`), never on the
+whole line first.
+
+Pixel assertions need a pixel that is really inside the row: the last few pixels at a clipped rounded edge can be the parent's
+background, even when the row's center has the expected tint. Compose's `Color` constructor also quantizes alpha to eight
+bits, so a token written as `0.14` reads back as `36 / 255`; compare rendered alpha with that quantization in mind.
+
+## A build value a library page needs, without threading it through the shell
+
+The pairing page lives in `feature:settings` but the build config (application id, OAuth scheme, the getting-started address) belongs to `:app`, and a library has no `BuildConfig` of its own. Pass such a value as a Gradle property into a manifest placeholder, carry it in a `<meta-data>`, and read it with `PackageManager.getApplicationInfo(..., GET_META_DATA)` in the library (`GettingStarted.kt`). Give the placeholder a marker default (`"unset"`) that the parser refuses, so a build without the value hides the feature instead of showing a dead link, and keep the value out of the code, docs and tests (tests inject a placeholder address through a parameter).
+
+A page shown before any shell exists (pairing, first run) is outside `ShellLinkHost`, so its links would leave the app through the system handler. Wrap the page itself in `ChatLinkHost` (`PairingLinkHost` in `PairingScreen.kt`, only where the page has no shell around it) so they open in the same in-app card as everywhere else, without touching `Root.kt`. Read `LocalUriHandler.current` inside the host's content, never above it: a handler read in the page's own body is the activity's and the tap goes to the system browser. Wrap only when the page has a link to open: the host starts a WebView pool and warms the renderer as soon as it is composed.
+
+The password page added below the welcome page needs its own Back step (`passwordEntry = false`), or the generic welcome
+back jumps over the connect choices. A WebView feature check is not enough for an optional appearance setting: Robolectric
+can report algorithmic darkening as supported and then throw `UnsupportedOperationException` when it is set. Ignore that
+failure for the optional setting rather than losing the whole link card.
+
+## A held list page: read its controls from the live page, let what needs the user through, and hold again
+
+The Agents list holds the page it drew while it scrolls (`AgentsFeedHold.kt`). Four things went wrong in the first version, and
+each is a rule for the next one:
+
+- Everything the screen derives to decide whether the hold still applies, and what the pill compares, must come from the page
+  the hub last sent. Taken from the drawn page, a tapped fold or a changed grouping would never release the hold, since the held
+  page still shows the old setting.
+- What needs the user (and what is offline) must not wait with the rest. Holding the whole page left a row saying Working
+  after it needed the user, and a pill is no substitute for a row that says so. `landCritical` gives those rows their state and
+  leaves the order and the rest of the page held; it is a copy of a few fields, not a second projection.
+- A release is not the end of the scroll. A release by the cap, a changed control or a fetched page, with the list still moving,
+  must hold again from the page that landed, or every later push lands under the finger until the next gesture. The
+  `isScrollInProgress` flow only reports a change, so the code that releases has to re-hold itself. The same goes for a scroll
+  the screen starts itself (the jump to the latest): it is not the user reading and holds nothing, and a user who takes the list
+  over mid-way gets a hold from that moment.
+- Which page is held must not be Compose state read where the page is drawn. A state read there composes the whole screen at the
+  start and end of every scroll, the moment the finger is most sensitive; keep it a plain field and bump one counter only when a
+  landing changes what is drawn.
+
+A paged list also needs its own exit: a fetched page appends rows that were never live, so it lands at once, but only when the old
+window is the start of the new one in the same order (`growsPage`); a session a push put in front is a live insertion. Write the
+release conditions as pure functions (`holdsAgainst`, `landCritical`) so each can be tested without a list. A restoration test must
+change the hub's data when the old screen is taken down (`DisposableEffect.onDispose`), not while it is alive, or the old screen
+saves the new place and the test passes on the wrong thing.
+
+A computer's state is read both from `page.machines` and from the `AgentMachineGroup` in `page.list.machines`; landing only
+one leaves the group header's online dot stale. Remove a group whose last urgent row left, using the same parent/child rule
+as `retainOpenedRows`, or an empty heading remains. Repeated jumps to the latest overlap: a Boolean programmatic-scroll
+flag is cleared by the first coroutine to finish while the second is still moving. Count the jumps (or fence their jobs)
+so only the last one restores user-scroll handling. With a frozen Compose test clock, a state mutation can need one frame
+to invalidate and another to apply composition and side effects; advance both before asserting. For a restoration test,
+hold a real `state.scroll` open until the snapshot observer sees it instead of using an instantaneous `scrollToItem`.
+
+Process restoration and live-read anchoring are two owners of the same list and must be tested together. The lazy list first
+restores its own index; the live observer can take a reading anchor there and then undo the subsequent key-based restore with
+a well-intentioned offset correction. `RestoreAgentReadingPosition` reports while its restore is pending, and
+`KeepAgentReadingPosition` clears its anchor and issues no correction during that interval. Testing `RestoreAgentReadingPosition`
+alone passes while the production composition still returns to another row; composing both makes the old failure reproducible.
+
+`am kill` stops background processes, not an app held important by a foreground service: check the PID instead of assuming the
+command created process death. On a rooted test emulator, a direct signal after state saving can exercise retained-task
+restoration without `force-stop` clearing the task; record that distinction and keep the same-PID `am kill` attempt as a
+no-op, not as restoration evidence.
+
+A joined flow can say "loaded" about a list it has not caught up with. The Agents page joined the hub's latest status to a
+page built on a throttled context, so a status that turned loaded right after a build was reported with that build's empty
+rows: on a loaded emulator under CPU load, the saved row was missing from a list that said it was in, and the restore gave up
+and opened at the top (one failure in 64 recorded runs of the old build; logs showed loaded with no tree rows, the rows 266 ms
+later in that single run, not a measure of delay). Stamp loaded on the page from the status it was built from, and make the
+restore keep the saved place for a bounded time after a loaded list without the row, so a late row is still put back. Test the
+old order directly (rows after a loaded line, a status flipping right after the first build) rather than lengthening a wait.
+
+## Cleanup warnings are acknowledged per operation, not consumed on arrival
+
+A hub retry of an extension uninstall creates a new operation id, so it needs the same in-flight pairing phase as the first
+start: cache matching pushes, join them to the response's id, and let an early terminal packet beat the older running
+response. Relisting after reconnect must leave bounded terminal tombstones for every listed uninstall, including success
+and cancellation; otherwise an older running packet revives the operation and a later duplicate success notifies again.
+Historical tombstones never notify.
+
+Warnings that arrive while another operation's sheet is up are not shown, but they are not consumed either. Keep cumulative
+warnings separate from the lines actually acknowledged with OK, and queue a notice per operation. Present the next one only
+after the current OK and while no newer operation is running. Test early success on first start and retry, historical
+success/failure/cancellation followed by old running packets, and two successful operations whose late warnings overlap.
+
 ## Shadow comparisons require equivalent contracts (#7448)
 
 A shared field name does not imply shared semantics: Kotlin continuity's per-input `verified` can be true for restored

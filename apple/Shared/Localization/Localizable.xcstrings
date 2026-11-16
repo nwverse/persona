@@ -133347,6 +133347,29 @@
       },
       "extractionState" : "manual"
     },
+    "Return Key Sends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return Key Sends"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returnキーで送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按回车发送"
+          }
+        }
+      }
+    },
     "Review" : {
       "localizations" : {
         "en" : {
@@ -136446,6 +136469,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SOCKS5 代理"
+          }
+        }
+      }
+    },
+    "Send with Return; Shift-Return starts a new line" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send with Return; Shift-Return starts a new line"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returnで送信、Shift + Returnで改行"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回车直接发送，Shift + 回车换行"
           }
         }
       }
@@ -200021,19 +200067,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "appearance display color theme style text size layout dark light glow"
+            "value" : "appearance display color theme style text size layout dark light glow return enter keyboard send"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外观 显示 颜色 主题 风格 字号 布局 深色 浅色 发光"
+            "value" : "外观 显示 颜色 主题 风格 字号 布局 深色 浅色 发光 回车 键盘 发送"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外観 表示 色 テーマ スタイル 文字サイズ レイアウト ダーク ライト"
+            "value" : "外観 表示 色 テーマ スタイル 文字サイズ レイアウト ダーク ライト Return キーボード 送信"
           }
         }
       }
