@@ -1,4 +1,7 @@
+import AVFoundation
 import Foundation
+import LiveCommunicationKit
+import PushKit
 import Testing
 @testable import Persona
 
@@ -126,5 +129,62 @@ struct UrgentCallCardTests {
         card.questions = [Question(question: "要不要现在停掉？", header: nil, multiSelect: false, options: [QuestionOption(label: "现在停掉")])]
         let answered = await call(card, owner: ["现在停掉", "不对"])
         #expect(answered.isEmpty)
+    }
+}
+
+/// System frameworks call these delegates and callbacks on queues of their own, so none may be the main actor's (this
+/// target's default): an Objective-C protocol's witness or a closure handed to an Objective-C API traps in Swift's
+/// runtime isolation check when called off the main thread. Each delegate is called here through its protocol from a
+/// background queue, as the system does; and launching makes no LiveCommunicationKit manager at all.
+struct UrgentCallIsolationTests {
+    private func offMain(_ body: @escaping @Sendable () -> Void) async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                body()
+                done.resume()
+            }
+        }
+    }
+
+    @Test func liveCommunicationKitCallsItsDelegateOffTheMainThread() async {
+        let config = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil, maximumConversationGroups: 1,
+                                                       maximumConversationsPerConversationGroup: 1, includesConversationInRecents: false,
+                                                       supportsVideo: false, supportedHandleTypes: [.generic])
+        nonisolated(unsafe) let manager = ConversationManager(configuration: config)
+        nonisolated(unsafe) let delegate: any ConversationManagerDelegate = UrgentCallLCKDelegate()
+        await offMain {
+            delegate.conversationManagerDidBegin(manager)
+            delegate.conversationManagerDidReset(manager)
+            delegate.conversationManager(manager, timedOutPerforming: JoinConversationAction(conversationUUID: UUID()))
+            delegate.conversationManager(manager, didDeactivate: AVAudioSession.sharedInstance())
+        }
+    }
+
+    @Test @MainActor func pushKitCallsItsDelegateOffTheMainThread() async {
+        nonisolated(unsafe) let registry = PKPushRegistry(queue: nil)
+        nonisolated(unsafe) let delegate: any PKPushRegistryDelegate = UrgentCallPush.shared
+        await offMain { delegate.pushRegistry?(registry, didInvalidatePushTokenFor: .voIP) }
+        #expect(UrgentCallPush.shared.token == nil)
+    }
+
+    /// The call page's cover, on every launch, reads only the presenter: no call center's LiveCommunicationKit manager.
+    @Test @MainActor func launchingMakesNoCallManager() {
+        _ = UrgentCallPresenter.shared.session
+        #expect(!UrgentCallCenter.shared.managerMade)
+    }
+
+    /// Every system callback in the call code is written `nonisolated`, so a new one cannot quietly be the main actor's.
+    @Test func callCallbacksAreNotTheMainActors() throws {
+        let calls = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().appending(path: "Persona/Calls")
+        let files = try FileManager.default.contentsOfDirectory(at: calls, includingPropertiesForKeys: nil).filter { $0.pathExtension == "swift" }
+        var seen = 0
+        for file in files {
+            for line in try String(contentsOf: file, encoding: .utf8).split(separator: "\n")
+            where line.contains("func conversationManager") || line.contains("func pushRegistry") {
+                seen += 1
+                #expect(line.contains("nonisolated"), "\(file.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            }
+        }
+        #expect(seen >= 10)
     }
 }
