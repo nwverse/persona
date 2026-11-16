@@ -251,7 +251,15 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val sidebarState = rememberSaveableStateHolder()
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
-    val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
+    // Both beside-the-page column choices start from what was kept and only persist when toggled beside the page.
+    val rememberColumns = !shell.automation && session.demo == null
+    val keptSidebarColumnShown = rememberSaveable { mutableStateOf(if (rememberColumns) saved.sidebarColumnShown else true) }
+    val keptAgentsListShown = rememberSaveable { mutableStateOf(if (rememberColumns) saved.agentsListShown else true) }
+    val columnMemory = remember(store, rememberColumns) {
+        ColumnMemory(keptSidebarColumnShown.value, keptAgentsListShown.value, persist = rememberColumns)
+    }
+    val sidebarColumnShown = rememberSaveable { mutableStateOf(columnMemory.sidebarShown) }
+    val agentsListShown = rememberSaveable { mutableStateOf(columnMemory.agentsShown) }
     // Overlays close when the tab or beside/over placement changes; the beside-column choice stays saved.
     val sidebarOverlayShown = remember { mutableStateOf(false) }
     val agentsOverlayShown = remember { mutableStateOf(false) }
@@ -379,10 +387,19 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         }
     }
     LaunchedEffect(store) {
-        snapshotFlow { ShellPosition(selected, machine, stacks.mapNotNull { (tab, stack) ->
-            stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
-                .lastOrNull()?.let { tab to it }
-        }.toMap(), navigator.inboxReturns()) }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
+        snapshotFlow {
+            ShellPosition(
+                selected,
+                machine,
+                stacks.mapNotNull { (tab, stack) ->
+                    stack.mapNotNull { when (it) { is ChatRoute -> it; is InteractionRoute -> it.chat; else -> null } }
+                        .lastOrNull()?.let { tab to it }
+                }.toMap(),
+                navigator.inboxReturns(),
+                columnMemory.sidebarShown,
+                columnMemory.agentsShown,
+            )
+        }.distinctUntilChanged().collect { position -> withContext(Dispatchers.IO) { store.save(position) } }
     }
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
@@ -631,6 +648,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.
         val currentRegular = rememberUpdatedState(regular)
+        val currentWide = rememberUpdatedState(wide)
+        val currentSelected = rememberUpdatedState(selected)
+        val currentLifecycle = rememberUpdatedState(lifecycle)
         val currentOthersWaiting = rememberUpdatedState(othersWaiting)
         val currentConnection = rememberUpdatedState(connection)
         val leading: @Composable (Boolean) -> Unit = { assistantRoot ->
@@ -644,7 +664,18 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 JPersonaButton(sidebar.personaState, sidebarLabel, {
                     if (assistantRoot && currentRegular.value) {
                         val shown = if (currentColumnsOver.value) sidebarOverlayShown else sidebarColumnShown
-                        shown.value = !shown.value
+                        val next = !shown.value
+                        shown.value = next
+                        if (columnMemory.toggleSidebarBeside(
+                                shown = next,
+                                regular = currentRegular.value,
+                                columnsOver = currentColumnsOver.value,
+                                tabShown = currentSelected.value == AppTab.Persona,
+                                foreground = currentLifecycle.value.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED),
+                            )
+                        ) {
+                            keptSidebarColumnShown.value = next
+                        }
                     }
                     else sidebar.opened.value = true
                 })
@@ -803,8 +834,25 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val policy = panePolicies.getValue(tab)
                         val sceneDirective = if (policy.singleRightStack) directive.onePane() else directive
-                        val listDetail = rememberShellListDetail(tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
-                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
+                        val listDetail = rememberShellListDetail(
+                            tab, sceneDirective, maxWidth, paneHinges, detailOpen = detail != null,
+                            store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)),
+                            initialCollapsed = tab == AppTab.Agents && !agentsListShown.value,
+                            onCollapsedChange = if (tab == AppTab.Agents) { collapsed ->
+                                val nextShown = !collapsed
+                                agentsListShown.value = nextShown
+                                if (columnMemory.toggleAgentsBeside(
+                                        shown = nextShown,
+                                        twoPanes = currentWide.value,
+                                        columnsOver = currentColumnsOver.value,
+                                        tabShown = currentSelected.value == AppTab.Agents,
+                                        foreground = currentLifecycle.value.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED),
+                                    )
+                                ) {
+                                    keptAgentsListShown.value = nextShown
+                                }
+                            } else null,
+                        )
                         val agentsOverlay = rememberAgentsOverlayStrategy(columnsOver && tab == AppTab.Agents &&
                             stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown) {
                             val barHeight = remember { mutableIntStateOf(0) }
