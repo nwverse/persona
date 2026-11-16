@@ -782,6 +782,7 @@ func (s *Service) finishInteraction(id string) {
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
+	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
 	done := assistantwire.FleetResolved{ID: p.ix.ID, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
