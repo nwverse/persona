@@ -225,9 +225,10 @@ notices/statuses. Exact manifests, malformed inputs and deliberately wrong expec
 `harmony/tests/core-host/stream-repair.test.mjs` (#9241) replays 21 fence + 14 marker + 22 table repairs and 6
 fence-end + 15 table/text end expectations stated independently from the Apple Swift test source through the
 `stream_repair` host projection command, with malformed inputs and deliberately wrong expectations rejected.
-The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks`,
-`coreProjectStreamRepair` (#9241), `coreProjectTaskIndex` and `coreProjectTurns` (#9235); their generated declarations
-are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other five take JSON documents.
+The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAnswer`, `coreDisplayAnswer`,
+`coreProjectStreamChunks`, `coreProjectStreamRepair` (#9241), `coreProjectTaskIndex` and `coreProjectTurns`; their
+generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other six take
+JSON documents.
 `harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
 all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
 turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The

@@ -35,6 +35,13 @@ final class PersonaCoreProjectionTests: XCTestCase {
         print("PersonaCore Swift/C task_index: \(count) complete objects plus the background receipt")
     }
 
+    func testEveryViewedImageProjectionThroughTheRealCBinding() throws {
+        let result = try ProjectionBindingReplay.viewedImages()
+        XCTAssertEqual(result.completeObjects, 28)
+        XCTAssertEqual(result.noLineBoundaries, 8)
+        print("PersonaCore Swift/C viewed_images: \(result.completeObjects) complete objects, \(result.noLineBoundaries) no-line boundaries")
+    }
+
     func testJSONComparisonKeepsLargeIntegersAndScalarFailuresExact() throws {
         let larger = try ProjectionFixture.decode("9007199254740993", "large integer")
         let smaller = try ProjectionFixture.decode("9007199254740992", "adjacent integer")
@@ -69,6 +76,7 @@ final class PersonaCoreProjectionTests: XCTestCase {
             PersonaCoreProjections.streamChunks,
             PersonaCoreProjections.turns,
             PersonaCoreProjections.taskIndex,
+            PersonaCoreProjections.viewedImages,
         ] {
             XCTAssertThrowsError(try projection("")) { error in
                 XCTAssertEqual(error as? PersonaCoreProjectionError, .emptyResult)
