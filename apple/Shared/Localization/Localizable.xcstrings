@@ -78691,6 +78691,29 @@
         }
       }
     },
+    "Invite Persona to ask, or use Just Me." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite Persona to ask, or use Just Me."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先邀请 Persona 再提问，或者用“仅自己”。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問するには Persona を招待するか、「自分だけ」を使ってください。"
+          }
+        }
+      }
+    },
     "Isolated preview: scripts and network are off. Turn them on in ⋯" : {
       "localizations" : {
         "en" : {
@@ -159555,7 +159578,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音频保存在这台设备上，文字会进入知识库。结束后的录音无法继续。"
+            "value" : "音频保存在这台设备上，文字会进入知识库。结束后不能再接着录。"
           }
         }
       }
@@ -178407,29 +178430,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Turn Persona on in the menu to ask, or use Just Me." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn Persona on in the menu to ask, or use Just Me."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在菜单里打开 Persona 再提问，或者用“仅自己”。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "質問するにはメニューで Persona をオンにするか、「自分だけ」を使ってください。"
-          }
-        }
-      }
     },
     "Turn it on and tap Restart" : {
       "localizations" : {

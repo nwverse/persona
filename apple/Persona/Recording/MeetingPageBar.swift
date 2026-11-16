@@ -141,12 +141,6 @@ struct MeetingPageBar: View {
         .onChange(of: justMe) { _, on in
             if on { call.endHold(entry.id) }
         }
-        .confirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible) {
-            Button("End and Write the Minutes", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
-            Button("Keep Going [Meeting Room]", role: .cancel) {}
-        } message: {
-            Text("The audio is saved on this device and its text goes to Knowledge. A stopped recording can't be continued.")
-        }
         .photosPicker(isPresented: $choosingPhotos, selection: $picks, maxSelectionCount: Theme.Recording.photoPickLimit,
                       matching: .images)
         .onChange(of: picks) { _, items in addPicked(items) }
@@ -185,7 +179,7 @@ struct MeetingPageBar: View {
     /// Why the field can't take words now, and the way out when there is one here (an older manager has none: the role
     /// is on, and nothing on the phone changes it).
     private var blocked: String? {
-        if silenced { return String(localized: "Turn Persona on in the menu to ask, or use Just Me.") }
+        if silenced { return String(localized: "Invite Persona to ask, or use Just Me.") }
         if unreachable { return String(localized: "Persona can't take part in this meeting right now.") }
         switch hold {
         case .finishing?: return String(localized: "Persona is finishing the meeting. You can ask about it in a moment.")
@@ -386,6 +380,13 @@ struct MeetingPageBar: View {
             }
             MeetingRoomButton(title: String(localized: "End [Meeting Room]"), symbol: Theme.Icon.interrupt, ends: true) { confirmingStop = true }
                 .accessibilityIdentifier("recording-stop")
+                // On the button, so the question points at End.
+                .confirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible) {
+                    Button("End and Write the Minutes", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
+                    Button("Keep Going [Meeting Room]", role: .cancel) {}
+                } message: {
+                    Text("The audio is saved on this device and its text goes to Knowledge. A stopped recording can't be continued.")
+                }
         }
     }
 

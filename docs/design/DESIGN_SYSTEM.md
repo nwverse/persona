@@ -2198,7 +2198,7 @@ meeting started with the live view, three pages that swipe and are named in a ro
 in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
 row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
 answers out loud or on screen; only while it is in), **Invite / Remove**, and **End** in the danger color, which asks
-first (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
+first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
 with the speaker mid-meeting is an experiment behind a switch (B2). Ordinary recordings and #3746 meetings keep the live
 view, in the same dark full screen.
 
