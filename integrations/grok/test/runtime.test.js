@@ -441,3 +441,65 @@ test('manual check times out and closes its native session without publishing a 
   assert.ok(f.acp.calls.some((c) => c.method === 'session/close'))
   assert.deepEqual(await f.runtime.driver.listSessions(), [])
 })
+
+async function terminalSession(f, { cwd = join(f.home, 'code', 'project'), raw = RAW, updated = new Date().toISOString(), text = 'Hello from the terminal' } = {}) {
+  const dir = join(f.home, '.grok', 'sessions', encodeURIComponent(cwd), raw)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'summary.json'), JSON.stringify({ info: { id: raw, cwd }, generated_title: 'Terminal work', current_model_id: 'fast-model', updated_at: updated }))
+  await writeFile(join(dir, 'updates.jsonl'), JSON.stringify({ method: 'session/update', params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } } } }) + '\n')
+  return { cwd, dir }
+}
+const holdInTerminal = (f, raw = RAW, pid = process.pid) =>
+  writeFile(join(f.home, '.grok', 'active_sessions.json'), JSON.stringify([{ session_id: raw, pid, cwd: '/', opened_at: new Date().toISOString() }]))
+
+test('conversations started in a terminal are listed outside the assistant directories, not as the assistant', async (t) => {
+  const f = await fixture(t)
+  const { cwd } = await terminalSession(f)
+  const rows = await f.runtime.driver.listSessions()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].session_id, ID)
+  assert.equal(rows[0].cwd, cwd)
+  assert.equal(rows[0].space_name, 'project')
+  assert.equal(rows[0].title, 'Terminal work')
+  assert.equal(f.runtime.sessions.get(ID).assistant, false)
+  assert.equal((await f.node.peer.call('session.items', { session_id: ID })).items[0].text, 'Hello from the terminal')
+})
+
+test('old terminal conversations are left out unless a terminal still holds them', async (t) => {
+  const f = await fixture(t)
+  await terminalSession(f, { updated: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString() })
+  assert.equal((await f.runtime.driver.listSessions()).length, 0)
+  await holdInTerminal(f)
+  assert.equal((await f.runtime.driver.listSessions()).length, 1)
+})
+
+test('a conversation open in a terminal is read-only until that terminal exits, then continues through ACP', async (t) => {
+  const f = await fixture(t)
+  await terminalSession(f)
+  await holdInTerminal(f)
+  await f.runtime.driver.listSessions()
+  for (const call of [() => f.send('From the phone'), () => f.node.peer.call('session.rename', { session_id: ID, title: 'New' }),
+    () => f.node.peer.call('session.modes', { session_id: ID, permission_mode: 'plan' })]) {
+    await assert.rejects(call(), /open in a terminal/)
+  }
+  assert.equal(f.acp.calls.some((c) => c.method === 'session/load'), false)
+  // A process that no longer runs holds nothing.
+  await holdInTerminal(f, RAW, 2 ** 22 + 12345)
+  await f.send('From the phone')
+  await until('continuation prompt', () => f.acp.prompts.length === 1)
+  assert.equal(f.acp.calls.find((c) => c.method === 'session/load').params.cwd, join(f.home, 'code', 'project'))
+  await f.done()
+})
+
+test('a watched terminal conversation receives the turns the terminal appends', async (t) => {
+  const f = await fixture(t)
+  const { dir } = await terminalSession(f)
+  await holdInTerminal(f)
+  await f.runtime.driver.listSessions()
+  await f.node.peer.call('session.watch', { session_id: ID })
+  const more = JSON.stringify({ method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Terminal answer' } } } }) + '\n'
+  await writeFile(join(dir, 'updates.jsonl'), (await readFile(join(dir, 'updates.jsonl'), 'utf8')) + more)
+  await f.runtime.driver.listSessions()
+  await until('terminal answer pushed', () => f.node.events.some((e) => e.event === 'session.items' && e.params.session_id === ID &&
+    e.params.items.some((i) => i.text === 'Terminal answer')))
+})

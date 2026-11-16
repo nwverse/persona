@@ -117,7 +117,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
-| `ui` (version 8) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
+| `ui` (version 9) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
@@ -2041,7 +2041,7 @@ Where each client puts them:
 
 | placement | Web | Mac | iOS | Android |
 | --- | --- | --- | --- | --- |
-| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
+| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages"); after a reload the entries and an open page's last view are drawn from this browser's cache until the hub answers (web.md "Extension pages on reload") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
 | `overview_card` | On the Overview page (`/overview`), a row of cards below the Agent summary | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
 | `machine_section` | Machine detail page | Machine detail page | Machine detail page | Machine detail page |
 | `inbox_item` | The Inbox detail pane: the header (title, source, **Done**, ✦ summary, **AI draft reply** / **Hand to AI**) stays, and the conversation / body below is replaced by what the extension draws | When an item from this connector's source is opened in the Inbox, the right column (✦ summary and buttons, **Done**) stays, and the conversation / body on the left is replaced by the extension's View | When an item from this connector's source is opened in the Inbox, the action bar under the navigation bar (✦ summary, **AI Draft Reply** / **Hand to AI**) and **Done** stay, and the conversation / body below is replaced by the extension's View | Same as web (Android's own PR) |
@@ -2077,7 +2077,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `8`; the web sends `8` (its native stream `7`), Android and iOS send `8` (their native streams too); **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `9`; the web sends `9` (its native stream `7`), Android and iOS send `8` (their native streams too) until they draw all of UI version 9; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2220,7 +2220,7 @@ If you do not want to see an extension's entries and cards: disable the extensio
 
 ### Compatibility
 
-**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 8).
+**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 9).
 
 - **Older app, new slot**: the app only queries the slots it knows by `placement`; it does not see new slots and does not error. `nav_page` also appears in the extension details' `ui`, so older apps (web) can still open it under **Settings › Extensions** › this extension;
   important content can therefore just go in `nav_page`, without a `plugin_page`.
@@ -2659,6 +2659,56 @@ actions only in their menu), measured from the page's width; a launcher's page a
 a line. In the native stream a link press goes back as its section's key, as the section's other controls do. Unit tests
 `ExtensionColumnsTests`, UI test `ExtensionColumnsUITests` against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`).
 
+
+## UI version 9 (#9337)
+
+A quota or usage card: rings side by side, each filled to how much of a limit is left (or used), with the amount in its centre, a small
+unit under it and the limit's name below ("5 hours", "This week", "Fable this week"), green while there is enough and amber once it runs
+low; the card's footer says when each limit resets. The app sends `9` in `context.ui_version`; `hub.extension_points.ui` is `9`; there is
+no new `features` entry (an older hub holds the app's version to its own, and the extension sees that). No new component: one field on a
+tile, authoritative in `schema/extension/view.schema.json` (`Tile.gauge`, `x-since: 9`); examples are
+`schema/extension/examples/View.v9-*.json`. **An app sends 9 only when it draws all of the below** (and all of 8).
+
+| Where | Field | What it does |
+| --- | --- | --- |
+| `Tile.gauge` (a `grid`'s or a `carousel`'s tile) | `{ratio, unit?, color?}` (`Gauge`) | The tile is drawn as a ring instead of its icon: filled to `ratio` (0–1, required) from the top, clockwise; the tile's `value` in its centre with `unit` (at most 8 characters, as a control's unit) under it, or the percentage when the tile has no value; the tile's `title` and `subtitle` below. `color` is a named color (`Color`), never a hex; without it the tile's `color`, else the app's accent. The tile's badge, action, extra actions and switch stay as on any tile |
+
+A tile with a gauge has no `image` and no `spark` (the hub's check refuses them: the ring takes their place); its `icon` is drawn only by an
+older app. The status tiles above such a card are ordinary `grid` tiles, and the reset times are the section's `footer`. The apps read a
+gauge out as "title: value unit, N%" (a meter; a button when the tile has an action).
+
+```json
+{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+  {"key": "five_hours", "title": "5 hours", "value": "4.69", "gauge": {"ratio": 0.94, "unit": "USD", "color": "green"}},
+  {"key": "fable_week", "title": "Fable this week", "value": "0.62", "badge": {"text": "Low", "color": "amber"},
+   "gauge": {"ratio": 0.12, "unit": "USD", "color": "amber"}}
+]}
+```
+
+### Compatibility
+
+The hub draws version 9 for an older app (`downgrade9`, `server/internal/extension/ui_v9.go`, before the older downgrades), so nothing
+the ring says is lost:
+
+| Version 9 | Version 6–8 |
+| --- | --- |
+| `Tile.gauge` | left out; the tile stays, with what the ring said on it |
+| `gauge.unit` | after the tile's value (`4.69 USD`), when that fits the value's 40 characters |
+| `gauge.ratio` | the percentage (`94%`) in the tile's subtitle, after it with ` · ` when it has one and it fits 80 characters; the tile's value when it has none |
+| `gauge.color` | the tile's `color` when the tile has none of its own, so a low quota still shows in its color |
+
+Below version 6 the tile becomes a row as any other (see "UI version 6"), with that value and subtitle. A native stream's client of 8
+gets the same. Extensions may still draw an older app differently (`ui_version`).
+
+**The web** (#9337) draws all of it and sends `9` (`web/src/views/extensions/ViewBody9.tsx`, a chunk loaded with the first tile that has
+a gauge; the tile keeps the ring's space meanwhile and is already read out as it will be). The ring is 96 px across on a page and 80 px in a card, its track the
+color's tint, its arc with round ends; the value is in `text-xl` (`text-lg` in a card) with tabular figures, the unit and subtitle in
+`text-submeta`, the title in `text-meta`. The arc eases to a new ratio when the view is drawn again, and snaps with Reduce Motion. The
+tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone has two a line. The web's native stream still sends 7.
+`web/e2e/extension-gauge.mjs` checks it in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1`).
+
+**iOS and Android** have the field in their generated types and still send 8: the hub draws them the tile without its ring until
+they draw version 9 (their own changes, after #9337).
 
 ## System-level placements (#1858)
 
