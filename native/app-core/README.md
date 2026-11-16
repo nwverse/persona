@@ -25,6 +25,7 @@ cargo test --locked                                # unit tests and the shared f
 cargo run --locked -p persona-core-typegen          # regenerate the clients' codecs after changing a wire type
 cargo run --locked -p persona-core-typegen -- --check
 cargo build --locked --release -p persona-core-ffi # libpersona_core.{a,so,dylib}
+bash scripts/test-c-abi.sh                        # independent C11 client + dynamic C exports (Linux)
 python3 -I scripts/ohos-napi-defs.py --check        # napi-derive definitions and index.d.ts
 python3 -I scripts/test_ohos_napi_defs.py           # declaration parser and drift-check regressions
 ```
@@ -39,7 +40,14 @@ No NAPI library is linked or loaded. For testing the converter alone, `--records
 and `--print-records` prints the validated raw records. Keep the complete generic `ThreadsafeFunction` types on the
 `#[napi]` functions: napi-derive does not expand Rust type aliases into their TypeScript callback signatures.
 
-`scripts/ci/core.sh` runs all of these, plus formatting and clippy. Android's `:core:rustcore` tests build a host copy of
+`scripts/ci/core.sh` runs all of these, plus formatting and clippy. On Linux, `scripts/test-c-abi.sh` compiles
+`tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
+`libpersona_core.so`, compares the `empty_list` projection and empty-buffer behavior, and checks that the header's
+declared functions have dynamic exports. This proves a real C compiler/linker can consume the C ABI; it is not a Swift
+importer, Apple ABI, NAPI/HAP, physical-device or performance test. Generated inputs and the executable stay under the
+ignored `native/app-core/target/` directory.
+
+Android's `:core:rustcore` tests build a host copy of
 the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
 turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
 Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
@@ -71,7 +79,7 @@ values and the open cells for #6871.
 
 | Evidence | Command / entry point | What still has to be supplied or measured |
 | --- | --- | --- |
-| Core tests, codec drift, HarmonyOS binding lints and notices, release FFI | `scripts/ci/core.sh` | Rustup only; no phone or platform SDK. The lane adds the `aarch64-unknown-linux-ohos` Rust target and lints `persona-core-ohos` with its `ohos` feature, which the host build never compiles. Nothing is linked, so this is not evidence of a device library. |
+| Core tests, codec drift, HarmonyOS binding lints and notices, release FFI and independent C ABI client | `scripts/ci/core.sh` | Rustup, a C compiler and binutils on Linux; no phone or platform SDK. The lane adds the `aarch64-unknown-linux-ohos` Rust target and lints `persona-core-ohos` with its `ohos` feature, which the host build never compiles. The separate C11 client links to the real release library, but this is not evidence of Swift/Apple ABI or a device library. |
 | Real host-JNI boundary | `cd android && ./gradlew :core:rustcore:test` | JDK 21; host JVM tests do not need the Android NDK or a device. |
 | Android ABIs and packaged bytes | Build the APK, then run `native/app-core/scripts/android-package-report.py` with the exact arguments in `android/core/rustcore-android/README.md`. | x86_64 Linux, JDK 21, SDK 37 and NDK 29.0.14206865. Reports raw/stripped/gzip/APK bytes and ELF/APK alignment, not store downloads. |
 | Android real packaged-JNI replay | `native/app-core/scripts/android-device-test.py --serial <owned serial> --suite replay --apk </absolute/path/to/debug androidTest.apk> --output <report directory>` | An explicitly owned emulator or device; no hub is needed. The existing host and software-emulator passes do not establish physical arm64 or a 16 KiB kernel. |
