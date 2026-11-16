@@ -57,7 +57,7 @@ internal object ExtensionIcons {
     fun of(name: String?): PhIcon = when (name) {
         "chart" -> PhIcons.ChartBar
         "gauge" -> PhIcons.Gauge
-        "list" -> PhIcons.ListChecks
+        "list" -> PhIcons.List
         "bell" -> PhIcons.BellSimple
         "doc" -> PhIcons.FileText
         "calendar" -> PhIcons.CalendarBlank

@@ -296,6 +296,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.rememberKind = false
 		s.trustKinds(ctx, []PlanTask{*t})
 	}
+	if t.grantSchedule != "" { // "let this scheduled task start these": the same kind, the schedule's own (#8045)
+		id := t.grantSchedule
+		t.grantSchedule = ""
+		s.grantScheduleKind(ctx, id, *t)
+	}
 	prompt := t.Prompt
 	if t.Continues != "" {
 		prompt += "\n\n" + prompts.RenderTaskContinuation(prompts.TaskContinuation{TodoID: t.Continues, Readonly: t.Readonly})

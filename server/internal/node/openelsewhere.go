@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -63,6 +64,19 @@ type claudeProc struct {
 	dir  string // the sessions directory the file is in (its key file is next to it)
 }
 
+// literalGlobPath quotes every glob metacharacter in a literal directory. Windows does not support backslash escaping
+// in filepath patterns, so use character classes there. The caller appends the active *.json suffix separately.
+func literalGlobPath(path string) string {
+	return literalGlobPathForOS(path, runtime.GOOS)
+}
+
+func literalGlobPathForOS(path, goos string) string {
+	if goos == "windows" {
+		return strings.NewReplacer("[", "[[]", "*", "[*]", "?", "[?]").Replace(path)
+	}
+	return strings.NewReplacer(`\`, `\\`, "[", `\[`, "*", `\*`, "?", `\?`).Replace(path)
+}
+
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.
 // The list calls it on every rebuild (once a second): a file is read again only once it changed (claudefiles.go).
 func (n *Node) liveClaudes() []claudeProc {
@@ -74,7 +88,7 @@ func (n *Node) liveClaudes() []claudeProc {
 	}
 	listed := map[string]bool{}
 	for _, sessions := range dirs {
-		files, _ := filepath.Glob(filepath.Join(sessions, "*.json"))
+		files, _ := filepath.Glob(filepath.Join(literalGlobPath(sessions), "*.json"))
 		for _, f := range files {
 			p, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(f), ".json"))
 			if err != nil || p <= 0 || seen[p] {

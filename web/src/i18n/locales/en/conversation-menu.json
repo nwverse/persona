@@ -19,6 +19,7 @@
   "leader_made": "Pinned “{title}”",
   "leader_ended": "Unpinned “{title}”: its tasks keep their lead",
   "leader_failed": "Couldn't change it: {error}",
+  "delete": "Delete…",
   "make_leader_confirm": "Confirm Pin",
   "make_leader_confirm_detail": "The chat moves to Pinned and no longer appears in Recent.",
   "end_leader_confirm": "Confirm Unpin",

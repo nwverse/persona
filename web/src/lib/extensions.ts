@@ -526,6 +526,16 @@ export function pickerChoices(f: ExtensionField, current: Json | undefined, mach
   return out;
 }
 
+/**
+ * The secret the header's "Still needs" line opens (#8853): the first one not set that is required or that the line
+ * names (the hub writes a missing secret's own title into needs_setup). Undefined when nothing it names is a secret to
+ * set here (a dependency, a configuration an upgrade no longer takes): the line stays plain text.
+ */
+export function setupSecret(needs: string[] | undefined, secrets: ExtensionSecret[] | undefined): ExtensionSecret | undefined {
+  if (!needs?.length) return undefined;
+  return secrets?.find((s) => !s.set && (!!s.required || needs.some((n) => !!s.title && n.includes(s.title))));
+}
+
 /** Where a reference's value comes from, in words: "From <provider> · <item>". */
 export function secretState(s: ExtensionSecret): string {
   if (s.reference) return t("lib-extensions.from_provider", { provider: s.reference.provider_name || s.reference.provider });

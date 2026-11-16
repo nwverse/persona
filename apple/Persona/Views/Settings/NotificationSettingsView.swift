@@ -15,13 +15,15 @@ struct NotificationSettingsView: View {
     #if os(iOS)
     @State private var activitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
     #endif
-    @State private var debugIsland = false
     /// The quiet-hours request in flight: an older one's answer does not undo a newer choice.
     @State private var quietRequest = 0
     /// The hub's low-distraction switch (#8157); nil until read, and on a hub without it (the section stays away).
     @State private var lowDistraction: Bool?
     /// The low-distraction write in flight: an older one's answer does not undo a newer choice.
     @State private var lowDistractionRequest = 0
+    /// `-openIslandSettings YES` / `-openUrgentCallSettings YES` (DEBUG): the page opened for screenshots.
+    @State private var debugPage: DebugPage?
+    private enum DebugPage: Hashable { case island, urgentCalls }
 
     var body: some View {
         SettingsForm {
@@ -129,6 +131,20 @@ struct NotificationSettingsView: View {
             }
             #endif
 
+            // Urgent calls (docs/assistant/urgent-call.md): the assistant may ring this iPhone; off by default.
+            #if os(iOS)
+            Section {
+                NavigationLink {
+                    UrgentCallSettingsView()
+                } label: {
+                    Label("Urgent Calls", systemImage: Theme.Icon.voiceChannel)
+                }
+                .accessibilityIdentifier("notify.urgentCalls")
+            } footer: {
+                Text("When something can't wait, Persona can ring this iPhone like a phone call.")
+            }
+            #endif
+
             // The hub's switch, for every device (#8157): after this device's own rows.
             if let lowDistraction { lowDistractionSection(lowDistraction) }
 
@@ -151,11 +167,20 @@ struct NotificationSettingsView: View {
         }
         #if DEBUG && os(iOS)
         // `-openIslandSettings YES` (with `-openNotificationSettings YES -tab settings`): Dynamic Island.
-        .navigationDestination(isPresented: $debugIsland) { IslandSettingsView(island: binding(\.island)) }
+        // One destination for both: a second navigationDestination(isPresented:) on the same view never opened.
+        .navigationDestination(item: $debugPage) { page in
+            switch page {
+            case .island: IslandSettingsView(island: binding(\.island))
+            case .urgentCalls: UrgentCallSettingsView()
+            }
+        }
         .task {
-            if UserDefaults.standard.bool(forKey: "openIslandSettings") {
+            // `-openUrgentCallSettings YES` (with `-openNotificationSettings YES -tab settings`): Urgent Calls.
+            let d = UserDefaults.standard
+            let page: DebugPage? = d.bool(forKey: "openIslandSettings") ? .island : d.bool(forKey: "openUrgentCallSettings") ? .urgentCalls : nil
+            if let page {
                 try? await Task.sleep(for: .milliseconds(600))
-                debugIsland = true
+                debugPage = page
             }
         }
         #endif

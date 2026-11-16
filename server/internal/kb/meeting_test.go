@@ -127,6 +127,8 @@ func TestRoomUploadRoles(t *testing.T) {
 		markedAnyPrivates bool
 	}{
 		{"listener", `"kind":"meeting","room":{"attendance":"listener"}`, true, false, AttendanceListener, "", false, false},
+		{"notes (#8851)", `"kind":"meeting","room":{"attendance":" Notes "}`, true, false, AttendanceNotes, "", false, false},
+		{"notes on a note", `"kind":"note","room":{"attendance":"notes"}`, true, false, AttendanceOff, AttendanceNotMeeting, false, false},
 		{"off", `"kind":"meeting","room":{"attendance":"off"},"private":false`, true, false, AttendanceOff, "", true, true},
 		{"empty room", `"kind":"meeting","room":{}`, true, false, AttendanceOff, "", false, false},
 		{"unknown", `"kind":"meeting","room":{"attendance":"speaker"}`, true, false, AttendanceOff, AttendanceUnknownRole, false, false},
@@ -144,6 +146,9 @@ func TestRoomUploadRoles(t *testing.T) {
 				t.Fatalf("put %+v %v", put, err)
 			}
 			r := recordingNow(t, e, recID)
+			if answering := c.role == AttendanceListener || c.role == AttendanceParticipant; r.Answering() != answering || r.Attending() != (c.role != AttendanceOff) {
+				t.Fatalf("answering %v attending %v for %s", r.Answering(), r.Attending(), c.role)
+			}
 			if r.RoomMeeting() != c.room || r.MarkedNotPrivate() != c.markedNotPrivate || (r.Conv != nil && r.Conv.Private != nil) != c.markedAnyPrivates {
 				t.Fatalf("stored %+v", r.Conv)
 			}

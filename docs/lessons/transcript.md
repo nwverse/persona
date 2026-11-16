@@ -102,6 +102,18 @@ Tests need the system row followed by a real-shaped synthetic assistant error, p
 an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
 and the item-cache version bump separately.
 
+Behind a gateway the switch itself was the failure (#7319): Claude Code picks the fallback model's ID on its own, so a
+gateway without it answers 404 after two requests that cannot succeed. A gateway-shaped managed provider whose model
+list lacks one of Claude Code's fallback models (`refusalFallbackModels`, `node/launcherenv.go`) now launches with
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`, and the refusal ends the turn instead: a `system/model_refusal_no_fallback`
+row and a synthetic `stop_reason: "refusal"` reply. Keep both endings tested: the no-fallback one must stay a
+safeguards refusal for the assistant's recovery whether the reply carries `isApiErrorMessage`, an error code or neither,
+and must not become `model_fallback_unavailable` (no fallback row); the fallback 404 must stay
+`model_fallback_unavailable`, the user's, for every start that keeps the switch: Anthropic's own API, gateways whose list
+has every fallback model, unmanaged launchers, providers from before #2455, providers with no model list and providers
+that turn the switch back on. The fallback IDs are Claude Code's and change with its versions: when a transcript's
+`fallbackModel` names one the constant does not have, update the constant and its test.
+
 ## Subagent peer reports are nonterminal tool output (#3378)
 
 A peer display name such as `general-purpose` does not prove a subagent relationship. Associate `origin.from` /
@@ -338,3 +350,14 @@ A view that fetches once per id cannot recover when the store puts the same id b
 - JavaScript's `Object.keys` order (integer-like keys first) and default UTF-16 sort do not match Go's UTF-8/code-point key
   order. Sort only the SDK's removal and preorder keys with UTF-8 bytes; delete from the original object so surviving fields
   retain their own output order. Compare shared cases as parsed values and keep known encoder differences platform-specific.
+
+## A Codex command can outlive its turn (#8868)
+
+- Codex records one `CommandExecution` twice when a command is backgrounded: first with `status: backgrounded` and its
+  start output, later with `completed` or `failed` and the final output under the same item id. The first record is a
+  pending `tool_use`, not a finished call; emitting a result there discards the real output and exit status.
+- Suppress a repeated background record through genuinely pending state, which survives `task_started`, and mark the id
+  as seen only when its terminal record arrives. If the pending cap evicted the id, its completion must still keep the
+  final output: fall back to a standalone call and result pair, as a cold read does when it no longer tracks the call.
+- Keep the pending queue and map in sync and remove the entry on completion. Otherwise a later command that reuses the
+  id inherits the old queue position, and the cap evicts it instead of the oldest live command.

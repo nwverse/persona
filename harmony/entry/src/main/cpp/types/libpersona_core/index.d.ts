@@ -13,6 +13,10 @@ export interface PersonaCoreNative {
   coreClose(handle: number): void;
   coreConfig(): Uint8Array;
   coreProjectSort(input: string): string;
+  coreProjectAnswer(input: string): string;
+  coreDisplayAnswer(label: string): string;
+  coreProjectStreamChunks(input: string): string;
+  coreProjectTaskIndex(input: string): string;
 }
 
 declare const native: PersonaCoreNative;

@@ -8,7 +8,7 @@ Confirmed product decision: cards, HTML cards included, are always on, with no s
 
 When comparisons, choices, input, or progress monitoring are needed, the assistant decides to draw a card. Cards and extensions share `schema/extension/view.schema.json`, generated types, and component renderers. One-off cards in the body are saved with the transcript; cards that keep updating are handed to the hub through tools for storage.
 
-Conclusions and key numbers still belong in the body. Every card requires a plain-text `fallback` for Watch, notifications, summaries, and unsupported clients. Legacy `persona-card` continues to convert to View through `sdk/go/wire/personacard.go`, without a separate rendering implementation.
+Conclusions and key numbers still belong in the body. Every card requires a plain-text `fallback` for Watch, notifications, summaries, and unsupported clients. Legacy `persona-card` continues to convert to View through `sdk/go/wire/personacard.go`, without a separate rendering implementation. Paseo's ```paseo-ui blocks reach the apps as `persona-view`, written by the hub (`docs/integrations/paseo.md`, "Mapping").
 
 ```persona-view
 {

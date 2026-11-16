@@ -1,4 +1,4 @@
-import { ComposeListItemV2, ContentItemV2 } from '@kit.ArkUI';
+import { ComposeListItemV2, ContentItemV2, LengthMetrics } from '@kit.ArkUI';
 import { ClientModel } from '../models/ClientModel';
 import { ManagementModel, ManagementRow, ManagementInput } from '../models/ManagementModel';
 import { ResourceRow, Wire } from '../models/Wire';
@@ -9,6 +9,8 @@ import { nativeNotifications, NativeNotifications } from '../platform/NativeNoti
 import { listScheduleTemplates } from '../core/ScheduleTemplates';
 import type { ScheduleTemplate } from '../core/ScheduleTemplates';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
+import { AgentWorkspace } from '../models/AgentWorkspace';
+import { Colors } from '../design/Colors';
 import { DeviceLookPicker } from './DeviceLookPicker';
 import { LicenseNotices } from './LicenseNotices';
 import { common } from '@kit.AbilityKit';
@@ -18,11 +20,13 @@ export struct SettingsPage {
   @Require @Param model: ClientModel;
   @Param page: string = '';
   @Param active: boolean = true;
+  @Param agentWorkspace: AgentWorkspace = new AgentWorkspace();
   @Local machineOwner: ClientModel | undefined;
   @Local machineDirectoryKey: string = '';
   private machineRevision: number = 0;
   private pairingOwnerScope: string = '';
   private mounted: boolean = false;
+  @Local appearanceRevision: number = 0;
   @Event onOpen: (page: string) => void = () => {};
   @Event onDetail: (page: string, row: ResourceRow) => void = () => {};
   @Event onExtension: (extensionId: string, uiId: string, title: string) => void = () => {};
@@ -59,15 +63,55 @@ export struct SettingsPage {
   @Local channelTargetDraft: string = '';
   @Local look: DeviceLook = deviceLook;
 
-  aboutToAppear(): void { this.mounted = true; this.syncCatalogRows(); this.syncManagementRows(); this.syncInputRows(); this.loadSettingsPage(); this.loadLook(); }
+  private appearanceCurrent(owner: ClientModel, revision: number, scope: string, generation: number): boolean {
+    return this.mounted && this.active && this.page === 'appearance' && this.appearanceRevision === revision &&
+      this.model === owner && owner.owns(generation, scope);
+  }
+
+  private applyAgentGrouping(index: number, owner: ClientModel, workspace: AgentWorkspace, revision: number,
+    scope: string, generation: number): void {
+    if (!this.appearanceCurrent(owner, revision, scope, generation) || this.agentWorkspace !== workspace ||
+      !workspace.isBoundTo(owner) || workspace.loading) return;
+    workspace.setGroupingMode(['state', 'machine', 'space'][index] || 'state');
+  }
+
+  private applyDensity(index: number, owner: ClientModel, revision: number, scope: string, generation: number): void {
+    if (!this.appearanceCurrent(owner, revision, scope, generation) || !this.look.ready) return;
+    this.look.setDensity(index === 1 ? 'compact' : 'standard');
+  }
+
+  private applyLanguage(index: number, owner: ClientModel, revision: number, scope: string, generation: number): void {
+    if (!this.appearanceCurrent(owner, revision, scope, generation)) return;
+    this.model.setLanguage(['default', 'en-US', 'zh-CN', 'ja-JP'][index]).then(() => {
+      if (this.appearanceCurrent(owner, revision, scope, generation) && index === 0 && this.model.language === 'default')
+        this.getUIContext().getPromptAction().showToast({ message: tr('language_after_restart') });
+    });
+  }
+
+  private applyColorMode(index: number, owner: ClientModel, revision: number, scope: string, generation: number): void {
+    if (this.appearanceCurrent(owner, revision, scope, generation)) this.model.setAppearance(index);
+  }
+
+  private applyStyle(index: number, owner: ClientModel, revision: number, scope: string, generation: number): void {
+    if (this.appearanceCurrent(owner, revision, scope, generation)) this.model.setStyle(['system', 'glass', 'brief', 'board'][index] || 'system');
+  }
+
+  private agentGroupingIndex(workspace: AgentWorkspace): number {
+    const index = ['state', 'machine', 'space'].indexOf(workspace.groupingMode);
+    return index < 0 ? 0 : index;
+  }
+
+  aboutToAppear(): void { this.mounted = true; this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.syncInputRows(); this.loadSettingsPage(); this.loadLook(); }
   private async loadLook(): Promise<void> {
     if (!this.mounted || !this.active || this.page !== 'appearance') return;
     const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration(), pairing = owner.pairingRevision();
+    const revision = this.appearanceRevision;
+    const current = (): boolean => this.mounted && this.active && this.page === 'appearance' && this.appearanceRevision === revision &&
+      this.model === owner && owner.owns(generation, scope) && pairing === owner.pairingRevision();
     const context = this.getUIContext().getHostContext(); if (!context) return;
     try { await this.look.initialize(context as common.UIAbilityContext); }
-    catch (_) { this.look.error = 'device_look_storage_failed'; return; }
-    if (!this.mounted || !this.active || this.page !== 'appearance' || this.model !== owner ||
-      !owner.owns(generation, scope) || pairing !== owner.pairingRevision()) return;
+    catch (_) { if (current()) this.look.error = 'device_look_storage_failed'; return; }
+    if (!current()) return;
     await this.look.bind(owner);
   }
   private basePage(): string { return this.page === 'extension_detail' || this.page === 'extension_catalog' ? 'extensions' : this.page === 'connector_detail' ? 'connectors' : this.page === 'channel_detail' ? 'channels' : this.page; }
@@ -93,11 +137,12 @@ export struct SettingsPage {
     row.group = this.model.profile.id; row.manager = this.model.profile.manager; row.detail = item?.detail || ''; row.raw = JSON.stringify(item?.raw || Wire.payload([], [])); this.onDetail(page, row);
   }
 
-  aboutToDisappear(): void { this.mounted = false; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
+  aboutToDisappear(): void { this.mounted = false; this.appearanceRevision++; this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); }
   @Monitor('management.extensionDetailMissing') extensionRemoved(): void { if (this.mounted && this.active && this.page === 'extension_detail' && this.management.extensionDetailMissing) this.onBack(); }
-  @Monitor('active') machineVisibilityChanged(): void { if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
+  @Monitor('active') machineVisibilityChanged(): void { this.appearanceRevision++; if (!this.active) { this.machineRevision++; if (this.page === 'appearance') this.look.bind(undefined); } else if (this.mounted) { this.loadSettingsPage(); this.loadLook(); } }
   @Monitor('model.connected') settingsConnectionChanged(): void { if (this.mounted && this.active) { if (this.model.connected) this.loadSettingsPage(); this.loadLook(); } }
-  @Monitor('model.profile', 'model.forgottenEpoch') scheduleOwnerChanged(): void { this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
+  @Monitor('model.profile', 'model.forgottenEpoch', 'model.connected') scheduleOwnerChanged(): void { this.appearanceRevision++; this.syncCatalogRows(); this.syncManagementRows(); this.management.scheduleReceiptChat(this.model); this.loadLook(); }
+  @Monitor('page') settingsPageChanged(): void { this.appearanceRevision++; }
   @Monitor('management.catalogRows') catalogRowsChanged(): void { this.syncCatalogRows(); }
 
   @Monitor('management.rows', 'management.scheduleRuns', 'management.channelDetail', 'management.selectedId', 'page', 'model.profile', 'machineOwner')
@@ -1033,35 +1078,84 @@ export struct SettingsPage {
     }.width('100%').height('100%')
   }
 
+  private appearanceSelector(kind: string, revision: number): (index: number) => void {
+    const owner = this.model, workspace = this.agentWorkspace, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (index: number): void => {
+      if (kind === 'language') this.applyLanguage(index, owner, revision, scope, generation);
+      else if (kind === 'color') this.applyColorMode(index, owner, revision, scope, generation);
+      else if (kind === 'style') this.applyStyle(index, owner, revision, scope, generation);
+      else if (kind === 'density') this.applyDensity(index, owner, revision, scope, generation);
+      else if (kind === 'group') this.applyAgentGrouping(index, owner, workspace, revision, scope, generation);
+    };
+  }
+  private appearanceAvatarAction(revision: number, accent: boolean): (key: string) => void {
+    const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (key: string): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) { if (accent) this.look.setAccent(key); else this.look.setAvatar(key); } };
+  }
+  private appearanceRefreshAction(revision: number): () => void {
+    const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+    return (): void => { if (this.appearanceCurrent(owner, revision, scope, generation)) this.loadLook(); };
+  }
   @Builder appearancePage() {
     List() {
-      DeviceLookPicker({ model: this.look, active: this.active, onAvatarSelected: (key: string): void => { this.look.setAvatar(key); },
-        onAccentSelected: (id: string): void => { this.look.setAccent(id); }, onRefresh: (): void => { this.loadLook(); } })
+      ForEach([this.appearanceRevision], (revision: number) => {
+        DeviceLookPicker({ model: this.look, active: this.appearanceCurrent(this.model, revision, this.model.scope(), this.model.connectionGeneration()),
+          onAvatarSelected: this.appearanceAvatarAction(revision, false),
+          onAccentSelected: this.appearanceAvatarAction(revision, true),
+          onRefresh: this.appearanceRefreshAction(revision) })
+      }, (revision: number) => String(revision))
       ListItem() {
-        Row({ space: Tokens.gap }) {
-          Text(tr('language')).fontSize(Tokens.body).layoutWeight(1)
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('language')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
           Select([{ value: tr('system') }, { value: 'English' }, { value: '简体中文' }, { value: '日本語' }])
             .selected(['default', 'en-US', 'zh-CN', 'ja-JP'].indexOf(this.model.language))
             .value(this.model.language === 'default' ? tr('system') : this.model.language === 'en-US' ? 'English' : this.model.language === 'zh-CN' ? '简体中文' : '日本語')
-            .enabled(!this.model.languageChanging).onSelect((index: number) => this.model.setLanguage(['default', 'en-US', 'zh-CN', 'ja-JP'][index]).then(() => { if (index === 0 && this.model.language === 'default') this.getUIContext().getPromptAction().showToast({ message: tr('language_after_restart') }); })).id('appearance.language')
-        }.padding(Tokens.inset).width('100%')
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(!this.model.languageChanging && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('language', this.appearanceRevision)).id('appearance.language')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
       ListItem() {
-        Row({ space: Tokens.gap }) {
-          Text(tr('color_mode')).fontSize(Tokens.body).layoutWeight(1)
-          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).selected(this.model.appearance).value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
-            .onSelect((index: number) => this.model.setAppearance(index)).id('appearance.color-mode')
-        }.padding(Tokens.inset).width('100%')
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('color_mode')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('system') }, { value: tr('light') }, { value: tr('dark') }]).selected(this.model.appearance)
+            .value(tr(['system', 'light', 'dark'][this.model.appearance] || 'system'))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('color', this.appearanceRevision)).id('appearance.color-mode')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
       ListItem() {
-        Row({ space: Tokens.gap }) {
-          Text(tr('style')).fontSize(Tokens.body).layoutWeight(1)
-          Select([{ value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }])
-            .selected(['glass', 'brief', 'board'].indexOf(this.model.style)).value(tr('app_style_' + this.model.style))
-            .onSelect((index: number) => this.model.setStyle(['glass', 'brief', 'board'][index]))
-        }.padding(Tokens.inset).width('100%')
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('style')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('app_style_system') }, { value: tr('app_style_glass') }, { value: tr('app_style_brief') }, { value: tr('app_style_board') }])
+            .selected(['system', 'glass', 'brief', 'board'].indexOf(this.model.style) < 0 ? 0 : ['system', 'glass', 'brief', 'board'].indexOf(this.model.style))
+            .value(tr(['system', 'glass', 'brief', 'board'].includes(this.model.style) ? 'app_style_' + this.model.style : 'app_style_system'))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('style', this.appearanceRevision)).id('appearance.style')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
       }
-    }.width('100%').height('100%')
+      ListItem() {
+        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+          Text(tr('agent_density')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+          Select([{ value: tr('agent_density_standard') }, { value: tr('agent_density_compact') }])
+            .selected(this.look.density === 'compact' ? 1 : 0)
+            .value(tr(this.look.density === 'compact' ? 'agent_density_compact' : 'agent_density_standard'))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.look.ready && this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('density', this.appearanceRevision)).id('appearance.agent-density')
+        }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
+      }
+    ListItem() {
+      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
+        Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
+        if (this.agentWorkspace.isBoundTo(this.model) && !this.agentWorkspace.loading) {
+          Select([{ value: tr('agent_group_state') }, { value: tr('agent_filter_machine') }, { value: tr('agent_group_space') }])
+            .selected(this.agentGroupingIndex(this.agentWorkspace))
+            .value(tr(['agent_group_state', 'agent_filter_machine', 'agent_group_space'][this.agentGroupingIndex(this.agentWorkspace)]))
+            .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
+            .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
+        } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
+      }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset }).width('100%')
+    }
+    }.width('100%').height('100%').backgroundColor(Colors.canvas)
   }
 
   @Builder notificationsPage() {

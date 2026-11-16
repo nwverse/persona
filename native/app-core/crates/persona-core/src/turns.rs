@@ -224,10 +224,17 @@ fn is_supervision(item: &Item) -> bool {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Fold {
+    /// These fields are present only for an actual fold item. Optional outer `fold` still deserializes an absent
+    /// payload for every ordinary item; a real fold uses the existing zero-count compatibility behavior.
+    #[serde(default)]
     pub tools: i64,
+    #[serde(default)]
     pub thoughts: i64,
+    #[serde(default)]
     pub through_seq: i64,
+    #[serde(default)]
     pub through_id: String,
+    #[serde(default)]
     pub until: Option<String>,
 }
 
@@ -705,7 +712,7 @@ pub fn answer_mutation(input: &Input) -> Option<String> {
         })
 }
 
-fn timestamp_text(nanoseconds: i128) -> Option<String> {
+pub(crate) fn timestamp_text(nanoseconds: i128) -> Option<String> {
     let seconds = nanoseconds.div_euclid(1_000_000_000);
     let days = seconds.div_euclid(86_400);
     let time = seconds.rem_euclid(86_400);

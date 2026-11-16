@@ -384,6 +384,12 @@ export class InboxWorkspace {
   }
   private targetPath(row: ResourceRow): string { return '/api/v1/inbox/' + segment(row.id) + managerQuery(row.manager); }
   private targetActionPath(row: ResourceRow, action: string): string { return '/api/v1/inbox/' + segment(row.id) + '/' + action + managerQuery(row.manager); }
+  private detailRow(data: Record<string, Object>, row: ResourceRow): ResourceRow {
+    const next = ResourceRow.from(data, 'inbox');
+    if (next.id && next.id !== row.id) throw new Error('identity_changed');
+    next.id = row.id; next.group = row.group; next.manager = row.manager;
+    next.machine = row.machine; next.session = row.session; return next;
+  }
   private cloneRow(row: ResourceRow): ResourceRow {
     const next = ResourceRow.from(row.data(), row.kind || 'inbox');
     next.id = row.id || next.id; next.title = row.title || next.title; next.detail = row.detail || next.detail;
@@ -759,7 +765,7 @@ export class InboxWorkspace {
       const result = await owner.repo.call(this.targetPath(row));
       if (!this.owns(owner)) return;
       const item = Wire.object(result, 'item'); const data = Object.keys(item).length ? item : result;
-      const updated = ResourceRow.from(data, 'inbox'); updated.manager = row.manager;
+      const updated = this.detailRow(data, row);
       if (updated.id && updated.id !== row.id) { this.error = 'identity_changed'; return; }
       updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
       const nextTargetRevision = targetRevision(updated, data);
@@ -1178,7 +1184,7 @@ export class InboxWorkspace {
       const result = await owner.repo.call(path, 'POST', body, clientId);
       if (!this.owns(owner)) return false;
       const item = Wire.object(result, 'item'), data = Object.keys(item).length ? item : result;
-      const updated = ResourceRow.from(data, 'inbox'); updated.manager = row.manager; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
+      const updated = this.detailRow(data, row); this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
       this.items = updateResourceList(this.items, updated);
       this.replyDraft = ''; this.writeState = 'sent';
       if (this.draftReady) await this.persistDraft(owner, row, '');
@@ -1205,7 +1211,7 @@ export class InboxWorkspace {
     try {
       const result = await owner.repo.call(path, 'POST', Wire.payload(['done'], [nextDone]));
       if (!this.owns(owner)) return false;
-      const updated = ResourceRow.from(result, 'inbox'); updated.manager = row.manager;
+      const updated = this.detailRow(result, row);
       if (updated.id && updated.id !== row.id) throw new Error('identity_changed');
       updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = result; this.items = updateResourceList(this.items, updated);
       this.writeState = ''; return true;
@@ -1226,8 +1232,7 @@ export class InboxWorkspace {
       const acknowledgedItem = Wire.object(response, 'item');
       const acknowledgedId = Wire.text(acknowledgedItem, 'id');
       if (acknowledgedId === row.id) {
-        const updated = ResourceRow.from(acknowledgedItem, 'inbox'); updated.manager = row.manager;
-        updated.machine = row.machine; updated.session = row.session;
+        const updated = this.detailRow(acknowledgedItem, row);
         updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = acknowledgedItem;
         this.items = updateResourceList(this.items, updated);
       }
@@ -1243,8 +1248,7 @@ export class InboxWorkspace {
         const envelopeItem = Wire.object(refreshed, 'item');
         const detail = Object.keys(envelopeItem).length ? envelopeItem : refreshed;
         if (Wire.text(detail, 'id') === row.id) {
-          const updated = ResourceRow.from(detail, 'inbox'); updated.manager = row.manager;
-          updated.machine = row.machine; updated.session = row.session;
+          const updated = this.detailRow(detail, row);
           updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = detail;
           this.items = updateResourceList(this.items, updated);
           const handoffs = Wire.rows(detail, 'handoffs');

@@ -680,3 +680,114 @@ func TestPRStatusConflictRetriesAfterBusySupervisor(t *testing.T) {
 		t.Fatalf("the delivered conflict was not kept: %+v, %v", history, err)
 	}
 }
+
+// prsForge answers each PR from its own facts, by number.
+type prsForge struct {
+	fakeForge
+	byNumber map[int]TodoPRStatus
+	calls    map[int]int
+}
+
+func (f *prsForge) PRStatus(_ context.Context, _ string, n int) (TodoPRStatus, error) {
+	if f.calls == nil {
+		f.calls = map[int]int{}
+	}
+	f.calls[n]++
+	return f.byNumber[n], nil
+}
+
+// Work spanning several PRs (#7935): the poll reads the earlier ones too, the task waits for merge while any of them
+// is open, and its supervisor is woken only once the last open one is merged or closed.
+func TestPRStatusFollowsEveryPROfTheTask(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx, now := context.Background(), time.Now()
+	first, second, last := "https://github.com/example/app/pull/11", "https://github.com/example/app/pull/12", "https://github.com/example/app/pull/13"
+	for _, u := range []string{first, second, last} {
+		s.setTaskStage(ctx, task.ID, "review", u)
+	}
+	if _, err := reviewErr(s, task.ID, mergePark(last)); err != nil {
+		t.Fatal(err)
+	}
+	f := &prsForge{byNumber: map[int]TodoPRStatus{
+		11: {State: "merged"},
+		12: {State: "open", Review: "required", Checks: "success"},
+		13: {State: "merged"},
+	}}
+	s.deploy.forge = f
+	s.sweepPRStatuses(ctx, now)
+	got := todoNow(s, task.ID)
+	if f.calls[11] != 1 || f.calls[12] != 1 || f.calls[13] != 1 {
+		t.Fatalf("not every PR was read: %v", f.calls)
+	}
+	if open := triageOpenPRs(got, now); len(open) != 1 || open[0].URL != second {
+		t.Fatalf("open PRs = %+v (current %+v, others %+v)", open, got.PRStatus, got.OtherPRs)
+	}
+	if tr := triageTodo(listedTodo{Todo: got}, noSessions, now, time.Time{}, time.UTC, false); tr.Section != triagePR {
+		t.Fatalf("a task whose earlier PR is open is not waiting for merge: %+v (review %q, status %q, open %d)", tr, triageReviewState(got), triageStatus(got, noSessions, now), len(triageOpenPRs(got, now)))
+	}
+	if got.Supervision.State != reviewParked {
+		t.Fatalf("woken while a PR is still open: %+v", got.Supervision)
+	}
+	raw, _ := json.Marshal(got)
+	if !strings.Contains(string(raw), `"other_prs"`) {
+		t.Fatal("earlier PR facts not published on Todo")
+	}
+	// The last open one merges: woken now; a merged PR is not polled again.
+	f.byNumber[12] = TodoPRStatus{State: "merged"}
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	got = todoNow(s, task.ID)
+	if got.Supervision.State != reviewPending {
+		t.Fatalf("last open PR merged without a wake: %+v", got.Supervision)
+	}
+	if f.calls[11] != 1 {
+		t.Fatalf("a merged earlier PR was polled again: %v", f.calls)
+	}
+}
+
+// A task held at its PRs whose PRs are all found merged the first time they are read is woken once the last one is
+// read, not by the first one while the others are still unknown (#7935).
+func TestPRStatusWakesAPRHoldOnlyAfterEveryPRIsRead(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx, now := context.Background(), time.Now()
+	for _, u := range []string{"https://github.com/example/app/pull/11", "https://github.com/example/app/pull/12"} {
+		s.setTaskStage(ctx, task.ID, "review", u)
+	}
+	if _, err := reviewErr(s, task.ID, mergePark("https://github.com/example/app/pull/12")); err != nil {
+		t.Fatal(err)
+	}
+	f := &prsForge{byNumber: map[int]TodoPRStatus{11: {State: "merged"}, 12: {State: "merged"}}}
+	s.deploy.forge = f
+	s.sweepPRStatuses(ctx, now)
+	if got := todoNow(s, task.ID); got.Supervision.State != reviewPending {
+		t.Fatalf("all PRs merged, not woken: %+v", got.Supervision)
+	}
+}
+
+// Only the current PR raises a conflict signal: an earlier PR of the task that conflicts is shown with its blockers,
+// but the digest revalidates against the task/stage PR, so a signal for it would only be dropped there (#7935).
+func TestPRStatusConflictSignalsOnlyForTheCurrentPR(t *testing.T) {
+	s, _, task := newPRConflictTask(t, nil)
+	ctx := context.Background()
+	current := "https://github.com/example/app/pull/13"
+	s.setTaskStage(ctx, task.ID, "review", current)
+	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+		12: {State: "open", HeadOID: "head-a", Conflicts: true},
+		13: {State: "open", HeadOID: "head-b"},
+	}}
+	s.sweepPRStatuses(ctx, time.Now())
+	if g, ok := pendingPRConflict(s, task.ID); ok {
+		t.Fatalf("an earlier PR's conflict raised a signal: %+v", g)
+	}
+	got := todoNow(s, task.ID)
+	if len(got.OtherPRs) != 1 || !got.OtherPRs[0].Conflicts {
+		t.Fatalf("the earlier PR's conflict was not kept as its fact: %+v", got.OtherPRs)
+	}
+	s.deploy.forge = &prsForge{byNumber: map[int]TodoPRStatus{
+		12: {State: "open", HeadOID: "head-a", Conflicts: true},
+		13: {State: "open", HeadOID: "head-b", Conflicts: true},
+	}}
+	s.sweepPRStatuses(ctx, time.Now().Add(deployRecheck))
+	if g, ok := pendingPRConflict(s, task.ID); !ok || g.Key != current+"@head-b" {
+		t.Fatalf("the current PR's conflict = %+v, %v", g, ok)
+	}
+}

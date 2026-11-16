@@ -15,6 +15,7 @@ globalThis.__attachmentRuntime = {
 
 registerHooks({
   resolve(specifier, context, next) {
+    if(specifier==='../platform/HubTransport')return {url:'persona-test:transport',shortCircuit:true};
     if (specifier.endsWith('/core/StorageOwnership') || specifier.endsWith('/core/AttachmentTypes')) return {url:new URL(specifier+'.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === '@kit.AbilityKit') return { url: 'persona-test:ability', shortCircuit: true };
     if (specifier === '@kit.ArkTS') return { url: 'persona-test:arkts', shortCircuit: true };
@@ -29,13 +30,19 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    if(url==='persona-test:transport')return {format:'module',shortCircuit:true,source:`
+      export class EndpointConfig {}
+      export class HttpFailure extends Error{constructor(status,code,resultUnknown=false,resultPending=false){super(code);Object.assign(this,{status,resultUnknown,resultPending});}}
+      export class HubTransport{async request(...args){return globalThis.__attachmentRequest(...args);}async requestBytes(...args){return {data:new globalThis.TextEncoder().encode(await globalThis.__attachmentRequest(...args)).buffer};}}
+    `};
     if (url === 'persona-test:ability') return { format: 'module', source: 'export const common={}; export const wantConstant={Flags:{FLAG_AUTH_READ_URI_PERMISSION:1}};', shortCircuit: true };
     if (url === 'persona-test:log') return { format: 'module', source: 'export const hilog={debug(){}};', shortCircuit: true };
     if (url === 'persona-test:arkts') return { format: 'module', source: `
       export const util={
         generateRandomUUID:()=>globalThis.__attachmentUUID(),
         Base64Helper:class{encodeToStringSync(bytes){return Buffer.from(bytes).toString('base64')}},
-        TextEncoder:{create:()=>({encodeInto:(value)=>new globalThis.TextEncoder().encode(value)})}
+        TextEncoder:{create:()=>({encodeInto:(value)=>new globalThis.TextEncoder().encode(value)})},
+        TextDecoder:{create:()=>({decodeToString:(value)=>new globalThis.TextDecoder('utf-8',{fatal:true}).decode(value)})}
       };`, shortCircuit: true };
     if (url === 'persona-test:arkdata') return { format: 'module', source: `
       export const dataSharePredicates={DataSharePredicates:class{constructor(){this.values={}} equalTo(key,value){this.values[key]=value;return this}}};`, shortCircuit: true };
@@ -139,6 +146,50 @@ function repository(upload = async () => ({ path: '/tmp/remote.bin', name: 'remo
   const value = { uploads: [], async upload(path, bytes) { this.uploads.push({ path, bytes }); return upload(path, bytes); } };
   return value;
 }
+
+test('a route retired during the upload journal sends no file bytes and keeps the local file retryable',async()=>{
+ resetRuntime();const runtime=globalThis.__attachmentRuntime,{HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ const {LocalStore}=await import('persona-test:local'),repo=new HubRepository({hubId:'hub-a',managerId:'manager-a'},new LocalStore('journal'));
+ const session=row(),client=model(session,repo),attachments=new ChatAttachments(),gate=deferred(),entered=deferred();
+ let allowed=true,posts=0;const previous=globalThis.__attachmentRequest;
+ globalThis.__attachmentRequest=async()=>{posts++;return JSON.stringify({path:'/tmp/notes.txt',name:'notes.txt'});};
+ runtime.files.set('document://picker/notes.txt',new Uint8Array([1,2]));runtime.pickedFiles=['document://picker/notes.txt'];
+ try{
+  await attachments.open(client,context(),session);await attachments.chooseFiles();const path=attachments.attachments[0].localPath;
+  const begin=repo.mutations.begin.bind(repo.mutations);repo.mutations.begin=async(...args)=>{const record=await begin(...args);entered.resolve();await gate.promise;return record;};
+  const preparing=attachments.prepareSend('Read',()=>allowed);await entered.promise;allowed=false;await attachments.close();gate.resolve();
+  await assert.rejects(preparing,/request_updated|upload_failed|target_unavailable|scope_changed/);assert.equal(posts,0);
+  await attachments.open(client,context(),session);
+  assert.equal(attachments.attachments.length,1);assert.equal(runtime.files.has(path),true);assert.equal(attachments.attachments[0].status,'failed');
+  allowed=true;await attachments.prepareSend('Read',()=>allowed);assert.equal(posts,1);
+ }finally{globalThis.__attachmentRequest=previous;await attachments.close();}
+});
+
+test('a dispatched upload still saves its known receipt when the route retires before its response',async()=>{
+ resetRuntime();const runtime=globalThis.__attachmentRuntime,gate=deferred(),entered=deferred(),session=row();
+ let allowed=true;const repo=repository(async()=>{entered.resolve();return gate.promise;}),client=model(session,repo),attachments=new ChatAttachments();
+ runtime.files.set('document://picker/notes.txt',new Uint8Array([1]));runtime.pickedFiles=['document://picker/notes.txt'];
+ try{
+  await attachments.open(client,context(),session);await attachments.chooseFiles();
+  const preparing=attachments.prepareSend('Read',()=>allowed);await entered.promise;allowed=false;await attachments.close();
+  client.selected=row('session-b');await attachments.open(client,context(),client.selected);
+  gate.resolve({path:'/tmp/notes.txt',name:'notes.txt'});
+  await assert.rejects(preparing,/scope_changed|target_unavailable/);assert.equal(repo.uploads.length,1);assert.equal(attachments.attachments.length,0);
+  await attachments.close();client.selected=session;await attachments.open(client,context(),session);
+  assert.equal(attachments.attachments[0].status,'ready');assert.equal(attachments.attachments[0].remotePath,'/tmp/notes.txt');
+  allowed=true;await attachments.prepareSend('Read',()=>allowed);assert.equal(repo.uploads.length,1,'explicit retry reuses the confirmed receipt');
+ }finally{await attachments.close();}
+});
+test('a late upload receipt cannot resurrect a forgotten attachment draft or its files',async()=>{
+ resetRuntime();const runtime=globalThis.__attachmentRuntime,gate=deferred(),entered=deferred(),session=row();
+ const repo=repository(async()=>{entered.resolve();return gate.promise;}),client=model(session,repo),attachments=new ChatAttachments();
+ runtime.files.set('document://picker/notes.txt',new Uint8Array([1]));runtime.pickedFiles=['document://picker/notes.txt'];
+ await attachments.open(client,context(),session);await attachments.chooseFiles();const path=attachments.attachments[0].localPath;
+ const preparing=attachments.prepareSend('Read');await entered.promise;await attachments.close();
+ runtime.epoch=(runtime.epoch||0)+1;await ChatAttachments.forgetHub(context(),'hub-a');
+ gate.resolve({path:'/tmp/notes.txt',name:'notes.txt'});await assert.rejects(preparing,/scope_changed/);
+ await attachments.open(client,context(),session);assert.equal(attachments.attachments.length,0);assert.equal(runtime.files.has(path),false);await attachments.close();
+});
 
 test('picked files stay local until prepareSend and use only the server receipt path', async () => {
   resetRuntime();

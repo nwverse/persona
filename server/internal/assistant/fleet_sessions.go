@@ -25,6 +25,8 @@ import (
 // setSessions takes a node's session list: the turns it shows starting and ending (the finished push, the
 // assistant's own business), then the list the apps get.
 func (s *Service) setSessions(machine string, list []proto.Session) {
+	list = s.deletionRows(context.Background(), machine, list, false)
+	list = slices.DeleteFunc(list, func(row proto.Session) bool { return row.IsDeleted() })
 	before := s.fleetPrevious(machine)
 	now := time.Now()
 	for i := range list {
@@ -188,6 +190,8 @@ func (s *Service) publishList(machine string) []proto.Session {
 	} else {
 		list = s.decorated(machine)
 	}
+	// A deleted conversation's row is the assistant's, never an archived one: it goes with the rows the apps see.
+	list = s.deletionRows(context.Background(), machine, list, true)
 	// A review's reviewer is no agent of the user's (supervise_autoreview.go): its result is on the task it reviewed.
 	hide := s.reviewerSessions()
 	if len(hide) > 0 {
@@ -415,7 +419,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	if !complete {
 		s.foldSubset(machine, list) // a complete list is folded once its archive is applied (archivedInventory)
 	}
-	return list
+	return s.deletionRows(context.Background(), machine, list, false)
 }
 
 // decoratedSession is one of the machine's sessions as the apps get it. Each row is decorated on its own, so the one
@@ -423,6 +427,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 // finished turn; one the node does not list may still be an archived row (archivedSessions), read from its record
 // alone (archivedRow): the records only grow, and the whole list carries every one of them.
 func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
+	if row, ok, err := s.deletedConversation(context.Background(), machine, sid); err == nil && ok {
+		return s.deletedRow(context.Background(), row), true
+	}
 	if row, ok := s.listedSession(machine, sid); ok {
 		return row, true
 	}

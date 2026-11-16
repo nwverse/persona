@@ -318,8 +318,8 @@ Chat page:
   Your message → gray work row "Tools 5 · Thinking 1 · Replies 1 · 4 min 17 sec ›" (name then count) → Agent's last text before next message → next message…
   Active and complete look identical except active spinner, timer and terminal button ("Working 39 sec · Tools 2").
   While it runs, the line names the current step instead of its counts (#2987, `WorkNow`, every style, Agents and Persona chats): the newest call without a result in its running form, with the subject its step row shows ("Running go test ./server/... · 1 min 4 s", "Editing ChatView.swift · 2 min", "Reading 3 files" for reads running together; a command Claude described shows its description alone, already an imperative: "Run the widget snapshot tests · 1 min 16 s"), "+N" for other calls running at once; with none running, the latest step (a thought: its first line, else "Thinking"). Only the newest batch of calls counts as running, back to a thought, the agent's words or a call answered before the next began (an older call without a result never got one); notices and bookkeeping calls (to-dos, ToolSearch) are not steps; nothing known (only words, or the newest work folded by the hub) keeps the counts. The words give way in the middle or at the end on one line, "+N" and the clock stay whole (at the accessibility text sizes, where beside those the words kept a letter, the words take up to two lines, with room for both always kept so the line holds still as steps change, with "+N" and the clock on a line under them); they change at most about twice a second (`WorkLine.follow`, `WorkNow.hold`), and a step coming back after subagents or a fold is named at once, without the counts in between. Subagents it waits on keep their own words. A finished line reads as before.
-  The queue strip above the composer (`QueueStrip`): each queued message's menu takes it back to edit, copies or deletes it. For a Claude in a terminal pane (`Session.steersQueue`, #6088) the strip also has Send Now (after a confirmation that says a running command moves to the background and a reply being written starts again; `POST …/queue/send-now`, Claude Code's own send-now, which takes the whole queue; the hub's words for `nothing_queued` / `send_now_unsupported` / `send_now_unrecognized` / `send_now_in_doubt` are shown as they come), and each message Move Up / Move Down (`QueueOrder.moved`: the `/queue` `keep` in the new order). At the interface's largest text size (xxxLarge, where the accessibility sizes stop), unless the title and Send Now fit on one line, the title wraps and Send Now has the line under it, so the title keeps its words and a tap on it opens the strip (#4846, #7730; UI test `QueueStripTextSizeUITests`); smaller sizes keep the one line and cut the title short where they must. UI test `QueueSteerUITests` (`MOCK_QUEUE=1`; `MOCK_SEND_NOW=<code>` makes the mock refuse).
-  A Persona chat shows the same strip (#4475): the user's own messages come first and keep those actions with a Persona-specific Send Now confirmation, while the last `queued_relayed` messages only show their arrival note ("Arrives when this chat is free": its turn ended and the owner not talking in it, `docs/assistant/assistant.md` "Messages from the system wait for the owner") and Copy. `AppModel` and the UI both index only `Session.ownQueuedCount`, so relayed messages cannot be changed even if a menu is wrong. UI test `PersonaQueueUITests` (`MOCK_PERSONA_QUEUE=1`, light and dark).
+  The queue strip above the composer (`QueueStrip`): each queued message's menu takes it back to edit, copies or deletes it. For a Claude in a terminal pane (`Session.steersQueue`, #6088) the strip also has Send Now (at one tap since #7169, as on the web, `docs/design/DESIGN_SYSTEM.md` 4.4; its VoiceOver hint says, as its confirmation used to, that a running command moves to the background and a reply being written starts again; `POST …/queue/send-now`, Claude Code's own send-now, which takes the whole queue; the hub's words for `nothing_queued` / `send_now_unsupported` / `send_now_unrecognized` / `send_now_in_doubt` are shown as they come), and each message Move Up / Move Down (`QueueOrder.moved`: the `/queue` `keep` in the new order). At the interface's largest text size (xxxLarge, where the accessibility sizes stop), unless the title and Send Now fit on one line, the title wraps and Send Now has the line under it, so the title keeps its words and a tap on it opens the strip (#4846, #7730; UI test `QueueStripTextSizeUITests`); smaller sizes keep the one line and cut the title short where they must. UI test `QueueSteerUITests` (`MOCK_QUEUE=1`; `MOCK_SEND_NOW=<code>` makes the mock refuse; `GET /mock/send_nows` lists the send-now requests it got, so one tap is one request). VoiceOver hears the strip's row as one element: Send Now is among its actions and the button's hint is the row's (`QueueStripHintTests`).
+  A Persona chat shows the same strip (#4475): the user's own messages come first and keep those actions, with Send Now's hint in Persona's words (what it is doing stops, or goes on in the background when it can), while the last `queued_relayed` messages only show their arrival note ("Arrives when this chat is free": its turn ended and the owner not talking in it, `docs/assistant/assistant.md` "Messages from the system wait for the owner") and Copy. `AppModel` and the UI both index only `Session.ownQueuedCount`, so relayed messages cannot be changed even if a menu is wrong. UI test `PersonaQueueUITests` (`MOCK_PERSONA_QUEUE=1`, light and dark).
   Claude's queue keeps only text: photos become `[Image #N]` placeholders and an `<attached_images>` block of machine paths, videos and quotes their XML tags. `QueuedDraft` reads that back into what was written, so a row shows the words with a mark per kind of attachment, and Take Back to Edit puts the words in the box and the attachments in their bars (photos from this phone's outbox copy, else read from the machine by path; one that can't come back leaves its path in the words, #3022). A Persona hub instead returns the photos with `/queue`; those bytes go through the same off-main-actor decode and composer restoration. `QueuedDraft(photoCount:)` removes the composer's stand-in from a photo-only message. Pathless photos stay in the composer even beyond the picker's four-photo cap, but `sendNow` refuses them until enough are removed, and `sendText` clears nothing when refused; an unreadable preview keeps its original payload and says so. A Persona message sent from this device also shows its pending outbox photo count beside its queued words. UI test `QueuedAttachEditUITests` (`MOCK_QUEUE_SENDS=1` queues what is sent to the working widget Agent in Claude's shape; `/mock/queue?photos=N&text=…` queues one sent from elsewhere).
   Multiple queued messages in one turn still pair one-to-one after completion, each with its work/reply (#2512 removed merged-bubble completion); sent images are square thumbnails above message (`SentPhotos`, same as pending),
   stripping Claude "[Image #N]" placeholders from bubbles.
@@ -353,6 +353,7 @@ Chat page:
   - Work-row text never truncates; insufficient space uses short format with tool count and duration only.
 - Can't reach hub banner appears only after 5 continuous seconds (brief network/foreground reconnects finish sooner; previously flashed), disappears immediately on reconnect.
 - Layout: list above, input region (interactions / loop / background / queue / composer) below in VStack, no overlay; keyboard reduces page height, latest messages stay against input.
+  An undocked iPad keyboard (floating or split, its frame ending above the screen's bottom) does not (#2565): it floats over the page, which keeps its height, and the composer stays at the bottom, as UIKit's keyboard layout guide does by default. SwiftUI's keyboard safe area took the floating keyboard's height off the bottom as if it were docked, and the composer stood that far up, half under the keyboard. `KeyboardState.isUndocked` follows the frames (Will Change Frame; a frame with no height or wholly below the screen, a keyboard going away, leaves it as it was, and so does Will Hide: undocking says Will Hide with the floating frame, and a floating keyboard comes back floating; a notification without its screen uses the app's scene's; Will Show always means docked: an undocked keyboard never says it, and turning the iPad with the docked keyboard up says it with in-between frames that end above the bottom), and `keepsHeightUnderUndockedKeyboard()` drops the keyboard's safe area on the chat page, Persona's new conversation (iPad page and shell) and Health's while it is set. An undocked keyboard is not `isUp`, so the pending cards keep their keyboard-down room; docked again it is up again, at its first docked frame (`KeyboardState.after`). `UndockedKeyboardTests`, `FloatingKeyboardTests` (iPad).
   A 1pt empty view above keeps the scroll view away from top safe area, eliminating its safe areas (inversion puts them at the wrong end) without ignoring them and manually padding.
 - Messages from other sessions (`Item.from`): left gray From name card, Markdown body like replies (hub converts teammate JSON notices to Markdown).
 - Inverted list (`chatScroll`: flip ScrollView and each row): latest offset 0, entry/follow/↓ jump exactly to 0,
@@ -516,7 +517,7 @@ Chat page:
   slim Back + "●" and the session's title fade in during latter half; dragging toward history restores it. Release never stays halfway: collapse at latest,
   otherwise snap nearest end (`.smooth`, 0.3 s). Following new content also collapses after user has touched list; tap slim bar / switch tabs expands.
   After 3 idle seconds (`ChatView.chromeIdleSeconds`: no list/header touch, info card closed, no sheet/menu), auto-collapse; header interaction (swiping Agents), expand and tab switch reset timer.
-  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed hides full layer while keeping measurement, VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
+  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed swaps the full layer for a clear placeholder of its measured height (a `.hidden()` copy rebuilt the whole header at every fold and unfold, #9103), VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
   - Smooth because collapse lives in separate `@Observable` `ChatChrome`, redrawing only header per frame; floating above fixed-frame list (header-height margins only at oldest end),
     so messages never move a pixel. Former toggle animated system navigation plus two labels independently and changed list height, abrupt.
   - User tracking/interacting and immediately subsequent decelerating only (`onScrollPhaseChange`), not keyboard-driven offset changes.
@@ -736,6 +737,17 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   Copy overlays "✓ Copied…" on the name capsule for 3 seconds (not global toast, which would cover the avatar). Slow / offline networks replace the name with spinner + Waiting for network / Connecting… / Updating…,
   and the menu's first item becomes Connection details.
 - Left circular **Chat history** button opens the sidebar; right circular **New chat** button (disabled on the new-chat page). Both icon-only.
+- **Assistant model menus** request `purpose=assistant` for both launchers and their models, including the new-chat
+  composers and the typed-model sheet. They use the assistant catalog separately from New Agent's cached list: on a
+  Paseo computer, a shell launcher can share a provider's name while running different credentials and models.
+  Older hubs without the purpose filter keep the shell-launcher eligibility fallback; an explicit assistant capability
+  takes precedence over agent kind. The menu's visual layout and the saved Main chat default are unchanged.
+  New-chat effort choices come from that launcher's effective default model (the Main chat binding when it applies).
+  Switching launchers resets the explicit effort to Follow Launcher; an unknown list offers only that inherited choice.
+  Catalogs and cached choices are scoped to the manager, computer, launcher and settings revision; Health uses the
+  default manager. A saved effort is checked against already known capabilities before the first message, including
+  a suggestion or Resend. Sending never waits for a model-list request, and unknown or failed discovery preserves
+  the user's saved choice for server validation. A confirmed unsupported level resets to Follow Launcher.
 - **Sidebar** below the main page, 82% of screen width (at most 380pt). The main page covers it, remaining a same-size rounded card when slid right (thin dark-mode border separates it from the sidebar), dimming with progress (`Theme.Fill.scrim`, black 20% light / 45% dark, #334); sidebar stays horizontally fixed and rises only 8pt as revealed (`Theme.Motion.drawerLift`), with no scaling or fading. Tap the card or drag left to close.
   Content (2026-10-31, changed to match Doubao's sidebar from user screenshots): large avatar name (Persona) and a circular Search button on the right (becomes search field + Cancel);
   Main chat is the first row (avatar App icon + Persona, identical to the new-shell drawer, #2004 / #5110), then a separator; actions below: New chat, Scheduled tasks, Knowledge, Health (icon + text, no cards; Health in `docs/assistant/health.md` ("iOS and Mac entry points")); separator; Directions (the leader conversations in the hub's order, each with its "N need you" and its spinner while anything under it runs, as in the new shell) then Recent (the 5 most recently active other chats whoever opened them, except the scheduled tasks' own chats #6228, the others with their source's mark, #4873, #5195; the heading folds it, #6228; **Show Scheduled Task Chats** brings the scheduled tasks' chats and the background supervisor back by time, #8324: the hub's `recent_task_chats`, one value for all of the user's devices, off by default, switched in Assistant Profile › **Sidebar's Recent** or the ⋯ at the top left of All Chats, opposite Done, a menu with its check; `AppModel.setRecentTaskChats` shows it at once and puts it back if the hub says no; a hub without it shows neither; the app reads the assistant's settings again when it comes back to the front, so a change made on another device shows) and one **All Chats** row opening the full list; no inline Pinned group (#4331). Each row has one circular marker (pale chat bubble color chosen by session id, adjacent rows different) + one-line title,
@@ -788,8 +800,12 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
-    With the list folded, the chat's ‹ brings it back (#963). On iPhone Duo open on its side the chat has no ‹ then either (#3680): its actions are in the system's side bars, whose
-    Show Sidebar at the top left brings the list back, and a ‹ that did the same was read as a Back that opened the sidebar instead of going back. Upright (#3641) keeps #963's ‹.
+    With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
+    main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
+    same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
+    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back.
+  - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
+    area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
   - Settings entry points all use values (`SettingsPage`); view-based `NavigationLink { page }` pushes the left column's own stack and opens in the narrow column.
 - **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (the shell's places and Settings at its foot), with the top-left button showing / hiding it; on iPhone Duo open the
@@ -934,16 +950,27 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   styles whose list paints the page's own color: three bands down the column.
 - **Under side bars** (the open iPhone Duo on its side, `SidebarRoot` reading `readsVerticalBarEdge` into
   `\.splitSideBars`): nothing is above the columns there, so the column's head and the page's top bar sat at the
-  display's edge, the mark under its rounded corner (#4853). Both columns start `Theme.Space.l` lower, or as low as the
-  lower of their own tops (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the page's top stay on one line.
-- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
-  whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
-  the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
-  routes: an Agent's chat (its row, a card), a place (`ShellRoute` / `SidebarRoute`, the split's first page without a back),
-  the conversation itself (its row, `ShellPage.conversation`). Every page the Persona page opens is a value there, never a
-  flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
-  column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
-  `shownPlace`).
+  display's edge, the mark under its rounded corner (#4853). Both columns start at least `Theme.Space.l` lower
+  (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the conversation's top bar stay on one line. The
+  column's head never follows the page's own top (#8359): that is the root's navigation bar (0 on the conversation,
+  82 pt on a place, 24 on an Agent's chat), and the head dropped by that much on every root but the conversation.
+  `SidebarRootsUITests.testTheSidebarHeadStaysPutOnEveryRoot` holds the head, the main conversation and the Pages
+  heading within 1 pt on the conversation, Recordings, Inbox and an Agent.
+- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`;
+  the Persona tab's in the Separate layout too). **Switching area replaces the page's root; only drilling down pushes**
+  (#8359, docs/design/sidebar-navigation.md section 6): each sidebar item is a root of its own, the main conversation, a
+  place (`ShellRoute`), Health or Messages (`SidebarRoute`), an Agent's chat (its row, a card, a route) or another page the
+  Agents list opens. A pick replaces the root at once, with no push, pop or Back; the split's path (`\.unifiedPath`) holds
+  only what is opened inside the page (an Inbox item, a machine, a recording), pushed with Back. Each root keeps its
+  drill-down while the user is elsewhere, and the root in front picked again goes back to it (`SidebarPageRoots`, held by
+  `UnifiedSidebar`). `AssistantView` without a stack of its own (`embedded`) stays the stack's root and draws the root picked
+  (`sidebarRootPage`); `SplitNavigation(rootsSwap:)` counts the root as the first page. The conversation's sidebar button
+  folds and brings back the split's column (`SplitShowList.hide`). The shaded row follows the root, also while drilled in
+  (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from the root). Laid over the page (the open Duo upright) the
+  column slides away on a pick, the only motion. DEBUG: `-probes YES` writes `probe.sidebar-page` (the root, the path, how
+  many animated navigation transitions ran; `SidebarRootsUITests`). The conversation's `RootBarHidden` (which hides the
+  stack's bar again after a pop) stops once the conversation is taken away: a hide still waiting from its last update hid
+  the next root's bar, its title and, on the open Duo upright, the button that brings the sidebar back.
 - **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
   drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
   of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
@@ -969,7 +996,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   Duo on its side), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
   and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
   `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
-  it. Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
+  it until an Agent is picked, which then is the page's root, put in place with no push (#8603, as the Sidebar layout's
+  roots). Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
   Persona's tab. Each tab's column is kept as before (`assistant.list`, `agents.list`); an Agent asked for from outside
   opens on the Agents tab only. At compact width the shell is drawn as before.
 - **The head's fold** (both layouts, beside a page; #4206 as the earlier one sidebar had it): the column's head ends in
@@ -978,12 +1006,13 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   phone's drawer the face opens it, as before.
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
-  would be, the setting switching both ways at once, nothing picked: Separate). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
+  would be, the setting switching both ways at once, nothing picked: Separate), `SidebarRootsUITests` (a pick replaces the
+  root, a drill-down pushes, each root keeps its drill-down; iPad, open Duo, iPhone), `SidebarPageRootsTests` (the rule). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)
 
-Long-press the Persona icon: the last conversation opened on this device, then "Record" (a meeting recording; `docs/apple/recording.md`), "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it), and the menu has one recent conversation, not two.
+Long-press the Persona icon: the last conversation opened on this device, then "Start Meeting" (a meeting recording, "Record" until #8731; `docs/apple/recording.md`), "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it), and the menu has one recent conversation, not two.
 
 - **Recently opened** (#2191, `Persona/App/RecentChats.swift`): every chat that comes on screen (`AppModel.visibleSession`, an Agent's or a Persona conversation) goes first in a list of ten `SessionKey.path`s kept in `StateCache` (`recent-chats`; keys only, never a title or a message; never sent to a hub). The rules are shared with the web's ⌘K (`spec/fixtures/recents/README.md`). The menu lists the newest one the app still has (`RecentChats.homeScreen`), title and "computer · folder" (or "Persona"), with `Theme.Icon.recent`; tapped, it opens like a notification (`AppModel.open`). `shortcutItems` is set at launch, when a new conversation is opened and when the app goes to the background (the titles as they are then).
 - Navigation only, except Record, which starts recording: Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
@@ -1014,15 +1043,18 @@ on every Apple app.
 
 ## Share to Persona (#4586, #1460)
 
-In another App, Share › Persona sends text, a web link, up to 4 images and up to 10 files (PDFs, documents, videos, archives…), with an optional note, to the conversation or agent picked in the sheet, or starts a new chat with them (`PersonaShare/`, target `PersonaShare`). Android's ShareActivity has the same recent-first rules (#2515).
+In another App, Share › Persona sends text, a web page or link, up to 4 images and up to 10 files (PDFs, documents, videos, archives…), with an optional note, to the conversation or agent picked in the sheet, or starts a new chat with them (`PersonaShare/`, target `PersonaShare`). Android's ShareActivity has the same recent-first rules (#2515). It is separate from the composer's photo, camera and file pickers, which it does not change (#2282).
 
 - **Send To**: the sheet lists Persona's main conversation, the targets shared to most recently that are still listed (latest first, at most 3), the one picked from the full list, and New Chat. "All Chats and Agents" opens the full list, searchable by title, machine and folder: Recent, Persona (the main conversation, New Chat, the user's own conversations newest first, at most 30; not archived, Health's or the automatic ones), and Agents (the ones that can take a message and are not offline, newest first, with machine and state as in the Agents list).
 - **Where it starts**: on the last target when it was used within 24 hours and is still listed; otherwise on the main conversation, or New Chat when there is none yet. Sending is always the user's tap. The note is not focused when the sheet opens, and Send To comes right under it: the keyboard would otherwise hide where the share goes. A sent share records its target (a new chat as the conversation it started; at most 8) in the extension's own defaults; the app never reads them.
 - **Sending**: as the composer does (images resized to 1600 px, JPEG; the same `client_msg_id` and op id on a retry), `POST /api/v1/sessions/{machine}/{session}/messages`; New Chat is `POST /api/v1/assistant/conversations` with the shared items as the first message, on the hub's default launcher.
+- **Safari pages** (#2282): the extension declares `NSExtensionActivationSupportsWebPageWithMaxCount` and `NSExtensionJavaScriptPreprocessingFile` (`PersonaShare/SharePage.js`, a resource of both share targets), so Safari runs that script in the page first and hands over its `document.title`, `document.URL` and selected text as a `com.apple.property-list` item (`NSExtensionJavaScriptPreprocessingResultsKey`). The message is the title, then the link on the next line, then the selection quoted (`> `, at most 4,000 characters). Safari also hands over the plain link and its own text for the item; `ShareText.compose` (`Shared/ShareText.swift`, `ShareTextTests`) keeps each piece once, comparing them without surrounding spaces or a link's trailing slash. Everything else keeps the order it was shared in (each item's text, then its attachments' links and texts as they come); only the page goes first, so other apps (no script) send exactly what they did before. The property list is read before files are looked for: it is data and would otherwise go as a file.
 - **Files**: pictures stay pictures (the first 4; more go as files). Anything else that is a file (a movie, a document or archive, a file's text: it has a name with an extension) is copied into the extension's temporary folder when the sheet opens, then on Send uploaded one after another as the composer's + › Files does (protocol.md "Sending files", 200 MB each; over that, the sheet names it and leaves it out) to the computer the target runs on: the agent's, the assistant's for Persona's conversations and a new chat. Their paths follow the text, quoted when they have spaces (`PathInsert.quoted`), and the chat shows them as file cards. A progress bar shows while they upload; a retry does not upload again what already reached that computer.
+- **Size before Send** (#2282): under the shared files, the footer gives their total and the limit per file ("12.3 MB in total · up to 200 MB per file", `ShareSizeFooter`). From 50 MB in total (`ShareTargets.slowUpload`: about 40 seconds at 10 Mbit/s up) it adds that large uploads can take a few minutes and the sheet should stay open: the upload runs in the extension, which goes away with the app it was shared from.
 - The extension connects to the hub itself; the App need not be running. It compiles all of `apple/Shared` as the watch does and reads the App-saved pairing from the keychain (`HubStore` "hubs" entry, App keychain group; `Keychain` takes the app's service from `PersonaAppBundleID`) through a keychain access that never writes (`ShareTargets.readOnlyKeychain`). It uses the default group (else the first), on the hub of it that answers first (`HubRoute.pick`), then lists with `GET /api/v1/assistant`, `GET /api/v1/sessions` and `GET /api/v1/machines`. No App Group, so no manual group setup on the developer website.
 - Failure stays on the panel with a reason: unpaired, invalid pairing, cannot reach the hub, or the hub's own words for a refused send; the list has Try Again. No SSH tunnels; other groups of hubs and other managers are not offered.
-- Rules: `Shared/ShareTargets.swift` (`ShareTargetsTests`); the sheet in the simulator: `ShareSheetTests` (the runtime CLI's `share` opens the system share sheet in the app; against the mock hub, light and dark by `simctl ui appearance`).
+- Rules: `Shared/ShareTargets.swift` (`ShareTargetsTests`), `Shared/ShareText.swift` (`ShareTextTests`); the sheet in the simulator: `ShareSheetTests` (the runtime CLI's `share` opens the system share sheet in the app, `fileMB` makes its files large enough for the size footer's slow-upload hint, `testLargeFilesShowTheirTotalAndTheSlowUploadHint`; against the mock hub, light and dark by `simctl ui appearance`).
+- From the system's apps: `scripts/app/share-from-apps.sh [light|dark] [shots dir] [test | suite]` runs `ShareFromAppsTests` on a stock simulator (`sim-boot.sh --profile stock`) with its own mock hub. It seeds a picture with `simctl addmedia` and a PDF in Files' On My iPhone (the `group.com.apple.FileProvider.LocalStorage` container's `File Provider Storage`), then drives Safari to the mock hub's `/mock/share-page` (title "A Page Worth Reading"), Photos and Files: Share › Persona › Send, checking that the hub got the title and link together and once each, one picture, and the file's path.
 - Release: the share extension has a new Bundle ID (`<bundle id>.share`), see `docs/operations/release.md`.
 
 ## Clipboard with your computers (#3064)
@@ -2447,6 +2479,13 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
   of the hub-level group (another group's hub keeps its own prefs); its Dock badge still counts them. A prefs read already on its
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
+- **The built-in assistant in the switcher** (#9055): its page (`ManagerDetailView`) has **Show in Switcher** (on: the roster's
+  `hide` is false), sent alone as `PATCH /api/v1/managers/assistant {"hide": …}` (`APIClient.hideManager`,
+  `ManagersModel.showInSwitcher`), shown at once and put back if the hub says no (`409 builtin_in_use` while it is the default
+  or has a computer, in plain words). It can't be turned off while the built-in one is the default, and its footer says so
+  (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
+  An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
+  update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
 - **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
@@ -2564,7 +2603,10 @@ then those still installing, each with its first letter on a disc in its color (
 client; the letter in the panel's color) and the state's dot at the disc's foot, its state line, a Default chip and a check on
 the current one or, beside any other with something waiting, its count ("The pages show the current assistant" above), on a
 solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
-picked. The dot (`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
+picked. A manager the roster marks `hidden` (the built-in assistant while the user hides it and it isn't used, #9055;
+Settings › Assistants) has no row (`AssistantSwitcherText.rows`); it still counts as installed (`ManagerRoster.installed`,
+`isMulti`), so the pages still scope by assistant, its badge still counts and the Default chip still shows. The dot
+(`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
 Settings › Assistants keeps its dot beside the words. Under them **New Assistant** (asks for a
 name, then the install code sheet of Settings › Assistants) and **Manage Assistants…** (Settings › Assistants). A row still
 installing opens its install code: the one this header made while it lasts, else a new one (`ManagersModel.showCode`; the hub
@@ -2577,8 +2619,9 @@ roster has no Default chip, and **New Assistant** and **Manage Assistants…** s
 `AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
-the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
-that becomes the default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
+the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster, or that the roster marks
+`hidden`, goes back to the default (`ManagerRoster.canPick`; a hidden one can't be picked either), and one that becomes the
+default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
 starts on the current assistant before the hub answers. Switching closes the Persona page's pushed pages (`assistantSwitches`:
 they read the assistant before and would write to the next); re-reading the same assistant (back online, the default moving
 under a pick) doesn't. While another assistant is current, the default's settings are read once a run all the same
@@ -2615,9 +2658,9 @@ default assistant.
   and gives way to the current assistant's main conversation only when the user switches. A hand-off sent as a plain message goes to the item's manager's main conversation. A summary started from an extension's chat page stays on the default
   manager.
 - **Tests**: `ManagerSwitchTests` (the route rule and real requests, the pick's start, fallback and one manager, the pick kept
-  across launches and through a change of the default, each manager's settings held, a manager leaving the roster, the lists,
-  another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the rows and
-  their words, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
+  across launches and through a change of the default, each manager's settings held, a manager leaving the roster or hidden,
+  the lists, another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the
+  rows and their words, a hidden one left out but still counted, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
   code sheet, Manage Assistants… → Settings › Assistants, a row still installing → code sheet; against the mock hub with
   `TEST_RUNNER_PERSONA_SWITCHER_HUB`). By hand, against the mock hub (`MOCK_MANAGER_NAS=1`):
   `-openAssistantManager m-3fa21c` (工作, no main conversation yet) or `m-8b04d2` (家里, offline) makes that manager the current

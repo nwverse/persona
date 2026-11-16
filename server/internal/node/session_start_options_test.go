@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,6 +116,17 @@ func TestWorkSessionOffersPlainClaudeTheListLeavesOut(t *testing.T) {
 	if err := os.Remove(filepath.Join(home, "bin", "claude")); err != nil {
 		t.Fatal(err)
 	}
+	// Nor the machine's own: fakeCLIHome's PATH keeps /usr/bin and /bin for the fake's sh, cat and sleep, where a
+	// system-wide install (npm install -g with the distribution's node) puts claude, and the check is the shell's
+	// `command -v` (#6257, #8926). Only the fake's folder stays, with the shell in it.
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(zsh, filepath.Join(home, "bin", "zsh")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(home, "bin"))
 	_, err = options()
 	if code, data := refusalOf(t, err); code != "work_launcher_unavailable" || data["delivered"] != "none" {
 		t.Fatalf("options without claude: %q %v", code, data)

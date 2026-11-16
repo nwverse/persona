@@ -3,7 +3,7 @@ import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
   checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
-  machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setAt, setExtensionConfig, setExtensionEnabled, setExtensionSecret, sourceText,
+  machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
   type HubExtension, type ExtensionField, type ExtensionUpgrade, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
 } from "./extensions";
@@ -117,6 +117,23 @@ describe("扩展的文字", () => {
     expect(secretState({ name: "k", title: "K", set: true })).toBe("已设置");
     // a hint on one that is not set (it should never come) does not make it read as set
     expect(secretState({ name: "k", title: "K", set: false, required: true, hint: "7f3a" })).toBe("未设置（必填）");
+  });
+  // Same cases as ExtensionsModelTests' theStillNeedsLineOpensTheSecretItNames on the iPhone (#8853).
+  it("opens from Still needs the first unset secret that is required or that the line names", () => {
+    const key = { name: "key", title: "API Key", set: false };
+    const token = { name: "token", title: "Token", set: false, required: true };
+    // an optional secret the line names (the hub's own words for the extension)
+    expect(setupSecret(["火山引擎的 API Key"], [key])).toBe(key);
+    // a required one, first among those not set
+    expect(setupSecret(["密钥「Token」"], [{ ...key, set: true }, token])?.name).toBe("token");
+    expect(setupSecret(["密钥「API Key」"], [token, key])?.name).toBe("token");
+    // nothing it names is a secret here: plain text
+    expect(setupSecret(["依赖「Example」还没准备好"], [key])).toBeUndefined();
+    expect(setupSecret(["密钥「API Key」"], [{ ...key, set: true }])).toBeUndefined();
+    // nothing needed: no target, whatever is unset
+    expect(setupSecret([], [token])).toBeUndefined();
+    expect(setupSecret(undefined, [token])).toBeUndefined();
+    expect(setupSecret(["密钥「API Key」"], undefined)).toBeUndefined();
   });
   it("reads a save the extension turned down in the hub's words, and nothing else", () => {
     const words = "网关不认这把 Key（401）：invalid api key";

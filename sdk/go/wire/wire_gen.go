@@ -267,6 +267,7 @@ type Contributes struct {
 	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Transcription   []NamedItem          `json:"transcription,omitempty"`
+	Speech          []NamedItem          `json:"speech,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
 	Iphone          []NamedItem          `json:"iphone,omitempty"`
@@ -301,7 +302,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -333,7 +334,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -629,7 +630,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -4502,6 +4503,8 @@ type KBEntry struct {
 	Extra string `json:"extra,omitempty"`
 	// A chat's source (lark, mail, wechat, github…).
 	Source string `json:"source,omitempty"`
+	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
+	RecordingKind string `json:"recording_kind,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:

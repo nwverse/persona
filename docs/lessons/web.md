@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## A refused credential-mirror write must not erase the readable legacy login (#9023)
+
+Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
+
 ## Compact buttons need their touch targets when moved into a dialog (#7446)
 
 The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing
@@ -1344,3 +1348,12 @@ code that tells "above" from "below" by `boundingClientRect.top < rootBounds.top
 the view" matters, open the view far below the scroller (`rootMargin: "0px 0px 1000000px 0px"`): a mark is then either
 in it or above it, and every change between the two is reported (`watchPin` in `web/src/views/SidebarSection.tsx`, the
 sidebar's pinned headings). Check such code with a jump, not only with a scroll a few pixels at a time.
+
+## An uncertain send must keep the computer's reason, not a generic "not sure" (#8975)
+
+`failureText` turned every `delivered: unknown` into "Not sure it arrived. Check the chat", under the failed bubble's
+"Not sent:" prefix, and **Check** could only find the same unknown receipt. A message a Claude desktop session held for
+approval (bypass permissions mode holds Persona's peer messages) read as "Not sent: not sure it arrived" forever, and the
+owner retyped it on the computer. Keep the node's code on the entry and word the bubble from it (`entryReason`, also for
+entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
+nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).

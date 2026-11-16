@@ -17,6 +17,17 @@ val googleOAuthScheme = providers.gradleProperty("personaGoogleOAuthScheme")
     ?: System.getenv("PERSONA_GOOGLE_OAUTH_SCHEME")?.takeIf { it.isNotBlank() }
     ?: "persona.oauth.unset"
 
+// The commit the About page shows. Only an explicit, public input counts (docs/android/android.md "Build commit"):
+// -PpersonaBuildCommit, then PERSONA_BUILD_COMMIT; with neither, the build says "unknown". It never asks git, and a value
+// that is not a commit fails the build rather than put a branch name or a path in the APK.
+val buildCommit = (providers.gradleProperty("personaBuildCommit").orNull?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("PERSONA_BUILD_COMMIT").orNull?.takeIf { it.isNotEmpty() }
+    ?: "unknown").also {
+    require(it == "unknown" || Regex("[0-9a-fA-F]{7,64}").matches(it)) {
+        "Invalid build commit: use 7 to 64 hex digits, or unknown"
+    }
+}.lowercase()
+
 // The same language resources drive the contracts, packaged translations, and Android 13's per-app picker.
 val languageFiles = rootProject.fileTree("i18n") { include("*.properties") }
 val languageTags = languageFiles.files.map { it.nameWithoutExtension }.sorted()
@@ -45,6 +56,7 @@ androidComponents.onVariants { variant ->
 
 android {
     namespace = "persona.android"
+    buildFeatures { buildConfig = true }
     testOptions { unitTests { isIncludeAndroidResources = true } }
     lint {
         baseline = file("lint-baseline.xml")
@@ -53,6 +65,8 @@ android {
     androidResources {
         localeFilters += languageTags.map { it.substringBefore('-') }
     }
+    // Generated resources (the build commit below) need resValues on; the default is not the same in every AGP version.
+    buildFeatures { resValues = true }
     defaultConfig {
         applicationId = appId
         versionCode = providers.gradleProperty("personaVersionCode").orElse("1").get().toInt().also {
@@ -61,6 +75,7 @@ android {
         versionName = providers.gradleProperty("personaVersionName").orElse("0.1").get()
         manifestPlaceholders["appLabel"] = appLabel
         manifestPlaceholders["googleOAuthScheme"] = googleOAuthScheme
+        resValue("string", "persona_build_commit", buildCommit)
     }
     buildTypes {
         release {

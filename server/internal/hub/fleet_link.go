@@ -185,6 +185,24 @@ func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, r
 	if list == nil {
 		list = []proto.Session{}
 	}
+	var newlyDeleted []string
+	var wasDeleted map[string]bool
+	for _, row := range list {
+		if !row.IsDeleted() {
+			continue
+		}
+		if wasDeleted == nil {
+			wasDeleted = map[string]bool{}
+			for _, previous := range m.keptSessions() {
+				if previous.IsDeleted() {
+					wasDeleted[previous.SessionID] = true
+				}
+			}
+		}
+		if !wasDeleted[row.SessionID] {
+			newlyDeleted = append(newlyDeleted, row.SessionID)
+		}
+	}
 	m.setSessionListRaws(list, raws)
 	f := &h.reported
 	f.mu.Lock()
@@ -193,6 +211,9 @@ func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, r
 	}
 	f.muted[m.cfg.ID] = p.Muted
 	f.mu.Unlock()
+	for _, id := range newlyDeleted {
+		h.conversationDeletedPush(m, id)
+	}
 	h.broadcastSessions(m, m.keptSessions())
 }
 

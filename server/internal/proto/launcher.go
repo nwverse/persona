@@ -13,6 +13,9 @@ type Launcher struct {
 	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go), "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go) "claude_desktop" (claude-desktop, a new session in Claude's desktop app, node/claudedesktop_new.go) or "codex_app" (codex-app, a new chat in the Codex App, node/codexapp_new.go). Empty
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
+	// RuntimeFallback is node-local discovery provenance: an ordinary CLI command yields to a connected runtime
+	// offering the same launcher. Explicit shell definitions never do. This flag is not part of the wire protocol.
+	RuntimeFallback bool `json:"-"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
 	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
@@ -383,6 +386,16 @@ func (l ManagedLauncher) LaunchBaseURL() string {
 		return MessagesBaseURL(l.BaseURL)
 	}
 	return l.BaseURL
+}
+
+// AnthropicAPIHost is the host of Anthropic's own API: where Claude Code goes with no Base URL.
+const AnthropicAPIHost = "api.anthropic.com"
+
+// AnthropicAPI: base (a Base URL) is Anthropic's own API, not a relay, a gateway or another vendor. The probe's
+// error reading (the manager's models_probe.go) and the node's provider environment (launcherenv.go) both ask.
+func AnthropicAPI(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	return err == nil && strings.EqualFold(u.Hostname(), AnthropicAPIHost)
 }
 
 // MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add
