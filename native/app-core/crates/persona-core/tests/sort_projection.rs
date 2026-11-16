@@ -53,6 +53,7 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
             "filters.json",
             "folding.json",
             "grouping.json",
+            "held.json",
             "hub_state.json",
             "ordering.json",
             "session_state.json",
@@ -75,6 +76,9 @@ fn fixture_manifest_has_unique_names_and_projection_shape() {
         "folded_machine_hides_rows",
         "folded_space_keeps_counts",
         "folded_state_and_expanded_idle",
+        "held_quiet_row_keeps_unread_state_section",
+        "held_quiet_space_stays_active",
+        "held_row_stays_out_of_quiet_idle_fold",
         "hub_blocked",
         "hub_done_seen_after",
         "hub_done_seen_at_tolerance",
@@ -253,6 +257,29 @@ fn awaiting_reply_is_not_folded_like_plain_idle() {
         actual["groups"][1]["visible_rows"],
         serde_json::json!(["machine-a/quiet"])
     );
+}
+
+#[test]
+fn held_in_list_matches_the_complete_ios_session_key_path() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "m", "session_id": "held", "app_hub_group": "hub-a", "state": "idle"},
+            {"machine_id": "m", "session_id": "held", "app_hub_group": "hub-b", "state": "idle"},
+        ],
+        "machines": [
+            {"id": "m", "name": "Example", "group": "hub-a"},
+            {"id": "m", "name": "Example", "group": "hub-b"},
+        ],
+        "pins": {}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all", "held": "hub-a|m/held"},
+    }))
+    .expect("multi-hub held input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    // iOS `AgentListOrder.held` compares `SessionKey.path`, not a machine/session pair without its hub.
+    assert_eq!(actual["groups"][0]["id"], "state/unread");
+    assert_eq!(actual["groups"][0]["rows"], serde_json::json!(["hub-a|m/held"]));
+    assert_eq!(actual["groups"][1]["id"], "state/idle");
+    assert_eq!(actual["groups"][1]["rows"], serde_json::json!(["hub-b|m/held"]));
 }
 
 #[test]

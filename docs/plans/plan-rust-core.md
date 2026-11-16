@@ -503,13 +503,15 @@ Phase 3 lands in several PRs.
   - `persona_core::state` decodes client and hub session states: client-state precedence, hub `done` with a
     2-second seen tolerance, waiting detection from loop info / background tasks / subagents / workflows.
   - `persona_core::recents` implements the conversation and setup LRU with dedup, skip-current and limits.
-  - 43 sort cases (30 projection + 2 session_state + 11 hub_state) + 21 recents cases (11 conversations +
-    10 setups) = 64 exact fixture cases, all passing in `cargo test`. The exact manifest assertion catches
-    added, dropped or renamed cases; a mutation test catches a reversed date comparison.
+  - 46 sort cases (33 projection + 2 session_state + 11 hub_state) + 21 recents cases (11 conversations +
+    10 setups) = 67 exact fixture cases. #9033 adds three iOS-derived held-row projections: quiet held rows retain
+    Unread rank in State, stay out of idle folds, and keep their space out of quiet spaces. Expectations cite
+    `AgentListOrder.swift` and `AppModel.swift` and are not generated from Kotlin or Rust. The exact manifest assertion
+    catches added, dropped or renamed cases; a mutation test catches a reversed date comparison.
   - Multi-hub grouping uses `group|machine_id` (`MachineRef.path`); BackgroundWaiting quick filter shows only
     rank-4; `since:` uses the caller's `now`, never a system clock.
   - Host boundaries: C FFI `persona_core_project_sort`, JNI `Java_..._projectSort`, NAPI `core_project_sort`
-    (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
+    (all pure JSON functions, no runtime handle). ArkTS host replay covers all 33 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
   - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966, final integration PR
@@ -523,9 +525,10 @@ Phase 3 lands in several PRs.
     have cargo evidence, and state also has ArkTS host replay, but no production migration or separate C/SwiftPM replay.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
-  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
-    `Turn.pickAnswerAcrossWakes`. It handles raw-item frozen cuts, entry-based user pictures, tool pairing,
-    compaction, supervision provenance, recap reopening and pending wakes; it does not project rendered `ChatLine`s.
+  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build`.
+    It handles raw-item frozen cuts, entry-based user pictures, tool pairing, compaction, supervision provenance and
+    the wake of an idle agent, which opens a turn of its own since #9140 (until then: recap reopening and pending
+    wakes inside the turn before it); it does not project rendered `ChatLine`s.
   - All 57 static turn cases compare complete `turns` arrays after applying the checked-in current-iOS overlay
     (`spec/fixtures/lines/ios/differences.json`, #8429). The independent maintainer's macOS replay passed the 59
     executable content cases and its properties; this Rust PR does not run Swift or claim that replay itself.
@@ -591,6 +594,10 @@ Phase 3 lands in several PRs.
     timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
     remains separately #8483. The later C ABI, macOS SwiftPM and ArkTS host replays are recorded below; they do not
     execute the real NAPI boundary, transport or a physical device.
+  - The draft a click leaves (#9238): a single choice empties its question's Other entry and keeps the key, as iOS's
+    `QuestionForm.pick` does, and Advance and Submit change neither map. The core follows iOS; Android's builder removes the
+    key, so the answer shadow reports `other-state` until its adapter drops emptied entries
+    (`native/app-core/README.md`, "Android answer adapter and shadow (#9143)").
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
@@ -607,10 +614,27 @@ Phase 3 lands in several PRs.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
     are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
-    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
-    math blocks, `plainOpenFence`, visual gaps, timing, rendering, production adapters and the #4044 performance goal
-    remain open. These repair slices have cargo and real host-JNI evidence only: no C ABI, SwiftPM, ArkTS host or real
-    NAPI projection. `stream_chunks`, in contrast, also has C ABI, SwiftPM and ArkTS host replay, without StreamRepair.
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline repair
+    (#9286) adds 51 explicit Apple assertions plus source-derived boundary controls through that same real JNI
+    boundary. It also replays all 342 Unicode-scalar prefixes of Apple's mixed reply through real stream-chunks JNI
+    into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
+    follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math
+    recognition prevents inline repair there. Math end (#9395) independently replays all six explicit Apple math
+    assertions and 57 source-derived display/inline/math-boundary controls through real Kotlin/JNI, including
+    `MathMarkdown.display`'s extended-grapheme predicate, open/closed blocks, code spans, money, CJK prose and
+    trailing indentation. Plain-open-fence projection (#9515) adds all five explicit Apple assertions and 31
+    source-derived scanner, indentation, whitespace, Unicode, drawn-predicate and closed/open-fence controls through a
+    separate real Kotlin/JNI entry point. Its caller supplies the complete drawn-info-string list as input, replacing
+    Apple's `drawn` closure; no renderer is called. Existing repaired/end behavior and the C ABI/ArkTS repair corpus are
+    unchanged. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
+    projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus
+    the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 39
+    table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
+    `repaired` and extra-field expectations; they do not replay the complete inline, math or mixed-reply corpora. The
+    NAPI export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift
+    check. `MathMarkdown.rewrite`, visual gaps, timing, rendering, the plain-fence C ABI/ArkTS/SwiftPM projections,
+    production adapters and the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI
+    and ArkTS host evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
@@ -654,7 +678,7 @@ Phase 3 lands in several PRs.
     `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
     every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
     production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
-  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 33 `agents_list` sort cases,
     answer 15 question + 9 recommendation cases (conditional expected objects, invalid page/option and U+200B; the
     ninth recommendation is #9233), all 21
     complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
@@ -666,6 +690,19 @@ Phase 3 lands in several PRs.
     rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
     projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
     **26.0 not verified**.
+
+- **Android heldInList production alignment (#9033).**
+  - Android's production `AgentSession` carries the visible-chat held flag through `AgentListOrder` / `AgentList`.
+    A quiet held row retains Unread rank and stays visible, and its space is excluded from quiet-space grouping.
+    The shell's existing visible Agent chat is latched only if the row was Unread on opening, and released on leaving.
+  - `spec/fixtures/sort/held.json` supplies three State, Space and quiet-fold cases derived from current iOS
+    `AgentListOrder.stays`, `rank`, `isQuiet` and `AppModel.visibleSession` / `markSeen`. Rust, real Kotlin/JNI,
+    the independent C client, ArkTS host and Swift/C host replay compare the complete expected objects. A separate
+    core fix matches `SessionKey.path` for held identity: the hub group must not be lost from a held row's id.
+    No iOS production behavior changes.
+  - Native JVM Compose captures cover Glass, Brief and Board in light and dark, both held and released. They are
+    synthetic host-render evidence, not an emulator, device or performance measurement; Apple compilation is host
+    SwiftPM evidence, not simulator or physical-device evidence.
 
 ### Migration rules (each domain)
 

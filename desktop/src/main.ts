@@ -222,6 +222,8 @@ async function showSetup(): Promise<void> {
   setup.once("closed", () => {
     removeIPC();
     if (setupWindow === setup) setupWindow = undefined;
+    // Quitting closes setup too; opening another window here would cancel the quit (#9458).
+    if (quitting) return;
     // Do not re-enter a connection whose setup was closed while its creation was still pending.
     if (!mainWindow && !hubWindow.pending) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
   });

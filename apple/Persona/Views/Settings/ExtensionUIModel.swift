@@ -32,14 +32,15 @@ nonisolated extension ExtensionUIContext {
     static let cardVersion = version
     #else
     /// The UI version a whole page of the app draws (`ExtensionPageView`): 4's code hosting (#2961), 5's code review
-    /// (#3136) and 6's pictures, controls, row actions, charts, tiles, fields and styles (#827).
-    static let pageVersion = 6
+    /// (#3136), 6's pictures, controls, row actions, charts, tiles, fields and styles (#827), 7's section keys (nothing
+    /// to draw) and 8's columns layout, section icons, links and rows side by side (#9158, `ExtensionColumns.swift`).
+    static let pageVersion = 8
 
     /// The UI version the app's cards and sections draw (the Settings home's cards, a launcher's or a computer's
-    /// sections, an Inbox item's, the assistant's `persona-view`): 6 too, version 4–5's code components read-only
-    /// (`ExtensionCodeSummary`). Widgets, the watch and the system extensions keep `version` (Shared, 3): they draw
-    /// none of it.
-    static let cardVersion = 6
+    /// sections, an Inbox item's, the assistant's `persona-view`): 8 too, version 4–5's code components read-only
+    /// (`ExtensionCodeSummary`), a columns view as a stack. Widgets, the watch and the system extensions keep
+    /// `version` (Shared, 3): they draw none of it.
+    static let cardVersion = 8
     #endif
 
     /// This context for a whole page: the page's UI version.
@@ -327,7 +328,7 @@ extension APIClient {
         self.initialManager = manager
         self.ui = ui
         // A whole page (`forPage()`) is told from a card or a section by the version it was given, before every model
-        // says what the app's renderer draws (both 6): only a page opens the native stream.
+        // says what the app's renderer draws (both 8): only a page opens the native stream.
         let isPage = context.uiVersion == ExtensionUIContext.pageVersion && (context.size == nil || context.size == "full")
         self.context = context.drawnByApp()
         self.initialState = state

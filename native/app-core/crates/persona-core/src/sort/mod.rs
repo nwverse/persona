@@ -337,11 +337,8 @@ impl Row {
         } else {
             format!("{prefix}{short_id}")
         };
-        let held = input
-            .settings
-            .held
-            .as_deref()
-            .is_some_and(|held| held == short_id || held == row_id);
+        // iOS compares the complete SessionKey.path; a hub-less short id must not hold a same-named row in another hub.
+        let held = input.settings.held.as_deref() == Some(row_id.as_str());
         let sort_date = if state == AgentState::Working {
             session.state_since.as_deref().or(session.updated_at.as_deref())
         } else {
