@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // chatCompletions sends an ordinary system message, which is supported by local servers as well as hosted APIs.
@@ -25,8 +27,12 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		body["max_tokens"] = r.MaxTokens
 	}
 	ApplyReasoningEffort(body, "chat", c.cfg.Model, c.cfg.ReasoningEffort)
+	droppedEffort := OmitChatEffort(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ViaMachine, c.cfg.ReasoningEffort)
+	if droppedEffort {
+		delete(body, "reasoning_effort")
+	}
 	// Each rejected field is changed at most once, so independent compatibility retries stay bounded.
-	renamedTokens, droppedStreamOptions, droppedEffort := false, false, false
+	renamedTokens, droppedStreamOptions := false, false
 	for {
 		encoded, _ := json.Marshal(body)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiEndpoint(c.cfg.BaseURL, "chat/completions"), bytes.NewReader(encoded))
@@ -46,9 +52,12 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			resp.Body.Close()
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
 			// reject stream_options or reasoning_effort. Retry only those rejected requests without an explicit no-retry
-			// signal; arbitrary 400s, invalid effort values, policy ceilings and started streams must never be replayed.
+			// signal; arbitrary 400s, non-off effort values, policy ceilings and started streams must never be replayed.
 			noRetry := NoRetry(resp.Header)
-			if !noRetry && !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && ChatRejectsReasoningEffort(raw) {
+			fieldRejected := ChatRejectsReasoningEffort(raw)
+			offValueRejected := !fieldRejected && ChatNoThinking(c.cfg.ReasoningEffort) && ChatRejectsNoEffortValue(raw)
+			if !noRetry && !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && (fieldRejected || offValueRejected) {
+				RememberChatEffortRejection(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ViaMachine, offValueRejected)
 				droppedEffort = true
 				delete(body, "reasoning_effort")
 				logf("ai: chat/completions: gateway rejected reasoning_effort; retrying once without it")
@@ -72,6 +81,103 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		var limit *streamLimit
 		return reply, !errors.As(err, &limit), err
 	}
+}
+
+// ChatNoThinking reports the product-level efforts that mean "disable thinking when possible".
+func ChatNoThinking(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "off", "none", "disabled":
+		return true
+	}
+	return false
+}
+
+const (
+	chatEffortCompatTTL   = time.Hour
+	chatEffortCompatLimit = 128
+)
+
+// chatEffortCompatibility separates a gateway that rejects the whole field from one that rejects only "none".
+// The latter must not suppress an explicit non-off level on a later call.
+type chatEffortCompatibility struct {
+	allUntil  time.Time
+	noneUntil time.Time
+}
+
+// chatEffortCache is one process-wide, hard-bounded map, not an allowance per connection.
+type chatEffortCache struct {
+	mu      sync.Mutex
+	entries map[string]chatEffortCompatibility
+}
+
+var processChatEffortCache chatEffortCache
+
+func chatEffortCacheKey(baseURL, key, model, viaMachine string) string {
+	return gateKey(baseURL, key) + "\x00" + viaMachine + "\x00" + model
+}
+
+// omitChatEffort says whether this connection/model already rejected the requested form of effort recently.
+func (c *chatEffortCache) omitChatEffort(key, effort string) bool {
+	if effort == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	current := now()
+	if !entry.allUntil.After(current) && !entry.noneUntil.After(current) {
+		delete(c.entries, key)
+		return false
+	}
+	return entry.allUntil.After(current) || ChatNoThinking(effort) && entry.noneUntil.After(current)
+}
+
+// rememberChatEffortRejection learns only from an explicit rejection. noneOnly keeps explicit non-off levels eligible.
+func (c *chatEffortCache) rememberChatEffortRejection(key string, noneOnly bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]chatEffortCompatibility{}
+	}
+	current := now()
+	for id, entry := range c.entries {
+		if !entry.allUntil.After(current) && !entry.noneUntil.After(current) {
+			delete(c.entries, id)
+		}
+	}
+	if len(c.entries) >= chatEffortCompatLimit {
+		oldestID, oldest := "", current
+		for id, entry := range c.entries {
+			latest := entry.allUntil
+			if entry.noneUntil.After(latest) {
+				latest = entry.noneUntil
+			}
+			if oldestID == "" || latest.Before(oldest) {
+				oldestID, oldest = id, latest
+			}
+		}
+		delete(c.entries, oldestID)
+	}
+	entry := c.entries[key]
+	if noneOnly {
+		entry.noneUntil = current.Add(chatEffortCompatTTL)
+	} else {
+		entry.allUntil = current.Add(chatEffortCompatTTL)
+	}
+	c.entries[key] = entry
+}
+
+// OmitChatEffort applies a connection's learned rejection to a probe as well as a real call.
+func OmitChatEffort(baseURL, key, model, viaMachine, effort string) bool {
+	return processChatEffortCache.omitChatEffort(chatEffortCacheKey(baseURL, key, model, viaMachine), effort)
+}
+
+// RememberChatEffortRejection records a probe's explicit rejection for later probes and real calls.
+func RememberChatEffortRejection(baseURL, key, model, viaMachine string, noneOnly bool) {
+	processChatEffortCache.rememberChatEffortRejection(chatEffortCacheKey(baseURL, key, model, viaMachine), noneOnly)
 }
 
 // ChatRequiresCompletionTokens recognizes a rejected token field that explicitly requests its replacement.
@@ -139,6 +245,70 @@ func chatReasoningValueCode(code string) bool {
 	for _, marker := range []string{"ceiling", "unsupported_value", "invalid_value", "unsupported_reasoning_effort", "invalid_reasoning_effort"} {
 		if strings.Contains(code, marker) {
 			return true
+		}
+	}
+	return false
+}
+
+func chatReasoningCeilingCode(code string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(code)), "ceiling")
+}
+
+// ChatRejectsNoEffortValue recognizes a value-level rejection of "none". Call it only for ChatNoThinking requests:
+// explicit non-off levels deliberately keep their original errors.
+func ChatRejectsNoEffortValue(raw []byte) bool {
+	var envelope struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  []struct {
+			Loc []any  `json:"loc"`
+			Msg string `json:"msg"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(raw, &envelope) == nil {
+		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+			var object struct {
+				Message string `json:"message"`
+				Param   string `json:"param"`
+				Code    string `json:"code"`
+			}
+			if json.Unmarshal(envelope.Error, &object) == nil {
+				if chatReasoningCeilingCode(object.Code) || strings.Contains(strings.ToLower(object.Message), "reasoning_effort_above_ceiling") {
+					return false
+				}
+				if chatReasoningValueCode(object.Code) {
+					return strings.EqualFold(strings.TrimSpace(object.Param), "reasoning_effort") || chatNoEffortValueMessage(object.Message, "")
+				}
+				return chatNoEffortValueMessage(object.Message, object.Param)
+			}
+			var message string
+			return json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
+		}
+		if envelope.Message != "" {
+			return chatNoEffortValueMessage(envelope.Message, "")
+		}
+		for _, detail := range envelope.Detail {
+			for _, part := range detail.Loc {
+				if part == "reasoning_effort" && chatNoEffortValueMessage(detail.Msg, "reasoning_effort") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return chatNoEffortValueMessage(string(raw), "")
+}
+
+func chatNoEffortValueMessage(message, param string) bool {
+	message = strings.ToLower(message)
+	param = strings.ToLower(strings.TrimSpace(param))
+	if strings.Contains(message, "reasoning_effort_above_ceiling") {
+		return false
+	}
+	for _, valueError := range []string{"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
+		"input should be", "not one of", "not a valid enum", "not a valid enumeration"} {
+		if strings.Contains(message, valueError) {
+			return param == "reasoning_effort" || strings.Contains(message, "reasoning_effort") && strings.Contains(message, "none")
 		}
 	}
 	return false
