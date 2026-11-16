@@ -816,7 +816,7 @@ class Watcher:
             raise WatchError("PR has an outstanding changes request")
         return True
 
-    def stale_progress_at(self, repo, number, pr, old, ignore_notice=None):
+    def stale_progress_at(self, repo, number, pr, old, ignore_notice=None, include_push_timestamp=True):
         """Use actual GitHub activity, never repeated polling or retry state."""
         comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
                             "--paginate", "--jq", ".[] | {createdAt: .created_at, body: .body}"], timeout=90)
@@ -849,7 +849,7 @@ class Watcher:
         # and new head activity still reset the inactivity interval.
         updated_at = pr_watch_common.github_time(pr["updatedAt"])
         previous_update = float(old.get("stale_updated_at", old.get("last_progress_at", 0)))
-        if updated_at > previous_update:
+        if include_push_timestamp and updated_at > previous_update:
             # updatedAt also advances when a replacement push keeps the same
             # SHA. Our remembered baseline is the previous observation, not a
             # commit creation date.
@@ -889,8 +889,8 @@ class Watcher:
             self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
         marked = self.state.get(repo, number)
-        marked["stale_updated_at"] = pr_watch_common.github_time(latest["updatedAt"])
-        progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason)
+        progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason,
+                                          include_push_timestamp=False)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
         # the marker write cannot make its own timestamp look like new work.

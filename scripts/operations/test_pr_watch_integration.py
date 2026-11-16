@@ -52,9 +52,11 @@ elif args[:2] in (["pr", "review"], ["pr", "comment"]):
     entry["body"] = args[args.index("--body") + 1]
     if args[:2] == ["pr", "comment"]:
         state.setdefault("comments", []).append({"createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "body": entry["body"]})
+        state["pr"]["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "edit"]:
     state["pr"].setdefault("labels", []).append(args[args.index("--add-label") + 1])
+    state["pr"]["updatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "close"]:
     entry["comment"] = args[args.index("--comment") + 1] if "--comment" in args else ""
