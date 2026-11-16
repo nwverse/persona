@@ -348,11 +348,33 @@ export function resetRestoredForTests() {
   restored.clear();
 }
 
+/** How the node says your own message went into a Claude outside Persona's terminals (session.send's answer). */
+export type DeliveryReply = { delivered_as?: string; relay_reason?: string };
+
+/**
+ * What to tell you when your own message to a Claude with Persona's plugin went through its message inbox instead of
+ * as your input (docs/integrations/claude-integration.md "Owner input through the Persona plugin"): the Agent may not
+ * take it as your approval. Nothing when it went in as your input, or when the session has no plugin (it always used
+ * the inbox there, and its row says so).
+ */
+export function relayNotice(reply?: DeliveryReply): string | undefined {
+  if (reply?.delivered_as !== "relayed") return undefined;
+  switch (reply.relay_reason) {
+    case "busy":
+      return t("lib-outbox.relayed_busy");
+    case "plugin_unavailable":
+    case "plugin_refused":
+    case "plugin_unconfirmed":
+      return t("lib-outbox.relayed_plugin");
+  }
+  return undefined;
+}
+
 async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: string, flight = beginMessageSend(mid, sid, e.id, e.text)): Promise<boolean> {
   const key = outboxKey(mid, sid);
   try {
     // stays sending through a gap (a hub restart); the client_msg_id is the op id
-    const r = await inSendOrder(key, () => apiOp<{ launcher_note?: string; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+    const r = await inSendOrder(key, () => apiOp<({ launcher_note?: string; waits_on_computer?: boolean } & DeliveryReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
       ...flight.request,
       method: "POST",
       opId: e.id,
@@ -364,6 +386,8 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
     // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
     if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
+    const relayed = relayNotice(r);
+    if (relayed) toast(relayed, "info");
     return true;
   } catch (err) {
     if (!flight.current()) return false;

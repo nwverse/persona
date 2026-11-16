@@ -1178,3 +1178,22 @@ AskUserQuestion, often with several questions. Read the open call from the trans
 rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
+
+## A plugin's asUser prompt is the only way in that counts as the person's (Persona's Claude Code plugin)
+
+The peer inbox frames every message as another session's, and no wording in it makes the model take a go-ahead from
+it: the same "I approve: create the file" was refused through the inbox and when a plugin submitted it framed, and
+accepted only through `$.prompt.submit({ asUser: true })` (Claude Code 2.1.291, 2.1.299 and 2.1.308). Do not try to
+argue the model round in the inbox prompt (#5965). Things that cost time while measuring it:
+
+- A `claude` started from inside a desktop-app session inherits that host's provider variables
+  (`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`, its `ANTHROPIC_BASE_URL`) but not its credentials, and answers "Not logged
+  in". Start it without the parent's `CLAUDE_CODE_*` variables (`node/ccplugin_live_test.go` `childEnv`).
+- A `claude -p --input-format stream-json` session is a good throwaway session for a plugin (it keeps running while
+  stdin is open, and has a peer inbox), but its `sessions/<pid>.json` says `entrypoint: "sdk-cli"`, which the node
+  leaves to its own host: such a claude is not "outside Persona's terminals".
+- A plugin's `$.http.fetch` gives up after 30 s, so a long poll must answer sooner. On Windows, its first connections
+  over a Unix socket a moment after the listener appeared failed (`FailedToOpenSocket`); a retry got through.
+- `$.ui.log(text)` writes a dim row into the transcript by default; a plugin that must stay quiet passes `{ to: 'debug' }`.
+- The plugin API types are written per Claude Code build (`plugin-authoring` skill, `types/claude-code.d.ts`); read the
+  build you test against, not an older copy.
