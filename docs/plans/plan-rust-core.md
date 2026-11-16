@@ -444,7 +444,26 @@ Phase 2 lands in several PRs.
     JNI and ArkTS host replays cover the new fields.
   - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
+- **The `sync` domain's survey and fixtures-first design (#9230), documentation only.**
+  - `docs/plans/plan-rust-core-sync.md` surveys iOS's chat-sync layer with file/line citations (socket lifecycle,
+    reconnect/backoff, the event-resume cursor, per-chat subscription, gap-to-request, stalled catch-up, background
+    prefetch, the catch-up barrier and foreground/background), defines the `spec/fixtures/sync-driver` fixture
+    inventory with explicit clock/network injection, and carves out the first pure `SyncDriver` state-machine slice
+    (lifecycle/network results in → request/reconnect/backoff/catch-up effects out, no real socket or persistence).
+  - Nothing is implemented; no production network, client or core behavior changed, and no device claim is made.
+
 Phase 3 lands in several PRs.
+
+- **Nested-item Envelope fallback removal (#9187).**
+  - After #9082, an independent reviewer found that a valid `items` array could let a different bad scalar bypass the
+    shared Envelope gate and become `Frame::Other`. Production now refuses the shared error before Other routing;
+    there is no `NestedItems` shortcut and no additional full `ServerEvent` implementation.
+  - Mixed bad-scalar / malformed-history inputs assert the source-required refusal, with the exact Foundation error
+    priority marked `source-undetermined`. Isolated `rows` has `wrong_type: rows` from `Envelope.rows: Int?`;
+    `args:1e999` is `malformed_json` from `JSONValue` / swift-foundation's non-finite-number rejection, never a
+    payload-bearing error string. Expectations come from Swift sources, not from Rust output.
+  - Existing 17 accepted wire cases, 38 / 94 continuity steps, #8955's 64 source-derived cases, real host JNI,
+    ArkTS and independent C ABI replay all pass. This is host evidence only, not Swift/iOS or production-client proof.
 
 - **Production shared-envelope scalar checks (#8995).**
   - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
@@ -486,8 +505,12 @@ Phase 3 lands in several PRs.
     (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
-  - Not done: no production client calls these functions yet; Swift codec generation is typegen-only; device-side
-    NAPI linking and ArkTS runtime behavior remain blocked: no physical device.
+  - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966), with iOS
+    state/machine/space groups, pinned/quiet/folded rows, filters and ranks. The temporary native sorter and debug
+    shadow are deleted after the unchanged fixture corpus matches 30/30. `spec/README.md` names the core as this
+    domain's reference. A native failure retains the last usable projection and exposes failure; there is no second
+    release sorter. Device-side NAPI linking, HAP and physical-device execution remain blocked: no physical device.
+  - Swift codec generation is typegen-only; other clients have not switched this domain to core production.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
@@ -507,6 +530,16 @@ Phase 3 lands in several PRs.
     burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
     and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
     incremental ChatStore rebuild algorithm or its timing evidence.
+  - ArkTS host replay (#9235) adds `coreProjectTurns` and a pure `turns` JSON entry to the existing
+    `persona-core-ohos` host helper, with generated declaration drift coverage. `turns.test.mjs` compares all 57
+    unchanged static cases (62 complete post-overlay turn objects and three empty arrays), and uses the generated
+    ArkTS codec plus existing dispatch/flush/drain commands for all 10 operation checkpoints (13 complete turn
+    objects) and the standalone replacement. The real runtime requests the original fold range before the helper
+    supplies it. Exact manifests, malformed/wrong-shaped input and deliberately wrong expectations are checked;
+    fixture expectations and turn semantics remain unchanged.
+  - This is ArkTS host helper evidence only. It does not execute the NAPI export or load a Linux NAPI addon, and
+    does not replace #8808's separate real loader work. No HAP/HDC, physical-device, production adapter, rendered
+    ChatLine/layout, incremental ChatStore rebuild or performance result is established.
   - `persona_core::task_index` covers the fixture-facing `TaskIndex.build` fields (#8842): started calls, notice/call
     association, descriptions, UTC start times and per-call status sequences. Real Kotlin/JNI replay compares all five
     existing task-index expected objects, plus a background receipt whose notices/statuses are empty but whose original
@@ -559,8 +592,10 @@ Phase 3 lands in several PRs.
     opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
-    are rejected. Tables, inline markup, math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift
-    bindings, production adapters and the #4044 performance goal remain open.
+    are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
+    math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the
+    #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and

@@ -81,18 +81,20 @@ export function ReplyQuote({ children }: { children?: ReactNode }) {
   );
 }
 
-type HNode = { type: string; tagName?: string; properties?: Record<string, unknown>; children?: HNode[] };
+type HNode = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: HNode[] };
 
 /** A rehype plugin, last: inline code inside a link (a path that opens, a written link) is marked `data-linked`, so
- *  it stays the link's and is not a copy button of its own inside it (Markdown's `code`). */
+ *  it stays the link's and is not a copy button of its own inside it (Markdown's `code`). Inline code in a table cell
+ *  of at most 24 characters is marked `data-chip`: styles.css keeps it whole on one line (#9146). */
 export function rehypeLinkedCode() {
-  return (tree: HNode) => mark(tree, false);
+  return (tree: HNode) => mark(tree, false, false);
 }
 
-function mark(node: HNode, inLink: boolean) {
+function mark(node: HNode, inLink: boolean, inCell: boolean) {
   for (const c of node.children ?? []) {
     if (c.type !== "element") continue;
     if (c.tagName === "code" && inLink) c.properties = { ...c.properties, dataLinked: true };
-    mark(c, inLink || c.tagName === "a");
+    if (c.tagName === "code" && inCell && c.children?.length === 1 && c.children[0].value!.length <= 24) c.properties = { ...c.properties, dataChip: true };
+    mark(c, inLink || c.tagName === "a", inCell || c.tagName === "td");
   }
 }

@@ -1,5 +1,34 @@
 # Lessons: hub / node and networking
 
+## A transport made for one request opens a connection for one request (2026-11-16, #9202)
+
+The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
+but each new relay stream is `extensions.accept` on the bus plus the manager's WebSocket back to the hub, about four round trips. Between a
+hub and a manager on a 142 ms link every relayed request took about a second, while the hub's own answers took a millisecond. The manager
+side had served many requests per stream all along; only the hub threw the stream away.
+
+- On a hop between machines, keep the transport, and with it the pool, for as long as what it dials through. Here that is the manager's
+  bus connection: a new connection gets a new transport, and the old one's idle streams are closed when that connection ends.
+- A pooled connection over a long link can die without a sound (a stalled tunnel, a NAT that forgot it). Ping the idle ones, so the next
+  request does not wait for an answer that is not coming.
+- net/http keeps upgrades apart: a request with `Upgrade` has its own pool key, so a WebSocket never takes a pooled stream and its stream
+  is never pooled after it. A request whose context ends closes its connection instead of pooling it, so revoking a caller still closes
+  the stream its request was on.
+- `httptrace`'s `PutIdleConn` runs after the connection is already back in the pool, so the next request may have taken it by then.
+  Count the uses (`GotConn`) and compare them, rather than setting an idle flag.
+
+## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
+
+The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
+`127.0.0.1:<listen port>`. A hub whose `listen` names one address (`<LAN address>:18660`) does not answer there, so each of
+them said the hub was not running while it served the LAN. Dialling the LAN address instead is only half the fix: the
+connection then comes from that address, and the hub's checks for the master token over loopback (pairing codes, admin,
+peers, extension installs) refuse it with 403. `managerconf.CLIHubURL` picks the address (listen's only when it is loopback
+or one of this machine's, never a name or an address the machine no longer has, so the token stays on the machine) and
+`managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
+A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
+the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
