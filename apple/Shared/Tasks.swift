@@ -25,15 +25,19 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
     /// What the task will be held to, shown on the plan card before Start (docs/assistant/unified-entry.md "Briefs").
     /// Read-only: it is never sent back (`encode(to:)` leaves it out), and one that does not decode is as if there were none.
     var brief: TaskBrief?
+    /// The scheduled task whose own run planned this, and its name (#8045): the card then offers to let it start this kind
+    /// of task by itself from now on. Every task of such a plan carries the same; read-only, never sent back.
+    var schedule: String?
+    var scheduleTitle: String?
 
     enum CodingKeys: String, CodingKey {
-        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error, brief
-        case todoID = "todo_id"
+        case title, prompt, machine, cwd, launcher, model, permission, ultracode, readonly, why, error, brief, schedule
+        case todoID = "todo_id", scheduleTitle = "schedule_title"
     }
 
     init(title: String, prompt: String, machine: String, cwd: String, launcher: String? = nil, model: String? = nil,
          permission: String? = nil, ultracode: Bool? = nil, readonly: Bool? = nil, why: String? = nil, todoID: String? = nil,
-         error: String? = nil, brief: TaskBrief? = nil) {
+         error: String? = nil, brief: TaskBrief? = nil, schedule: String? = nil, scheduleTitle: String? = nil) {
         self.title = title
         self.prompt = prompt
         self.machine = machine
@@ -47,6 +51,8 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         self.todoID = todoID
         self.error = error
         self.brief = brief
+        self.schedule = schedule
+        self.scheduleTitle = scheduleTitle
     }
 
     init(from decoder: Decoder) throws {
@@ -64,6 +70,8 @@ nonisolated struct PlanTask: Codable, Hashable, Sendable {
         todoID = try c.decodeIfPresent(String.self, forKey: .todoID)
         error = try c.decodeIfPresent(String.self, forKey: .error)
         brief = (try? c.decodeIfPresent(TaskBrief.self, forKey: .brief)) ?? nil
+        schedule = (try? c.decodeIfPresent(String.self, forKey: .schedule)).flatMap { $0?.isEmpty == false ? $0 : nil }
+        scheduleTitle = (try? c.decodeIfPresent(String.self, forKey: .scheduleTitle)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -115,6 +123,15 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
         var plan = self
         plan.suggestion = nil
         return plan
+    }
+
+    /// The scheduled task whose own run planned this (#8045), with its name as the hub gives it ("" when none), when the
+    /// card can offer to let it start this kind by itself: a task in it changes files (read-only ones start without
+    /// asking anyway, as Start These Directly has nothing to remember for them). Nil for every other plan.
+    var grantableSchedule: (id: String, title: String)? {
+        guard let task = tasks.first(where: { $0.schedule != nil }), let id = task.schedule,
+              tasks.contains(where: { !$0.isReadOnly }) else { return nil }
+        return (id, task.scheduleTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 }
 
@@ -1075,10 +1092,17 @@ nonisolated extension APIClient {
     }
 
     /// Starts an open plan; `edits` replace the fields the user changed (by index), `remember` lets this kind start
-    /// without asking next time.
-    func startPlan(_ id: String, edits: [PlanTask]? = nil, remember: Bool = false) async throws -> TaskPlan {
-        struct Body: Encodable { var tasks: [PlanTask]?; var remember: Bool }
-        return try await post("/api/v1/task-plans/\(id)/start", body: Body(tasks: edits, remember: remember), as: PlanResponse.self).plan
+    /// without asking next time. `scheduleGrant` (#8045) lets the scheduled task whose run planned it start this kind by
+    /// itself from now on: sent only when set, so a hub before it never sees the key.
+    func startPlan(_ id: String, edits: [PlanTask]? = nil, remember: Bool = false, scheduleGrant: Bool = false) async throws -> TaskPlan {
+        struct Body: Encodable {
+            var tasks: [PlanTask]?
+            var remember: Bool
+            var scheduleGrant: Bool?
+            enum CodingKeys: String, CodingKey { case tasks, remember, scheduleGrant = "schedule_grant" }
+        }
+        let body = Body(tasks: edits, remember: remember, scheduleGrant: scheduleGrant ? true : nil)
+        return try await post("/api/v1/task-plans/\(id)/start", body: body, as: PlanResponse.self).plan
     }
 
     func dismissPlan(_ id: String) async throws -> TaskPlan {
