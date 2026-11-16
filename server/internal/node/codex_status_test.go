@@ -2,12 +2,90 @@ package node
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// Completed history may lag a continuation running on the shared app-server. Exercise the published pane row,
+// including a join made after the turn started, rather than only the intermediate liveStatus result (#8946).
+func TestCodexDaemonPaneActiveOverCompletedHistory(t *testing.T) {
+	for _, hostStatus := range []string{proto.StatusIdle, proto.StatusDone, proto.StatusWorking} {
+		t.Run(hostStatus, func(t *testing.T) {
+			n, f, c, _ := daemonPane(t)
+			path := filepath.Join(n.home, "completed.jsonl")
+			body := `{"type":"session_meta","payload":{"id":"` + remoteRaw + `","cwd":"/work/project"}}` + "\n" +
+				`{"type":"event_msg","payload":{"type":"task_complete"}}` + "\n"
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+			n.registerCodex(n.codexHome(), remoteRaw, path)
+			n.mu.Lock()
+			a := n.agents[remoteRaw]
+			a.AgentStatus = hostStatus
+			n.agents[remoteRaw] = a
+			n.mu.Unlock()
+			if !n.codexTurnOver(remoteRaw, time.Now()) {
+				t.Fatal("fixture must have stale completed history")
+			}
+			f.mu.Lock()
+			f.active = true
+			f.mu.Unlock()
+			if err := c.refresh(); err != nil {
+				t.Fatal(err)
+			}
+			joinPane(t, n)
+			if threadOf(c, remoteRaw).turn != "" {
+				t.Fatal("late join must have no observed turn ID")
+			}
+			if got := paneRow(t, n, remoteRaw).Status; got != proto.StatusWorking {
+				t.Fatalf("active read with completed history: %s", got)
+			}
+			for _, flag := range []string{"waitingOnApproval", "waitingOnUserInput"} {
+				f.mu.Lock()
+				f.response = func(method string, _ map[string]any) (any, bool) {
+					return map[string]any{"thread": map[string]any{"id": remoteRaw,
+						"status": map[string]any{"type": "active", "activeFlags": []string{flag}}}}, method == "thread/read"
+				}
+				f.mu.Unlock()
+				if err := c.refresh(); err != nil {
+					t.Fatal(err)
+				}
+				if threadOf(c, remoteRaw).status != proto.StatusBlocked || n.codexTurnOver(remoteRaw, time.Now()) {
+					t.Fatalf("%s was treated as completed history", flag)
+				}
+			}
+			f.mu.Lock()
+			f.response = nil
+			f.mu.Unlock()
+			f.push(map[string]any{"method": "turn/started", "params": map[string]any{
+				"threadId": remoteRaw, "turn": map[string]any{"id": "current-turn"}}})
+			waitFor(t, "the current turn", func() bool { return threadOf(c, remoteRaw).turn == "current-turn" })
+			if got := paneRow(t, n, remoteRaw).Status; got != proto.StatusWorking {
+				t.Fatalf("started turn with completed history: %s", got)
+			}
+			f.mu.Lock()
+			f.active = false
+			f.mu.Unlock()
+			endTurn(t, f, c)
+			want := hostStatus
+			if want == proto.StatusWorking {
+				want = proto.StatusDone // a stale terminal observation is still corrected
+			}
+			if got := paneRow(t, n, remoteRaw).Status; got != want {
+				t.Fatalf("after completion: %s, want %s", got, want)
+			}
+		})
+	}
+}
 
 // herdr said idle through a whole turn of a Codex joined on its app-server (#4865): a reporter holding the pane decides
 // its state there (#4657), and the node took herdr's word for a Codex as it was. A Codex the host calls done, idle or

@@ -194,3 +194,4 @@ final class WorkoutReports {
     }
 }
 #endif
+import PersonaWire

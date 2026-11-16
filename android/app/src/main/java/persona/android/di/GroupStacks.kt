@@ -40,6 +40,8 @@ class GroupStack internal constructor(
     internal val mergedTerminal: TerminalTransport by lazy { terminal.inGroup(names) }
     internal val files: SessionFiles by lazy { HubSessionFiles(connection).inGroup(names) }
     internal val actions: ChatActions by lazy { HttpChatActions(connection).inGroup(names) }
+    /** Successful manager snapshots follow this pairing across refreshed HTTP routes. */
+    internal val metricSnapshots = HttpMachineMetricsApi.Cache()
     val current: Boolean get() = group.data === data && group.active
 }
 
@@ -83,7 +85,7 @@ class GroupStacks @Inject constructor(application: Application, private val runt
         fun current() = group.data === data && group.active
         val repositories = withContext(Dispatchers.IO) {
             ChatDataRepositories(data, HubChatTransport(connection), connection, foreground,
-                HttpHubPreferencesTransport(connection) { current() })
+                HttpHubPreferencesTransport(connection) { current() }, continuityFactory = app.continuityFactory)
         }
         val names = GroupNames(group.namespace)
         group.adoptSession = { previous, session -> if (current()) repositories.sessions.adoptThread(previous, session) }

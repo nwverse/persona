@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Settings › Extensions' logic (ExtensionsModel, ExtensionModel): what the hub sends decodes, the form's draft is edited by path and
 /// saved as a whole without the emptied fields, a field the hub refuses comes back beside that field.
@@ -162,10 +163,30 @@ struct ExtensionsModelTests {
             ExtensionField(name: name, type: type, title: name == "machines" ? "能操控的电脑" : nil,
                         items: machines ? ExtensionItems(type: "string", format: "machine") : nil)
         }
-        #expect(ExtensionText.saveFooter([field("url", "string")]) == String(localized: "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults."))
+        #expect(ExtensionText.saveFooter([field("url", "string")]) == String(localized: "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults."))
         #expect(ExtensionText.saveFooter([field("machines", "array", machines: true)]) == nil)
         let names = ExtensionText.list([String(localized: "「\(field("machines", "array", machines: true).label)」", comment: "A field's name in quotes")])
-        #expect(ExtensionText.saveFooter([field("machines", "array", machines: true), field("confirm", "boolean")]) == String(localized: "Switches in \(names) take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults."))
+        #expect(ExtensionText.saveFooter([field("machines", "array", machines: true), field("confirm", "boolean")]) == String(localized: "Switches in \(names) take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults."))
+    }
+
+    /// Same cases as the web's "opens from Still needs the first unset secret…" (lib/extensions.test.ts, #8853).
+    @Test func theStillNeedsLineOpensTheSecretItNames() {
+        let key = ExtensionSecret(name: "key", title: "API Key", set: false)
+        let token = ExtensionSecret(name: "token", title: "Token", required: true, set: false)
+        var setKey = key
+        setKey.set = true
+        // an optional secret the line names (the hub's own words for the extension)
+        #expect(ExtensionText.setupSecret(needs: ["火山引擎的 API Key"], secrets: [key])?.name == "key")
+        // a required one, first among those not set
+        #expect(ExtensionText.setupSecret(needs: ["密钥「Token」"], secrets: [setKey, token])?.name == "token")
+        #expect(ExtensionText.setupSecret(needs: ["密钥「API Key」"], secrets: [token, key])?.name == "token")
+        // nothing it names is a secret here: plain text
+        #expect(ExtensionText.setupSecret(needs: ["依赖「Example」还没准备好"], secrets: [key]) == nil)
+        #expect(ExtensionText.setupSecret(needs: ["密钥「API Key」"], secrets: [setKey]) == nil)
+        // nothing needed: no target, whatever is unset
+        #expect(ExtensionText.setupSecret(needs: [], secrets: [token]) == nil)
+        #expect(ExtensionText.setupSecret(needs: nil, secrets: [token]) == nil)
+        #expect(ExtensionText.setupSecret(needs: ["密钥「API Key」"], secrets: []) == nil)
     }
 
     @Test func aRefusedFieldComesBackBesideIt() async {

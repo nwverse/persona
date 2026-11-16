@@ -44,17 +44,26 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		p.MachineID = s.settings(ctx).MachineID // where a launcher picked for it runs (models_run.go)
 	}
 	stored := s.storedLaunchers(ctx)
+	var roomHere []ConfiguredLauncher // the assistant's computer's launchers as last seen: what each runs there
+	if p.ID == purposeMeetingRoom {
+		roomHere = s.roomLaunchers(ctx, p.MachineID, "", false)
+	}
 	p.Fields = []string{"provider", "model"}
 	p.ProviderIDs = []string{}
 	for _, v := range providers {
-		if s.modelProviderCompatible(p, v, stored) {
+		offered := s.modelProviderCompatible(p, v, stored)
+		if p.ID == purposeMeetingRoom { // Claude Code only, as the assistant's computer runs it (models_room.go)
+			here, ok := onRoomMachine(v, stored, roomHere)
+			offered = ok && s.modelProviderCompatible(p, here, stored)
+		}
+		if offered {
 			p.ProviderIDs = append(p.ProviderIDs, v.ID)
 		}
 		if v.ID == p.Effective.Provider {
 			if p.Effective.Model == "" {
 				p.Effective.Model = v.Model
 			}
-			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "") {
+			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "chat" || v.API == "") {
 				p.Fields = append(p.Fields, "effort")
 			}
 		}
@@ -65,9 +74,14 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 	if len(p.Runtimes) > 0 {
 		p.Fields = append(p.Fields, "runtime")
 	}
+	if len(p.ConfigDirs) > 0 {
+		p.Fields = append(p.Fields, "config_dir")
+	}
 	l := s.requestCtxLang(ctx)
 	p.Status = modelUnverified
-	if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
+	if room := roomNotClaudeStatus(l, p, providers, stored, roomHere); room != "" {
+		p.Status = room // it follows a main chat on Codex, say: no room starts until a Claude Code launcher is picked here
+	} else if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
 		p.Status = scope // the provider is out of the main chat's computer's scope: why it does not run there
 	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) {
 		p.Status = mc(l, "status_provider_incompatible")
@@ -202,6 +216,10 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 400, i18n.Err("assistant-models.err_runtime_assistant_only"))
 			return
 		}
+		if in.ConfigDir != nil && string(in.ConfigDir) != "null" && len(p.ConfigDirs) == 0 {
+			apierr.Write(w, 400, i18n.Err("assistant-models.err_config_dir_assistant_only"))
+			return
+		}
 		b, err := patchModel(p.Override, in)
 		if err != nil {
 			apierr.Write(w, 400, err)
@@ -232,7 +250,7 @@ func (s *Service) modelConfigRoutes() {
 				apierr.Write(w, 400, e)
 				return
 			}
-			if !messagesAPI(config.API) && config.API != "responses" {
+			if !messagesAPI(config.API) && config.API != "responses" && config.API != "chat" {
 				apierr.Write(w, 400, i18n.Err("assistant-models.err_api_effort"))
 				return
 			}

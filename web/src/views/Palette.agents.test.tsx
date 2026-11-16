@@ -74,16 +74,8 @@ async function search(query: string, listShown = true) {
 }
 /** lib/agent-search.ts loads with the first query typed, or the Filter's first click. */
 async function ticks() {
-  // Those imports land a few macrotasks after the render, as late as the machine is slow: wait until the palette stops changing.
-  let last = "";
-  let still = 0;
-  const end = Date.now() + 5000;
-  while (still < 8 && Date.now() < end) {
-    await act(async () => { await new Promise((ok) => setTimeout(ok, 25)); });
-    const now = document.body.innerHTML;
-    still = now === last ? still + 1 : 0;
-    last = now;
-  }
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 10; i++) await act(async () => { await new Promise((ok) => setTimeout(ok, 0)); });
 }
 /** The Agent rows' titles, top to bottom. */
 const titles = () =>
@@ -151,7 +143,7 @@ describe("⌘K as the Agents list's search", () => {
     act(() => root.unmount());
     root = createRoot(host);
     // the default By to-do is the paged list's on a hub that lists sessions by to-do (#6662)
-    Object.assign(getState(), { features: ["sessions_list", "sessions_todo"], sessionSummaries: sessions });
+    Object.assign(getState(), { features: ["sessions_list", "sessions_agents_only", "sessions_todo"], sessionSummaries: sessions });
     await search("parser");
     expect(titles()).toContain("parser rewrite");
     const row = document.body.querySelector<HTMLButtonElement>("[data-testid=palette-filter-list]")!;

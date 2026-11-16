@@ -12,6 +12,9 @@ pub(crate) struct Diagnostics {
     pub counters: Arc<Counters>,
 }
 
+/// Counters for the patch-side lock and worker spans. The `pending_*` fields are kept only so the diagnostic ABI
+/// shape stays stable: dispatch no longer takes a mutex, so those counters stay at zero and should not be read as
+/// evidence of lock contention.
 #[derive(Default)]
 pub(crate) struct Counters {
     pub pending_lock: AtomicU64,
@@ -36,8 +39,12 @@ pub(crate) struct Counters {
     pub pending_lock_without_proc: AtomicU64,
 }
 
-/// Time the real lock acquisition once, including the scheduler counter reads' own overhead.
+/// Time the patch lock acquisition once, including the scheduler counter reads' own overhead.
 pub(crate) fn timed_lock<'a, T>(shared: &Shared, mutex: &'a Mutex<T>, patch: bool) -> MutexGuard<'a, T> {
+    debug_assert!(
+        patch,
+        "the dispatch pending lock is gone; only the patch lock is measured"
+    );
     let Some(diagnostics) = shared.diagnostics.get() else {
         return lock(mutex);
     };
@@ -49,37 +56,17 @@ pub(crate) fn timed_lock<'a, T>(shared: &Shared, mutex: &'a Mutex<T>, patch: boo
     let guard = lock(mutex);
     let low_overhead_ns = low_overhead_started.elapsed().as_nanos() as u64;
     let after = scheduler_switches(0);
-    let (total, switches, calls) = if patch {
-        (
-            &counters.patch_lock,
-            &counters.patch_switches,
-            &counters.patch_lock_calls,
-        )
-    } else {
-        (
-            &counters.pending_lock,
-            &counters.pending_switches,
-            &counters.pending_lock_calls,
-        )
-    };
-    add(total, started);
-    switches.fetch_add(after.0 - before.0 + after.1 - before.1, Ordering::Relaxed);
-    increment(calls);
-    if patch {
-        if contended {
-            increment(&counters.patch_contended);
-        }
-        counters
-            .patch_lock_without_proc
-            .fetch_add(low_overhead_ns, Ordering::Relaxed);
-    } else {
-        counters
-            .pending_lock_without_proc
-            .fetch_add(low_overhead_ns, Ordering::Relaxed);
-        if contended {
-            increment(&counters.pending_contended);
-        }
+    add(&counters.patch_lock, started);
+    counters
+        .patch_switches
+        .fetch_add(after.0 - before.0 + after.1 - before.1, Ordering::Relaxed);
+    increment(&counters.patch_lock_calls);
+    if contended {
+        increment(&counters.patch_contended);
     }
+    counters
+        .patch_lock_without_proc
+        .fetch_add(low_overhead_ns, Ordering::Relaxed);
     guard
 }
 
@@ -114,13 +101,22 @@ pub(crate) fn measure_patch_held<T>(shared: &Shared, work: impl FnOnce() -> T) -
     value
 }
 
+#[cfg(any(target_os = "android", target_os = "linux"))]
 unsafe extern "C" {
     fn gettid() -> i32;
 }
 
 pub(crate) fn thread_id() -> u64 {
-    // SAFETY: Android's gettid has no arguments and returns the calling Linux task's kernel thread id.
-    unsafe { gettid() as u64 }
+    #[cfg(any(target_os = "android", target_os = "linux"))]
+    {
+        // SAFETY: Android and Linux gettid have no arguments and return the calling task's kernel thread id.
+        unsafe { gettid() as u64 }
+    }
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
+    {
+        // Non-Linux hosts have no Linux task id; zero keeps this diagnostic best-effort.
+        0
+    }
 }
 
 pub(crate) fn scheduler_switches(tid: u64) -> (u64, u64) {
@@ -149,4 +145,13 @@ pub(crate) fn add(counter: &AtomicU64, started: Instant) {
 
 pub(crate) fn increment(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    fn diagnostics_do_not_require_linux_thread_symbols_or_proc() {
+        let tid = super::thread_id();
+        assert_eq!(super::scheduler_switches(tid), (0, 0));
+    }
 }

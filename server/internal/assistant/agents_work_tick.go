@@ -172,6 +172,10 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 	}
 	// Read again right before acting: the pass's view may be a send or two old.
 	c, why := s.workGuard(s.newWorkView(ctx), e, false)
+	if retired, recovered := retiredRetry(c, e); recovered {
+		s.putWork(ctx, retired)
+		return
+	}
 	switch why {
 	case "":
 	case "offline", "todo state unavailable":
@@ -275,7 +279,7 @@ func (s *Service) workWake(ctx context.Context, v *workView, k [2]string, now ti
 			e.Retries, e.Work.Max)
 	case e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent:
 		e.Wakes++
-		wk := agentWake{Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
+		wk := agentWake{Language: answerLanguage(s.hello(ctx).Locale), Attempt: e.Wakes, Wait: e.Work.Wait, Then: e.Work.Then}
 		s.work.mu.Lock()
 		if a, ok := s.work.approved[k]; ok && risky(e.Work.Then) && a.covers(&e.Work) {
 			wk.Approved, wk.ApprovedByTask = a.then, a.task != "" // said yes to: the wake must not tell it to ask again
@@ -430,6 +434,12 @@ func (s *Service) cardTick(ctx context.Context, v *workView, k [2]string, now ti
 	e, ok := s.workEntry(k)
 	if !ok || e.InteractionID == "" {
 		return
+	}
+	if c, listed := v.session(k[0], k[1]); listed {
+		if retired, recovered := retiredRetry(c, e); recovered {
+			s.putWork(ctx, retired)
+			return
+		}
 	}
 	s.work.mu.Lock()
 	_, out := s.work.cards[e.InteractionID]

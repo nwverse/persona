@@ -137,7 +137,10 @@ reports share.
 - iOS reads `.dietaryEnergyConsumed`, `.dietaryProtein`, `.dietaryCarbohydrates`, `.dietaryFatTotal`, and `.basalEnergyBurned` through `HealthTool.quantityIdentifiers`. These join `HealthTool.readTypes`, so the Health authorization request includes them. People who allowed Health before these types were added must also grant the new read permissions.
 - The hub advertises the app's registered description and metric enum. Open/reconnect the updated phone app so its new catalog reaches the hub; a hub update alone cannot add metrics to an older phone app.
 - HealthKit does not reveal read authorization status: an empty result can mean no source data or denied read access. Check that the source app wrote today's entries and that Persona may read those categories.
-- **Locked phone (#7677)**: while the iPhone is locked, HealthKit's database is closed and every query fails with `HKError.errorDatabaseInaccessible`. The app then never starts a query: it answers from a snapshot of every metric over 90 days, written to Application Support with `completeFileProtectionUntilFirstUserAuthentication` while the app was in the foreground (refreshed on foreground and after successful live reads, throttled to 15 minutes). A snapshot answer keeps every field of the live answer and adds `"source": "snapshot"` plus `"as_of"`; the hub prepends a plain-text note with the same `as_of`. When no snapshot exists yet, the tool fails with a bilingual `device_locked` message instead of putting the English HealthKit error into the day fields.
+- **Locked phone (#7677)**: while the iPhone is locked, HealthKit's database is closed and every query fails with `HKError.errorDatabaseInaccessible`. The app then never starts a query: it answers from a snapshot of every metric over 90 days, written to Application Support with `completeFileProtectionUntilFirstUserAuthentication` while the app was in the foreground (refreshed on foreground and after successful live reads, throttled to 15 minutes).
+  - Both the `health-snapshot` directory and its `summary.json` file set `isExcludedFromBackup` on every save, keeping the 90 days of health data out of iCloud/iTunes backups. The flags are reapplied to files written by older builds too.
+  - A snapshot is valid for at most 48 hours after `as_of`. An older snapshot is treated as absent: the tool fails with the same bilingual `device_locked` message as when no snapshot exists, instead of putting the English HealthKit error into the day fields.
+  - A snapshot answer keeps every field of the live answer and adds `"source": "snapshot"` plus `"as_of"`; the hub prepends a plain-text note with the same `as_of`. Both `start` and `end` are computed from the snapshot time, with `end` equal to `as_of`, rather than the time of the locked-phone request. The save-time timezone is persisted too, so travel cannot move the day window or its partial marker onto a different row. The row for the snapshot's own day has `"partial": true` because it contains only the data collected before `as_of`; earlier rows omit `partial`.
 
 For the iPhone acceptance steps using 薄荷健康, see `docs/assistant/health.md` ("How to verify").
 
@@ -192,8 +195,10 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
   requests fail and the tool reports it.
 - **Home** needs the HomeKit capability on the App ID and the `com.apple.developer.homekit` entitlement, a signing change for the owner of the
   developer account. Until a build sets both and `PERSONA_HOMEKIT=YES` (Info.plist `PersonaHomeKit`, `HomeAccess.isBuilt`), the Home source is not
-  shown and its tools are never offered. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
-- **Share Extension** (#2282): files and choosing the conversation are #1460; nothing changed here.
+  shown and its tools are never offered. Both come from one switch: config.json `app.homekit: true` makes `scripts/persona_config.py xcconfig` add
+  the entitlement to the generated `apple/PersonaOptIn.entitlements` and write `PERSONA_HOMEKIT = YES` (`docs/operations/config.md`); turn the
+  capability on for the App ID first. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
+- **Share Extension** (#2282): Share › Persona from any app (Safari pages as title and link, Photos pictures, Files and other apps' files, text) is a separate path from these tools and from the composer's photo, camera and file pickers; it is described in `docs/apple/ios.md` ("Share to Persona (#4586, #1460)").
 
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
