@@ -365,7 +365,7 @@ struct MeetingPageBar: View {
             if entry.roomMeeting {
                 MeetingRoomButton(title: String(localized: "Speaker [Meeting Room]"),
                                   symbol: role.speaks ? Theme.Icon.answersAloud : Theme.Icon.answersOnScreen, on: role.speaks) {
-                    // Out loud or on screen; the system's echo cancellation stays as the meeting started (B2 decides).
+                    // Out loud or on screen; out loud turns echo cancellation on too where the experiment is on (`setSpeaks`, B2).
                     Haptics.tap()
                     _ = MeetingRecorder.shared.setRole(role.speaks ? .listener : .participant, recordingID: entry.id.uuidString)
                 }

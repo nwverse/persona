@@ -2894,6 +2894,29 @@ data class ExtensionTile(
     val control: ExtensionRowControl? = null,
     val actions: List<ExtensionRowAction>? = null,
     val action: ExtensionAction? = null,
+    /**
+     * Draws the tile as a ring (UI version 9): never with an image or a spark.
+     */
+    val gauge: ExtensionGauge? = null,
+)
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+@Serializable
+data class ExtensionGauge(
+    /**
+     * How full the ring is, 0 to 1.
+     */
+    val ratio: Double = 0.0,
+    /**
+     * A short word under the value (USD, GB, h), as a control's unit.
+     */
+    val unit: String? = null,
+    val color: String? = null,
 )
 
 /**

@@ -1272,7 +1272,6 @@ const SECTION_TONE: Record<TriageSection, string> = {
   working: "text-orange",
   parked: "text-ink-2",
   just_done: "text-green",
-  pr: "text-accent-ink",
   other: "text-ink-2",
   shelved: "text-ink-3",
   done: "text-ink-3",
@@ -1523,8 +1522,7 @@ const TodoListItem = memo(function TodoListItem({
   const showWait = !todo.done_at && !["working", "waiting", "needs_you", "interrupted", "failed"].includes(status) &&
     (reviewState(todo) === "parked" || ["pr", "parked"].includes(section ?? view.section ?? ""));
   // the PR it waits on: its current one, or an earlier one still open (#7935)
-  const openPR = section === "pr" ? openMergePRs(todo, Date.now())[0] : undefined;
-  const pr = openPR ? prLink(openPR.url) : null;
+  const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
@@ -1628,7 +1626,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
-        {showWait && <div className="mt-1"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
+        {showWait && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
@@ -1648,30 +1646,13 @@ const TodoListItem = memo(function TodoListItem({
         )}
 
         {/* Most Urgent Agent Line */}
-        {view.urgentLine && (
+        {view.urgentLine && !showWait && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
             {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}
 
-        {/* A PR to merge: its link and how long it has not moved (#3156) */}
-        {pr && (
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3" data-testid="todo-pr-line">
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              aria-label={pr.label}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
-            >
-              <Icon name="pullRequest" size={11} />
-              {pr.text}
-            </a>
-            <span className="truncate">· {prBlockers(todo, openPR).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
-          </div>
-        )}
 
         {/* Shelved: one tap brings it back (#3156); nothing is deleted */}
         {section === "shelved" && onRestore && (

@@ -544,7 +544,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 	defer cancel()
 	for _, w := range s.awaitingAcceptance(ctx) {
 		a := w.ask
-		if !decideAsk(&a) {
+		if !decideAsk(&a) || a.AgentReply != nil {
 			continue
 		}
 		// One that recommends nothing goes back as undecidable instead (undecidableSignal): not both.
@@ -557,7 +557,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		b := &s.accept
 		b.mu.Lock()
 		cur := b.asks[w.todo]
-		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() {
+		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() || cur.AgentReply != nil {
 			b.mu.Unlock()
 			continue
 		}

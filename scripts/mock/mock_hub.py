@@ -24400,6 +24400,9 @@ def markets_route(handler, p, body):
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
                     "placement": "nav_page", "size": "full", "icon": "calendar"}]
+        if GAUGE_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
+                    "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -28986,6 +28989,7 @@ def features():
 
 
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29563,6 +29567,8 @@ _plugins_route_without_extensions = plugins_route
 def plugins_route(handler, p, body):
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
+    if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
+        return mock_quota(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29656,6 +29662,48 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GAUGE=1 (with MOCK_EXTENSIONS=1): a made-up gateway's quota page, UI version 9's gauge (#9337): a row
+# of status tiles, then a card of three rings, each filled to the quota left with the amount in its centre and the
+# limit's name below, green while there is enough and amber once it runs low; the reset times are the card's footer.
+# Pressing the low ring answers a toast. All names and numbers are invented.
+GAUGE_MODE = os.environ.get("MOCK_EXTENSION_GAUGE") == "1"
+
+
+def _quota_ring(key, title, value, ratio, **extra):
+    color = "amber" if ratio < 0.2 else "green"
+    tile = {"key": key, "title": title, "value": value, "gauge": {"ratio": ratio, "unit": "USD", "color": color}}
+    tile.update(extra)
+    return tile
+
+
+def _quota_view():
+    return {"title": "Gateway quota", "refresh_after": 300, "sections": [
+        {"key": "status", "items": [{"type": "grid", "key": "status", "tiles": [
+            {"key": "state", "title": "Gateway", "value": "Online", "icon": "wifi", "color": "green"},
+            {"key": "keys", "title": "Keys", "subtitle": "1 paused", "value": "3", "icon": "lock"},
+            {"key": "requests", "title": "Requests today", "value": "1,284", "icon": "chart",
+             "spark": {"values": [420, 610, 580, 820, 960, 1010, 1284], "color": "blue"}},
+            {"key": "errors", "title": "Errors", "value": "0.4%", "icon": "warning", "badge": {"text": "Low", "color": "green"}},
+        ]}]},
+        {"key": "quota", "title": "Quota left", "footer": "5 hours resets in 1 h 49 min · this week resets in 1 d 16 h",
+         "items": [{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+             _quota_ring("five_hours", "5 hours", "4.69", 0.94),
+             _quota_ring("week", "This week", "38.20", 0.76),
+             _quota_ring("fable_week", "Fable this week", "0.62", 0.12, badge={"text": "Low", "color": "amber"},
+                         action={"id": "open_limit", "values": {"limit": "fable_week"}}),
+         ]}]},
+    ]}
+
+
+def mock_quota(handler, body):
+    request = json.loads(body) if body else {}
+    if request.get("action") == "open_limit":
+        handler.send_json({"toast": "Fable this week: 0.62 USD left"})
+    else:
+        handler.send_json({"view": _quota_view()})
     return True
 
 

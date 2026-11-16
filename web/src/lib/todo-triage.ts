@@ -7,11 +7,11 @@ import { compareWaitAge } from "./task-wait";
 import { openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 /** Where a to-do shows. */
-export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "pr" | "other" | "shelved" | "done";
+export type TriageSection = "waiting" | "working" | "parked" | "just_done" | "other" | "shelved" | "done";
 
 /** The page's order (#5707): what the owner has to act on, the unfinished work, what just finished, then the folded
  *  ones, Done last. A merged row is led by its member in the first of these. */
-export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "pr", "parked", "other", "just_done", "shelved", "done"];
+export const TRIAGE_SECTIONS: readonly TriageSection[] = ["waiting", "working", "parked", "other", "just_done", "shelved", "done"];
 
 /** Sections that start folded: the rest start open, unfinished to-dos included. */
 export const FOLDED_SECTIONS: ReadonlySet<TriageSection> = new Set(["shelved", "done"]);
@@ -138,7 +138,7 @@ function shelvable(todo: Todo, now: number): boolean {
  *  6. accepted        the latest review accepted it (even reopened)     → Just finished (24 h), then Done
  *  7. deployed        its delivery is live                              → Just finished (24 h), then Done
  *  8. finished_unseen an agent finished unseen, awaits review, or a done ask → Just finished
- *  9. pr_open         fresh matching open non-draft PR facts, nothing active or awaiting owner → Waiting for merge
+ *  9. pr_open         fresh matching open non-draft PR facts, nothing active or awaiting owner → Parked (merge wait)
  *  9a. seen           rule 8, seen since it last moved, no PR open      → Done
  *
  * Seen (#5707): the owner looked at it (`seen_at`: Got it, or opening it) at or after the moment that put it in Just
@@ -172,14 +172,14 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR
   // accepted or deployed work is finished whatever its PR facts say: rule 9 never outranks those rules (#7614 review)
   const settled = !concern && (acceptanceStands(todo) || todo.delivery?.state === "live");
-  if (!settled && !(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) return at("pr", "pr_open");
+  if (!settled && !(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) {
+    // Seeing a supervisor's review does not finish its open PR or turn that internal review into an external wait.
+    return reviewState(todo) === "pending_review" ? at("other", "rest") : at("parked", "pr_open");
+  }
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
-  // A stopped turn is not a completed task. When the wait expires it needs review, not filing as done.
-  if (reviewState(todo) === "parked") {
-    const until = ms(todo.supervision?.parked?.until);
-    return at(until && until <= now ? "other" : "parked", "parked");
-  }
+  // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.
+  if (reviewState(todo) === "parked") return at("parked", "parked");
   if (!concern && acceptanceStands(todo)) return at(fresh(ms(latestReview(todo.supervision)?.at)) ? "just_done" : "done", "accepted");
   if (!concern && todo.delivery?.state === "live") return at(fresh(ms(todo.delivery.at) || last) ? "just_done" : "done", "deployed");
   if (finished && !seen(last)) return at("just_done", "finished_unseen");

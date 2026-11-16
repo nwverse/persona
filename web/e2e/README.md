@@ -78,6 +78,42 @@ at both widths and no card's content wider than the card. Only the mock's own re
 (the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
 run, and the last line is the verdict.
 
+## Extension pages on reload: the last places and view at first paint (#9283)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-first-paint.mjs <loopback-web-origin> <artifact directory> [--shots-only] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark, 1440 × 900. Every request the hub would
+relay to the manager (`/api/v1/extensions…`) is held for a second in the browser, as a far hub takes. The made-up "Today"
+page is loaded three times in one profile. The first load has kept nothing: its sidebar entry and header title come only
+after the first relayed answer. The second draws the sidebar's entry, the header's title and icon and the page's last view
+(marked as updating, inert) before the first relayed answer, and the extension's drawing then replaces it. The third's first
+paint is photographed while every relayed request is still held (`first-paint-after-<theme>.png`). `--shots-only` takes only
+that photograph (`first-paint-before-<theme>.png`), for a build without the cache. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line
+is the verdict.
+
+## An extension's quota card: UI version 9's gauge (#9337)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-gauge.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+gateway's "Quota" page and checks what jsdom cannot lay out: the three rings in order, each read out as "title: value unit, N%"
+(a meter, or a button for the one with an action), its arc filled to the ratio in the named color the browser resolves, its value
+centred in the ring and not cut, its title below, the ring inside its tile, and the reset times under the rings; at 1440 × 900 the
+four status tiles in one row above three rings side by side of one width, and pressing the low ring answers its toast; at 390 × 844
+two rings a line; with Settings › Appearance's Large text the values still whole and centred at both widths; with Reduce Motion the
+arc does not ease. It waits for the page's finite animations to end, never for a fixed time. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line is the
+verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.

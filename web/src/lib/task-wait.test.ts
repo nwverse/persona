@@ -161,7 +161,7 @@ describe("recorded external wait information", () => {
   });
 });
 
-describe("wait-age ordering on existing surfaces without the grouping PR", () => {
+describe("wait-age ordering on task surfaces", () => {
   const list = () => [make("unknown"), make("newer", 2), make("older", 100)];
   it("puts known starts oldest first and unknowns last, with stable identity ties", () => {
     expect(list().sort((a, b) => compareWaitAge(a, b, now)).map((td) => td.id)).toEqual(["older", "newer", "unknown"]);
@@ -170,8 +170,8 @@ describe("wait-age ordering on existing surfaces without the grouping PR", () =>
   it("orders wait rows in the existing conversation tray without changing membership or open count", () => {
     const todos = list();
     const got = assistantEntries({ conversation: "main", main: "main", todos, sessions: [], interactions: [], plans: {}, feed: [], now });
-    expect(got.running.map((item) => item.kind === "task" ? item.todo.id : "")).toEqual(["older", "newer", "unknown"]);
-    expect(got.running.filter((item) => item.kind === "task" && item.countsOpen)).toHaveLength(3);
+    expect(got.parked.map((item) => item.kind === "task" ? item.todo.id : "")).toEqual(["older", "newer", "unknown"]);
+    expect(got.parked.filter((item) => item.kind === "task" && item.countsOpen)).toHaveLength(3);
     expect(got.needsYou).toHaveLength(0);
   });
   it("orders To-dos waiting sections using the same starts", () => {
@@ -180,9 +180,9 @@ describe("wait-age ordering on existing surfaces without the grouping PR", () =>
     expect(got.open).toBe(3);
   });
   it("orders All's waiting slots without changing their section", () => {
-    const got = boardSections(list().map((todo) => ({ todo, status: "follow_up" as const })), [], now);
+    const got = boardSections(list().map((todo) => ({ todo, status: "follow_up" as const, parked: true })), [], now);
     expect(got).toHaveLength(1);
-    expect(got[0].key).toBe("stopped");
+    expect(got[0].key).toBe("parked");
     expect(got[0].rows.map((row) => row.todo.id)).toEqual(["older", "newer", "unknown"]);
   });
 });
