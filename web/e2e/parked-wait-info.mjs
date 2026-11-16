@@ -32,7 +32,8 @@ const tasks = [
   { id: "wait-legacy", title: "Check vendor delivery", created_at: since, updated_at: iso(-60_000), agents: [], supervision: { supervisor: "demo-main", state: "parked", parked: { reason: "Waiting on vendor", until: iso(86400_000), waiting_on: "external_event", count: 1 }, reviews: [] } },
   { id: "wait-unrecorded-review", title: "Merge earlier copy update", created_at: since, updated_at: iso(-60_000), agents: [], pr_url: pr(74).url, pr_status: pr(74) },
   { id: "wait-active", title: "Draft rollout notes", created_at: since, updated_at: iso(-60_000), agents: [{ machine_id: "demo", session_id: "active-agent", linked_at: since }], supervision: { supervisor: "demo-main", state: "pending_review" } },
-].map(task => ({ ...task, origin: "demo-main" }));
+].map(task => ({ ...task, origin: "demo-main" })).reverse();
+const waitingOrder = ["wait-person", "wait-review", "wait-legacy", "wait-unrecorded-review"];
 const reads = [], writes = [], forbidden = [], cases = [];
 const sid = "demo-main";
 const api = async (route) => {
@@ -128,6 +129,7 @@ try {
         continue;
       }
       const person = page.locator('[data-task-wait-info="wait-person"]'); await person.waitFor();
+      assert.deepEqual(await page.locator("[data-parked-task-row]").evaluateAll(rows => rows.map(row => row.dataset.parkedTaskRow)), waitingOrder);
       const readyMs = await page.evaluate(start => performance.now() - start, feedback.start);
       assert(feedback.ms < 1000 && readyMs < 1000, "local feedback and information-ready are measured separately, both under 1s");
       assert.equal(await person.getAttribute("data-wait-kind"), "person_reply");
@@ -179,12 +181,14 @@ try {
       const board = page.locator('[data-testid="task-board"]');
       await board.locator('[data-task-wait-info="wait-person"]').waitFor();
       assert.equal(await board.locator("[data-task-wait-info]").count(), 4);
+      assert.deepEqual(await board.locator("[data-task-wait-info]").evaluateAll(rows => rows.map(row => row.dataset.taskWaitInfo)), waitingOrder);
       assert.equal(await board.locator('[data-task-wait-info="wait-active"]').count(), 0);
       await shot("all");
       await page.goto(`${base}/todos`);
       const rows = page.locator("[data-todo]");
       await rows.locator('[data-task-wait-info="wait-person"]').waitFor();
       assert.equal(await rows.locator("[data-task-wait-info]").count(), 4);
+      assert.deepEqual(await rows.locator("[data-task-wait-info]").evaluateAll(rows => rows.map(row => row.dataset.taskWaitInfo)), waitingOrder);
       assert.equal(await rows.locator('[data-task-wait-info="wait-legacy"] [data-wait-contact-missing]').count(), 1);
       assert.equal(await rows.locator('[data-task-wait-info="wait-active"]').count(), 0);
       await shot("todos");

@@ -1,20 +1,12 @@
 # Lessons: web UI and interactions
 
-## A lazy waiting row can still grow startup code and copy (#9390)
+## A lazy waiting row needs a lazy ordering boundary (#9390)
 
-Ordering an unopened tray imports its age computation on the first screen. Keep that small read-only computation
-separate from the lazy display projection and reminder editor. Moving a row behind `lazyPage` also does not defer
-its phrases if startup still lists their whole namespace: the PR-blocker phrases belong to client-rest once their
-only callers are lazy waiting rows and To-dos. Keep the other Assistant task phrases available at startup, retain
-the same catalog keys, and check both the key-split regression and every language's measured first-screen budget.
-Do not hide the growth with an exemption or a larger budget.
-The existing New main chat dialog is another cold caller: keep its menu entry and current-main warning ready,
-but leave its confirmation and carry-summary copy with the dialog. The build's literal-key check verifies that
-no first-screen caller loses a phrase; narrowing catalog prefixes does not rename keys or change the dialog.
-The same applies to the expanded composer's Collapse caption, history's Sidebar caption and a detail's Latest
-report caption: include their callers in the first-screen audit rather than keeping their entire namespace eager.
-The repository status link and Inbox's Lark label are also cold callers; retain their hot neighbors, not their whole
-namespaces. Reuse the shared time parser and existing minimum-width token rather than adding duplicate startup code or CSS.
+Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
+row is lazy. Keep canonical classification and counts unchanged; order the waiting list inside its existing lazy
+boundary. To-dos similarly orders only the already-classified waiting groups in its lazy page, preserving the other
+sections and counts. Check the boundary regression and every language's measured first-screen budget; do not hide
+growth with an exemption, a larger budget or unrelated catalog changes. New waiting copy stays in its own lazy namespace.
 On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
 on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
 

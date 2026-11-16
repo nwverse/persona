@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assistantEntries } from "./assistant-entries";
 import { boardSections } from "./task-board";
-import { compareWaitAge, waitSource, waitStart } from "./task-wait";
+import { compareWaitAge, orderWaitGroups, waitSource, waitStart } from "./task-wait";
 import { taskWait } from "./task-wait-info";
 import { triageTodos } from "./todo-triage";
 import type { ParkEvidence, TaskReview } from "./supervision";
@@ -177,17 +177,31 @@ describe("wait-age ordering on task surfaces", () => {
     expect(list().sort((a, b) => compareWaitAge(a, b, now)).map((td) => td.id)).toEqual(["older", "newer", "unknown"]);
     expect([make("b", 2), make("a", 2)].sort((a, b) => compareWaitAge(a, b, now)).map((td) => td.id)).toEqual(["a", "b"]);
   });
-  it("orders wait rows in the existing conversation tray without changing membership or open count", () => {
+  it("keeps the existing conversation tray's membership and open count for lazy wait ordering", () => {
     const todos = list();
     const got = assistantEntries({ conversation: "main", main: "main", todos, sessions: [], interactions: [], plans: {}, feed: [], now });
-    expect(got.parked.map((item) => item.kind === "task" ? item.todo.id : "")).toEqual(["older", "newer", "unknown"]);
+    expect(got.parked.map((item) => item.kind === "task" ? item.todo.id : "").sort()).toEqual(["newer", "older", "unknown"]);
     expect(got.parked.filter((item) => item.kind === "task" && item.countsOpen)).toHaveLength(3);
     expect(got.needsYou).toHaveLength(0);
   });
   it("orders To-dos waiting sections using the same starts", () => {
-    const got = triageTodos(list(), undefined, now);
+    const got = orderWaitGroups(triageTodos(list(), undefined, now), now);
     expect(got.sections.parked.map((group) => group.lead.id)).toEqual(["older", "newer", "unknown"]);
     expect(got.open).toBe(3);
+  });
+  it("changes a waiting group's lead to its oldest wait without mutating canonical triage or counts", () => {
+    const newer = { ...make("a-newer", 2), pr_url: pr.url };
+    const older = { ...make("z-older", 100), pr_url: pr.url };
+    const original = triageTodos([newer, older, make("middle", 50)], undefined, now);
+    const before = JSON.stringify(original);
+    const got = orderWaitGroups(original, now);
+    expect(got.sections.parked.map((group) => group.lead.id)).toEqual(["z-older", "middle"]);
+    expect(got.sections.parked[0].members.map((todo) => todo.id)).toEqual(["z-older", "a-newer"]);
+    expect(got.sections.parked[0].key).toBe("z-older");
+    expect(got.todoCounts).toBe(original.todoCounts);
+    expect(got.sections.working).toBe(original.sections.working);
+    expect(got.open).toBe(original.open);
+    expect(JSON.stringify(original)).toBe(before);
   });
   it("orders All's waiting slots without changing their section", () => {
     const got = boardSections(list().map((todo) => ({ todo, status: "follow_up" as const, parked: true })), [], now);

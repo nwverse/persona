@@ -5,7 +5,6 @@ import { reviewState } from "./supervision";
 import { supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
-import { compareWaitAge } from "./task-wait";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
 
@@ -141,7 +140,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
-  const parked: Extract<RunningItem, { kind: "task" }>[] = [];
+  const parked: { item: RunningItem; at: string }[] = [];
   const review: { item: RunningItem; rank: number; at: string }[] = [];
   const finished: { item: RunningItem; at: number }[] = [];
   const folded = new Set<string>();
@@ -192,7 +191,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // on the PR) the PR rule below files it
     else if (underReview(todo, status)) review.push({ item: { kind: "task", key, card, todo, status, countsOpen }, rank: todoRank(todo, status), at: card.at });
     // Use the To-dos page's wait classification. Live work and owner decisions outrank a hold or an open PR.
-    else if (reviewState(todo) !== "pending_review" && triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "parked") parked.push({ kind: "task", key, card, todo, status, countsOpen });
+    else if (reviewState(todo) !== "pending_review" && triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id)).section === "parked") parked.push({ item: { kind: "task", key, card, todo, status, countsOpen }, at: card.at });
     else if (bucket === "open" || reviewState(todo) === "pending_review") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup), countsOpen }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status, countsOpen: false }, at: card.at });
     else {
@@ -231,7 +230,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     ],
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
-    parked: parked.sort((a, b) => compareWaitAge(a.todo, b.todo, now)),
+    parked: parked.sort(newest).map((row) => row.item),
     review: review.sort(newest).map((row) => row.item),
     justFinished: finished.sort((a, b) => b.at - a.at).map((row) => row.item),
   };

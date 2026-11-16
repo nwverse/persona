@@ -1,8 +1,18 @@
 import { openTask } from "../../lib/handoff";
+import type { RunningItem } from "../../lib/assistant-entries";
+import { compareWaitAge } from "../../lib/task-wait";
 import { openMergePRs } from "../../lib/todo-triage";
 import type { Todo } from "../../lib/todos";
 import { Icon } from "../../ui/icons";
+import { useNow } from "../../ui/atoms";
 import { TaskWaitInfo } from "./TaskWaitInfo";
+
+/** The tray already loads waiting rows on demand; keep their ordering on that same lazy boundary. */
+export function ParkedTaskRows({ items }: { items: readonly RunningItem[] }) {
+  const now = useNow(60_000);
+  return <>{items.filter((item) => item.kind === "task").sort((a, b) => compareWaitAge(a.todo, b.todo, now))
+    .map((item) => <ParkedTaskRow key={item.key} todo={item.todo} countsOpen={item.countsOpen} />)}</>;
+}
 
 /** Preserve the dedicated waiting tray's row contract and group membership. */
 export function ParkedTaskRow({ todo, countsOpen }: { todo: Todo; countsOpen: boolean }) {

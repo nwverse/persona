@@ -3,7 +3,6 @@
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
 import { acceptanceStands, latestReview, reviewState } from "./supervision";
-import { compareWaitAge } from "./task-wait";
 import { openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 /** Where a to-do shows. */
@@ -327,8 +326,6 @@ export function triageTodos(
 
   const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
   const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
-  // Callers compare sections first, so both tasks have the same section here.
-  const byWaitAge = (a: Todo, b: Todo) => placed.get(a.id)!.section === "parked" ? compareWaitAge(a, b, now) : 0;
   let open = 0;
   for (const td of list) {
     const tr = placed.get(td.id)!;
@@ -343,14 +340,13 @@ export function triageTodos(
       const tb = placed.get(b.id)!;
       // a superseded failed start never leads the row of the work that finished
       const behind = (t: Triage) => (t.rule === "superseded" ? 1 : 0);
-      return ORDER.get(ta.section)! - ORDER.get(tb.section)! || behind(ta) - behind(tb) ||
-        byWaitAge(a, b) || tb.last - ta.last || a.id.localeCompare(b.id);
+      return ORDER.get(ta.section)! - ORDER.get(tb.section)! || behind(ta) - behind(tb) || tb.last - ta.last || a.id.localeCompare(b.id);
     });
     const lead = members[0];
     const lt = placed.get(lead.id)!;
     const triageOf = new Map(members.map((m) => [m.id, placed.get(m.id)!]));
     sections[lt.section].push({ key: lead.id, section: lt.section, lead, members, triage: triageOf, last: Math.max(...members.map((m) => placed.get(m.id)!.last)) });
   }
-  for (const s of TRIAGE_SECTIONS) sections[s].sort((a, b) => byWaitAge(a.lead, b.lead) || b.last - a.last || a.key.localeCompare(b.key));
+  for (const s of TRIAGE_SECTIONS) sections[s].sort((a, b) => b.last - a.last || a.key.localeCompare(b.key));
   return { sections, todoCounts, open, shelved, finished };
 }

@@ -1,5 +1,6 @@
 import type { ParkContact, ParkEvidence, TaskReview } from "./supervision";
 import { timeMs } from "./times";
+import type { TriageResult } from "./todo-triage";
 import type { Todo } from "./todos";
 
 /** Rendering a source never turns an unchecked URL into an executable link. */
@@ -68,4 +69,15 @@ export function waitStart(todo: Todo, now: number): { at?: number; request: bool
 /** Known starts first, oldest first; unknowns last. Identity ties never depend on a mutable last update. */
 export function compareWaitAge(a: Todo, b: Todo, now: number): number {
   return (waitStart(a, now).at ?? Infinity) - (waitStart(b, now).at ?? Infinity) || a.id.localeCompare(b.id);
+}
+
+/** Order only waiting rows after canonical triage, without changing membership, counts or other sections. */
+export function orderWaitGroups(result: TriageResult, now: number): TriageResult {
+  const parked = result.sections.parked.map((group) => {
+    const isWaiting = (todo: Todo) => group.triage.get(todo.id)?.section === "parked";
+    const waiting = group.members.filter(isWaiting).sort((a, b) => compareWaitAge(a, b, now));
+    const lead = waiting[0];
+    return { ...group, key: lead.id, lead, members: [...waiting, ...group.members.filter((todo) => !isWaiting(todo))] };
+  }).sort((a, b) => compareWaitAge(a.lead, b.lead, now));
+  return { ...result, sections: { ...result.sections, parked } };
 }

@@ -420,8 +420,15 @@ describe("Assistant Needs you / In progress trays", () => {
         reason: "Waiting for the schedule owner", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1, evidence,
       }, reviews: [{ at: "2026-11-10T09:00:00Z", verdict: "parked", parks: 1, evidence }] },
     }];
+    const older = moreTodos[0];
+    const newerEvidence = { ...evidence, contact: { ...evidence.contact, sent_at: "2026-11-10T08:30:00Z" } };
+    moreTodos = [{ ...older, id: "tray-wait-newer", title: "Newer example wait", updated_at: "2026-11-10T08:40:00Z",
+      supervision: { ...older.supervision!, parked: { ...older.supervision!.parked!, evidence: newerEvidence },
+        reviews: [{ at: "2026-11-10T08:40:00Z", verdict: "parked", parks: 1, evidence: newerEvidence }] } }, older];
     await act(async () => { await refreshTodos(); });
     await act(async () => entry("parked").click());
+    expect([...host.querySelectorAll("[data-parked-task-row]")].map((row) => row.getAttribute("data-parked-task-row")))
+      .toEqual(["tray-wait-evidence", "tray-wait-newer"]);
     const info = host.querySelector('[data-task-wait-info="tray-wait-evidence"]');
     expect(info?.querySelector("[data-wait-target]")?.textContent).toContain("Schedule owner");
     expect(info?.querySelector("[data-wait-contact]")?.textContent).toContain("Example sender");

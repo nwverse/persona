@@ -77,6 +77,7 @@ import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeSt
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
 import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { orderWaitGroups } from "../lib/task-wait";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -297,12 +298,12 @@ export function TodosView({
   const filterTodo = (t: Todo) => matchesSearch(t) && inFilter(t);
 
   const triaged = useMemo(
-    () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
+    () => orderWaitGroups(triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }), Date.now()),
     [todos, lookup, restored, search, listFilter, superseded, tick],
   );
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
-    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }) : triaged),
+    () => (search.trim() ? orderWaitGroups(triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }), Date.now()) : triaged),
     [todos, lookup, restored, search, listFilter, superseded, triaged, tick],
   );
   // Where the status sections place each to-do the search and the filter leave: its row's section (a merged row takes
