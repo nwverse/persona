@@ -446,6 +446,17 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Nested-item Envelope fallback removal (#9187).**
+  - After #9082, an independent reviewer found that a valid `items` array could let a different bad scalar bypass the
+    shared Envelope gate and become `Frame::Other`. Production now refuses the shared error before Other routing;
+    there is no `NestedItems` shortcut and no additional full `ServerEvent` implementation.
+  - Mixed bad-scalar / malformed-history inputs assert the source-required refusal, with the exact Foundation error
+    priority marked `source-undetermined`. Isolated `rows` has `wrong_type: rows` from `Envelope.rows: Int?`;
+    `args:1e999` is `malformed_json` from `JSONValue` / swift-foundation's non-finite-number rejection, never a
+    payload-bearing error string. Expectations come from Swift sources, not from Rust output.
+  - Existing 17 accepted wire cases, 38 / 94 continuity steps, #8955's 64 source-derived cases, real host JNI,
+    ArkTS and independent C ABI replay all pass. This is host evidence only, not Swift/iOS or production-client proof.
+
 - **Production shared-envelope scalar checks (#8995).**
   - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
     raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
@@ -563,8 +574,10 @@ Phase 3 lands in several PRs.
     opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
-    are rejected. Tables, inline markup, math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift
-    bindings, production adapters and the #4044 performance goal remain open.
+    are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
+    math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the
+    #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
