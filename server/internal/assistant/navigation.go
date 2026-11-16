@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The user's navigation choices (#9071, docs/protocol/protocol.md "Navigation"): the page the apps open on and how the
@@ -50,7 +50,7 @@ const (
 	sidebarGroupsMost = 32
 )
 
-var sidebarGroupID = regexp.MustCompile(`^(?:u:[a-z0-9]{1,16}|[a-z][a-z0-9-]{0,31})$`)
+var sidebarGroupID = lazyre.New(`^(?:u:[a-z0-9]{1,16}|[a-z][a-z0-9-]{0,31})$`)
 
 func validGroupID(id string) bool { return id == "" || sidebarGroupID.MatchString(id) }
 
@@ -96,7 +96,7 @@ func (p *sidebarPages) check() error {
 // startPagePattern is a start page's shape: a built-in page's key, or an extension page's `p:<extension>/<page>`. Which
 // pages there are is the apps' business (an extension's page comes and goes): an app opens on the default for a key it
 // does not know or a page that is not there.
-var startPagePattern = regexp.MustCompile(`^(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})$`)
+var startPagePattern = lazyre.New(`^(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})$`)
 
 func validStartPage(s string) bool { return s == "" || startPagePattern.MatchString(s) }
 
