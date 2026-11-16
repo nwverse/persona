@@ -438,8 +438,7 @@ final class ChatStore {
     let key: SessionKey
     @ObservationIgnored private let cacheFolder: URL?
     #if DEBUG
-    @ObservationIgnored var initialContinuitySnapshot = NativeContinuitySnapshot(
-        items: [], covered: 0, history: nil, hasMore: false, loadedOnce: false)
+    @ObservationIgnored var initialContinuitySnapshot: NativeContinuitySnapshot?
     @ObservationIgnored var continuityShadowEnabled = true
     #endif
     private(set) var items: [Item] = []
@@ -570,10 +569,6 @@ final class ChatStore {
             blocks = ChatBlock.build(rows)
             tasks = TaskIndex.build(items)
             version += 1
-            #if DEBUG
-            initialContinuitySnapshot = NativeContinuitySnapshot(items: items, covered: covered, history: history,
-                                                                 hasMore: hasMore, loadedOnce: loadedOnce)
-            #endif
         }
     }
 

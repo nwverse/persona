@@ -79,7 +79,7 @@ extension ChatStore: ChatContinuityAdapting {
 
     private func shadow(_ input: NativeContinuityInput, gap: ChatStore.Gap? = nil) {
         guard let hook = Self.shadowHook, continuityShadowEnabled else { return }
-        let snapshot = initialContinuitySnapshot
+        let snapshot = initialContinuitySnapshot ?? nativeSnapshot()
         let result = nativeResult()
         initialContinuitySnapshot = nativeSnapshot()
         hook(self, input, .init(snapshot: snapshot, native: result, gap: gap))

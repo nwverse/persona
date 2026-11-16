@@ -68,6 +68,7 @@ struct ProductionContinuityShadowTests {
     }
 
     @Test func diagnosticsHaveOnlyDomainRuleAndShape() async throws {
+        ProductionContinuityShadow.shared.installForTests()
         let reports = MutexBox<[ProductionContinuityShadow.Report]>([])
         let shadow = ProductionContinuityShadow { report in reports.withLock { $0.append(report) } }
         let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "private-identifiers"))
@@ -75,6 +76,7 @@ struct ProductionContinuityShadowTests {
         secret.text = "synthetic-message-content-that-must-not-be-reported"
         secret.id = "synthetic-item-identifier"
         _ = store.apply(.batch(.latest, items: [secret], span: ItemSpan(history: "h", to: 1), backlog: true, hasMore: false))
+        store.setContinuityShadowEnabledForFixtureReplay(false)
         // A native result that deliberately disagrees proves the mismatch reporter rather than a silent comparison.
         var wrong = store.nativeResult()
         wrong = NativeContinuityResult(items: [], covered: 999, history: "synthetic-history", hasMore: true, loadedOnce: false)
@@ -87,7 +89,58 @@ struct ProductionContinuityShadowTests {
             #expect(!text.contains(forbidden))
         }
         #expect(reports.withLock { $0.allSatisfy { $0.domain == "continuity" && !$0.rule.isEmpty && $0.inputShape.contains("kind=pushed") } })
+        ProductionContinuityShadow.shared.close(store)
+    }
+
+    @Test func directOlderResponseDoesNotInventASchedulingRequest() async throws {
+        let shadow = ProductionContinuityShadow.shared
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "direct-older"))
+        _ = store.apply(.batch(.latest, items: [item(2)], span: ItemSpan(history: "h", to: 2), backlog: true, hasMore: true))
+        // ChatView.jumpToInput calls prepend directly; there is no AppModel.loadOlder scheduling event.
+        store.prepend([item(1)], hasMore: false)
+        let result = try await shadow.compare(store)
+        #expect(result.compared == 2)
+        #expect(result.mismatches == 0)
         shadow.close(store)
+    }
+
+    @Test func pushWhileFillResponseIsOutstandingKeepsItsEvidence() async throws {
+        let shadow = ProductionContinuityShadow.shared
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "outstanding-fill"))
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 1, to: 3)))
+        // Another push while the first fetchAfter response is held must reuse, not expire, the in-flight request.
+        _ = store.apply(.batch(.pushed, items: [item(4)], span: ItemSpan(history: "h", from: 3, to: 4)))
+        let result = try await shadow.compare(store)
+        #expect(result.compared == 2)
+        #expect(result.mismatches == 0)
+        shadow.close(store)
+    }
+
+    @Test func completedFillThenGapUsesItsOwnAfterRequest() async throws {
+        ProductionContinuityShadow.shared.installForTests()
+        let reports = MutexBox<[ProductionContinuityShadow.Report]>([])
+        let shadow = ProductionContinuityShadow { report in reports.withLock { $0.append(report) } }
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "completed-fill"))
+        store.setContinuityShadowEnabledForFixtureReplay(false)
+        func mirror(_ input: NativeContinuityInput) {
+            let before = store.nativeSnapshot()
+            let gap = store.applyNativeOnly(input)
+            shadow.accept(input, into: store, snapshot: before, native: store.nativeResult(), gap: gap)
+        }
+        mirror(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", to: 1), backlog: true, hasMore: false))
+        mirror(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 1, to: 3)))
+        mirror(.batch(.after, items: [item(2), item(3)], span: ItemSpan(history: "h", from: 0, to: 3)))
+        // The completed catch-up clears filling; this skipped sequence must request another page, not reuse an old one.
+        let pushed = NativeContinuityInput.batch(.pushed, items: [item(5)], span: ItemSpan(history: "h", from: 5, to: 5))
+        let before = store.nativeSnapshot()
+        let gap = store.applyNativeOnly(pushed)
+        #expect(gap == .fill)
+        shadow.accept(pushed, into: store, snapshot: before, native: store.nativeResult(), gap: gap)
+        let result = try await shadow.compare(store)
+        #expect(result.compared == 4)
+        #expect(reports.withLock { $0.allSatisfy { $0.domain == "continuity" && $0.rule != "missing-request" } })
+        #expect(result.mismatches == 0)
+        ProductionContinuityShadow.shared.close(store)
     }
 
     @Test func shapeCountsAndPresenceFlagsNeverCarrySequences() {

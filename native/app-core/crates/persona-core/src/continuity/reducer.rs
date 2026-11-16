@@ -307,7 +307,9 @@ impl Reducer {
         for item in fresh {
             self.insert_shared(item);
         }
-        self.items.sort_by_key(|item| item.key());
+        if deduplicated {
+            self.items.sort_by_key(|item| item.key());
+        }
         let reaches_start = new_min.is_some_and(|min| min <= existing_first.unwrap_or(i64::MAX));
         if let Some(more) = has_more
             && backlog
@@ -342,7 +344,6 @@ impl Reducer {
                 self.items.push(item);
             }
         }
-        self.items.sort_by_key(|item| item.key());
     }
 
     fn insert_shared(&mut self, item: Arc<Item>) {
