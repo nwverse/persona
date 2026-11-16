@@ -1000,6 +1000,10 @@ Deployment: update hub and node together (`resume_only` is new; old node ignores
 **A turn schedules its successor** ("Finally use schedule_followup with at=30m and the same prompt"): hub recognizes the task from run history;
 same title or prompt doesn't create another. One-shot relative-time (`30m`) renewal becomes a 30-minute `interval`; later identical requests update the prompt without changing time,
 and don't re-enable tasks disabled in the App. Copied leading "⏰ … (your scheduled follow-up)" lines are removed to prevent growth.
+A task deleted while its run was going is not brought back by that run asking for it again (#4792): it is told so and nothing is
+scheduled. The exception is the run's own conversation having deleted it (`cancel_followup` / `delete_routine`, e.g. to change its rule):
+asking for it again then makes a new task (#9090). Which conversation deleted a task is kept in memory for 30 minutes; after a hub
+restart, a deletion is taken as the user's.
 `interval` messages say "It will run again on schedule; no need to arrange the next run", and assistant instructions recommend `every`.
 
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),

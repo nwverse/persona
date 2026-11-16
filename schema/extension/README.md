@@ -50,8 +50,9 @@ The View semantics both extensions and the assistant check (charts, tables, fiel
 Stage 1 of #5956 defined the contracts for **server-only TSX execution, native client rendering and WebSocket
 deltas**. Later stages add the immutable keyed-tree core, process page bridge and manager-owned lifecycle below.
 Runtime activation still requires independent sandbox, resource-isolation and egress verification. Existing
-process extensions and HTTP render/action/invalidation behavior remain compatible. The hub still advertises UI
-version 6; generated client models and transport forwarding do not alone enable client or source-runtime support.
+process extensions and HTTP render/action/invalidation behavior remain compatible. The hub's UI version (8 since
+#9158) does not turn the stream on; generated client models and transport forwarding do not alone enable client or
+source-runtime support.
 
 ### Negotiation and messages
 
@@ -374,6 +375,10 @@ UI version 6 (#5464) was added the same way: the `image` / `grid` / `carousel` c
 `ChartPoint`) rather than in `Component`'s flat struct; `Thumbnail.url` is optional now (exactly one of it and `ref`),
 which Swift reads as `String?`. Its examples are `examples/View.v6-*.json`; the showcase's version 6 pages come from
 the extensions repository (#5477), and until then `SHOWCASE_UI` in `test_extension_schema.py` stays at 5.
+UI version 8 (#9158) adds no component, only fields: `View.layout: "columns"` and a section's `span`, `icon`,
+`icon_color`, `link` (`SectionLink`) and `columns`, each `x-since: 8`. The hub's `downgrade8`
+(`server/internal/extension/ui_v8.go`) takes them out for an older app; `UIStreamSection` lists them too, so a native
+stream's source may draw them. Its examples are `examples/View.v8-*.json`.
 
 ## Adding a call
 

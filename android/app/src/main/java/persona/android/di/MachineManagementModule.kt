@@ -34,6 +34,9 @@ import persona.core.hub.OkHttpHubConnection
 import persona.core.hub.extensionStreamBindings
 import android.app.Application
 import persona.android.PersonaApp
+import persona.platform.notify.ExtensionNotificationEnvironment
+import persona.platform.notify.forExtensionNotification
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -291,6 +294,31 @@ object MachineManagementModule {
         override suspend fun authStep(id: String, step: String, values: Map<String, String>) = api().authStep(id, step, values)
         override suspend fun authLogout(id: String) = api().authLogout(id)
     }
+
+    /** Notification actions stay on the exact pairing that delivered them, even if selection changes before the call. */
+    @Provides @Singleton
+    fun extensionNotificationEnvironment(runtime: ConnectionRuntime, extensions: ExtensionManagement): ExtensionNotificationEnvironment =
+        object : ExtensionNotificationEnvironment {
+            override fun currentScope(): ExtensionNotificationScope? {
+                val data = runtime.scopedData.value ?: return null
+                val group = runtime.groups.value.firstOrNull { it.data === data } ?: return null
+                return ExtensionNotificationScope(data.scope.path, group.namespace, ManagerRoster.ASSISTANT_MANAGER)
+            }
+
+            override fun canRouteUnscopedEvents(): Boolean = runtime.groups.value.size == 1
+
+            override fun extensionUi(record: ExtensionNotificationActionRecord): ExtensionUi? {
+                if (currentScope() != record.scope) return null
+                val data = runtime.scopedData.value ?: return null
+                return try {
+                    val connection = runtime.connectionFor(data)
+                    HttpExtensionManagement(connection, extensions.available,
+                        legacy = "extensions" !in connection.serverFeatures.value).forExtensionNotification(record)
+                } catch (_: CancellationException) {
+                    null
+                }
+            }
+        }
 
     // Settings › Hub version (docs/operations/hub-update.md "In the app"): the selected group's hub, following its `hub_update` pushes.
     @OptIn(ExperimentalCoroutinesApi::class)

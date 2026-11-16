@@ -818,7 +818,7 @@ private struct HomeUsageWidget: View {
             HStack(alignment: .bottom, spacing: HomeWidgetTokens.gap) {
                 ZStack {
                     HomeRing(fraction: (w?.percent ?? 0) / 100, color: Self.color(w?.percent ?? 0))
-                    Text(verbatim: "\(Int(w?.percent ?? 0))").font(HomeWidgetTokens.ringNumber).monospacedDigit().minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.primary)
+                    Text(verbatim: "\(Int((w?.percent ?? 0).rounded()))").font(HomeWidgetTokens.ringNumber).monospacedDigit().minimumScaleFactor(HomeWidgetTokens.heroMinScale).homeInk(.primary)
                 }
                 .frame(width: HomeWidgetTokens.ringHero * 0.76, height: HomeWidgetTokens.ringHero * 0.76)
                 VStack(alignment: .leading, spacing: 0) {
@@ -861,7 +861,7 @@ enum HomeWindowName {
 
     /// "5 hours 86% · 7 days 61%", shortest window first.
     static func list(_ account: HomeSnapshot.Account, short: Bool) -> String {
-        account.windows.sorted { $0.minutes < $1.minutes }.map { "\(of($0, short: short)) \(Int($0.percent))%" }.joined(separator: " · ")
+        account.windows.sorted { $0.minutes < $1.minutes }.map { "\(of($0, short: short)) \(Int($0.percent.rounded()))%" }.joined(separator: " · ")
     }
 }
 
@@ -891,7 +891,7 @@ private struct HomeAccountRings: View {
                     HomeRing(fraction: w.percent / 100, color: HomeUsageWidget.color(w.percent), width: HomeWidgetTokens.ringStrokeSmall)
                         .padding(CGFloat(i) * (HomeWidgetTokens.ringStrokeSmall + HomeWidgetTokens.hair))
                 }
-                Text(verbatim: "\(Int(fullest?.percent ?? 0))").font(HomeWidgetTokens.ringNumberSmall).monospacedDigit().homeInk(.primary)
+                Text(verbatim: "\(Int((fullest?.percent ?? 0).rounded()))").font(HomeWidgetTokens.ringNumberSmall).monospacedDigit().homeInk(.primary)
             }
             .frame(width: HomeWidgetTokens.ringMedium, height: HomeWidgetTokens.ringMedium)
             Text(verbatim: account.name).font(HomeWidgetTokens.captionStrong).lineLimit(1).homeInk(.primary)
@@ -1466,7 +1466,7 @@ struct HomeLockView: View {
             }
         case .usage:
             let w = c.accounts.first?.windows.max { $0.percent < $1.percent }
-            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: "\(Int(w?.percent ?? 0))") }
+            Gauge(value: min(100, w?.percent ?? 0), in: 0...100) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: "\(Int((w?.percent ?? 0).rounded()))") }
                 .gaugeStyle(.accessoryCircularCapacity).homeAccent()
         case .health:
             let steps = c.snapshot.health?.steps ?? 0

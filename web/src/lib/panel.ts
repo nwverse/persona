@@ -56,8 +56,8 @@ export type Panel =
    *  panel stays while the page shows the parent. */
   | { kind: "sides"; mid: string; sid: string; side?: string; at?: string }
   /** An Agent's background work (#5421, cindy's Background tasks tab; lib/background-panel.ts): its /loop, background tasks
-   *  and workflow runs. `run`: a workflow run's task_id to open at (its detail in the panel). */
-  | { kind: "background"; mid: string; sid: string; run?: string }
+   *  and workflow runs. `run`: a workflow run's task_id; `task`: a background command's id. */
+  | { kind: "background"; mid: string; sid: string; run?: string; task?: string }
   /** The session's dev server in a headless browser on its computer (docs/web/preview.md); `port` / `path`: the one to
    *  show (a localhost link of a reply), else the one shown last or the first running one. */
   | { kind: "preview"; mid: string; sid: string; cwd: string; port?: number; path?: string };
