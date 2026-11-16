@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const taskStateMaxBytes = 4096
@@ -212,62 +213,129 @@ func currentTaskStateRun(items []proto.Item, key string) bool {
 }
 
 // finishTaskStateRun saves the state a run staged, once the run is over and went well. A run's turn can end while work
-// it started in the background still runs (background subagents and commands, workflows): their notices wake the
-// conversation and the run carries on there, staging its state only then (#8913). An assistant conversation does not
-// read as working for its background work (backgroundState), so waitTurnEnd ended the run at its first stop and the
-// draft was gone by the time it was staged. The draft now stays open while the background work runs, until the
-// conversation is idle with nothing left in the background or the run's watch (ctx) ends; a run with no background
-// work finishes as it did. sess is the conversation as its turn ended.
+// it sent to the background still runs (background subagents and commands, workflows): their notices wake the
+// conversation and the run carries on there, staging its state only then (#8913). waitTurnEnd ends the run at its first
+// stop (an assistant conversation does not read as working for its background work, backgroundState, and its row does
+// not list its subagents), and the draft was gone by the time it was staged. So when nothing is staged yet and the run
+// has background work that has not reported back, the draft stays open until it has and the conversation is idle, or
+// the run's watch (ctx) ends. A run that staged its state already, or sent nothing to the background, is saved at its
+// first stop as before. sess is the conversation as its turn ended.
 func (s *Service) finishTaskStateRun(ctx context.Context, t Task, run ScheduleRun, machine string, sess proto.Session) {
-	if backgroundRunning(sess) {
-		var over bool
-		if sess, over = s.waitBackgroundEnd(ctx, machine, run.SessionID); !over {
-			return // still at work when the watch ended: the next run reads the last saved note
-		}
-		if sess.TurnError != "" || s.lastTurnAPIError(ctx, machine, run.SessionID) != "" {
-			return // the turn that carried the run on failed: not a run that went well
-		}
-	}
 	if sess.State == proto.StateNeedsYou || sess.Starting {
 		return
 	}
 	items, ok := s.taskStateItems(ctx, machine, run.SessionID)
-	if ok && s.stillEnded(ctx, machine, run.SessionID, items) && currentTaskStateRun(items, t.stateRunKey) {
+	if !ok {
+		return
+	}
+	if !s.taskStateStaged(t.stateRunKey) && runBackground(items, t.stateRunKey) > 0 {
+		if items, ok = s.waitRunBackground(ctx, machine, run.SessionID, t.stateRunKey); !ok {
+			return
+		}
+	}
+	if s.stillEnded(ctx, machine, run.SessionID, items) && currentTaskStateRun(items, t.stateRunKey) {
 		s.finishTaskState(ctx, t, run)
 	}
 }
 
-// waitBackgroundEnd waits until the conversation is idle with no background work, read so twice in a row as
-// waitTurnEnd does, or waits on the user (as there: it counts as over); over is false when ctx ended first. sess is the
-// conversation as last read.
-func (s *Service) waitBackgroundEnd(ctx context.Context, machine, sid string) (sess proto.Session, over bool) {
+// waitRunBackground waits, after the run's first stop, until the conversation is idle (read so twice in a row, as
+// waitTurnEnd) and the run has staged its state or has no background work left; items are the conversation's latest
+// turns then. ok is false when the run is not to be saved: the watch ended first, the conversation waits on the user,
+// the next run's prompt came, or the turn that carried the run on failed.
+func (s *Service) waitRunBackground(ctx context.Context, machine, sid, key string) (items []proto.Item, ok bool) {
 	poll := turnPollInterval
 	if s.turnPoll > 0 {
 		poll = s.turnPoll
 	}
-	quiet := 0
+	quiet, looked := 0, ""
 	for {
 		select {
 		case <-ctx.Done():
-			return sess, false
+			return nil, false
 		case <-time.After(poll):
 		}
-		c, ok := s.session(ctx, machine, sid)
-		if !ok {
-			continue // not read: no sight of idle
+		c, read := s.session(ctx, machine, sid)
+		if !read {
+			continue
 		}
-		sess = c
 		if c.State == proto.StateNeedsYou {
-			return c, true
+			return nil, false
 		}
-		if c.Status == proto.StatusWorking || c.State == proto.StateWorking || c.Starting || backgroundRunning(c) {
+		if c.Status == proto.StatusWorking || c.State == proto.StateWorking || c.Starting {
 			quiet = 0
 			continue
 		}
-		if quiet++; quiet >= 2 {
-			return c, true
+		if quiet++; quiet < 2 {
+			continue
+		}
+		last, read := s.lastItemID(ctx, machine, sid)
+		if !read || last == looked {
+			continue // nothing new since the last look: its background work has not reported back
+		}
+		if items, read = s.taskStateItems(ctx, machine, sid); !read {
+			continue
+		}
+		looked = last
+		if !currentTaskStateRun(items, key) {
+			return nil, false
+		}
+		if s.taskStateStaged(key) || runBackground(items, key) == 0 {
+			if c.TurnError != "" || s.lastTurnAPIError(ctx, machine, sid) != "" {
+				return nil, false
+			}
+			return items, true
 		}
 	}
+}
+
+// taskStateStaged: the run holding key has staged its state.
+func (s *Service) taskStateStaged(key string) bool {
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	return s.sched.stateDrafts[key].session != ""
+}
+
+// runBackground is how much of the work the run holding key sent to the background has not reported back yet: the
+// calls after its prompt whose result says they went on in the background (startsBackground: a subagent launched async
+// needs no run_in_background) without a notice of theirs that they ended. Claude Code's notice names the call it reports
+// on (<tool-use-id>, TaskNote.ToolUseID).
+func runBackground(items []proto.Item, key string) int {
+	start := -1
+	for i := len(items) - 1; i >= 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && strings.Contains(it.Text, taskStateRunMarker) {
+			start = i
+			break
+		}
+	}
+	if start < 0 || !matchesTaskStateRun(items[start].Text, key) {
+		return 0
+	}
+	waiting := map[string]bool{}
+	for _, it := range items[start+1:] {
+		switch {
+		case it.Kind == proto.KindToolResult && it.ToolUseID != "" && startsBackground(it.Text):
+			waiting[it.ToolUseID] = true
+		case it.Task != nil && it.Task.ToolUseID != "" && taskEnded(it.Task.Status):
+			delete(waiting, it.Task.ToolUseID)
+		}
+	}
+	return len(waiting)
+}
+
+// startsBackground: a call's result says the call goes on in the background and reports back with a notice when it
+// ends (transcript.LaunchedBackgroundID: a background command, one moved there, an async subagent, a workflow). A
+// Monitor's start is not one: it reports events, not an end.
+func startsBackground(result string) bool {
+	return transcript.LaunchedBackgroundID(result) != "" && !strings.HasPrefix(strings.TrimSpace(result), "Monitor started")
+}
+
+// taskEnded: a background task's notice says it is over (proto.TaskNote.Status).
+func taskEnded(status string) bool {
+	switch status {
+	case "completed", "failed", "killed", "stopped", "ended":
+		return true
+	}
+	return false
 }
 
 func (s *Service) finishTaskState(ctx context.Context, task Task, run ScheduleRun) {
