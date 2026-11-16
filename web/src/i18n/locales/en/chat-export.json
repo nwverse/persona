@@ -23,6 +23,7 @@
   "result": "Result",
   "error": "Error",
   "image": "Image",
+  "cut_unknown": "Some text was not included.",
   "cut": "{n} more characters not included",
   "partial": "Starts at {from}: earlier messages were not read."
 }
