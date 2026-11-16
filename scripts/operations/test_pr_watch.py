@@ -136,6 +136,22 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.github.call_count, 1)
         self.assertIn("Automated independent semantic review", self.github.call_args.args[0][-1])
 
+    def test_p2_findings_publish_only_once_before_merge_finishes(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[finding]), \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True}]), \
+                patch.object(self.watcher, "merge", side_effect=[pr_watch_common.WatchError("busy"), True]) as merge:
+            self.watcher.process("example/one", 7)
+            self.watcher.state.put("example/one", 7, SHA_A,
+                                   evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                                   outcome="passed_with_findings", retry_after=0)
+            self.watcher.process("example/one", 7)
+        self.assertEqual(merge.call_count, 2)
+        finding_calls = [call for call in self.github.call_args_list
+                         if call.args[0][:2] == ["gh", "api"]]
+        self.assertEqual(len(finding_calls), 1)
+
     def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
         self.watcher.config["repositories"][0]["merge"] = False
         findings = [

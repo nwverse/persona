@@ -761,7 +761,8 @@ class Watcher:
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
                                                 and old.get("semantic") == "passed") \
                     and not (old.get("outcome") == "passed_with_findings" and not old.get("success_posted")) \
-                    and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]):
+                    and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
+                    and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0):
                 return
             # A dry run keeps semantic/test evidence but has no external side
             # effects. A live run resumes publication and the merge gate.
@@ -932,7 +933,7 @@ class Watcher:
                 phase = "semantic_repair"
                 return self.repair_findings(config, pr, worktree, [finding for finding in findings
                                                             if finding["severity"] in ("P0", "P1")])
-            if current.get("findings") and not current.get("outcome") == "findings":
+            if current.get("findings"):
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          outcome="passed_with_findings")
             if current.get("verification") not in ("passed", "base_failure"):
