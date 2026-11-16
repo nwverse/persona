@@ -27937,11 +27937,20 @@ class H(BaseHTTPRequestHandler):
                 PREFS["quiet"] = {k: body["quiet"].get(k, "") for k in ("enabled", "start", "end", "tz")}
             return self.send_json(PREFS)
         if p.startswith("/api/v1/sessions/") and p.endswith("/messages") and os.environ.get("MOCK_SEND_REFUSE"):
-            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds
+            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds.
+            # =peer_held|peer_unconfirmed: a Claude session outside Persona's terminals got it through its peer inbox but did
+            # not take it (held for approval at the computer in bypass permissions mode / not confirmed): delivered unknown
             body = json.loads(self.last_body or b"{}")
             SENT.append(body)
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
+            if os.environ["MOCK_SEND_REFUSE"] in ("peer_held", "peer_unconfirmed"):
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+                code = os.environ["MOCK_SEND_REFUSE"]
+                lang = readiness_mock.lang_of(self.headers.get("Accept-Language", ""))
+                return self.send_json({"error": readiness_mock.t(lang, "rpc-errors." + code), "code": code,
+                                       "detail": "the node's own words", "delivered": "unknown"}, 409)
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
                 # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
                 return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
