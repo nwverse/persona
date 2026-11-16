@@ -396,6 +396,9 @@ object MachineManagementModule {
         override suspend fun deleteMessagesData() = api().deleteMessagesData()
         override suspend fun messagesChats(before: String?) = api().messagesChats(before)
         override suspend fun messagesThread(chatId: String, before: String?) = api().messagesThread(chatId, before)
+        override suspend fun gitHubAuth() = api().gitHubAuth()
+        override suspend fun setGitHubAuth(machine: String?) = api().setGitHubAuth(machine)
+        override suspend fun setGitHubInboxOptions(options: GitHubInboxOptions) = api().setGitHubInboxOptions(options)
     }
 }
 
