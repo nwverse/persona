@@ -33,6 +33,13 @@ val sdk = providers.environmentVariable("ANDROID_HOME")
     })
 val resolvedSdk = requireNotNull(sdk.orNull) { "Set ANDROID_HOME or ANDROID_SDK_ROOT to package the Android core" }
 val ndkVersion = "29.0.14206865"
+// NDK 29 ships darwin-x86_64 on macOS, including Apple silicon, and linux-x86_64 on Linux.
+val hostOs = org.gradle.internal.os.OperatingSystem.current()
+val ndkHostTag = when {
+    hostOs.isMacOsX -> "darwin-x86_64"
+    hostOs.isLinux -> "linux-x86_64"
+    else -> error("Unsupported NDK host OS '${hostOs.name}' (expected macOS or Linux)")
+}
 
 abstract class BuildAndroidCore : Exec() {
     @get:OutputDirectory abstract val jniDirectory: DirectoryProperty
@@ -40,6 +47,7 @@ abstract class BuildAndroidCore : Exec() {
     @get:OutputDirectory abstract val reportsDirectory: DirectoryProperty
     @get:Input abstract val cargoFeatures: Property<String>
     @get:Input abstract val cargoTargetDirectory: Property<String>
+    @get:Input abstract val ndkHost: Property<String>
 
 
     override fun exec() {
@@ -49,28 +57,39 @@ abstract class BuildAndroidCore : Exec() {
         require(File("$sdk/ndk/29.0.14206865/source.properties").isFile) {
             "Install Android NDK 29.0.14206865 before building the shared core"
         }
+        val prebuilt = "$sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/${ndkHost.get()}"
+        require(File(prebuilt).isDirectory) {
+            "NDK 29.0.14206865 prebuilt host tools are missing: $prebuilt"
+        }
         environment("PERSONA_ANDROID_CARGO_FEATURES", cargoFeatures.get())
         environment("CARGO_TARGET_DIR", cargoTargetDirectory.get())
         commandLine("bash", workingDir.resolve("scripts/build-android.sh").absolutePath)
         args(jniDirectory.get().asFile.absolutePath, symbolsDirectory.get().asFile.absolutePath, reportsDirectory.get().asFile.absolutePath)
         super.exec()
         if (cargoFeatures.get() == "release-android") {
-            ProcessBuilder(
+            val process = ProcessBuilder(
                 "python3", "-I", workingDir.resolve("scripts/check-android-sort-shadow.py").absolutePath,
                 jniDirectory.get().asFile.absolutePath,
-                "$sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf",
-            ).inheritIO().start().waitFor().also { check(it == 0) { "Release sort-shadow native export check failed" } }
+                "$prebuilt/bin/llvm-readelf",
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exit = process.waitFor()
+            output.lineSequence().filter { it.isNotEmpty() }.forEach(logger::lifecycle)
+            check(exit == 0) { "Release sort-shadow native export check failed\n$output" }
         }
     }
 }
 tasks.withType<BuildAndroidCore>().configureEach {
     inputs.files(coreInputs).withPropertyName("rustCore").withPathSensitivity(PathSensitivity.RELATIVE)
+    ndkHost.set(ndkHostTag)
     inputs.property("ndkVersion", ndkVersion)
     inputs.property("cargoFeatures", cargoFeatures)
     inputs.property("cargoTargetDirectory", cargoTargetDirectory)
-    inputs.property("ndkHost", "linux-x86_64")
     val ndkRoot = "$resolvedSdk/ndk/$ndkVersion"
-    val llvm = "$ndkRoot/toolchains/llvm/prebuilt/linux-x86_64"
+    val llvm = "$ndkRoot/toolchains/llvm/prebuilt/$ndkHostTag"
+    require(File(llvm).isDirectory) {
+        "NDK $ndkVersion prebuilt host tools are missing: $llvm"
+    }
     inputs.files(fileTree("$ndkRoot/sysroot") { include("**/*") })
         .withPropertyName("ndkSysroot").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(fileTree(llvm) {
