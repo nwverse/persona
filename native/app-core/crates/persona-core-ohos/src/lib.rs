@@ -98,4 +98,9 @@ mod binding {
     pub fn core_project_task_index(input: String) -> Result<String> {
         to_json(&persona_core::task_index::project(&from_json(&input)?))
     }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_turns(input: String) -> Result<String> {
+        to_json(&persona_core::turns::project(&from_json(&input)?))
+    }
 }

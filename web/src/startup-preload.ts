@@ -344,7 +344,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
 // 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459; merged
 // with main 27a828ec48 (#9146 above): en 477,579 B, ja 480,708 B, zh-Hans 478,398 B, 27 B of room.
-export const FIRST_SCREEN_BUDGET = 480_735;
+// #9215: a paged list keeps Load more on screen while it refreshes (lib/session-list.ts loadingMore, read by the flat
+// list), a busy fleet's hints wait for a window counted from when the last read came back, and a reconnect reads the
+// Agents list at once. 80 B in ja, measured in one environment against main 211207fd5f: ja 480,708 B to 480,788 B
+// (en 477,579 B to 477,659 B, zh-Hans 478,398 B to 478,478 B). The budget takes the 53 B over.
+export const FIRST_SCREEN_BUDGET = 480_788;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
