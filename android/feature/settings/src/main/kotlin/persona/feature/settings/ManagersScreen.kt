@@ -118,7 +118,8 @@ private enum class ManagerAsk { Rename, Move, Delete }
 
 /**
  * Settings › Managers › one: its status, where it runs, its version and when it was last connected; Rename, Set as default, Install elsewhere
- * (New installation code while installing) and Delete (Cancel installation), each only where the hub would take it.
+ * (New installation code while installing) and Delete (Cancel installation), each only where the hub would take it. The hub's own
+ * assistant also has Show in the switcher.
  */
 @Composable
 internal fun ManagerPage(
@@ -149,7 +150,8 @@ internal fun ManagerPage(
         // An installing manager's new code moves nothing: no warning.
         onMove = { if (manager?.isInstalling == true) scope.launch { model.newCode(managerId) } else asking = ManagerAsk.Move },
         onDelete = { asking = ManagerAsk.Delete },
-        push = push, onPush = pushModel?.let { m -> { on: Boolean -> scope.launch { m.set(managerId, on) }; Unit } })
+        push = push, onPush = pushModel?.let { m -> { on: Boolean -> scope.launch { m.set(managerId, on) }; Unit } },
+        onShowInSwitcher = { show -> scope.launch { model.showInSwitcher(managerId, show) } })
     val name = manager?.name?.ifBlank { manager.id }.orEmpty()
     when (asking) {
         ManagerAsk.Rename -> NameDialog(
@@ -177,6 +179,8 @@ internal fun ManagerContent(
     onRename: () -> Unit, onDefault: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit,
     /** 推送通知 for this device; null (or a hub without `muted_managers`): no switch. */
     push: ManagerPushState? = null, onPush: ((Boolean) -> Unit)? = null,
+    /** Show in the switcher, on the hub's own assistant's page: true shows it there, false keeps it out while it is not used. */
+    onShowInSwitcher: (Boolean) -> Unit = {},
 ) {
     val res = LocalResources.current
     val manager = state.manager(managerId)
@@ -226,6 +230,18 @@ internal fun ManagerContent(
                 }
                 ManagerNote(stringResource(R.string.settings_managers_push_note))
                 push.failure?.let { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.xs), tone = InlineTone.Failed) }
+            }
+        }
+        // Show in the switcher (the hub's own assistant, #9055): on is the hub's `hide` turned around. Hiding it is off
+        // while it is the default (the hub would refuse); showing it again always goes. The hub's other refusal (it owns
+        // a computer) is said under the actions, as every change's is.
+        if (manager.builtin && !installing) item("switcher") {
+            val enabled = !state.busy && (manager.hide || !manager.isDefault)
+            Column(Modifier.padding(top = Tokens.Space.l)) {
+                JGroupItem(GroupPosition.Single) {
+                    JSwitchRow(stringResource(R.string.settings_managers_show_in_switcher), !manager.hide, onShowInSwitcher, enabled = enabled)
+                }
+                ManagerNote(stringResource(if (manager.isDefault && !manager.hide) R.string.settings_managers_switcher_default else R.string.settings_managers_switcher_note))
             }
         }
         val actions = buildList<@Composable () -> Unit> {

@@ -15,7 +15,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -63,6 +66,10 @@ class ManagersShotsTest {
     private val loaded = ManagersState(roster = ManagerRoster(ManagersSample, "assistant"))
     // 工作 on a build that reads no manager.json of its own: the hub marks it needs_update
     private val outdated = ManagersState(roster = ManagerRoster(ManagersSample.map { if (it.id == "m-3fa21c") it.copy(needsUpdate = true) else it }, "assistant"))
+    // 工作 the default, the hub's own assistant kept out of the switcher (#9055): its Show in the switcher is off.
+    private val hidden = ManagersState(roster = ManagerRoster(ManagersSample.map {
+        if (it.builtin) it.copy(isDefault = false, hide = true, hidden = true) else it.copy(isDefault = it.id == "m-3fa21c")
+    }, "m-3fa21c"))
     private val commands = ManagerCommands(
         service = "curl -fsSL http://<hub 地址>/i/mi_0123456789abcdef0123456789abcdef | sh",
         docker = "docker run -d --name persona-m-c1e9f0 --restart unless-stopped -e PERSONA_INSTALL=http://<hub 地址>/i/mi_0123456789abcdef0123456789abcdef ghcr.io/example/personad:latest manager",
@@ -82,7 +89,7 @@ class ManagersShotsTest {
         File(out(), "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private enum class Shot(val tall: Boolean = true) { Settings, List, Detail, Builtin, Installing, Code, Expired, Unsupported, Push, PushOffline, Outdated, OutdatedDetail }
+    private enum class Shot(val tall: Boolean = true) { Settings, List, Detail, Builtin, BuiltinHidden, BuiltinRefused, Installing, Code, Expired, Unsupported, Push, PushOffline, Outdated, OutdatedDetail }
 
     @Test fun drawsTheManagersPagesInEveryStyle() {
         var style by mutableStateOf(AppStyle.Glass)
@@ -98,7 +105,13 @@ class ManagersShotsTest {
                         Shot.Settings -> SettingsScreen(services, onOpen = {})
                         Shot.List -> ManagersContent(loaded, ManagersNow, {}, {}, {}, {}, selected = { it == "m-3fa21c" })
                         Shot.Detail -> ManagerContent(loaded, "m-3fa21c", ManagersNow, {}, {}, {}, {}, {}, {})
+                        // The default: Show in the switcher on and off-limits, with why.
                         Shot.Builtin -> ManagerContent(loaded, "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
+                        // Kept out of the switcher: the switch off, there to turn on again.
+                        Shot.BuiltinHidden -> ManagerContent(hidden, "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
+                        // Turning it off refused (a computer went back to it): on again, and the hub's reason.
+                        Shot.BuiltinRefused -> ManagerContent(hidden.copy(roster = hidden.roster!!.copy(managers = hidden.managers.map { it.copy(hide = false, hidden = false) }),
+                            failure = ResText.of(R.string.settings_managers_err_builtin_in_use)), "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
                         Shot.Installing -> ManagerContent(loaded, "m-c1e9f0", ManagersNow, {}, {}, {}, {}, {}, {})
                         // The sheet's body on the sheet's own surface (JSheet draws it over a scrim in the app).
                         Shot.Code, Shot.Expired -> Column(Modifier.fillMaxWidth().background(if (style == AppStyle.Brief) palette.background else palette.surfaceOpaque)
@@ -228,6 +241,56 @@ class ManagersShotsTest {
         rule.onNode(hasText("删除") and hasClickAction()).assertIsNotEnabled()
         assertTrue(rule.onAllNodes(hasText("换个地方装")).fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodes(hasText("设为默认")).fetchSemanticsNodes().isEmpty())
+    }
+
+    /**
+     * Show in the switcher on the hub's own assistant's page (#9055): off sends `{"hide": true}` and stays off, on sends
+     * `{"hide": false}`; the hub's refusal (it owns a computer) is said and the switch is back on. Another manager has no
+     * such switch.
+     */
+    @Test fun theHubsOwnAssistantCanBeKeptOutOfTheSwitcher() {
+        val fake = FakeManagers(ManagersSample.map { it.copy(isDefault = it.id == "m-3fa21c") })
+        var id by mutableStateOf("assistant")
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.width(400.dp).height(1500.dp)) { ManagerPage(fake, id, onBack = {}, ticking = false) }
+            }
+        }
+        rule.waitForIdle()
+        val row = rule.onNode(hasText("在切换列表里显示") and hasClickAction())
+        row.assertIsOn().assertIsEnabled()
+        rule.onNodeWithText("关掉后，它不是默认助手", substring = true).assertIsDisplayed()
+        row.performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("hide assistant true"), fake.calls)
+        row.assertIsOff().assertIsEnabled()
+        row.performClick()
+        rule.waitForIdle()
+        assertEquals("hide assistant false", fake.calls.last())
+        row.assertIsOn()
+        // A computer went back to it: the hub refuses, the switch is on again and the page says why.
+        fake.inUse = setOf("assistant")
+        row.performClick()
+        rule.waitForIdle()
+        row.assertIsOn()
+        rule.onNodeWithText("它正在使用（是默认助手，或有自己的电脑），会留在切换列表里").assertIsDisplayed()
+        id = "m-8b04d2"
+        rule.waitForIdle()
+        assertTrue(rule.onAllNodes(hasText("在切换列表里显示")).fetchSemanticsNodes().isEmpty())
+    }
+
+    /** The default can't be kept out: its switch is on, off-limits and says why; nothing is sent. */
+    @Test fun theDefaultHubsOwnAssistantStaysInTheSwitcher() {
+        val fake = FakeManagers()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.width(400.dp).height(1500.dp)) { ManagerPage(fake, "assistant", onBack = {}, ticking = false) }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNode(hasText("在切换列表里显示") and hasClickAction()).assertIsOn().assertIsNotEnabled()
+        rule.onNodeWithText("默认助手总会显示在切换列表里").assertIsDisplayed()
+        assertTrue(fake.calls.isEmpty())
     }
 
     /** Managers stays in the Hub group after Connection, opens its page, and is absent in demo mode. */
