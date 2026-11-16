@@ -9,7 +9,7 @@ import persona.core.contracts.api.AssistantSearchAnswer
 import persona.core.contracts.api.AssistantSearchHit
 import persona.core.contracts.api.AssistantSearchResult
 
-/** Filtering, opening and dismissing for the regular-window full search (#9171). */
+/** Filtering, archiving exclusion and manager merge for the regular-window full search (#9171). */
 class AssistantFullSearchTest {
     private val words = ConversationWords("Chat", "Hand to Persona", "Hand to Persona: %1\$s", "Background supervisor")
     private val newer = Session(machineId = "hub", sessionId = "new", title = "Weekend trip",
@@ -18,20 +18,27 @@ class AssistantFullSearchTest {
         lastText = "Draft ready", updatedAt = "2026-11-15T12:00:00Z", assistant = true)
     private val named = Session(machineId = "hub", sessionId = "lead", title = "Lead chat",
         updatedAt = "2026-11-14T12:00:00Z", assistant = true)
-
-    @Test fun regularWindowOpensFullSearchAndCompactStaysInline() {
-        assertTrue(sidebarOpensFullSearch(true))
-        assertFalse(sidebarOpensFullSearch(false))
-        assertEquals(FullSearchGate(open = true), FullSearchGate().onSearch(regularWindow = true))
-        assertEquals(FullSearchGate(open = false), FullSearchGate().onSearch(regularWindow = false))
-        assertFalse(FullSearchGate(open = true).dismiss().open)
-        assertFalse(FullSearchGate(open = true).afterPick().open)
-    }
+    private val archived = Session(machineId = "hub", sessionId = "arch", title = "Archived trip",
+        lastText = "Old bags", archived = true, updatedAt = "2026-11-17T12:00:00Z", assistant = true)
 
     @Test fun blankQueryListsChatsLatestFirst() {
         val rows = fullSearchRows("", listOf(older, newer), listOf(older, newer), enabled = false, answer = null, words)
         assertEquals(listOf("new", "old"), rows.map { it.session.sessionId })
         assertTrue(rows.all { it.hit == null })
+    }
+
+    @Test fun archivedChatsStayOutOfLocalResultsEvenWhenInKnown() {
+        val blankRows = fullSearchRows(
+            "", chats = listOf(newer, archived), known = listOf(newer, archived),
+            enabled = true, answer = null, words,
+        )
+        assertEquals(listOf("new"), blankRows.map { it.session.sessionId })
+
+        val localFiltered = fullSearchRows(
+            "trip", chats = listOf(newer, archived), known = listOf(newer, archived),
+            enabled = true, answer = null, words,
+        )
+        assertEquals(listOf("new"), localFiltered.map { it.session.sessionId })
     }
 
     @Test fun localFilterMatchesTitleLastMessageAndDirectionName() {

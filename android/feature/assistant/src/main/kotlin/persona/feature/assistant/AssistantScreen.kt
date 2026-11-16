@@ -1463,8 +1463,9 @@ internal fun AssistantDrawer(
                     })
             } }
             if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
-            // Regular window: the field lives in the full-window search; compact keeps the inline field.
-            if (!fullWindowSearch && (!drawer || searchVisible || query.isNotBlank())) {
+            // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
+            // query typed before unfolding remains clearable until blank).
+            if ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank()) {
                 item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
             }
             if (searchPartial) item {

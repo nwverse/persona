@@ -25,11 +25,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -47,32 +50,13 @@ import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
-import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.MessageJumps
 import java.time.Instant
 
 /**
- * Whether the sidebar's Search opens over the whole window (a regular window, as the open iPhone Duo) or stays inline
- * in the compact drawer (#9171).
- */
-internal fun sidebarOpensFullSearch(regularWindow: Boolean): Boolean = regularWindow
-
-/**
- * Open / close / pick for the full-window search: opening is only for a regular window; Back, Close and a row all
- * dismiss it.
- */
-internal data class FullSearchGate(val open: Boolean = false) {
-    fun onSearch(regularWindow: Boolean): FullSearchGate =
-        if (regularWindow) copy(open = true) else this
-
-    fun dismiss(): FullSearchGate = copy(open = false)
-
-    fun afterPick(): FullSearchGate = copy(open = false)
-}
-
-/**
- * Persona's chats for the full-window search, latest first. A blank query lists them all; otherwise title, last
- * message and a direction's name match (the same local filter the sidebar uses).
+ * Persona's chats for the full-window search, latest first. Archived chats stay out of local results, and a blank
+ * query lists all non-archived chats; otherwise title, last message and a direction's name match (the same local
+ * filter the sidebar uses).
  */
 internal fun filterChatsForFullSearch(
     chats: List<Session>,
@@ -82,6 +66,7 @@ internal fun filterChatsForFullSearch(
     backgroundId: String? = null,
 ): List<Session> {
     val ordered = chats.distinctBy { it.key }
+        .filter { !it.archived }
         .map { it to it.updated }
         .sortedWith(compareByDescending<Pair<Session, Instant?>> { it.second }.thenBy { it.first.key.path })
         .map { it.first }
@@ -139,20 +124,29 @@ internal fun AssistantFullSearch(
     overlay: Boolean = true,
 ) {
     var query by rememberSaveable { mutableStateOf(initialQuery) }
-    val (found, partial) = rememberFoundChats(
-        query,
-        remember(chats, query, words, names, backgroundId) {
-            filterChatsForFullSearch(chats, query, words, names, backgroundId)
-        },
-        known, searchOn, management, hubKey,
-    )
-    val rows = remember(query, chats, known, searchOn, found, words, names, backgroundId) {
-        // rememberFoundChats returns null while the feature is off or the query is blank: fall back to the local list.
-        found ?: fullSearchRows(query, chats, known, enabled = false, answer = null, words, names, backgroundId)
+    val search = rememberAssistantSearch(query, searchOn, management, hubKey)
+    val answer = search.current(query)
+    val partial = answer?.partial == true
+    val rows = remember(query, chats, known, searchOn, answer, words, names, backgroundId) {
+        fullSearchRows(query, chats, known, searchOn, answer, words, names, backgroundId)
     }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    var focusedOnce by remember { mutableStateOf(false) }
+    LaunchedEffect(windowFocused) {
+        if (focusedOnce || !windowFocused) return@LaunchedEffect
+        focusedOnce = true
+        withFrameNanos { }
         runCatching { focus.requestFocus() }
+        keyboard?.show()
+    }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        if (!focusedOnce) {
+            runCatching { focus.requestFocus() }
+            keyboard?.show()
+        }
     }
     val body: @Composable () -> Unit = {
         Column(
@@ -198,7 +192,7 @@ internal fun AssistantFullSearch(
                     JEmptyState(
                         stringResource(R.string.assistant_full_search_no_results, query),
                         stringResource(R.string.assistant_no_match_detail),
-                        icon = PhIcons.MagnifyingGlass,
+                        icon = PersonaIcons.search,
                     )
                 }
             }

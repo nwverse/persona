@@ -64,6 +64,9 @@ fun AssistantSidebarContent(
     val words = conversationWords()
     var query by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf("") }
     var fullSearchOpen by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
+    LaunchedEffect(fullWindowSearch) {
+        if (fullWindowSearch) query = "" else fullSearchOpen = false
+    }
     var ended by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
@@ -100,11 +103,16 @@ fun AssistantSidebarContent(
         })), query, words)
     }
     val searchOn = management != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
-    val knownChats = remember(received.conversations, ended, archived, history.titles, history.archived) {
-        val open = history.titled(received.conversations.filter { it.key !in archived }.map {
+    val openChats = remember(received.conversations, ended, archived, history.titles) {
+        history.titled(received.conversations.filter { !it.archived && it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })
-        (open + history.shownArchived(openKeys(open))).distinctBy { it.sessionId }
+    }
+    val knownChats = remember(received.conversations, ended, archived, history.titles, history.archived) {
+        val listed = history.titled(received.conversations.filter { it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        })
+        (listed + history.shownArchived(openKeys(openChats))).distinctBy { it.sessionId }
     }
     val (foundChats, searchPartial) = rememberFoundChats(
         query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
@@ -155,16 +163,14 @@ fun AssistantSidebarContent(
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
                 found = foundChats, searchPartial = searchPartial,
                 fullWindowSearch = fullWindowSearch,
-                onFullSearch = {
-                    fullSearchOpen = FullSearchGate(fullSearchOpen).onSearch(fullWindowSearch).open
-                })
+                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true })
         }
     }
-    if (fullSearchOpen) {
+    if (fullSearchOpen && fullWindowSearch) {
         val roster = persona.core.designsystem.LocalManagerRoster.current
         val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
         AssistantFullSearch(
-            chats = knownChats,
+            chats = openChats,
             known = knownChats,
             searchOn = searchOn,
             management = management,
@@ -175,10 +181,10 @@ fun AssistantSidebarContent(
             mainName = assistantName,
             mainKey = received.mainSession,
             onOpen = { key ->
-                fullSearchOpen = FullSearchGate(true).afterPick().open
+                fullSearchOpen = false
                 onOpen(key)
             },
-            onDismiss = { fullSearchOpen = FullSearchGate(true).dismiss().open },
+            onDismiss = { fullSearchOpen = false },
         )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
