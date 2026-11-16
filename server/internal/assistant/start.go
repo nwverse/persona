@@ -1121,6 +1121,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 // …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
 // conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
