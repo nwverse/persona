@@ -11431,6 +11431,53 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
     ]
 
 
+# A scheduled task's briefing (#9041): its text is Markdown. The hub keeps it as written in `body` and says it as plain
+# words in summary, preview and the chain's received message; mode `before` is the same row as hubs before #9041 kept
+# it: no body, the Markdown run into one line and cut. GET /mock/assistant_inbox?mode=before|1 switches it. Made-up content.
+BRIEF_MD = ("**早报 · 周一**\n结论：上午有一节辅导课，下午没课。邮件和课程公告都**没有新消息**。\n\n"
+            "**今天的课**\n- **数据结构辅导课：10:30–12:20，教学楼 B201**\n- 课上有 3–5 道选择题小测，不补考\n\n"
+            "**本周要交**\n1. 周三 23:59 前交实验报告（第 4 章）\n2. 周五前在选课系统确认下学期课程\n\n"
+            "**提醒**\n- 周四图书馆下午闭馆\n- 校园卡余额 23 元，建议这周充值\n\n"
+            "> 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没课。邮件和课程公告都没有新消息。 今天的课 数据结构辅导课：10:30–12:20，教学楼 B201 "
+               "课上有 3–5 道选择题小测，不补考 本周要交 周三 23:59 前交实验报告（第 4 章） 周五前在选课系统确认下学期课程 提醒 周四图书馆下午闭馆 "
+               "校园卡余额 23 元，建议这周充值 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+
+
+def assistant_brief(mode):
+    base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
+    url = base + "/s/macbook/" + BLOG
+    if mode == "before":
+        one = " ".join(BRIEF_MD.split())
+        summary, preview, body = one[:200] + "…", one[:120] + "…", None
+        said = preview
+    else:
+        summary, preview, body = BRIEF_PLAIN, BRIEF_PLAIN[:120] + "…", BRIEF_MD
+        said = BRIEF_PLAIN[:200] + "…"
+    row = {"id": "assistant:s3", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "助手",
+           "title": "每日早报", "preview": preview, "count": 1, "started_at": ago(minutes=12), "updated_at": ago(minutes=12),
+           "tier": "fyi", "status": "fyi", "summary": summary, "reason": "定时任务设成每次都放进收件箱", "read": False,
+           "triaged_by": "rules", "context": "每日早报\n" + (body or summary),
+           "chain": [{"id": "c1", "at": ago(minutes=12), "kind": "received", "text": "收到 1 条新消息", "count": 1, "via": "assistant",
+                      "link": {"type": "source", "url": url}, "messages": [{"text": said}]},
+                     {"id": "c2", "at": ago(minutes=12), "kind": "triaged", "text": "分拣：知悉即可", "detail": "fyi", "via": "assistant"}],
+           "connector": {"thread": "assistant:macbook/" + BLOG, "label": "助手", "url": url}}
+    if body:
+        row["body"] = body
+    return row
+
+
+def assistant_inbox_area(h, method, p):
+    """/mock/assistant_inbox?mode=before|1 (MOCK_ASSISTANT_INBOX): the briefing row as hubs before #9041 kept it, or now."""
+    if not os.environ.get("MOCK_ASSISTANT_INBOX") or method != "GET" or p != "/mock/assistant_inbox":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for i, x in enumerate(INBOX):
+        if x["id"] == "assistant:s3":
+            INBOX[i] = assistant_brief(mode)
+    return h.send_json({"mode": mode}) or True
+
+
 # MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
 # `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
 if os.environ.get("MOCK_ASSISTANT_INBOX"):
@@ -11449,6 +11496,7 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
          "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
+    INBOX.insert(1, assistant_brief(os.environ.get("MOCK_ASSISTANT_INBOX", "1")))
 
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
@@ -25987,6 +26035,7 @@ class H(BaseHTTPRequestHandler):
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if subscription_thread_area(self, "GET", p): return
+        if assistant_inbox_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
