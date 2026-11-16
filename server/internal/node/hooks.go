@@ -116,6 +116,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	if err != nil {
 		return
 	}
+	if isHTTPRequestLine(line) { // Persona's Claude Code plugin (ccplugin.go)
+		n.serveCCPluginHTTP(ctx, c, line, r)
+		return
+	}
 	var req sockRequest
 	if json.Unmarshal(line, &req) != nil {
 		return
@@ -177,6 +181,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			n.decided.decide(in, time.Now())
 		}
 		resp = map[string]any{"ok": true}
+	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
+		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
 		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
 	case "update.inventory":

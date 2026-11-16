@@ -191,6 +191,8 @@ type Node struct {
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	// ccPlugins: Persona's Claude Code plugin in the sessions outside Persona's terminals that loaded it (ccplugin.go).
+	ccPlugins ccPluginRegistry
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
 	starts     startLog       // sessions starting in the background (starting.go)
@@ -1457,6 +1459,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		var owner *ownerDelivery
+		if opts.OwnerInput {
+			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
+		}
 		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after echoAfter
 			if opts.ClientMsgID != "" {
@@ -1470,10 +1476,20 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
 		})
-		if err == nil && *waits {
-			return map[string]any{"ok": true, "waits_on_computer": true}, nil
+		if err != nil {
+			return ok(err)
 		}
-		return ok(err)
+		res := map[string]any{"ok": true}
+		if *waits {
+			res["waits_on_computer"] = true
+		}
+		if owner != nil && owner.as != "" {
+			res["delivered_as"] = owner.as
+			if owner.reason != "" {
+				res["relay_reason"] = owner.reason
+			}
+		}
+		return res, nil
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
 			Echoes []echoRecord `json:"echoes"`
