@@ -23,6 +23,8 @@ export interface AgentListInput {
   query: string;
   /** Already frozen while reading: stable membership, with live status refreshed in place. */
   reading: boolean;
+  /** The already projected frozen groups, with current row data but unchanged membership. */
+  frozen?: AgentListGroupProjection[];
   kept: string[];
   /** Full registry, including an empty registry when a session's machine is unknown. */
   machines: Record<string, Object>[];

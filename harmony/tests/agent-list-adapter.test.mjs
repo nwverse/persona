@@ -114,6 +114,46 @@ test('debug receiver reports only shape and counts and never loads Rust during s
   assert.equal(globalThis.agentSortLog, undefined, 'a custom reporter owns diagnostics');
 });
 
+test('frozen reading uses the projected membership and a real core input, not an undefined helper', () => {
+  const list = input([row('removed', 'offline'), row('kept', 'working', {machine_id: 'machine-b'})]);
+  const groups = new NativeAgentListAdapter().project(list);
+  const frozen = {...list, reading: true, kept: ['machine-a/removed', 'machine-b/kept'],
+    machineFilter: 'machine-b', frozen: groups};
+  const core = coreAgentSortInput(frozen);
+  assert.ok(core);
+  assert.deepEqual(core.sessions.map((s) => s.session_id), ['removed', 'kept']);
+  assert.deepEqual(core.settings.kept, ['machine-a/removed', 'machine-b/kept']);
+  assert.equal(core.settings.machine_filter, 'machine-b');
+  const native = nativeCoreProjection(frozen);
+  assert.deepEqual(native.groups[0].rows, ['machine-b/kept']);
+  const snapshot = new DebugAgentListShadow().snapshot(frozen);
+  assert.ok(snapshot, 'snapshot must be a plain object');
+  assert.equal(Object.getPrototypeOf(snapshot.input), Object.prototype);
+  assert.equal(Object.getPrototypeOf(snapshot.projection), Object.prototype);
+});
+
+test('machine filters map by owner and never drop an ambiguous cross-Hub group', () => {
+  const base = input([row('a', 'working', {app_hub_group: 'hub-a'}),
+    row('b', 'working', {app_hub_group: 'hub-b'})]);
+  const json = {...base, machines: [{id: 'machine-a', name: 'A', group: 'hub-a'}], machineFilter: '["hub-a","work","machine-a"]'};
+  assert.equal(coreAgentSortInput(json).settings.machine_filter, 'hub-a|machine-a');
+  assert.equal(coreAgentSortInput({...json, machineFilter: 'machine-a'}).settings.machine_filter, 'hub-a|machine-a');
+  const ambiguous = {...json, rows: [row('a', 'working', {app_hub_group: 'hub-a'}),
+    row('b', 'working', {app_hub_group: 'hub-b'})],
+    machines: [{id: 'machine-a', name: 'A', group: 'hub-a'}, {id: 'machine-a', name: 'B', group: 'hub-b'}], machineFilter: 'machine-a'};
+  assert.equal(coreAgentSortInput(ambiguous), undefined);
+});
+
+test('coalescing retains one pending newest snapshot and teardown always runs', () => {
+  const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const start = index.slice(index.indexOf('private runAgentListShadow'), index.indexOf('aboutToDisappear'));
+  assert.ok(!index.includes('agentShadowQueue'));
+  assert.match(start, /this\.agentShadowPending = undefined;/);
+  assert.match(start, /try \{\n\s+const task = new taskpool\.Task/);
+  const dispose = index.slice(index.indexOf('aboutToDisappear'), index.indexOf('@Monitor', index.indexOf('aboutToDisappear')));
+  assert.match(dispose, /finally \{ this\.agentWorkspace\.setListShadow/);
+});
+
 test('release has no shadow module reference and DEBUG is the only dynamic-load gate', () => {
   const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
   const start = index.slice(index.indexOf('private startAgentListShadow'), index.indexOf('aboutToDisappear'));

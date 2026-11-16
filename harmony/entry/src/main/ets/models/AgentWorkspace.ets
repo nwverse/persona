@@ -1,6 +1,7 @@
 import type { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import type { AgentListAdapter, AgentListInput, AgentListRow } from '../core/AgentListAdapter';
+import type { AgentListGroupProjection } from '../core/AgentListProjection';
 import { NativeAgentListAdapter } from '../core/AgentListAdapter';
 
 interface AgentRepository {
@@ -633,7 +634,25 @@ export class AgentWorkspace {
     this.freezeSuppressed = false; this.frozenGroups = this.sourceReady() ? this.copyGroups(this.groups) : undefined;
   }
 
+  private frozenProjection(groups: AgentWorkspaceGroup[]): AgentListGroupProjection[] {
+    const latest = new Map<string, ResourceRow>();
+    this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
+    return groups.map((group) => ({id: group.id, machineId: group.machineId, machineName: group.machineName,
+      repositoryPath: group.repositoryPath, repositoryName: group.repositoryName, worktreePath: group.worktreePath,
+      worktreeName: group.worktreeName, branch: group.branch, showMachine: group.showMachine,
+      showRepository: group.showRepository, showWorktree: group.showWorktree,
+      rows: group.rows.map((row: ResourceRow) => {
+        const current = latest.get(rowKey(row)) || row, raw = current.data();
+        raw['machine_id'] = rowMachine(current); raw['session_id'] = rowSession(current); raw['title'] = current.title;
+        raw['cwd'] = current.path; raw['state'] = current.state; raw['manager'] = current.manager; raw['app_hub_group'] = current.group;
+        return {id: current.id, raw, source: current};
+      })}));
+  }
+
   private rebuild(): void {
+    const input = this.makeListInput();
+    this.listInput = input;
+    if (this.listShadow) this.listShadow(input);
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
       const latest = new Map<string, ResourceRow>();
       this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
@@ -645,10 +664,10 @@ export class AgentWorkspace {
       this.frozenGroups = this.copyGroups(this.groups);
       return;
     }
-    const input = this.makeListInput();
-    this.listInput = input;
-    if (this.listShadow) this.listShadow(input);
-    const groups = this.adapter.project(input);
+    const listInput = this.makeListInput();
+    this.listInput = listInput;
+    if (this.listShadow) this.listShadow(listInput);
+    const groups = this.adapter.project(listInput);
     this.groups = groups.map((group) => new AgentWorkspaceGroup(group.id, group.machineId,
       group.machineName, group.repositoryPath, group.repositoryName, group.worktreePath, group.worktreeName,
       group.branch, group.rows.map((row: AgentListRow) => row.source as ResourceRow)));
@@ -669,6 +688,7 @@ export class AgentWorkspace {
     });
     return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
+      frozen: this.readingDetail && !this.freezeSuppressed && this.frozenGroups ? this.frozenProjection(this.frozenGroups) : undefined,
       kept: this.frozenGroups?.flatMap((group) => group.rows.map((row: ResourceRow) =>
         (row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row))) || [],
       machines: this.client?.directoryOwners().flatMap((owner: ClientModel) => owner.machines.map((row: ResourceRow) =>

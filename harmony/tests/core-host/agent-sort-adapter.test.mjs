@@ -2,27 +2,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { registerHooks, stripTypeScriptTypes } from 'node:module';
+import './agent-sort-loader.mjs';
 import { HostCore, helperPath } from './host.mjs';
 
-registerHooks({
-  resolve(specifier, context, next) {
-    if (context.parentURL?.includes('/entry/src/main/ets/')) {
-      const url = new URL(specifier, context.parentURL);
-      if (url.pathname.endsWith('/Wire')) url.pathname += '.ets';
-      else if (!/\.[a-z]+$/i.test(url.pathname)) url.pathname += '.ts';
-      return {url: url.href, shortCircuit: true};
-    }
-    return next(specifier, context);
-  },
-  load(url, context, next) {
-    if (url.endsWith('.ts') || url.endsWith('.ets')) return {format: 'module', shortCircuit: true,
-      source: stripTypeScriptTypes(readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, ''))};
-    return next(url, context);
-  },
-});
-const {NativeAgentListAdapter, coreAgentSortInput} = await import('../../entry/src/main/ets/core/AgentListAdapter.ts');
-const {differingAgentSortRules} = await import('../../entry/src/main/ets/core/AgentListProjection.ts');
+const {debugAgentSortSnapshot} = await import('../../entry/src/main/ets/core/DebugAgentSortSnapshot.ts');
+const {NativeAgentListAdapter, coreAgentSortInput, nativeCoreProjection} = await import('../../entry/src/main/ets/core/AgentListAdapter.ts');
+const {differingAgentSortRules, compareNativeWithCore} = await import('../../entry/src/main/ets/core/AgentListProjection.ts');
 
 const fixtureDir = new URL('../../../spec/fixtures/sort/', import.meta.url);
 const documents = readdirSync(fixtureDir).filter((f) => f.endsWith('.json')).sort().map((file) => ({
@@ -42,7 +27,7 @@ function nativeInput(c) {
     history: false, reading: false, machines: input.machines,
     grouping: {state: 'flat', space: 'repository', machine: 'machine'}[input.settings.grouping],
     quick: {all: 'all', needsYou: 'needs_you', unread: 'unread', working: 'working', backgroundWaiting: 'working'}[input.settings.quick],
-    machineFilter: input.settings.machine_filter.split('|').at(-1) ?? '',
+    machineFilter: input.settings.machine_filter,
     query: input.settings.query,
     kept: input.settings.kept,
     coreSettings: {...input.settings},
@@ -53,27 +38,7 @@ function nativeInput(c) {
   };
 }
 
-// This is deliberately a complete structural projection, not an ID-only comparison. The existing corpus is iOS-derived
-// and predates the native-only grouping choices. Every mismatch is retained as an issue reference (#8966), not erased
-// by relabelling native groups as iOS groups or weakening the fixture.
-function nativeAsCore(input) {
-  const groups = new NativeAgentListAdapter().project(input);
-  const counts = {needsYou: 0, unread: 0, working: 0, backgroundWaiting: 0};
-  const state = (raw) => raw.state ?? raw.status ?? 'idle';
-  input.rows.filter((r) => state(r.raw) !== 'offline').forEach((r) => {
-    if (state(r.raw) === 'needs_you') counts.needsYou++;
-    if (state(r.raw) === 'unread') counts.unread++;
-    if (state(r.raw) === 'working') counts.working++;
-    if (r.raw.background_waiting) counts.backgroundWaiting++;
-  });
-  const id = (r) => `${r.raw.app_hub_group ? `${r.raw.app_hub_group}|` : ''}${r.raw.machine_id}/${r.raw.session_id}`;
-  const result = {counts, groups: groups.map((g) => ({id: g.id, title: g.machineName,
-    rows: g.rows.map(id), visible_rows: g.rows.map(id), folded: false})),
-    unread_shown: groups.flatMap((g) => g.rows.filter((r) => state(r.raw) === 'unread').map(id))};
-  if (input.grouping === 'repository') result.quiet_title = null;
-  return result;
-}
-
+// Complete structural projection through the actual production snapshot function, never a second native implementation.
 test('all 30 fixtures reach both native ArkTS and the real core; differences are reported, not hidden', async () => {
   const host = new HostCore(helperPath);
   try {
@@ -82,13 +47,23 @@ test('all 30 fixtures reach both native ArkTS and the real core; differences are
       const input = nativeInput(c);
       const coreInput = coreAgentSortInput(input);
       assert.ok(coreInput, `${c.name}: supported native-to-core input`);
-      // Send exactly the same session/registry/preferences values. The native-only history/mode adaptations are named
-      // in #8966, not treated as proof that production accepts core rows yet.
+      // Send exactly the same session/registry/preferences values. Native-only modes and membership rules are #8966.
       assert.deepEqual(coreInput.sessions.map((s) => s.session_id), c.input.sessions.map((s) => s.session_id), c.name);
       const core = await host.sort(coreInput);
       assert.deepEqual(core, c.expected, `${c.name}: real core remains pinned to the unchanged fixture`);
-      const native = nativeAsCore(input);
+      const snapshot = debugAgentSortSnapshot(input);
+      assert.ok(snapshot, `${c.name}: production snapshot supports the input`);
+      assert.deepEqual(snapshot.input, coreInput, 'the exact snapshot is sent to core');
+      const native = snapshot.projection;
+      assert.deepEqual(native, nativeCoreProjection(input));
       const rules = differingAgentSortRules(native, core);
+      const reports = [];
+      assert.equal(compareNativeWithCore(snapshot.input, native, (raw) => {
+        assert.deepEqual(JSON.parse(raw), coreInput);
+        return JSON.stringify(core);
+      }, (report) => reports.push(report)), rules.length === 0, c.name);
+      assert.deepEqual(reports.map((report) => report.rule), rules, c.name);
+      assert.ok(reports.every((report) => !JSON.stringify(report).includes(c.name)), 'no content in reports');
       results.push({name: c.name, matched: rules.length === 0, rules});
       if (rules.length === 0) assert.deepEqual(native, c.expected, c.name);
     }
@@ -106,7 +81,7 @@ test('the production comparison rejects a wrong expectation and native failure w
   const host = new HostCore(helperPath);
   try {
     const c = cases[0];
-    const native = nativeAsCore(nativeInput(c));
+    const native = nativeCoreProjection(nativeInput(c));
     assert.notDeepEqual(native, {...c.expected, counts: {needsYou: 0, unread: 0, working: 0, backgroundWaiting: 0}});
     await assert.rejects(() => host.sort({private: 'value must not be repeated'}), /sort/);
   } finally { await host.end(); }

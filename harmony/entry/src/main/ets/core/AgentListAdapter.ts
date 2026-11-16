@@ -17,8 +17,36 @@ export class NativeAgentListAdapter implements AgentListAdapter {
   project(input: AgentListInput): AgentListGroupProjection[] { return nativeAgentListProjection(input); }
 }
 
-/** A core input must name an actual iOS grouping; native-only modes are never relabelled. */
+function coreRowId(row: AgentListRow): string {
+  return (Wire.text(row.raw, 'app_hub_group') ? Wire.text(row.raw, 'app_hub_group') + '|' : '') +
+    Wire.text(row.raw, 'machine_id') + '/' + Wire.text(row.raw, 'session_id');
+}
+
+/** Translate only when a machine filter has an unambiguous owner; never strip a cross-Hub group. */
+export function coreMachineFilter(input: AgentListInput): string | undefined {
+  if (!input.machineFilter) return '';
+  if (input.machineFilter[0] === '[') {
+    try {
+      const parsed = JSON.parse(input.machineFilter) as Object[];
+      if (parsed.length !== 3) return undefined;
+      const group = typeof parsed[0] === 'string' ? parsed[0] as string : '';
+      const id = typeof parsed[2] === 'string' ? parsed[2] as string : '';
+      return id && group ? group + '|' + id : id || undefined;
+    } catch (_) { return undefined; }
+  }
+  const matches = input.machines.filter((machine) => Wire.text(machine, 'id') === input.machineFilter);
+  const uniqueGroups = new Set<string>(matches.map((machine) => Wire.text(machine, 'group')));
+  if (uniqueGroups.size === 1) {
+    const group = Wire.text(matches[0], 'group');
+    return (group ? group + '|' : '') + input.machineFilter;
+  }
+  if (uniqueGroups.size > 1) return undefined;
+  return input.machines.some((machine) => Wire.text(machine, 'id') === input.machineFilter) ? undefined : input.machineFilter;
+}
+
 export function coreAgentSortInput(input: AgentListInput): CoreSortInput | undefined {
+  const machineFilter = coreMachineFilter(input);
+  if (machineFilter === undefined) return undefined;
   const grouping = input.grouping === 'flat' ? 'state' : input.grouping === 'repository' ? 'space' : input.grouping;
   if (!['state', 'space', 'machine'].includes(grouping)) return undefined;
   const quick = {all: 'all', needs_you: 'needsYou', unread: 'unread', working: 'working'}[input.quick];
@@ -41,14 +69,14 @@ export function coreAgentSortInput(input: AgentListInput): CoreSortInput | undef
   });
   return {sessions, machines: input.machines, pins: {spaces: pinsSpaces, sessions: pinsSessions},
     mutes: {spaces: mutesSpaces, sessions: mutesSessions, allowed: mutesAllowed},
-    settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: input.machineFilter,
+    settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: machineFilter,
       kept: input.kept}};
 }
 
 export function nativeCoreProjection(input: AgentListInput): CoreAgentListProjection | undefined {
   const coreInput = coreAgentSortInput(input);
   if (!coreInput) return undefined;
-  const native = nativeAgentListProjection(input);
+  const native = input.reading && input.frozen ? input.frozen : nativeAgentListProjection(input);
   const state = (row: AgentListRow): string => Wire.text(row.raw, 'state', Wire.text(row.raw, 'status'));
   const id = (row: AgentListRow): string => (Wire.text(row.raw, 'app_hub_group') ? Wire.text(row.raw, 'app_hub_group') + '|' : '') +
     Wire.text(row.raw, 'machine_id') + '/' + Wire.text(row.raw, 'session_id');

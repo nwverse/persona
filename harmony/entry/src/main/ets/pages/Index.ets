@@ -28,7 +28,8 @@ import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { NativeAgentListAdapter } from '../core/AgentListAdapter';
 import type { AgentListInput } from '../core/AgentListAdapter';
-import type { AgentSortReport } from '../core/AgentListProjection';
+import type { AgentSortReport, CoreAgentListProjection, CoreSortInput } from '../core/AgentListProjection';
+import type { DebugAgentSortSnapshot } from '../core/DebugAgentSortSnapshot';
 import type { DebugAgentListShadow } from '../platform/DebugAgentListShadow';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
@@ -114,7 +115,9 @@ struct Index {
   @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
   private agentShadow: DebugAgentListShadow | undefined;
   private agentShadowTask: taskpool.Task | undefined;
-  private agentShadowQueue: Promise<void> = Promise.resolve();
+  private agentShadowPending: DebugAgentSortSnapshot | undefined;
+  private agentShadowRunning: boolean = false;
+  private agentShadowWorker: ((input: CoreSortInput, projection: CoreAgentListProjection) => AgentSortReport[]) | undefined;
   private agentShadowStarted: boolean = false;
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local spacesShown: boolean = false;
@@ -278,26 +281,43 @@ struct Index {
       if (!this.agentShadowStarted) return;
       const shadow = new DebugAgentListShadow();
       this.agentShadow = shadow;
+      this.agentShadowWorker = runDebugAgentSortShadow;
       this.agentWorkspace.setListShadow((input: AgentListInput) => {
-        let snapshot;
-        try { snapshot = shadow.snapshot(input); } catch (_) { shadow.failure(); return; }
-        if (!snapshot) return;
-        this.agentShadowQueue = this.agentShadowQueue.then(async () => {
-          if (this.agentShadow !== shadow) return;
-          const task = new taskpool.Task(runDebugAgentSortShadow, snapshot.input, snapshot.projection);
-          this.agentShadowTask = task;
-          try {
-            if (this.agentShadow === shadow) shadow.receive(await taskpool.execute(task) as AgentSortReport[]);
-          } catch (_) { if (this.agentShadow === shadow) shadow.failure(); }
-          finally { this.agentShadowTask = undefined; }
-        });
+        try {
+          const snapshot = shadow.snapshot(input);
+          if (snapshot) { this.agentShadowPending = snapshot; this.runAgentListShadow(); }
+        } catch (_) { shadow.failure(); }
       });
     }).catch(() => undefined);
   }
+  private runAgentListShadow(): void {
+    const shadow = this.agentShadow, worker = this.agentShadowWorker, snapshot = this.agentShadowPending;
+    if (!shadow || !worker || !snapshot || this.agentShadowRunning || !this.agentShadowStarted) return;
+    this.agentShadowPending = undefined;
+    this.agentShadowRunning = true;
+    let reports: Promise<AgentSortReport[]>;
+    try {
+      const task = new taskpool.Task(worker, snapshot.input, snapshot.projection);
+      this.agentShadowTask = task;
+      reports = taskpool.execute(task) as Promise<AgentSortReport[]>;
+    } catch (_) {
+      this.agentShadowTask = undefined; this.agentShadowRunning = false; shadow.failure();
+      if (this.agentShadowPending) this.runAgentListShadow();
+      return;
+    }
+    reports.then((result: AgentSortReport[]) => {
+      if (this.agentShadow === shadow) shadow.receive(result);
+    }).catch(() => { if (this.agentShadow === shadow) shadow.failure(); }).finally(() => {
+      this.agentShadowTask = undefined; this.agentShadowRunning = false;
+      if (this.agentShadowPending) this.runAgentListShadow();
+    });
+  }
   aboutToDisappear(): void {
-    this.agentShadowStarted = false; this.agentShadow = undefined;
-    if (this.agentShadowTask) { taskpool.cancel(this.agentShadowTask); this.agentShadowTask = undefined; }
-    this.agentWorkspace.setListShadow(undefined); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions();
+    try {
+      this.agentShadowStarted = false; this.agentShadow = undefined; this.agentShadowPending = undefined;
+      if (this.agentShadowTask) { taskpool.cancel(this.agentShadowTask); this.agentShadowTask = undefined; }
+    } catch (_) { this.agentShadowTask = undefined; }
+    finally { this.agentWorkspace.setListShadow(undefined); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
   }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
