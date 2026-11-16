@@ -4,7 +4,9 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -26,7 +28,7 @@ func (s *Service) remoteImageRoutes() {
 		}
 		size, _ := strconv.Atoi(r.URL.Query().Get("size"))
 		caller := r.Header.Get(assistantwire.DeviceNameHeader)
-		img, err := s.remoteImages.Get(r.Context(), caller, r.URL.Query().Get("url"), size)
+		img, err := s.remoteImages.Get(r.Context(), caller, queryURL(r.URL.RawQuery), size)
 		if err != nil {
 			var e *remoteimage.Error
 			if !errors.As(err, &e) {
@@ -61,4 +63,20 @@ func writeRemoteImageError(w http.ResponseWriter, e *remoteimage.Error) {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(e.RetryAfter.Seconds())))))
 	}
 	apierr.WriteCode(w, e.Status, e.Code, i18n.Err("assistant-remote_image."+e.Code))
+}
+
+// queryURL is the url parameter as written in the raw query: percent escapes undone, a "+" kept as a plus. A picture's
+// address keeps its plus signs that way: the apps escape "&", "=", "#" and spaces in it, but iOS's URLComponents
+// leaves "+" as it is, which form decoding (Query) would turn into a space.
+func queryURL(raw string) string {
+	for _, part := range strings.Split(raw, "&") {
+		if v, ok := strings.CutPrefix(part, "url="); ok {
+			s, err := url.PathUnescape(v)
+			if err != nil {
+				return ""
+			}
+			return s
+		}
+	}
+	return ""
 }

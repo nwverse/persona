@@ -53,6 +53,21 @@ func TestRemoteImageRoute(t *testing.T) {
 	}
 }
 
+// The address is read as written: escapes undone, plus signs kept (iOS leaves "+" unescaped in a query value).
+func TestRemoteImageQueryURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"url=https://img.test/a+b.jpg?x%3D1%26y%3D2%23f&size=512":     "https://img.test/a+b.jpg?x=1&y=2#f",
+		"size=512&url=https%3A%2F%2Fimg.test%2Fa%2Bb%20c.jpg&token=t": "https://img.test/a+b c.jpg",
+		"size=512":                    "",
+		"url=%zz":                     "",
+		"urlx=https://img.test/a.jpg": "",
+	} {
+		if got := queryURL(raw); got != want {
+			t.Errorf("queryURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestRemoteImageAnswers(t *testing.T) {
 	w := httptest.NewRecorder()
 	writeRemoteImage(w, &remoteimage.Image{Type: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff, 0}})
