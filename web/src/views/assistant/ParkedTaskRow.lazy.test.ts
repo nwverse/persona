@@ -14,6 +14,12 @@ describe("wait information stays off the first screen", () => {
     expect(inStartup("assistant-tasks.pr_blocker_review_required")).toBe(false);
     expect(inStartup("assistant-tasks.progress_count")).toBe(true);
     expect(inStartup("assistant-tasks.prepare")).toBe(true);
+    expect(inStartup("assistant-tasks.review_parked")).toBe(true);
+    expect(inStartup("assistant-tasks.report_done")).toBe(true);
+    expect(inStartup("assistant-tasks.report_latest")).toBe(false);
+    expect(inStartup("chat-composer.cmd_clear_confirm")).toBe(true);
+    expect(inStartup("chat-composer.collapse")).toBe(false);
+    expect(inStartup("assistant-history.sidebar")).toBe(false);
     expect(inStartup("assistant-assistantchat.new_main_ellipsis")).toBe(true);
     expect(inStartup("assistant-assistantchat.new_main_elsewhere")).toBe(true);
     expect(inStartup("assistant-assistantchat.new_main_title")).toBe(false);
