@@ -148105,25 +148105,25 @@
         }
       }
     },
-    "Switches in %@ take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults." : {
+    "Switches in %@ take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switches in %@ take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults."
+            "value" : "Switches in %@ take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 中的开关立即生效。其他字段编辑完成后，点击扩展配置末尾的「保存」。保存后扩展会重启，留空的字段使用默认值。"
+            "value" : "%@ 中的开关立即生效。其他字段编辑完成后点「保存」。保存后扩展会重启，留空的字段使用默认值。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ のスイッチはすぐに反映されます。その他の編集は、拡張機能の設定の末尾にある「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
+            "value" : "%@ のスイッチはすぐに反映されます。その他は編集後に「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
           }
         }
       }
@@ -182710,25 +182710,25 @@
         }
       }
     },
-    "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults." : {
+    "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults."
+            "value" : "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "编辑完成后，点击扩展配置末尾的「保存」。保存后扩展会重启，留空的字段使用默认值。"
+            "value" : "编辑完成后点「保存」。保存后扩展会重启，留空的字段使用默认值。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "編集後、拡張機能の設定の末尾にある「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
+            "value" : "編集後に「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
           }
         }
       }

@@ -135,6 +135,8 @@ func installedHelper(t *testing.T, permission string) string {
 	swap(t, &screenHelpers, &helperResolver{})
 	swap(t, &screenPermissions, &permissionCache{ttl: time.Minute})
 	swap(t, &screenPreflight, func(context.Context, string) string { return permission })
+	swap(t, &screenFFmpegPaths, []string{}) // never this Mac's own ffmpeg (#8859)
+	swap(t, &screenX264, &x264Probe{})
 	return app
 }
 
@@ -157,7 +159,7 @@ func TestStartScreenHelperJoinsTheStreamAndEndsWithScreenSharing(t *testing.T) {
 	n.screens.mu.Unlock()
 
 	var released atomic.Int32
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() { released.Add(1) }); err != nil {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() { released.Add(1) }); err != nil {
 		t.Fatal(err)
 	}
 	n.screens.mu.Lock()
@@ -183,13 +185,13 @@ func TestStartScreenHelperRefusesWithoutAHelperOrPermission(t *testing.T) {
 	n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 
 	installedHelper(t, "missing")
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no Screen Recording permission: %v", err)
 	}
 
 	swap(t, &screenHelperSource, func() string { return "" })
 	swap(t, &screenHelpers, &helperResolver{})
-	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
+	if _, err := n.startScreenHelper(context.Background(), "v1", "K", false, false, false, func() {}); dialErrCode(t, err) != "video_unavailable" {
 		t.Fatalf("no helper installed: %v", err)
 	}
 }
