@@ -76,6 +76,9 @@ internal object NativeBridge {
 
     @JvmStatic external fun destroy(handle: Long)
 
+    /** Projects the source-derived WebSocket envelope. Pure diagnostic function; no runtime handle needed. */
+    @JvmStatic external fun projectWireEnvelope(input: String): String
+
     /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectSort(input: String): String
 

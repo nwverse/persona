@@ -48,7 +48,9 @@ unchanged fixtures through every pure C projection: sort's `empty_list`, `person
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
-`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
@@ -251,6 +253,22 @@ JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below);
   which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
   text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
+
+### Source-derived WebSocket Envelope projection (#8955)
+
+`persona_core::wire_envelope` is a pure diagnostic projection of the narrow current-iOS slice in
+`spec/fixtures/wire-envelope`: the shared scalar and raw-JSON envelope keys, `mesh` / `fleet` tolerance, unknown
+types, and routing requirements for `hello`, `inbox`, `items`, `fleet`, `screen` and `sessions_list`. It returns
+accepted, ignored or dropped with the documented projected fields; known event types outside that set return
+`out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
+The existing continuity transport behavior and its known differences are unchanged.
+
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
+the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
+malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`
+extreme floating-point behavior and full Item / Fleet models remain explicitly limited in the domain README.
+Neither replay executed Swift, iOS, a simulator, a production adapter or a physical device.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 
