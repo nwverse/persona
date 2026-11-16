@@ -1003,6 +1003,15 @@ screen, saw a queue in the transcript and no hint.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
+## An installed CLI is not an explicit runtime override (#9181)
+
+Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
+assistant task chats then failed the launcher-agent guard. Preserve internal provenance when listing the ordinary
+executable: it is a terminal fallback, while real shell aliases, functions and helper entries remain authoritative.
+Use the same ownership rule for published launchers, models, starts and assistant validation. Exercise discovery plus
+the normal launcher-list and assistant-send paths with the CLI installed, explicit overrides and disconnects; a runtime
+test with an empty shell cache misses the collision. Never mutate the cached shell list while publishing runtime rows.
+
 ## Antigravity planner message completion can be progress narration (#3389)
 
 A text-only `PLANNER_RESPONSE` with `status: DONE` can precede more reasoning and tools. It closes that message, not the

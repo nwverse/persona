@@ -86,8 +86,10 @@ allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type
 **Not sent versus in doubt.** Every code but `assistant_in_doubt` means nothing went out: the failure came before the send (no connector, no record, no way to
 reply) or the source answered that it refused it. Such a send's record is forgotten, so the same reply asked again is really tried again; `retryable: true`
 says the cause is passing, `retryable: false` that the same request fails the same way until the user acts (signs in, turns the source on, replies in the
-source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included)
-or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`, and the same reply is not sent again.
+source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included),
+a mail whose SMTP server got the whole message and never answered it (the connection dropped or the wait ran out, `mail.ErrMaybeSent`, #9166; a server's
+refusal of it is still not sent) or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`,
+and the same reply is not sent again.
 
 **For the apps** (their wording is #9126's): say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
 sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. A confirmed suggestion is taken even when its send
