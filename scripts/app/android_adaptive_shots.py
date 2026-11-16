@@ -530,7 +530,8 @@ class AdaptiveRunner:
             position = json.loads(raw)
         except json.JSONDecodeError as error:
             raise AdaptiveFailure("invalid shell-position.json") from error
-        tab = position.get("tab")
+        # ShellPosition defaults to Persona; JsonCodec omits fields with their default value.
+        tab = position.get("tab", "Persona")
         if not isinstance(tab, str) or not tab:
             raise AdaptiveFailure("shell position has no route tab")
         chats = position.get("chats") if isinstance(position.get("chats"), dict) else {}
