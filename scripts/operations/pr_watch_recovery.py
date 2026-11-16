@@ -62,7 +62,7 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
             try:
                 remove_worktree(checkout, state_file, path)
                 removed += 1
-            except WatchError:
+            except (WatchError, OSError):
                 continue
         run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
         return removed

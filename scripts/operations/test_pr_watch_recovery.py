@@ -141,6 +141,17 @@ class RecoveryIntegrationTests(unittest.TestCase):
         remove.assert_not_called()
         self.assertTrue(other.exists())
 
+    def test_one_failed_lease_does_not_abort_other_reclamation(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        broken = self.worktrees / "persona-8-broken"
+        broken.mkdir()
+        pr_watch_recovery.atomic_leases(self.state, {"worktree_leases": {
+            str(stale): {"active": False, "heartbeat": 1},
+            str(broken): {"active": False, "heartbeat": 1}}})
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=[OSError("read failure"), None]):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state), 1)
+
     def test_only_empty_loose_objects_are_removed_and_pack_temps_are_preserved(self):
         loose = self.checkout / ".git/objects/ab"
         loose.mkdir(parents=True)

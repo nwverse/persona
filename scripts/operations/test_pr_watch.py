@@ -385,6 +385,21 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         update.assert_called_once()
 
+    def test_no_patch_attempts_exhaust_the_code_repair_budget(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[finding]), \
+                patch.object(pr_watch_repair, "repair_with_model", side_effect=pr_watch_common.RepairAttemptError("no change")), \
+                patch.object(pr_watch, "checked", return_value=""):
+            for _ in range(3):
+                if "example/one#7" in self.watcher.state.data["prs"]:
+                    self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
+                self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "repair_exhausted")
+        self.assertEqual(state["repair_rounds"], 3)
+        self.assertIn("no change", state["failure"])
+
     def test_semantic_repair_infrastructure_exhaustion_preserves_code_repair_budget(self):
         finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \

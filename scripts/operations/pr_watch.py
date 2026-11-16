@@ -1083,6 +1083,8 @@ class Watcher:
             if phase == "verification":
                 attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
                 latest = self.state.get(repo, number)
+                if isinstance(error, pr_watch_common.RepairAttemptError) and int(latest.get("repair_rounds", 0)) >= REPAIR_LIMIT:
+                    return self.exhaust_repair(repo, number, pr, evidence_key, error)
                 failure_fingerprint = fingerprint(repo, number, head, "repair-infrastructure", str(error))
                 publish = latest.get("infrastructure_fingerprint") != failure_fingerprint
                 self.state.put(repo, number, head, evidence_key=evidence_key,
@@ -1116,7 +1118,10 @@ class Watcher:
             # this exact base/head until the PR changes.
             retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
             if phase == "semantic_repair":
-                repair_attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
+                latest = self.state.get(repo, number)
+                repair_attempts = int(latest.get("repair_attempts", 0)) + 1
+                if isinstance(error, pr_watch_common.RepairAttemptError) and int(latest.get("repair_rounds", 0)) >= REPAIR_LIMIT:
+                    return self.exhaust_repair(repo, number, pr, evidence_key, error)
                 if repair_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                     self.state.put(repo, number, head, evidence_key=evidence_key, outcome="retry",
                                    repair_attempts=repair_attempts, retry_after=time.time() + 3600,
