@@ -114,7 +114,8 @@ language it was said in, as the contract wants).
   the first pause after 20 minutes (at the latest after 25: the service documents no limit). The next one starts with the next audio.
   A session that drops is replaced at once, then after 2 and 4 s, from the end of its last sentence, out of the job's last minute of
   audio (`warning session_dropped`); a fourth failure in a row ends the job (`upstream_failed`, or `upstream_unavailable` before
-  `ready`). Sentences go out in order: a session's wait while an earlier one is still open.
+  `ready`). A session that drops while it finishes (its audio all sent) is not replaced: its last seconds are left to the
+  phone's own text and the final pass. Sentences go out in order: a session's wait while an earlier one is still open.
 - **Pace**: audio goes to the service as it comes, a burst (the manager's backlog after `ready`) at most twice real time. `ack` follows
   what the sessions were sent, every 5 s of audio.
 - **Replay** (`bigmodel_nostream`, the streaming-input endpoint: more accurate, results once the audio ends): windows of about five

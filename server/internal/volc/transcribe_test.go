@@ -307,14 +307,20 @@ func TestLiveJob(t *testing.T) {
 // nothing is said twice and the order holds.
 func TestLiveJobReconnects(t *testing.T) {
 	fast(t)
+	liveQuietEnd = 10 * time.Second // waiting for the drop below must not end the session at a pause
 	fv := fake(t)
 	fv.Set(func(s *volctest.Script) { s.DropAfter, s.DropN = 12, 1 }) // the first session's socket drops after 2.4 s of audio
 	m := dialJob(t, testPlugin(t, Form{}, "test-key"))
 	m.send(extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: "live", At: extwire.F(0.0)})
 	m.until(extwire.TFReady)
-	m.audio(volctest.PCM(line(1, 1.0, 0.6), line(2, 1.2, 0.6), line(3, 0.8, 0.6)))
+	// The rest of the audio and end only after the drop, so it comes while the session takes audio, not while it
+	// finishes (a live session dropped while finishing is not replaced), however slow the machine.
+	m.audio(volctest.PCM(line(1, 1.0, 0.6), line(2, 1.2, 0.6)))
+	early, w := m.until(extwire.TFWarning)
+	m.audio(volctest.PCM(line(3, 0.8, 0.6)))
 	m.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
 	got, _ := m.until(extwire.TFDone)
+	got = append(append(early, w), got...)
 	want := []string{volctest.Sentence(1), volctest.Sentence(2), volctest.Sentence(3)}
 	if !slices.Equal(texts(got), want) {
 		t.Errorf("sentences %v, want %v: %s", texts(got), want, frameList(got))
