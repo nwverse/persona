@@ -83,7 +83,7 @@ final class MeetingBackgroundRecordingUITests: XCTestCase {
 
     /// Stop asks first: its confirmation's Stop Recording.
     @MainActor private func confirmStop(_ app: XCUIApplication) {
-        let named = app.buttons["停止录音"].firstMatch
+        let named = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         if named.waitForExistence(timeout: 5) { named.tap(); return }
         let dialog = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app.alerts.firstMatch
         if dialog.exists { dialog.buttons.element(boundBy: 0).tap() }

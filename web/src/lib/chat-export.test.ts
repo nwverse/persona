@@ -12,6 +12,7 @@ const words: ExportWords = {
   from: (name) => w.from.replace("{name}", name),
   cut: (n) => w.cut.replace("{n}", String(n)),
   partial: (from) => w.partial.replace("{from}", from),
+  partialUnknown: "Some messages could not be read.",
 };
 const utc = (ts: string) => ts.slice(0, 16).replace("T", " ");
 
@@ -136,5 +137,68 @@ describe("reading the whole conversation", () => {
     expect(got.items[0]).toMatchObject({ text: "cut", full_size: 100 });
     const stuck = async (): Promise<ItemsPage> => ({ items: [{ id: "a", seq: 1, role: "user", kind: "text", text: "a" }], has_more: true });
     expect((await readConversation({ work: false, page: stuck, full: h.full })).items).toHaveLength(1);
+  });
+
+  it.each(["repeated", "empty", "newer"])("marks a stalled %s older page partial in the document", async (failure) => {
+    const initial: Item = { id: "a", seq: 10, role: "user", kind: "text", text: "visible", ts: "2026-11-16T10:00:00Z" };
+    let requests = 0;
+    const page = async (): Promise<ItemsPage> => {
+      requests++;
+      if (requests === 1) return { items: [initial], has_more: true };
+      const items = failure === "empty" ? [] : failure === "newer" ? [{ ...initial, id: "b", seq: 11 }] : [{ ...initial, text: "wrong" }];
+      return { items, has_more: failure !== "empty" };
+    };
+    const result = await readConversation({ work: false, page, full: async () => initial });
+    expect(requests).toBe(2);
+    expect(result.partial).toBe(true);
+    expect(result.items).toEqual([initial]);
+    const md = transcriptMarkdown(result.items, fixture.meta, { work: false, words, time: utc, partial: result.partial });
+    expect(md).toContain(words.partial("2026-11-16 10:00"));
+  });
+
+  it("keeps valid older rows but warns and ignores a conflicting row in the same page", async () => {
+    const original: Item = { id: "a", seq: 10, role: "user", kind: "text", text: "original" };
+    const older: Item = { id: "b", seq: 9, role: "assistant", kind: "text", text: "older" };
+    let requests = 0;
+    const page = async (): Promise<ItemsPage> => ++requests === 1
+      ? { items: [original], has_more: true }
+      : { items: [older, { ...original, seq: 8, text: "conflict" }], has_more: false };
+    const result = await readConversation({ work: false, page, full: async () => original });
+    expect(result.partial).toBe(true);
+    expect(result.items).toEqual([older, original]);
+  });
+
+  it.each([{ items: [] }, { items: [{ id: "a", seq: 10, role: "user", kind: "text", text: "visible" }] }])(
+    "warns without a date when a partial first page has no usable timestamp",
+    async ({ items }) => {
+      const page = async (): Promise<ItemsPage> => ({ items: items as Item[], has_more: true });
+      const result = await readConversation({ work: false, page, full: async () => items[0] as Item });
+      expect(result.partial).toBe(true);
+      expect(transcriptMarkdown(result.items, fixture.meta, { work: false, words, partial: true })).toContain(words.partialUnknown);
+    },
+  );
+});
+
+
+describe("content keeps its internal newlines", () => {
+  const text = '```python\nmessage = """first\n\n\nlast"""\nprint(message)\n```';
+  it.each(["user", "assistant"] as const)("preserves the %s message's code and paragraph breaks", (role) => {
+    const markdown = transcriptMarkdown([{ id: "text1", seq: 1, role, kind: "text", text }], fixture.meta, { work: false, words, time: utc });
+    expect(markdown).toContain(text);
+  });
+
+  it("preserves the thinking text's internal newlines when work is included", () => {
+    const markdown = transcriptMarkdown([{ id: "thought1", seq: 1, role: "assistant", kind: "thinking", text }], fixture.meta, { work: true, words, time: utc });
+    expect(markdown).toContain(text);
+  });
+
+  it.each([true, false])("preserves a tool result's blank lines with its call present: %s", (paired) => {
+    const result = "first\n\n\nlast";
+    const items: Item[] = [
+      ...(paired ? [{ id: "call1", seq: 1, role: "assistant" as const, kind: "tool_use" as const, tool_name: "Read", tool_use_id: "tool1", tool_input: { path: "notes.txt" } }] : []),
+      { id: "result1", seq: 2, role: "assistant", kind: "tool_result", tool_use_id: "tool1", text: result },
+    ];
+    const markdown = transcriptMarkdown(items, fixture.meta, { work: true, words, time: utc });
+    expect(markdown).toContain(fenced(result));
   });
 });

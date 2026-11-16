@@ -14,21 +14,22 @@ import (
 // ---- signals ----
 
 const (
-	sigReview      = "review"      // the work looks finished: review it
-	sigIdle        = "idle"        // its agents stopped, and the work is not finished
-	sigUnjudged    = "unjudged"    // its agents stopped, and the judge could not say whether the work is finished
-	sigNeedsYou    = "needs_you"   // an agent waits for an answer
-	sigStalled     = "stalled"     // working, but nothing moved for long
-	sigAllStopped  = "all_stopped" // every current participant stopped with nothing scheduled to resume it
-	sigInterrupted = "interrupted" // the model service cut its turn off
-	sigFailed      = "failed"      // its agent did not start
-	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
-	sigPRConflict  = "pr_conflict" // the task's current open PR has merge conflicts at this head
-	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
-	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
-	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
-	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
-	sigDecide      = "decide"      // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
+	sigReview        = "review"         // the work looks finished: review it
+	sigIdle          = "idle"           // its agents stopped, and the work is not finished
+	sigUnjudged      = "unjudged"       // its agents stopped, and the judge could not say whether the work is finished
+	sigNeedsYou      = "needs_you"      // an agent waits for an answer
+	sigStalled       = "stalled"        // working, but nothing moved for long
+	sigAllStopped    = "all_stopped"    // every current participant stopped with nothing scheduled to resume it
+	sigInterrupted   = "interrupted"    // the model service cut its turn off
+	sigFailed        = "failed"         // its agent did not start
+	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
+	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
+	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
+	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
+	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
+	sigAsk           = "ask"            // its agent's card came to the supervisor before the user (ask_route.go)
+	sigDecide        = "decide"         // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
+	sigDecisionReply = "decision_reply" // the owner wrote in a task's Agent chat; its pending decision needs confirmation
 	// sigLeaderStuck: a leader's task is stuck (leader_reports.go): the main conversation says so in one line, no push
 	// (the owner's ruling after H1, #3609). Detail is the direction's name and where it is stuck.
 	sigLeaderStuck = "leader_stuck"
@@ -121,7 +122,7 @@ func (g superviseSignal) urgent() bool {
 	switch g.Kind {
 	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
-		sigParkDecided: // the owner answered: what they said is acted on soon
+		sigParkDecided, sigDecisionReply: // the owner answered: what they said is acted on soon
 		return true
 	case sigReport:
 		return g.Report != upReportProgress

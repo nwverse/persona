@@ -523,9 +523,10 @@ Phase 3 lands in several PRs.
     have cargo evidence, and state also has ArkTS host replay, but no production migration or separate C/SwiftPM replay.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
-  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
-    `Turn.pickAnswerAcrossWakes`. It handles raw-item frozen cuts, entry-based user pictures, tool pairing,
-    compaction, supervision provenance, recap reopening and pending wakes; it does not project rendered `ChatLine`s.
+  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build`.
+    It handles raw-item frozen cuts, entry-based user pictures, tool pairing, compaction, supervision provenance and
+    the wake of an idle agent, which opens a turn of its own since #9140 (until then: recap reopening and pending
+    wakes inside the turn before it); it does not project rendered `ChatLine`s.
   - All 57 static turn cases compare complete `turns` arrays after applying the checked-in current-iOS overlay
     (`spec/fixtures/lines/ios/differences.json`, #8429). The independent maintainer's macOS replay passed the 59
     executable content cases and its properties; this Rust PR does not run Swift or claim that replay itself.
@@ -591,6 +592,10 @@ Phase 3 lands in several PRs.
     timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
     remains separately #8483. The later C ABI, macOS SwiftPM and ArkTS host replays are recorded below; they do not
     execute the real NAPI boundary, transport or a physical device.
+  - The draft a click leaves (#9238): a single choice empties its question's Other entry and keeps the key, as iOS's
+    `QuestionForm.pick` does, and Advance and Submit change neither map. The core follows iOS; Android's builder removes the
+    key, so the answer shadow reports `other-state` until its adapter drops emptied entries
+    (`native/app-core/README.md`, "Android answer adapter and shadow (#9143)").
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
@@ -607,10 +612,18 @@ Phase 3 lands in several PRs.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
     are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
-    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
-    math blocks, `plainOpenFence`, visual gaps, timing, rendering, production adapters and the #4044 performance goal
-    remain open. These repair slices have cargo and real host-JNI evidence only: no C ABI, SwiftPM, ArkTS host or real
-    NAPI projection. `stream_chunks`, in contrast, also has C ABI, SwiftPM and ArkTS host replay, without StreamRepair.
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline repair
+    (#9286) adds 51 explicit Apple assertions plus source-derived boundary controls through that same real JNI
+    boundary. It also replays all 342 Unicode-scalar prefixes of Apple's mixed reply through real stream-chunks JNI
+    into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
+    follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math recognition prevents inline repair there. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair`
+    ArkTS host projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 39
+    table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
+    `repaired` and extra-field expectations; they do not replay the complete inline or mixed-reply corpora. The NAPI
+    export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift check.
+    The `.math` end state, `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and
+    the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host
+    evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and

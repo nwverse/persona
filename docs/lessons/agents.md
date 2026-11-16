@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+- Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
+  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
+  `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
+  `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -11,6 +16,16 @@ check. This demonstrates the confirmation gap, not the cause of any particular l
 # A continuation must stay on its original to-do (#6820)
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
+
+## A start-turn into a running Codex App turn is delivered twice (2026-11-17, #9416)
+
+The Codex App's bus offers a follower only `thread-follower-start-turn`. Into a running turn Codex's app-server steers it
+(`start_or_steer_turn`), and the App then runs the same request again as a new turn once the running one ends. The
+Agent answers it mid-turn, then starts over on it, while Persona's own read of the chat shows it once. Before asking the
+App for a turn, look whether one runs (rollout tail, or the history database for a chat without a rollout) and hold the
+message on the node until it ends; count a turn the node just started as running until the App writes it down, or two
+sends in a row steer the second into the first's turn. On Codex's own app-server, steer with `turn/steer` and the
+observed turn id instead; never send both a steer and a start for one message.
 
 ## Task branch reuse is not forced worktree creation (#8357)
 
@@ -363,6 +378,32 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.
+
+## Claude Code plugins from a folder marketplace (2026-11-16, 2.1.291 and 2.1.308)
+
+Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while building the node's plugin keeper
+(`server/internal/claudeplugin`, `docs/operations/link.md` "Claude Code plugin"):
+
+- Every CLI run, even `claude plugin list`, writes the config directory's `.claude.json` (and a `backups/` copy). With
+  `CLAUDE_CONFIG_DIR` set to `~/.claude` that file lands inside `~/.claude` instead of the user's `~/.claude.json`: a second global
+  config. Run commands for the user's own directory with `CLAUDE_CONFIG_DIR` unset; name any other directory. Tests decide "the user's
+  own" from the process's real home, never a home a test passed in, so a test cannot reach the real `~/.claude`.
+- `claude plugin install` on a plugin that is installed but turned off turns it back on. Never call it to "make sure": read
+  `plugin list --json` first and leave a disabled plugin alone (`update` keeps it disabled, but updating a plugin the user turned off is
+  not ours to do either).
+- A marketplace that is a folder, with the plugin at a relative `source`, is read from that folder: `list --json` shows `readFromFolder`
+  and `folderVersion` beside the recorded `version`. Writing new files there reaches new sessions at once; `claude plugin update` moves
+  the recorded version (`updateOutcome: updated | up_to_date`). The folder must stay where it was added: `list` keeps showing the plugin
+  after the folder is gone, but nothing loads.
+- `marketplace add` of another folder under a name already added re-points that marketplace silently ("now points at …"), and adding the
+  same folder again is a no-op. Failures print `{"outcome":"failed","failureCode":…}` on stdout and exit 1:
+  `already_in_goal_state` (enable / disable), `not_installed` (uninstall), `not_configured` (marketplace remove), `not_found`.
+- Uninstalling leaves `"enabledPlugins": {}` and `"extraKnownMarketplaces": {}` in `settings.json`; every other key stays as it was.
+- Each command takes about 1.5 s on Windows. The desktop app (the Store build, Claude-3p) ships its own, newer CLI under
+  `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<build>\claude.exe` (2.1.308 there while `PATH` had 2.1.291): a computer with only the
+  desktop app still has a CLI to install with.
+- Its Code sessions use `~/.claude` (the node already starts desktop sessions without `CLAUDE_CONFIG_DIR`, `node/claudedesktop_new.go`), and a
+  user-scope plugin installed from the CLI loads there; inside the app `/plugin` is not available, only **+ › Plugins**.
 
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
@@ -1003,6 +1044,15 @@ screen, saw a queue in the transcript and no hint.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
+## Rewind positions are not message identities (#9410)
+
+AGY reused a user step's numeric ID after rewind, so the node attached an earlier send's persisted client message ID
+to a new input. The current pending bubble could not settle, and reply caches could reuse abandoned content. Keep
+pagination position separate from immutable item identity: native birth time plus a cumulative replacement generation
+distinguishes even repeated prompts with identical timestamps. Preserve prefix and same-step IDs, namespace tool-call
+pairing too, and invalidate old cached pages once. Test normal runtime pages and full-item reads across append and
+complete-file replacement; fresh sessions and distinct sequential prompts do not exercise reused identities.
+
 ## An installed CLI is not an explicit runtime override (#9181)
 
 Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
@@ -1227,3 +1277,12 @@ aged out on its own clock. A start after a quiet spell waited for four probes on
 on a busy machine. Every caller now reads one kept probe per launcher and arguments (`keptProbe`): callers asking at
 once share one shell, and a probe in use is renewed in the background shortly before it ages out, so the bound still
 holds but no message waits for it. A renewal is not a use, or it would keep itself going forever.
+
+
+## A Paseo pin belongs to a workspace, not its project (#9300)
+
+Paseo's “Pin chat” persists on its workspace descriptor (`pinnedAt`). Persona's Paseo space is the entire project, which
+can contain multiple workspaces sharing a directory; importing a pin into `pins.spaces` would pin siblings too. Carry
+the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
+old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
+pin while the final catalog bytes equal the earlier unpinned snapshot.

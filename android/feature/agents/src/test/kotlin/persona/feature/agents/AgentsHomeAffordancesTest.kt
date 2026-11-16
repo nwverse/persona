@@ -71,6 +71,7 @@ class AgentsHomeAffordancesTest {
         grouping.performClick()
         rule.onNode(isPopup()).assertIsDisplayed()
         rule.onNodeWithText("By status").assertIsDisplayed()
+        rule.onNodeWithText("By Machine").assertIsDisplayed()
         rule.onAllNodesWithText("All machines").assertCountEquals(0) // the computers are behind ⋯, not in the picker
     }
 

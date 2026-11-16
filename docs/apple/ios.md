@@ -337,13 +337,15 @@ Chat page:
     Mac `NSClipView` clamps beyond-latest offsets on layout, so glide manually sets each frame and restores any displacement in the same layout (`ChatPin+Mac.swift`).
     Tapping thinking/tools/BeautifulUI tool-pill groups within open work keeps both title and tapped row still (no borrowing remaining title rise or replacing persistent hold with normal 1.5 s).
     Reduce Motion disables rise/glide and content fades (`Theme.Motion.reduced`, #1123).
-  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. The latest Agent text after a
-    wake is the answer, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783). Before new
-    words arrive, the previous answer stays in place while the new work joins its execution summary instead of opening
-    a second segment (#2796). Everything before the answer, including wake notices and intermediate narration, stays
-    inspectable by opening that ordinary work row. Tasks completing during work (not waking) remain a work step.
-    Pitfall: Claude Code's idle-session away recap closes the turn; a later wake must reopen and merge into it,
-    keeping recap in place, or post-wake replies show directly (`ChatBlock.build` `lastRaw` / `reopenedAt`).
+  - Background tasks wake idle Claude (`wake`: a background command's notice, or a subagent's report as its call's
+    result): the wake opens a turn of its own (`ChatBlock.build`, `Turn.wakes`, #9140). The turn before it had ended,
+    so its last words stay its answer; the woken turn draws the notice where a message would be (a subagent's report
+    is drawn under its call instead), then its own work row and its own last words, so the chat still ends on the
+    newest words (#3783). Its work row is known by the wake (`w-<wake id>`) from before its first step, and is the
+    live one while the woken agent works. Tasks completing during work (not waking) remain a work step, and a wake
+    after an away recap follows the recap. Until #9140 the woken work stayed in the turn before it and its newest
+    words took the answer's place, which folded a complete answer to a newer question into the work row once an older
+    background command reported back. The per-reply token count follows the same exchanges (`chatUsage`).
   - Away recaps resemble background tasks: small "↺ Away recap · 21 min ago ›" strip opens `RecapCard` / `RecapDrawer` with full text. Consecutive recaps with nothing between merge into "↺ Away recap · 3 times · 3 min ago ›", newest first in drawer (`ChatLines.foldRecaps`, requested 2026-10-31); mock `MOCK_RECAPS=1`.
     On returning, if latest recap is the chat's last item and never closed, it expands at the end as a full card (`RecapStrip`, `ChatLines.openRecap`):
     same plane as Agent replies, newest inverted-list row, scrolling away with content and fully visible when following bottom, not above input
@@ -837,14 +839,34 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
 - **The shell's side rail** (2026-11-07, TestFlight: on the outer screen every button was at the top, out of reach of the hand holding the phone): with bars on the side, the shell's
   top bars (Assistant's, Agents', Messages' when it is on, and the moving bar while the strip slides) become a rail in that column (`ShellSideRail`; `ShellView` reads the edge once with `readsVerticalBarEdge` and
   hands it down as `\.shellRailEdge`; a page whose bar skipped it put the bar back across the top while it was in front, #2318). Following Apple's iPhone Duo guidance (navigation first, then the prominent action, the tab bar below), the face (the drawer) and the page's
-  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol over its name,
-  the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
+  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol alone in a
+  tap target since #4231, its name spoken and shown large on a long press, the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **The Separate layout's switch on both displays** (#4231, the owner, after the design of #4206 drawn on 2026-11-11 / 12): one component,
+  the shell's upright switch (`ShellSwitch(axis: .vertical)`: Assistant, Agents, Messages when it is on, each its symbol alone in a 44 pt
+  tap target, a 52 × 140 pt glass capsule, 52 × 96 pt without Messages), at the bottom-trailing corner in every posture
+  (`TabSwitchLayout`, `apple/Persona/DesignSystem/TabSwitchDock.swift`). The outer display has it at the foot of the shell's rail. On the
+  open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once at each tab's root, never toggled) and
+  draws the switch over the tabs (`TabSwitchOverlay`), outside the splits and stacks, so it stays put on a push and a pop: on its side
+  at the foot of the system's column down the right (`ShellSideRail`, outside the content), upright floating over the page's
+  bottom-trailing corner, 12 pt from the edge and its foot level with the composer's. Where the bars are is read in the same update
+  as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture. Upright, what sits at the page's foot leaves it room
+  (`tabSwitchRoom`: the chats' footer and Jump to Latest, a new conversation's composer and Needs You, `floatingFooter`, the Inbox
+  hand-off bar, the Lark, connector and Personal Agent composers, Health's, the Recordings and meeting bars and a meeting's Jump to
+  Latest, Git's commit bar and Files' bar; `tabSwitchBottomBarRoom` for a mail's bottom toolbar and, only while selecting, the Inbox's
+  and Browser Sign-ins'), and the main lists keep room past their last
+  row (`tabSwitchListRoom`); a sheet over the tabs leaves none (`overTabSwitch`). While the keyboard is up the switch fades away
+  (on the outer display too) and the composer takes the whole width back. The counts hang off a segment's corner toward the page:
+  Agents' Needs You, and Persona's as its system tab showed it (`TabBadges.assistant`). Merged (the default where the Duo is open) is
+  unchanged; the iPad keeps the system's tab bar, an ordinary iPhone the top switch. Tests: `TabSwitchLayoutTests` (the placement, the
+  sizes, the rooms, the choice kept), `DuoTabSwitchTests` (UI, each posture: one capsule of symbols at the corner, the count toward the
+  page, each segment's page, the keyboard, Merged and Separate at once and after a relaunch). Built with Xcode 26 the bar edge is never
+  read, so the open Duo on its side gets the floating switch.
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
-  Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column. What follows is
-  the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
+  Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
+  system's tab bar gave way to the upright switch, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
@@ -992,8 +1014,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
   what is in front, so a relaunch goes back to the Agent's chat that was open.
 - **The Separate layout at regular width** (#4206, the owner's new look; it replaced #6332's pixel-for-pixel tabs and
-  #2623's switch drawn on the open Duo's pages): the system's tab bar (at the top on the iPad, down the side on the open
-  Duo on its side), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
+  #2623's switch drawn on the open Duo's pages): the system's tab bar at the top on the iPad; on the open Duo the shell's
+  upright switch in its place at the bottom-trailing corner (#4231, "iPhone Duo"), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
   and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
   `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
   it until an Agent is picked, which then is the page's root, put in place with no push (#8603, as the Sidebar layout's
@@ -1007,7 +1029,7 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
   would be, the setting switching both ways at once, nothing picked: Separate), `SidebarRootsUITests` (a pick replaces the
-  root, a drill-down pushes, each root keeps its drill-down; iPad, open Duo, iPhone), `SidebarPageRootsTests` (the rule). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
+  root, a drill-down pushes, each root keeps its drill-down; iPad, open Duo, iPhone), `SidebarPageRootsTests` (the rule), `DuoTabSwitchTests` (iPhone Duo: Merged and Separate switched at once and kept, #4231). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)

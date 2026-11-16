@@ -1,5 +1,31 @@
 # Lessons: web UI and interactions
 
+## A stalled export page is incomplete history (#9430)
+
+When a page promised older history, an empty page or one without an older new item must stop paging and mark the export
+partial. A page outside the requested range must not overwrite collected messages. Show the incomplete warning even
+when no usable timestamp was returned; a file that stopped safely must not look complete.
+
+## Historical times need their own UTC offset (#9422)
+
+Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
+and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+
+## ZIP preview limits must check actual bytes (#9384)
+
+A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate
+stream to inflate far beyond the limit. Count the streamed output and cancel on overflow; also bound the directory
+range before requesting it. Exercise both with forged ZIP metadata, not only normal generated archives. A Range
+request can also receive a full 200 or a malformed 206: bound the HTTP body itself, validate the returned range,
+and test with real streamed responses (#9405).
+
+## Vite module IDs use forward slashes on Windows (#9341)
+
+`fileURLToPath` returns host-native paths, while Vite's module IDs use forward slashes. Normalize config directories
+with Vite's `normalizePath` before comparing allowlisted module IDs or removing build-machine paths from a graph.
+Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
+the rejection of an injected module outside the allowed graph.
+
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
 Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.

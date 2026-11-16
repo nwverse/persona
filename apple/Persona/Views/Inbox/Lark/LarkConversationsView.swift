@@ -161,6 +161,7 @@ private struct LarkConversationsPage: View {
             }
             .listStyle(.plain)
             .listSectionSpacing(0)
+            .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
             .accessibilityIdentifier("feishu-conversations")
             .onAppear {
                 store.willChange = { [weak scroll] in scroll?.reader.willChange() }
