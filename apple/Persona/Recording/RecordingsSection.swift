@@ -30,6 +30,8 @@ struct RecordingsSection: View {
     #endif
     /// The recording a swipe asked to delete (its row shows the confirmation), and why a delete failed.
     @State private var pendingDelete: UUID?
+    /// The row's recording while Rename is open (#8873).
+    @State private var renaming: UUID?
     @State private var failure: String?
 
     var body: some View {
@@ -107,6 +109,11 @@ struct RecordingsSection: View {
                 } else {
                     NavigationLink { RecordingDetailView(id: entry.id) } label: { RecordingRow(entry: entry) }
                         .accessibilityIdentifier("recording-row")
+                        // Rename (#8873): a touch and hold, and VoiceOver's actions (a menu is no control of its own).
+                        .contextMenu {
+                            Button { renaming = entry.id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
+                        }
+                        .accessibilityAction(named: Text("Rename")) { renaming = entry.id }
                         // Only the swiped row's dialog shows, so its popover points at that row.
                         .confirmationDialog("Delete This Recording?", isPresented: Binding(get: { pendingDelete == entry.id }, set: { if !$0, pendingDelete == entry.id { pendingDelete = nil } }),
                                             titleVisibility: .visible) {
@@ -138,6 +145,7 @@ struct RecordingsSection: View {
                 .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                     Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
                 } message: { Text(failure ?? "") }
+                .recordingRename($renaming)
             }
         } footer: {
             if let problem = sync.problem ?? library.error {
