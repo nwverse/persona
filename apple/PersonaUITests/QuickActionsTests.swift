@@ -10,8 +10,8 @@ final class QuickActionsTests: XCTestCase {
     private static let review = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private static let reviewTitle = "检查 PR #42 的改动"
     private static let reviewMessage = "看一下 PR #42"
-    /// The menu's Record (#2949; Record a Meeting until #5243).
-    private static let recordTitle = "录音"
+    /// The menu's Start Meeting (#2949; Record a Meeting until #5243, Record until #8731).
+    private static let recordTitle = "开始会议"
     /// Another demo Agent's chat, its title and the start of its first message.
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let widgetTitle = "给天气 App 加主屏幕小组件"

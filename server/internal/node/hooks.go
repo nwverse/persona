@@ -468,7 +468,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
-		return n.larkGate(ctx, in, ix)
+		return n.larkGateWithEdit(ctx, in, ix)
 
 	case in.HookEventName == "PostToolUse" && in.ToolName == "AskUserQuestion":
 		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
@@ -837,6 +837,9 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	}
 	if res.Dismiss {
 		return res, false, nil
+	}
+	if ix.EditableText != "" && res.EditedText != "" {
+		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
 }
