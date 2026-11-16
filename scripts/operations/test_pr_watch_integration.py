@@ -179,7 +179,10 @@ class WatcherIntegrationTests(unittest.TestCase):
         config["repositories"][0]["close_stale"] = True
         self.config_path.write_text(json.dumps(config))
         self.state_path.write_text(json.dumps(state))
-        self.run_watch()  # initialize the reviewed configuration fingerprint
+        (self.root / "watch-state.json").write_text(json.dumps({"version": 1, "prs": {}}))
+        migration = subprocess.run([sys.executable, "-I", str(WATCH), "--config", str(self.config_path), "--migrate-config"],
+                                  cwd=self.root, env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(migration.returncode, 0, migration.stdout + migration.stderr)
         watcher_state = self.root / "watch-state.json"
         watcher_state.write_text(json.dumps({"version": 1, "prs": {"example/one#7": {
             "head": self.head, "evidence_key": "example/one#7@" + self.base + ".." + self.head,

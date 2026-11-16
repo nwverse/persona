@@ -127,9 +127,10 @@ class State:
                 item.clear()
                 item["head"] = head
             # Omitted diagnostics retain prior evidence; None explicitly clears it.
-            if "failure" in fields and fields["failure"] is None:
-                fields.pop("failure", None)
-                item.pop("failure", None)
+            for field in ("failure", "repair_exhausted", "published_failure"):
+                if field in fields and fields[field] is None:
+                    fields.pop(field, None)
+                    item.pop(field, None)
             item.update(fields)
             item["updated_at"] = int(time.time())
             atomic_json(self.path, self.data)
@@ -1046,7 +1047,7 @@ class Watcher:
                 outcome = "passed_with_findings" if old.get("findings") else "passed"
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  outcome=outcome, retry_reason=None, retry_after=0)
-        if old.get("head") == head and old.get("format") == FORMAT_VERSION \
+        if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("format") == FORMAT_VERSION \
                 and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry", "reviewed") \
                 and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure")) \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
@@ -1151,7 +1152,8 @@ class Watcher:
                         if current.get("head") != head or current.get("evidence_key") != evidence_key:
                             self.state.put(repo, number, head, evidence_key=evidence_key,
                                            base=pr["baseRefOid"], repair_rounds=rounds,
-                                           repair_exhausted=False)
+                                           repair_exhausted=None, failure_posted=False,
+                                           published_failure=None, failure=None)
                         if not self.state.get(repo, number).get("repair_exhausted"):
                             self.exhaust_repair(repo, number, pr, evidence_key,
                                                 "The PR still conflicts with main after %d repair rounds; no further base update was attempted." % REPAIR_LIMIT)

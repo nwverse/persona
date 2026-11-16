@@ -1141,6 +1141,20 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(locked)
         self.assertNotEqual(pr_watch.State(self.watcher.state.path).data["config_fingerprint"], "previous")
 
+    def test_resume_requires_the_exact_base_as_well_as_head(self):
+        new_base = "d" * 40
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="passed", semantic="passed",
+                               verification="passed", findings=[], success_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(baseRefOid=new_base)), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        verify.assert_called_once()
+
     def test_base_change_invalidates_same_head_evidence(self):
         new_base = "d" * 40
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(baseRefOid=new_base), pr(baseRefOid=new_base)]), \
