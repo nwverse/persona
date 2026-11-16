@@ -401,8 +401,10 @@ func TestARunThatCancelsItsOwnTaskCanScheduleItAgain(t *testing.T) {
 			h.recordRun(ScheduleRun{Kind: "routine", RefID: "fu_1", Title: title, At: time.Now().Add(-27 * time.Minute), Status: runOK,
 				MachineID: "server", SessionID: "run-1"})
 			if tc.by == "app" {
-				if ok, err := h.deleteTask(ctx, "fu_1"); !ok || err != nil {
-					t.Fatalf("delete: %v %v", ok, err)
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/v1/assistant/tasks/fu_1", nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("delete in the app: %d %s", rec.Code, rec.Body)
 				}
 			} else if out, err := h.runTool(ctx, "server", tc.by, "cancel_followup", json.RawMessage(`{"id":"fu_1"}`)); err != nil || out != "Cancelled." {
 				t.Fatalf("cancel: %q %v", out, err)
