@@ -48,7 +48,9 @@ unchanged fixtures through every pure C projection: sort's `empty_list`, `person
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
-`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
@@ -66,8 +68,11 @@ corpus plus overlay, and separately replays the existing replacement through the
 runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
-fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
-gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
+visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+The fence-only StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation, partial markers
+and malformed/wrong-expected controls. Tables, inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
@@ -77,7 +82,8 @@ checks real JNI output, malformed input and a wrong expectation. It does not pro
 consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
 projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
 real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
-path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. This is not
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
+optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
 full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
@@ -250,6 +256,22 @@ JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below);
   which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
   text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
+
+### Source-derived WebSocket Envelope projection (#8955)
+
+`persona_core::wire_envelope` is a pure diagnostic projection of the narrow current-iOS slice in
+`spec/fixtures/wire-envelope`: the shared scalar and raw-JSON envelope keys, `mesh` / `fleet` tolerance, unknown
+types, and routing requirements for `hello`, `inbox`, `items`, `fleet`, `screen` and `sessions_list`. It returns
+accepted, ignored or dropped with the documented projected fields; known event types outside that set return
+`out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
+The existing continuity transport behavior and its known differences are unchanged.
+
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
+the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
+malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`
+extreme floating-point behavior and full Item / Fleet models remain explicitly limited in the domain README.
+Neither replay executed Swift, iOS, a simulator, a production adapter or a physical device.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 

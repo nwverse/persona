@@ -9303,6 +9303,14 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+# MOCK_EDITABLE=1: a Claude Code Lark approval whose outgoing text may be edited before Allow, plus a deny note.
+if os.environ.get("MOCK_EDITABLE") == "1":
+    INTERACTIONS.append({
+        "id": "ix_editable_lark", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+        "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+        "tool_name": "Bash", "summary": "回复发布群：测试已经通过，准备发版",
+        "tool_input": {"command": "lark api POST /conversations/oc_example/messages --body '{\"text\":\"测试已经通过，准备发版\"}'"},
+        "editable_text": "测试已经通过，准备发版"})
 
 # MOCK_ASK_LONG=1: Persona's main conversation waits on an ask_user card taller than a phone's dock (#3112): two
 # questions, the first with eight options that have descriptions, so the card has to scroll for the last ones.

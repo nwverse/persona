@@ -1,3 +1,4 @@
+import { conversationDeleted, conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 // Messages other pages send for a conversation ("Ask Persona" from "Knowledge", "Hand to AI" from the inbox, a new Persona conversation):
 // the page moves to the conversation at once and the message shows there as a sending bubble until the transcript has
 // it, as the app's outbox does (AppModel.sendNow / askPersona). A failed one stays with the reason, "Retry" and "Delete",
@@ -176,6 +177,7 @@ function list(key: string): OutboxEntry[] {
 
 /** Keep messages until their transcript copy arrives, they expire, or the user deletes them. */
 function write(key: string, next: OutboxEntry[]) {
+  if (conversationKeyDeleted(key)) return;
   const before = list(key);
   setOutbox(key, next);
   for (const e of before) if (!next.some((x) => x.id === e.id)) forgetOutgoing(key, e.id);
@@ -265,6 +267,7 @@ type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" |
 /** Keeps one message's words until its transcript copy arrives (pictures are not kept: they would fill the
  *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
 export function keepOutgoing(key: string, e: Outgoing) {
+  if (conversationKeyDeleted(key)) return;
   if (!e.text.trim()) return;
   try {
     storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
@@ -276,6 +279,7 @@ export function keepOutgoing(key: string, e: Outgoing) {
 /** HTTP acceptance keeps the bubble pending across reloads, but never revives a copy already settled by an echo
  *  (possibly in another tab) before the HTTP response arrived. */
 export function acceptOutgoing(key: string, id: string, acceptedAt = Date.now()) {
+  if (conversationKeyDeleted(key)) return;
   // Navigation can restore the message while its original page's POST is still open. Update that existing bubble
   // too; the original component's setPending no longer reaches it. An already settled entry stays absent.
   const entries = list(key);
@@ -322,6 +326,7 @@ const restored = new Set<string>();
  *  settled (settle) before it shows.
  *  `inFlight`: ids this page is sending right now, which already have their bubble. */
 export function restoreOutbox(mid: string, sid: string, inFlight: string[] = []) {
+  if (conversationDeleted(mid, sid)) return;
   const key = outboxKey(mid, sid);
   const first = !restored.has(key);
   restored.add(key);
@@ -348,11 +353,33 @@ export function resetRestoredForTests() {
   restored.clear();
 }
 
+/** How the node says your own message went into a Claude outside Persona's terminals (session.send's answer). */
+export type DeliveryReply = { delivered_as?: string; relay_reason?: string };
+
+/**
+ * What to tell you when your own message to a Claude with Persona's plugin went through its message inbox instead of
+ * as your input (docs/integrations/claude-integration.md "Owner input through the Persona plugin"): the Agent may not
+ * take it as your approval. Nothing when it went in as your input, or when the session has no plugin (it always used
+ * the inbox there, and its row says so).
+ */
+export function relayNotice(reply?: DeliveryReply): string | undefined {
+  if (reply?.delivered_as !== "relayed") return undefined;
+  switch (reply.relay_reason) {
+    case "busy":
+      return t("lib-outbox.relayed_busy");
+    case "plugin_unavailable":
+    case "plugin_refused":
+    case "plugin_unconfirmed":
+      return t("lib-outbox.relayed_plugin");
+  }
+  return undefined;
+}
+
 async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: string, flight = beginMessageSend(mid, sid, e.id, e.text)): Promise<boolean> {
   const key = outboxKey(mid, sid);
   try {
     // stays sending through a gap (a hub restart); the client_msg_id is the op id
-    const r = await inSendOrder(key, () => apiOp<{ launcher_note?: string; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+    const r = await inSendOrder(key, () => apiOp<({ launcher_note?: string; waits_on_computer?: boolean } & DeliveryReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
       ...flight.request,
       method: "POST",
       opId: e.id,
@@ -364,6 +391,8 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
     // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
     if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
+    const relayed = relayNotice(r);
+    if (relayed) toast(relayed, "info");
     return true;
   } catch (err) {
     if (!flight.current()) return false;
@@ -613,3 +642,9 @@ export function adoptConversation(owner: string | undefined, sid: string, machin
 export function adoptedConversation(sid: string): { machine: string; manager?: string } | undefined {
   return homes.get(sid);
 }
+
+onConversationDeleted((mid, sid) => {
+  const key = outboxKey(mid, sid);
+  for (const entry of keptEntries(key)) forgetOutgoing(key, entry.id);
+  restored.delete(key);
+});
