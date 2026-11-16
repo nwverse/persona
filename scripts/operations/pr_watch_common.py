@@ -110,7 +110,7 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
             # this way. Other Git failures retain their original diagnostic.
             remote_name = argv[3] if len(argv) > 3 else "origin"
             original_refspecs = argv[4:]
-            refspecs = [refspec.split(":", 1)[0].lstrip("+") for refspec in original_refspecs]
+            refspecs = [refspec.rsplit(":", 1)[0].lstrip("+") for refspec in original_refspecs]
             remote_refspecs = [refspec if refspec.startswith("refs/") else "refs/" + refspec for refspec in refspecs]
             if remote_name.startswith("-") or any(refspec.startswith("-") for refspec in refspecs):
                 raise WatchError("cannot recover an unsafe fetch refspec")
@@ -128,8 +128,8 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
                     checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
                             timeout=60, environ=environ)
                     original_refspec = next(value for value in original_refspecs
-                                            if (value.split(":", 1)[0].lstrip("+") == entries[0][1]
-                                                or "refs/" + value.split(":", 1)[0].lstrip("+") == entries[0][1]))
+                                            if (value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]
+                                                or "refs/" + value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]))
                     if ":" in original_refspec:
                         destination = original_refspec.split(":", 1)[1]
                         if not destination.startswith("refs/"):

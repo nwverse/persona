@@ -744,7 +744,16 @@ class Watcher:
                 return False
             else:
                 reason = old.get("failure") or "The previous repair budget was exhausted without a recorded diagnostic."
-                self.comment(repo, number, "The previous repair budget was exhausted. The last failure was:\n\n```text\n%s\n```\n\nThe new three-round budget permits one more repair attempt." % bounded(reason, 12000))
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="repair_comment_pending", repair_comment_posted=False,
+                                     failure=reason)
+                try:
+                    self.comment(repo, number, "The previous repair budget was exhausted. The last failure was:\n\n```text\n%s\n```\n\nThe new three-round budget permits one more repair attempt." % bounded(reason, 12000))
+                except WatchError as error:
+                    self.state.put(repo, number, head, evidence_key=evidence_key,
+                                   outcome="repair_comment_pending", repair_comment_posted=False,
+                                   comment_failure=str(error), failure=reason)
+                    return False
                 old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                      outcome="retry", retry_after=0, failure=None,
                                      repair_comment_posted=True)

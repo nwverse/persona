@@ -108,7 +108,9 @@ def remove_worktree(checkout, state_file, path):
             if registration is not None and registration.exists():
                 raise WatchError("worktree registration remains after pruning: " + bounded(result.stderr, 800))
             if candidate.exists():
-                shutil.rmtree(str(candidate))
+                if any(candidate.iterdir()):
+                    raise WatchError("refusing to recursively delete nonempty worktree debris: " + bounded(result.stderr, 800))
+                candidate.rmdir()
     run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     if candidate.exists():
         raise WatchError("Git returned success but the watcher-owned worktree still exists")

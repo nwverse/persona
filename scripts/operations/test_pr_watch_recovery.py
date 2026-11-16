@@ -48,8 +48,6 @@ class RecoveryIntegrationTests(unittest.TestCase):
     def test_disk_pressure_reclaims_only_inactive_watcher_worktrees(self):
         stale = self.worktrees / "persona-7-old"
         stale.mkdir()
-        (stale / "file").write_text("old")
-        (stale / ".git").write_text("gitdir: " + str(self.checkout / ".git/worktrees/persona-7-old") + "\n")
         os.utime(stale, (1, 1))
         active = self.worktrees / "persona-8-active"
         active.mkdir()
@@ -95,10 +93,20 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.assertTrue(registered.exists())
         self.assertTrue(registration.exists())
 
-    def test_missing_worktree_registration_is_pruned_before_fallback_cleanup(self):
+    def test_missing_registration_never_deletes_a_nonempty_checkout(self):
         broken = self.worktrees / "persona-7-broken"
         broken.mkdir()
         (broken / "file").write_text("orphan")
+        with patch.object(pr_watch_recovery, "run", side_effect=[
+                subprocess.CompletedProcess([], 128, "", "not a working tree"),
+                subprocess.CompletedProcess([], 0, "", "")]):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_recovery.remove_worktree(self.checkout, self.state, broken)
+        self.assertTrue(broken.exists())
+
+    def test_empty_mkdtemp_reservation_can_be_removed(self):
+        broken = self.worktrees / "persona-7-empty"
+        broken.mkdir()
         with patch.object(pr_watch_recovery, "run", side_effect=[
                 subprocess.CompletedProcess([], 128, "", "not a working tree"),
                 subprocess.CompletedProcess([], 0, "", ""),
