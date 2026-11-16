@@ -34,7 +34,11 @@ export function TaskWaitInfo({ todo, merges = [], expanded = false }: { todo: To
     <p className="text-ink-3">{t(todo.supervision?.parked?.evidence ? "task-wait.evidence_note" : "task-wait.missing_evidence_note")}</p>
   </>;
   return <div data-task-wait-info={todo.id} data-wait-kind={info.kind} data-wait-overdue={info.overdue ? "true" : "false"}
-    className="min-w-0 space-y-1 text-xs text-ink-2" onClick={(event) => event.stopPropagation()}>
+    className="min-w-0 space-y-1 text-xs text-ink-2" onClick={(event) => {
+      const target = event.target;
+      // Plain waiting text still opens its task row; links, disclosure, actions and the portalled editor do not.
+      if (!(target instanceof Element) || !event.currentTarget.contains(target) || target.closest("a, button, summary, input, textarea")) event.stopPropagation();
+    }}>
     <div className={cx("flex flex-wrap items-baseline gap-x-2 gap-y-1", info.overdue && "text-red")}>
       <span data-wait-target className="min-w-0 break-words">{t(`task-wait.kind_${info.kind}`)}{t("task-wait.target", { target })}</span>
       <span data-wait-age className="min-w-0 break-words tabular-nums" title={info.since ? new Date(info.since).toISOString() : undefined}>{age}</span>

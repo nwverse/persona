@@ -130,4 +130,21 @@ describe("task wait information", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(JSON.stringify(todo)).toBe(snapshot);
   });
+
+  it("lets waiting text select its task row while controls and the portalled draft remain separate", async () => {
+    const select = vi.fn();
+    const todo = makeTodo({ kind: "person_reply", target: "Design team", wake: "They reply", contact });
+    await act(async () => root.render(<div onClick={select}><TaskWaitInfo todo={todo} /></div>));
+    await act(async () => host.querySelector<HTMLElement>("[data-wait-target]")!.click());
+    expect(select).toHaveBeenCalledTimes(1);
+    const link = host.querySelector<HTMLAnchorElement>("[data-wait-contact]")!;
+    link.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    await act(async () => link.click());
+    await act(async () => host.querySelector<HTMLElement>("summary")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="wait-reminder"]')!.click());
+    await act(async () => document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === "Cancel")!.click());
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

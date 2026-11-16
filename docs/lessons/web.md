@@ -11,6 +11,8 @@ Do not hide the growth with an exemption or a larger budget.
 The existing New main chat dialog is another cold caller: keep its menu entry and current-main warning ready,
 but leave its confirmation and carry-summary copy with the dialog. The build's literal-key check verifies that
 no first-screen caller loses a phrase; narrowing catalog prefixes does not rename keys or change the dialog.
+On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
+on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
 
 ## ZIP preview limits must check actual bytes (#9384)
 
