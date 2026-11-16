@@ -195,8 +195,10 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
   requests fail and the tool reports it.
 - **Home** needs the HomeKit capability on the App ID and the `com.apple.developer.homekit` entitlement, a signing change for the owner of the
   developer account. Until a build sets both and `PERSONA_HOMEKIT=YES` (Info.plist `PersonaHomeKit`, `HomeAccess.isBuilt`), the Home source is not
-  shown and its tools are never offered. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
-- **Share Extension** (#2282): files and choosing the conversation are #1460; nothing changed here.
+  shown and its tools are never offered. Both come from one switch: config.json `app.homekit: true` makes `scripts/persona_config.py xcconfig` add
+  the entitlement to the generated `apple/PersonaOptIn.entitlements` and write `PERSONA_HOMEKIT = YES` (`docs/operations/config.md`); turn the
+  capability on for the App ID first. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
+- **Share Extension** (#2282): Share › Persona from any app (Safari pages as title and link, Photos pictures, Files and other apps' files, text) is a separate path from these tools and from the composer's photo, camera and file pickers; it is described in `docs/apple/ios.md` ("Share to Persona (#4586, #1460)").
 
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.

@@ -4,6 +4,7 @@
   "evening": "晚间回顾",
   "unavailable": "暂时读不到定时任务（数据库没有响应），过一会儿再试",
   "save_failed": "无法保存定时任务，更改未生效，请重试。",
+  "task_state_changed": "任务状态笔记已更新。请重新打开编辑器后再试。",
   "prompt_empty": "提示词不能为空",
   "time_format": "时间 {time} 要写成 HH:MM",
   "daily_title": "每天运行的任务要有标题",
@@ -41,5 +42,8 @@
   "cron_month": "月份（1–12 或 JAN–DEC）",
   "cron_day_of_week": "星期（0–7 或 SUN–SAT，0 和 7 都是周日）",
   "cron_often": "{cron} 两次运行只隔 {gap} 分钟。定时任务最多每 {min} 分钟运行一次。",
-  "cron_never": "{cron} 永远不会运行：未来 5 年里没有符合的日期。"
+  "cron_never": "{cron} 永远不会运行：未来 5 年里没有符合的日期。",
+  "run_if_approval": "允许在每次定时运行前，在任务电脑上执行此命令吗？",
+  "run_if_skipped": "运行前检查要求跳过本次运行。",
+  "run_if_failed": "运行前检查失败：{error}"
 }

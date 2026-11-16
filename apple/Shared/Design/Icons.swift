@@ -596,8 +596,10 @@ extension Theme {
         static let chatBot = "message.badge.waveform"
         /// Settings › Channels: the ways of talking to Persona (docs/extensions/channels.md).
         static let channels = "ellipsis.bubble"
-        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat).
-        static let voiceChannel = "waveform.and.mic"
+        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat): a
+        /// handset, since it is a call with Persona and sits beside dictation's microphone (#8730). Filled, apart from
+        /// `phoneCall` (the phone's own calls).
+        static let voiceChannel = "phone.fill"
         /// The voice conversation's bar (docs/assistant/voice.md「UI」). Mute: turns the call's microphone off; muted, the button
         /// shows `voiceUnmute` (Unmute), the same mic filled like a toggle that is on, as the iOS Phone app's Mute. The muted
         /// orb wears `voiceMute`.
