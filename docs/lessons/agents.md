@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+- Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
+  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
+  `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
+  `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
@@ -12,6 +17,16 @@ check. This demonstrates the confirmation gap, not the cause of any particular l
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
 
+## A start-turn into a running Codex App turn is delivered twice (2026-11-17, #9416)
+
+The Codex App's bus offers a follower only `thread-follower-start-turn`. Into a running turn Codex's app-server steers it
+(`start_or_steer_turn`), and the App then runs the same request again as a new turn once the running one ends. The
+Agent answers it mid-turn, then starts over on it, while Persona's own read of the chat shows it once. Before asking the
+App for a turn, look whether one runs (rollout tail, or the history database for a chat without a rollout) and hold the
+message on the node until it ends; count a turn the node just started as running until the App writes it down, or two
+sends in a row steer the second into the first's turn. On Codex's own app-server, steer with `turn/steer` and the
+observed turn id instead; never send both a steer and a start for one message.
+
 ## Task branch reuse is not forced worktree creation (#8357)
 
 An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,
@@ -21,6 +36,10 @@ Persist reuse separately from creation and keep its machine/path on retry; do no
 
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
+
+- A native terminal Codex start must preserve a user's same-name `codex()` function (#4876), not just find the executable. `codex-start` used to bypass it, losing launcher environment while a normal terminal command worked; the assistant app-server fix (#3707) did not cover this path. Pass the launcher and prompt as positional arguments to the interactive shell, never interpolate them as shell code, and keep the shell inside the agent sandbox.
+  Fake-launcher tests must isolate rc paths such as `ZDOTDIR`, not just `HOME`: an inherited rc directory can otherwise load the user's real startup file and change the fake executable or flags.
+  A native launcher must prefer the user's supported login shell even when another shell's rc file exists; test with both rc files present, not just one.
 
 ## A saved task name can disappear without another model failure (#7337)
 
@@ -1028,6 +1047,15 @@ screen, saw a queue in the transcript and no hint.
   they are (`ESC [1;5F` for ctrl+End), which Claude Code reads as the key.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
+
+## Rewind positions are not message identities (#9410)
+
+AGY reused a user step's numeric ID after rewind, so the node attached an earlier send's persisted client message ID
+to a new input. The current pending bubble could not settle, and reply caches could reuse abandoned content. Keep
+pagination position separate from immutable item identity: native birth time plus a cumulative replacement generation
+distinguishes even repeated prompts with identical timestamps. Preserve prefix and same-step IDs, namespace tool-call
+pairing too, and invalidate old cached pages once. Test normal runtime pages and full-item reads across append and
+complete-file replacement; fresh sessions and distinct sequential prompts do not exercise reused identities.
 
 ## An installed CLI is not an explicit runtime override (#9181)
 

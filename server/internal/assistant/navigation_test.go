@@ -144,3 +144,55 @@ func TestNavigationOnDatabase(t *testing.T) {
 		t.Fatalf("another service on the database read %d %v", code, got)
 	}
 }
+
+// The sidebar's arrangement (#9071 groups) is kept beside the start page: a PUT of one leaves the other, the apps are
+// told only what changed, and an arrangement of another shape changes nothing.
+func TestNavigationSidebarPages(t *testing.T) {
+	s, hub := navigationService(t, newSettingsBoardStore())
+	pages := `{"order":["p:example-today/today","home"],"shown":[],"hidden":["kb"],` +
+		`"groups":[{"id":"workbench","title":"Work"},{"id":""},{"id":"u:a1b2","title":"生活"}],` +
+		`"assign":{"p:example-today/today":"workbench","routines":"u:a1b2","inbox":""},"removed":["assets"]}`
+	navigationCall(t, s, "PUT", `{"start":"inbox"}`, roleFull)
+	hub.take()
+	code, got := navigationCall(t, s, "PUT", `{"pages":`+pages+`}`, roleFull)
+	if code != http.StatusOK || got["start"] != "inbox" || got["pages"] == nil {
+		t.Fatalf("PUT pages: %d %v", code, got)
+	}
+	sent := hub.take()
+	if len(sent) != 1 || sent[0]["type"] != "navigation" || sent[0]["pages"] == nil {
+		t.Fatalf("told %v", sent)
+	}
+	if _, has := sent[0]["start"]; has {
+		t.Fatalf("a change of the pages told the start page again: %v", sent[0])
+	}
+	_, got = navigationCall(t, s, "GET", "", roleFull)
+	p, _ := got["pages"].(map[string]any)
+	if got["start"] != "inbox" || p == nil || len(p["groups"].([]any)) != 3 || p["assign"].(map[string]any)["routines"] != "u:a1b2" {
+		t.Fatalf("GET: %v", got)
+	}
+	navigationCall(t, s, "PUT", `{"start":"kb"}`, roleFull)
+	if _, got = navigationCall(t, s, "GET", "", roleFull); got["pages"] == nil || got["start"] != "kb" {
+		t.Fatalf("a change of the start page kept the pages: %v", got)
+	}
+	hub.take()
+	long := `"` + strings.Repeat("长", 41) + `"`
+	for _, bad := range []string{
+		`{"pages":{"order":[""],"shown":[],"hidden":[]}}`,
+		`{"pages":{"order":["Not A Key"],"shown":[],"hidden":[]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"groups":[{"id":"work"},{"id":"work"}]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"groups":[{"id":"u:x1"}]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"groups":[{"id":"Work Bench","title":"x"}]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"groups":[{"id":"u:x1","title":` + long + `}]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"removed":["u:x1"]}}`,
+		`{"pages":{"order":[],"shown":[],"hidden":[],"assign":{"inbox":"Not An Id"}}}`,
+		`{"pages":{"order":[` + strings.Repeat(`"home",`, sidebarPagesMost) + `"home"],"shown":[],"hidden":[]}}`,
+		`{"pages":1}`,
+	} {
+		if code, _ := navigationCall(t, s, "PUT", bad, roleFull); code != http.StatusBadRequest {
+			t.Fatalf("PUT %.80s: %d, want 400", bad, code)
+		}
+	}
+	if sent := hub.take(); len(sent) != 0 {
+		t.Fatalf("refused arrangements told the apps %v", sent)
+	}
+}
