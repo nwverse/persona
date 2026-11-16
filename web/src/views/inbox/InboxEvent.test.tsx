@@ -47,7 +47,8 @@ vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined, translatesChat: () => false, translatesMail: () => false, languageName: () => "" }));
 
 import type { InboxItem } from "../../lib/inbox";
-import { resetInboxForTests, shortTime, sourceLine } from "../../lib/inbox";
+import { resetInboxForTests, shortTime } from "../../lib/inbox";
+import { sourceLine } from "../../lib/inbox-page";
 import { rowMeta } from "../../lib/inbox-now";
 import { chainRows, type ChainEntry } from "../../lib/inbox-events";
 import { ApiError } from "../../lib/api";
@@ -293,6 +294,26 @@ describe("收件箱事件：详情", () => {
     expect(other.querySelector("[data-chain-detail]")?.textContent).toBe("The basis");
     act(() => root.render(<EventBody item={{ ...item, chain: [{ id: "reported-legacy", kind: "reported", text: "Assistant says: legacy words", detail: " \n " }] }} onSource={() => {}} />));
     expect(row("reported-legacy").querySelector("button span.truncate")?.textContent).toBe("Assistant says: legacy words");
+  });
+  it("draws an assistant row's text as Markdown, and an older row's chain message without its marks (#9041)", async () => {
+    const assistant: InboxItem = {
+      ...plain(reply), id: "assistant:s3", source: "assistant", kind: "assistant_post", handling: undefined, suggestion: undefined, now: undefined, recap: undefined,
+      summary: "Briefing · Mon Today: one tutorial. Classes Tutorial Short quiz", preview: "Briefing · Mon Today: one tutorial…",
+      body: "**Briefing · Mon**\nToday: one tutorial.\n\n**Classes**\n- **Tutorial**\n- Short quiz",
+      chain: [{ id: "c1", kind: "received", text: "1 new message", count: 1, messages: [{ text: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tut…" }] }],
+    };
+    act(() => root.render(<EventBody item={assistant} onSource={() => {}} />));
+    const text = host.querySelector("[data-event-text]")!;
+    expect(text.querySelector("strong")?.textContent).toBe("Briefing · Mon");
+    expect(text.querySelectorAll("li")).toHaveLength(2);
+    expect(text.textContent).not.toContain("**");
+    expect(host.querySelector("[data-event-summary]")).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-chain-id="c1"] button')!.click());
+    expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail]')?.textContent).toBe("**Briefing · Mon** Today: one tutorial. **Classes** - **Tut…");
+    expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail] p')?.className).toContain("line-clamp-3"); // its whole text is above
+    act(() => root.render(<EventBody item={{ ...assistant, body: undefined, summary: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tutorial** - Short quiz" }} onSource={() => {}} />));
+    expect(host.querySelector("[data-event-text] strong")?.textContent).toBe("Briefing · Mon");
+    expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail]')?.textContent).toBe("Briefing · Mon Today: one tutorial. Classes Tut…");
   });
   it("labels each kind's buttons", () => {
     act(() => root.render(<EventBody item={agentSuggestion} onSource={() => {}} />));

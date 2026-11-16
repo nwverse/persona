@@ -27,6 +27,26 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun assistantConnectorKeepsItsConversationUrl() = runTest {
+        val directory = Files.createTempDirectory("assistant-connector-url").toFile()
+        val url = "https://hub.example.com/chat/server/session-1"
+        try {
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(buildJsonObject {
+                    put("id", "assistant:1"); put("source", "assistant"); put("kind", "assistant_post")
+                    put("account_name", "Assistant"); put("title", "Morning briefing"); put("preview", "Ready")
+                    put("connector", buildJsonObject {
+                        put("thread", "server/session-1"); put("label", "Assistant"); put("url", url)
+                    })
+                }))
+            }
+            val repository = repository(transport, directory, backgroundScope, FakeHub())
+            val record = repository.snapshot.first { it.records.isNotEmpty() }.records.single()
+            val connector = JsonCodec.encodeToJsonElement(InboxConnectorRef.serializer(), record.connector!!).jsonObject
+            assertEquals(url, connector["url"]?.jsonPrimitive?.content)
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
         val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
         try {
@@ -34,33 +54,32 @@ class InboxRepositoryTest {
             val hub = FakeHub()
             val repository = repository(transport, directory, backgroundScope, hub)
             repeat(5) { backgroundScope.launch { repository.snapshot.collect() } }
-            val initial = settledCalls(transport)
+            val initial = completedRefreshCalls(repository, transport, 1)
             assertTrue(initial > 0)
             advanceTimeBy(60_000); runCurrent()
             assertEquals("shell and capsule subscribers must not start fast full-list polling", initial, transport.inboxCalls.get())
             hub.events.emit(InboxEvent())
             runCurrent()
             advanceTimeBy(1_001)
-            assertEquals(initial + 1, settledCalls(transport))
+            assertEquals(initial + 1, completedRefreshCalls(repository, transport, initial + 1))
             advanceTimeBy(300_000)
-            assertEquals("a slow poll still covers a missed event", initial + 2, settledCalls(transport))
+            assertEquals("a slow poll still covers a missed event", initial + 2, completedRefreshCalls(repository, transport, initial + 2))
         } finally { directory.deleteRecursively() }
     }
 
     /**
-     * Refreshes cross real IO threads; waiting for them with a suspending `first` lets virtual time jump ahead to the
-     * slow poll. Wait in real time instead, until the hub stops being called.
+     * Refreshes cross real IO threads; suspending on the snapshot lets virtual time jump to the slow poll.
+     * Pump current work in real time until the expected refresh publishes its result. An unchanged request count
+     * can still mean the previous refresh holds its lock while real IO runs.
      */
-    private fun TestScope.settledCalls(transport: FakeTransport): Int {
-        val deadline = System.currentTimeMillis() + 5_000
-        var calls = -1
-        while (System.currentTimeMillis() < deadline) {
-            runCurrent(); Thread.sleep(50); runCurrent()
-            val now = transport.inboxCalls.get()
-            if (now == calls && now > 0) return now
-            calls = now
+    private fun TestScope.completedRefreshCalls(repository: RealInboxRepository, transport: FakeTransport, refreshes: Int): Int {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (System.nanoTime() < deadline) {
+            runCurrent()
+            if (repository.snapshot.value.refreshes >= refreshes) return transport.inboxCalls.get()
+            Thread.yield()
         }
-        error("refreshes did not settle")
+        error("refresh $refreshes did not finish; completed ${repository.snapshot.value.refreshes}")
     }
 
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {

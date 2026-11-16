@@ -197,6 +197,8 @@ func TestParseTimeline(t *testing.T) {
 		{"not an object", `[1,2]`, false, nil},
 		{"a string", `"x"`, false, nil},
 		{"unknown role", `{"roles":[{"at":0,"attendance":"speaker"}]}`, false, nil},
+		{"notes (#8851)", `{"roles":[{"at":0,"attendance":"notes"},{"at":30,"attendance":"Listener"}]}`, true,
+			&Timeline{Roles: []TimelineRole{{0, AttendanceNotes}, {30, AttendanceListener}}}},
 		{"role without at", `{"roles":[{"attendance":"listener"}]}`, false, nil},
 		{"at a string", `{"roles":[{"at":"0","attendance":"listener"}]}`, false, nil},
 		{"negative at", `{"roles":[{"at":-1,"attendance":"listener"}]}`, false, nil},

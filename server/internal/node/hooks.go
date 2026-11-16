@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -82,12 +84,12 @@ func (n *Node) sockGone() string {
 func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 	path := nodeclient.SocketPath()
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return nil, err
 	}
 	// Never unlink on close: by then the path may belong to a newer node.
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.(*osproc.UnixListener).SetUnlinkOnClose(false)
 	_ = os.Chmod(path, 0o600)
 	if _, err := ensureLaunchKey(nodeclient.LaunchKeyPath()); err != nil { // before any personad launch reads it
 		n.logf("launch key: %v", err)
@@ -113,6 +115,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	r := bufio.NewReader(c)
 	line, err := r.ReadBytes('\n')
 	if err != nil {
+		return
+	}
+	if isHTTPRequestLine(line) { // Persona's Claude Code plugin (ccplugin.go)
+		n.serveCCPluginHTTP(ctx, c, line, r)
 		return
 	}
 	var req sockRequest
@@ -176,6 +182,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			n.decided.decide(in, time.Now())
 		}
 		resp = map[string]any{"ok": true}
+	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
+		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
 		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
 	case "update.inventory":
@@ -461,7 +469,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
-		return n.larkGate(ctx, in, ix)
+		return n.larkGateWithEdit(ctx, in, ix)
 
 	case in.HookEventName == "PostToolUse" && in.ToolName == "AskUserQuestion":
 		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
@@ -831,6 +839,9 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	if res.Dismiss {
 		return res, false, nil
 	}
+	if ix.EditableText != "" && res.EditedText != "" {
+		n.editedAnswers.Store(ix.ID, res.EditedText)
+	}
 	return res, true, nil
 }
 
@@ -895,11 +906,13 @@ func toolSummary(name string, input json.RawMessage) string {
 	return name
 }
 
-// callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
-// agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go), and a
-// task leader's task_plan and task_review (assistant/task_leader.go).
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"}
+// callerTools are the agents' own tools that act for the agent calling them: the manager's
+// (assistantwire.AgentToolNames: reporting to its supervisor; the decisions, thread, repositories and links of the
+// todo it works on), handing a subtask to another computer and reading it back (assistant/dispatch.go), and a task
+// leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
+// reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
+// only, and every agent's call of them reached the hub with no session).
+var callerTools = slices.Concat(assistantwire.AgentToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

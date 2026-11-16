@@ -71,6 +71,14 @@ type PlanTask struct {
 	// OwnerStarted: the owner tapped Start on the plan's card (POST …/start), as against the hub starting it without
 	// asking; the hub's, never what a tool call or an edit says. What a suggested rule counts (rule_suggest.go, #4929).
 	OwnerStarted bool `json:"owner_started,omitempty"`
+	// Schedule and ScheduleTitle: the scheduled task whose own round planned this (#8045), so its card can offer to let
+	// that schedule start this kind by itself. The hub's: set from the round the hub started, never from a tool call
+	// or an edit.
+	Schedule      string `json:"schedule,omitempty"`
+	ScheduleTitle string `json:"schedule_title,omitempty"`
+	// ScheduleBasis: the schedule's prompt and target when its round planned this (Task.grantBasis): a grant on Start
+	// applies only while they are the same.
+	ScheduleBasis string `json:"schedule_basis,omitempty"`
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
@@ -140,11 +148,24 @@ type PlanTask struct {
 	// repoOf: the machine NUL folder Repo was resolved for, so that admission resolves again only when the folder
 	// that runs is another one.
 	repoOf string
+	// grantSchedule: the owner ticked "let this scheduled task start these" on Start; the kind is added to that
+	// schedule's StartGrant once admission fixed the folder that runs, as rememberKind is (schedule_grant.go).
+	grantSchedule string
 	// rememberKind: the owner ticked "start these directly" on Start; the kind is remembered once the task's
 	// workspace is admitted, from the repository that actually runs (startTaskAgent).
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// planFirst: start defaults asked for the self-planning constraint in the prompt (start_defaults.go); never
+	// serialized, this try only.
+	planFirst bool
+	// callerPick: the launcher, model, effort, tier, permission mode and ultracode the task named itself, kept from its
+	// first start try in this process, so every try starts from them again whichever start-defaults rule fits it.
+	// Never serialized: the task as stored keeps its own value for whatever a policy filled in (storedLaunch).
+	callerPick *startPick
+	// startFilled: what the start-defaults policy filled in on this start try (start_defaults.go): the next try goes
+	// back to callerPick first, and the plan keeps the task's own value for exactly those. Never serialized.
+	startFilled startFill
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
@@ -234,11 +255,22 @@ type tasksState struct {
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
 	// however many turns the wait's wakes end.
 	limitLooks map[SessionRef]time.Time
-	// sentBy: by agent (machine, session), the conversation that last sent it text for a task and when (noteAgentSend:
-	// agent_send, the owner's message on a task's card). A task its supervisor accepted opens again on its agent's new
-	// turn only after its own conversation sent it more (closedTurnReopens, #6726). In memory only: after a restart
-	// such a task stays closed until its conversation sends again or the owner reopens it.
-	sentBy map[[2]string]agentSent
+	// sendsOut: by agent (machine, session), the sends of more for its accepted task from a conversation that may ask
+	// for it (noteAgentSend: agent_send, agent_interrupt with then, the owner's message on a task's card), while each
+	// still counts, and a turn of the agent held for them (closedTurnHeld). A task its supervisor accepted opens again
+	// only for those (closedTurnReopens, #6726, #7539). Kept in the database too (sendsOutKey, tasks_sends_out.go): a
+	// manager that restarts with one out takes it as a send whose answer is unknown. sendsSaving orders reading and
+	// writing them, the latest state last, and guards the three flags: sendsLoaded, what the manager before kept was
+	// read; sendsDirty, the latest write failed, so what is kept is not what is in memory; sendsRetrying,
+	// retrySendsOut is writing them again. sendsRetryAfter: retrySendsOut's first wait (sendsRetryEvery as the
+	// service was made: a retry still running from an earlier service never reads what a test sets).
+	sendsOut                               map[[2]string]*sendsOut
+	sendsSaving                            sync.Mutex
+	sendsLoaded, sendsDirty, sendsRetrying bool
+	sendsRetryAfter                        time.Duration
+	// sendsAcceptedUnread: by task, the latest acceptance made before the sends kept before were read (sendsAccepted),
+	// applied to them as they are read (loadSendsOut); under mu.
+	sendsAcceptedUnread map[string]time.Time
 	// retrying: the tasks whose agent is starting (again), one start at a time: a Retry after a failed start (#1396), a
 	// Continue, or a new agent after all of the task's stopped (startTaskSuccessor). A message on the card that would
 	// start another waits for that one and goes to the agent it started (routeAfterStart).
@@ -271,7 +303,8 @@ type tasksState struct {
 func newTasksState() tasksState {
 	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]*taskStart{},
-		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sentBy: map[[2]string]agentSent{},
+		outcomes: map[string]time.Time{}, reusing: map[string]bool{}, sendsOut: map[[2]string]*sendsOut{},
+		sendsRetryAfter: sendsRetryEvery,
 		turns: turnsState{again: map[string]bool{}, looked: map[string]turnLook{}, recovering: map[string]bool{}, tries: map[string]int{},
 			retry:   map[string]turnRetry{},
 			judging: map[string]int{}, closed: map[SessionRef]turnLook{}}}
@@ -549,10 +582,24 @@ func (s *Service) feedPlans(ctx context.Context, items []FeedItem) map[string]*T
 // planStartsAtOnce: every task only reads, was asked for by the user in this turn (while start_requested_tasks is on),
 // or is a kind the user said to start without asking (its directory or one it is under, task_trust_scope.go).
 func (s *Service) planStartsAtOnce(ctx context.Context, tasks []PlanTask) bool {
+	return s.planStartsAtOnceUnder(ctx, tasks, nil)
+}
+
+// planStartsAtOnceUnder is planStartsAtOnce in a scheduled round whose schedule's grant may start more (granted, read
+// only when a task needs it; nil: none, schedule_grant.go). started says which tasks the grant alone lets start.
+func (s *Service) planStartsAtOnceUnder(ctx context.Context, tasks []PlanTask, granted func() func(PlanTask) bool) bool {
 	trusted := s.trustCover(ctx)
 	requested := s.startRequestedTasks(ctx)
+	var cover func(PlanTask) bool
 	for _, t := range tasks {
-		if !t.Readonly && !(requested && t.UserRequested) && !trustedTask(trusted, t) {
+		if t.Readonly || (requested && t.UserRequested) || trustedTask(trusted, t) {
+			continue
+		}
+		if cover == nil && granted != nil {
+			cover = granted()
+			granted = nil
+		}
+		if cover == nil || !cover(t) {
 			return false
 		}
 	}
@@ -732,6 +779,8 @@ func (s *Service) taskRoutes() {
 		var in struct {
 			Tasks    []PlanTask `json:"tasks"`
 			Remember bool       `json:"remember"`
+			// ScheduleGrant: let the scheduled task whose round made this plan start these kinds by itself (#8045).
+			ScheduleGrant bool `json:"schedule_grant"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
@@ -739,7 +788,11 @@ func (s *Service) taskRoutes() {
 				return
 			}
 		}
-		p, err := s.startPlan(ownerStart(r.Context()), r.PathValue("id"), in.Tasks, in.Remember)
+		ctx := ownerStart(r.Context())
+		if in.ScheduleGrant {
+			ctx = scheduleGranting(ctx)
+		}
+		p, err := s.startPlan(ctx, r.PathValue("id"), in.Tasks, in.Remember)
 		if err != nil {
 			planErr(w, err)
 			return
@@ -837,7 +890,7 @@ func (s *Service) taskRoutes() {
 		if paginated {
 			out["next_cursor"] = nextCursor
 		}
-		apierr.WriteJSON(w, out)
+		s.writeConversationJSON(r.Context(), w, r.PathValue("id"), out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

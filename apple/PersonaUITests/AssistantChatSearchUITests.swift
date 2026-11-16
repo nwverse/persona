@@ -33,7 +33,7 @@ final class AssistantChatSearchUITests: XCTestCase {
 
     @MainActor private func search(_ app: XCUIApplication, _ words: String) {
         // An iPad starts with the sidebar column open, Search at its foot, and no sidebar button in the page's bar while
-        // the column is out (#4206); an iPhone's drawer opens with that button, its search behind 搜索对话 in the drawer.
+        // the column is out (#4206); an iPhone's drawer opens with that button, its search behind 「搜索对话」 in the drawer.
         let open = app.buttons["assistant-sidebar-button"].firstMatch
         let footSearch = app.buttons["sidebar-search"].firstMatch
         let either = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in open.exists || footSearch.exists }, object: nil)

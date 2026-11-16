@@ -19,7 +19,7 @@ registerHooks({
 });
 
 const {
-  decodeInteractionDecision, interactionCanSubmit, interactionElicitationDefaults, interactionElicitationMessage,
+  decodeInteractionDecision, interactionCanDefer, interactionCanSubmit, interactionElicitationDefaults, interactionElicitationMessage,
   interactionElicitationMode, interactionElicitationSupported, interactionElicitationUrl, interactionHistoryResolution,
   interactionPermissionFieldPlaceholder, interactionQuestionOptions, interactionResolution, interactionScreenOptions,
   validateInteractionElicitation
@@ -38,6 +38,17 @@ test('question answers keep exact labels, custom text takes precedence, and canc
   assert.deepEqual(interactionResolution(request, 'cancel', {}), { cancel: true });
   request.raw = JSON.stringify({ interaction: { id: 'question-1', kind: 'question', questions: [{ question: 'Which?', options: [] }] } });
   assert.throws(() => interactionResolution(request, 'cancel', {}), /unsupported/);
+});
+
+test('Later is eligible only for an open ask_user question in an editable Persona conversation', () => {
+  const request = decision({ id: 'ask-later', kind: 'question', tool_name: 'ask_user', questions: [{question: 'Which?'}] });
+  assert.equal(interactionCanDefer(request, 'conversation', false, false), true);
+  assert.equal(interactionCanDefer(request, 'conversation', true, false), false);
+  assert.equal(interactionCanDefer(request, 'conversation', false, true), false);
+  assert.equal(interactionCanDefer(request, 'session', false, false), false);
+  assert.equal(interactionCanDefer(decision({ id: 'permission-later', kind: 'permission', tool_name: 'ask_user' }), 'conversation', false, false), false);
+  request.status = 'pending';
+  assert.equal(interactionCanDefer(request, 'conversation', false, false), false);
 });
 
 test('plan and permission bodies match proto.Resolution and never send denied secret values', () => {

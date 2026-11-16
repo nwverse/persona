@@ -332,8 +332,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // their own (chat-sessioninfo, out of chat-sessiondialogs): ja 481,208 B to 480,451 B (en 478,073 B to 477,315 B,
 // zh-Hans 478,862 B to 478,105 B). On top of #8380, merged with main 1941e2e779: en 473,455 B, ja 476,517 B, zh-Hans
 // 474,236 B, 4,122 B of room.
-export const FIRST_SCREEN_BUDGET = 480_639;
-
+// The sessions list's invalidation throttle (lib/session-list.ts, one read per 2 s hint window instead of one per
+// hint) takes 59 B of that room in ja, measured in one environment against its own main (ja 480,249 B to 480,308 B;
+// en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
+// Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
+// en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
+export const FIRST_SCREEN_BUDGET = 480_666;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -533,9 +537,24 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * ceiling, so the budget is held here at 44,583 B — not raised to cover the drift, which the move removes instead.
  * #6542's model-pill re-read adds ~4 B to this tier, still far under the cap after the queue-panel reduction.
  * Every other lazy page loads on intent, not at idle; raise it on purpose, in the change that needs it.
+ * And 432 B for the image editor's fit geometry (#8746, 2026-11-16): the chat's image viewer left the first screen for
+ * a chunk loaded on its first open (views/chat/LazyImageViewer.tsx), which took en 476,644 B to 474,342 B, ja 479,772 B
+ * to 477,462 B and zh-Hans 477,452 B to 475,146 B against main at 3765c39bcb. The idle editor's fitIn / fitRect had
+ * come with the viewer on the first screen; they now come at idle in lib/image-fit.ts (44,543 B to 44,975 B), so the
+ * bytes a cold start fetches before idle still go down by about 1.9 KB. Main's 47 B of room is kept on top.
+ * And 34 B of minifier drift (#8778, 2026-11-16): main at 168f8311e sent 45,025 B at idle, 3 B over, with no idle page's
+ * own source changed; #8778's provider metadata adds nothing of its own there (its code is in the Settings chunk: 45,023 B
+ * with it). 31 B of room so the next main does not tip it.
+ * And 31 B of minifier drift (#9069, 2026-11-16): hiding the built-in assistant from the switcher adds nothing at idle
+ * (its code is in the Settings chunk and the locale catalogs). A CI build of the PR merged with main measured 45,500 B,
+ * 8 B over; a local build of the same tree measured 45,476 B against main's 45,478 B, each of the 11 idle files within
+ * 5 B of main's either way (the chunk names they import). 31 B of room on top of the CI figure.
  */
 // Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
-export const IDLE_TIER_BUDGET = 44_590;
+// Conversation-deletion guards, file retirement and open-search invalidation (#6172):
+// main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
+// The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
+export const IDLE_TIER_BUDGET = 45_531;
 
 const gzip = promisify(gzipCompress);
 

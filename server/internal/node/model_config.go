@@ -43,6 +43,9 @@ type modelExecution struct {
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
+	// Goal: a Claude Code /goal condition typed after the first message of a new start is in (startgoal.go). Per start,
+	// never part of a fingerprint, never kept for a resume.
+	Goal string `json:"-"`
 }
 
 func supervisionRuntimeRefusal(ctx context.Context) error {
@@ -53,10 +56,17 @@ func supervisionRuntimeRefusal(ctx context.Context) error {
 // what the manager reads as a refused request (assistant startRequestErr), so it stays "invalid model". The effort is
 // checked against the launcher's own levels: a codex one takes ultra (validModesFor).
 func (m modelExecution) check(launcher string) error {
+	if err := m.checkModel(); err != nil {
+		return err
+	}
+	return validModesFor(launcher, "", m.Effort)
+}
+
+func (m modelExecution) checkModel() error {
 	if m.Model != "" && !proto.ValidModelID(m.Model) {
 		return errors.New("invalid model")
 	}
-	return validModesFor(launcher, "", m.Effort)
+	return nil
 }
 
 // executionFingerprint also detects a managed provider changed before the next turn (any of its fields, the #2455 ones

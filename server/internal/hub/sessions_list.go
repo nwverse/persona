@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -53,6 +54,8 @@ const (
 	// directories, in those spaces), docs/protocol/protocol.md "Projects and spaces". An older hub reads none of the
 	// keys, so an app sends them only to a hub that says this.
 	featureSessionsCatalog = "sessions_catalog"
+	// featureSessionsAgentsOnly scopes pages, counts and deltas to the Agents sidebar view.
+	featureSessionsAgentsOnly = "sessions_agents_only"
 	// featureSessionsTodo: a paged GET /api/v1/sessions takes todo=<id> (the sessions on that open to-do) and
 	// todo=none (on none), and its counts have a todo map (by to-do id, "" for none), docs/protocol/protocol.md
 	// "Sessions by to-do" (#6662). An older hub ignores the key and lists every session, so an app sends it only to a
@@ -316,11 +319,61 @@ func startErrorRow(s proto.Session) int {
 }
 
 func rowText(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
+	// A whole-list answer cuts every long row (http.go writeSessionLists): a rune copy of each whole text was most of
+	// what that answer allocated, so cut without one whenever the bytes cannot hold more than max runes.
+	if len(s) <= max || utf8.RuneCountInString(s) <= max {
 		return s
 	}
-	return string(r[:max])
+	count := 0
+	for i := range s {
+		if count == max {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
+
+// legacyListCut bounds a whole-list answer's row in place (http.go writeSessionLists): the legacy keys only, none of
+// the summary's additions (pane_source, the counts scalars), but bounded like one — the long texts cut and the task
+// arrays (subagents, background, workflows, queued, ports) left out, what the chat routes serve. s's pointer fields
+// stay untouched: only scalars and slices change, and writeSessionLists encodes through a scratch copy.
+func legacyListCut(s *proto.Session) {
+	s.Title = rowText(s.Title, 256)
+	s.LastText = rowText(s.LastText, 180)
+	s.Activity = rowText(s.Activity, 120)
+	s.StartError = rowText(s.StartError, startErrorRow(*s))
+	s.ReadOnlyReason = rowText(s.ReadOnlyReason, 180)
+	s.TurnError = rowText(s.TurnError, 180)
+	s.Suggestion = rowText(s.Suggestion, 180)
+	if s.Work != nil {
+		s.Work.Line = rowText(s.Work.Line, 180)
+		s.Work.Wait = rowText(s.Work.Wait, 180)
+		s.Work.Then = rowText(s.Work.Then, 180)
+		if s.Work.Closeout != nil {
+			s.Work.Closeout.Waiting = rowText(s.Work.Closeout.Waiting, 180)
+			s.Work.Closeout.Missing = rowText(s.Work.Closeout.Missing, 180)
+		}
+	}
+	if s.Todo != nil {
+		s.Todo.Title = rowText(s.Todo.Title, 256)
+	}
+	if s.Plan != nil {
+		s.Plan.Current = rowText(s.Plan.Current, 180)
+	}
+	if s.Goal != nil {
+		s.Goal.Objective = rowText(s.Goal.Objective, 180)
+		s.Goal.Reason = rowText(s.Goal.Reason, 180)
+	}
+	if s.Loop != nil {
+		s.Loop.Prompt = ""
+		s.Loop.Reason = rowText(s.Loop.Reason, 120)
+	}
+	s.Queued = nil
+	s.Background = nil
+	s.Subagents = nil
+	s.Workflows = nil
+	s.Ports = nil
 }
 
 // runtimeSummary deliberately excludes transcript/task arrays and chat-only
@@ -687,7 +740,7 @@ func ownPage(index *sessionlist.Index, opts sessionlist.Options, own []string, p
 		return json.Unmarshal([]byte(id), &k) != nil || !keep(k[0])
 	})
 	counts, err := ownCounts(index, sessionlist.Options{Since: opts.Since, State: opts.State, Project: opts.Project, Group: opts.Group,
-		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, Places: opts.Places, Spaces: opts.Spaces}, own)
+		Source: opts.Source, Provider: opts.Provider, Q: opts.Q, Manager: opts.Manager, Roots: opts.Roots, NoPrivate: opts.NoPrivate, AgentsOnly: opts.AgentsOnly, Places: opts.Places, Spaces: opts.Spaces}, own)
 	if err != nil {
 		return sessionlist.Page{}, err
 	}

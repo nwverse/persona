@@ -6,7 +6,7 @@ import XCTest
 /// pushes the chat in the column beside its list, away from the window's edge.
 ///
 /// The Inbox lists the current assistant's items only (#5587), and on the default mock hub the group chat's item
-/// (周末徒步群) is another assistant's (工作): its Inbox case needs a hub with one assistant, as InboxCollapsedSourceTests'
+/// (「周末徒步群」) is another assistant's (「工作」): its Inbox case needs a hub with one assistant, as InboxCollapsedSourceTests'
 /// reused column does, and skips without it:
 ///   PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_INBOX_HUB=http://127.0.0.1:<port>
@@ -87,7 +87,7 @@ final class LarkNavigationTests: XCTestCase {
         try inboxRoundTrip("lark:f1:100", title: "韩梅梅")
     }
 
-    /// The group chat: 工作's on the default mock hub, so on a hub with one assistant.
+    /// The group chat: 「工作」's on the default mock hub, so on a hub with one assistant.
     @MainActor func testInboxGroupKeepsItsNavigationAfterCancelledAndCompletedBack() throws {
         try inboxRoundTrip("lark:f3:300", title: "周末徒步群", hubKey: "PERSONA_INBOX_HUB")
     }
