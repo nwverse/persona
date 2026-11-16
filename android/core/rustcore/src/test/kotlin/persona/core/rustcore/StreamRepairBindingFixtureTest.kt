@@ -6,6 +6,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -294,6 +295,30 @@ class StreamRepairBindingFixtureTest {
         }
     }
 
+    @Test fun everythingBeforeTheLastLineStaysAsItWasForEveryApplePrefix() {
+        // Exact Apple `reply` source and its `0...unicodeScalars.count` invariant. `lastIndexOf('\n') + 1` implements
+        // Swift's lastIndex(of: "\n").map(index(after:)) without changing the expected prefix into an output-derived value.
+        for (end in 0..reply.codePointCount(0, reply.length)) {
+            val text = reply.substring(0, reply.offsetByCodePoints(0, end))
+            val chunkInput = buildJsonObject { put("text", text) }.toString()
+            val chunks = Json.parseToJsonElement(NativeBridge.projectStreamChunks(chunkInput)) as JsonObject
+            val tail = chunks.getValue("tail").jsonPrimitive.content
+            val kept = tail.substring(0, tail.lastIndexOf('\n') + 1)
+            val repaired = replay(tail).getValue("repaired").jsonPrimitive.content
+            assertTrue("completed prefix changed at scalar $end: ${tail.replace("\n", "\\n")}",
+                repaired.startsWith(kept))
+        }
+        assertEquals("finished reply", reply, replay(reply).getValue("repaired").jsonPrimitive.content)
+        assertEquals("finished reply plus newline", reply + "\n",
+            replay(reply + "\n").getValue("repaired").jsonPrimitive.content)
+        val wrongTail = "上一行\n**重要"
+        val wrongPrefix = "上一行\n**重要!"
+        val actual = replay(wrongTail).getValue("repaired").jsonPrimitive.content
+        assertEquals("wrong-prefix control input repairs as Apple states", "上一行\n**重要**", actual)
+        assertFalse("a deliberately wrong retained prefix is rejected", actual.startsWith(wrongPrefix))
+        println("JNI StreamRepair Apple prefix replay: ${reply.codePointCount(0, reply.length) + 1} scalar prefixes plus finished controls")
+    }
+
     @Test fun rejectsMalformedInputAndWrongExpectedObjects() {
         assertEquals("", NativeBridge.projectStreamRepair("{\"invalid\":true}"))
         assertEquals("", NativeBridge.projectStreamRepair("not JSON"))
@@ -306,5 +331,43 @@ class StreamRepairBindingFixtureTest {
         }
         assertTrue(failure.message.orEmpty().contains("StreamRepair fence negative"))
         assertEquals("a trailing unfinished emphasis marker is unchanged", expected("unfinished **", "text"), replay("unfinished **"))
+    }
+
+    private companion object {
+        // StreamRepairTests.reply, independently transcribed including CJK, links, formulas and the final newline.
+        val reply = """
+            ## 看完了
+
+            改动没问题，**两处**要注意：`StreamChunks` 的 *缝隙* 和 [文档](https://example.com/docs_v2)。
+
+            - 第一项 ~~删掉~~
+            - 第二项
+              1. 嵌套 `code`
+            > 引用 **粗体**
+
+            | 文件 | 改动 |
+            | --- | :-: |
+            | a.swift | 刷新 |
+
+            1. 安装依赖：
+
+               ```bash
+               npm install
+               ```
+            **结果：**
+            | 项 | 值 |
+            | --- | --- |
+            | b | 2 |
+
+            ```swift
+            let a = "**"
+            ```
+
+            ${'$'}${'$'}
+            x^2
+            ${'$'}${'$'}
+
+            ![图](https://example.com/a.png) 结束 ${'$'}a_1${'$'}。
+        """.trimIndent() + "\n"
     }
 }

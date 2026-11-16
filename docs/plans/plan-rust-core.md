@@ -609,8 +609,9 @@ Phase 3 lands in several PRs.
     are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
     boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline repair
     (#9286) adds 51 explicit Apple assertions plus source-derived boundary controls through that same real JNI
-    boundary. It follows the scalar-based flanking, code-span, link/image, escape, URL and inline-formula scanner;
-    display-math recognition prevents inline repair there. The `.math` end state, `plainOpenFence`, visual gaps,
+    boundary. It also replays all 342 Unicode-scalar prefixes of Apple's mixed reply through real stream-chunks JNI
+    into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
+    follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math recognition prevents inline repair there. The `.math` end state, `plainOpenFence`, visual gaps,
     timing, rendering, production adapters and the #4044 performance goal remain open. These repair slices have cargo
     and real host-JNI evidence only: no C ABI, SwiftPM, ArkTS host or real NAPI projection. `stream_chunks`, in
     contrast, also has C ABI, SwiftPM and ArkTS host replay, without StreamRepair.
