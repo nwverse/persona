@@ -6,8 +6,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, enc, errorText } from "../../lib/api";
 import { clock } from "../../lib/format";
-import { cardText, mergeMessages, type LarkMessage, type LarkPage, type LarkPart } from "../../lib/inbox";
-import { emojiLabel } from "../../lib/inbox-page";
+import { mergeMessages, type LarkMessage, type LarkPage, type LarkPart } from "../../lib/inbox";
+import { cardText, emojiLabel } from "../../lib/inbox-page";
 import { larkPath } from "../../lib/lark-accounts";
 import { useItemManager } from "../../lib/manager-choice";
 import { LarkTopicReplies, SHOWN, topicReplyCount, type TopicPreview } from "../../lib/lark-topic-replies";

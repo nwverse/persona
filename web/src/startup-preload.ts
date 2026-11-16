@@ -337,6 +337,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
 // Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
 // en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
+// #9175: the inbox reads the hub's deltas (lib/inbox.ts, its cursor and applyInboxDelta), 124 B in ja; the Feishu card
+// text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
+// 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459.
 export const FIRST_SCREEN_BUDGET = 480_666;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
