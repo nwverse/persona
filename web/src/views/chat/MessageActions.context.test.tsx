@@ -136,6 +136,36 @@ describe("message context actions", () => {
 });
 
 describe("message context interaction paths", () => {
+  it("switches between More and the full context menu without opening two overlays", async () => {
+    act(() => root.render(
+      <ChatActionsContext.Provider value={chat}>
+        <MessageActions text="Original message" messageId="u1#0" isUser side><p data-message>Original message</p></MessageActions>
+      </ChatActionsContext.Provider>,
+    ));
+    const more = host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!;
+    const labels = () => [...document.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent?.trim());
+    act(() => more.click());
+    await settle();
+    expect(labels()).toContain("转发");
+    expect(labels()).not.toContain("复制");
+    act(() => host.querySelector("[data-message]")!.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true, clientX: 24, clientY: 30,
+    })));
+    await settle();
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    expect(labels()).toContain("复制");
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    act(() => more.click());
+    await settle();
+    expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
+    expect(labels()).toContain("转发");
+    expect(labels()).not.toContain("复制");
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("restores the explicit skill identity when rewinding a selected message", async () => {
     const selected = '<persona-context kind="skill" ref="exact-source">review</persona-context>\n\nOriginal message';
     const run = vi.fn(async () => {});

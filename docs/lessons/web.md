@@ -28,6 +28,8 @@ The fork action's label and callback belong in that same cold chunk; its opener 
 conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.
 The side bar's clipping measurement can share it on pointer/focus intent: keep the same buttons safely below
 until it arrives, and do not publish placement for disconnected elements.
+Keep one anchor and scope for the message's overlay: opening its full context menu from an open More menu must
+replace that menu, not leave two copies with different action scopes.
 Check whole startup namespaces: an already lazy dialog (such as New main chat) can still ship all its words there.
 Keep its header and immediate feedback keys eager, and let the existing dialog loader bring the rest.
 

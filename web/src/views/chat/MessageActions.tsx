@@ -139,12 +139,11 @@ export function MessageActions({
   const picker = chat?.forward ? chat.pick : undefined;
   const picking = Boolean(picker);
   const PickRow = picker && pick && text.trim() ? pickParts.Row : null;
-  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
-  const [anchor, setAnchor] = useState<HTMLElement | { x: number; y: number } | null>(null);
+  // Right-click and the side bar's More are entries to the same overlay, never two menus.
+  const [menu, setMenu] = useState<{ anchor: HTMLElement | { x: number; y: number }; more?: boolean } | null>(null);
+  const moreAnchor = menu?.more;
   const canFork = Boolean(itemId && chat?.fork && !itemId.startsWith("line") && itemId.includes("#"));
-  const contextActions = side ? actions.filter((a) => a.key === "forward" || a.key === "context") : [];
-  const hasMore = Boolean(contextActions.length || canFork || (isUser && (chat?.canCompose || (messageId && chat?.rewind && (editText ?? text).trim()))) || onDelete);
-  const menu = { itemId, text, rewindText: editText ?? text, messageId, isUser, onDelete };
+  const hasMore = Boolean((side && (chat?.canCompose || (chat?.forward && pick))) || canFork || (isUser && (chat?.canCompose || (messageId && chat?.rewind && (editText ?? text).trim()))) || onDelete);
   // Your bubble's hover bar sits to its left; in a narrow window a wide bubble leaves no room there and the bar fell
   // off the screen, its buttons still reached by Tab (audit item 73). Measured when the pointer comes or focus moves in
   // (not for every bubble as the chat opens): with no room, the same buttons sit under the bubble instead, so the one
@@ -162,8 +161,8 @@ export function MessageActions({
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const opened = useRef(0);
 
-  const openAt = (x: number, y: number) => setAnchor({ x, y });
-  const close = () => setAnchor(null);
+  const openAt = (x: number, y: number) => setMenu({ anchor: { x, y } });
+  const close = () => setMenu(null);
 
   const cancelPress = () => {
     if (press.current) clearTimeout(press.current.timer);
@@ -251,7 +250,7 @@ export function MessageActions({
       >
         {side && ts && !latest && <span className="mr-1 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
         {actions
-          .filter((a) => a.key !== "select" && !contextActions.includes(a))
+          .filter((a) => a.key !== "select" && !(side && (a.key === "forward" || a.key === "context")))
           .map((a) => (
             <button
               key={a.key}
@@ -271,7 +270,7 @@ export function MessageActions({
             title={t("chat-messageactions.more")}
             aria-haspopup="menu"
             aria-expanded={Boolean(moreAnchor)}
-            onClick={(e) => setMoreAnchor(moreAnchor ? null : e.currentTarget)}
+            onClick={(e) => setMenu(moreAnchor ? null : { anchor: e.currentTarget, more: true })}
             className={cx("flex size-6 items-center justify-center rounded-[6px] text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2", moreAnchor && "bg-hover-2 text-ink-2")}
           >
             <Icon name="more" size={14} />
@@ -290,8 +289,8 @@ export function MessageActions({
             aria-label={t("chat-messageactions.more")}
             title={t("chat-messageactions.more")}
             aria-haspopup="menu"
-            aria-expanded={Boolean(anchor)}
-            onClick={(e) => (anchor ? close() : setAnchor(e.currentTarget))}
+            aria-expanded={Boolean(menu)}
+            onClick={(e) => (menu ? close() : setMenu({ anchor: e.currentTarget }))}
             className="touch-hit flex size-6 items-center justify-center rounded-[6px] text-ink-3"
           >
             <Icon name="more" size={14} />
@@ -304,8 +303,10 @@ export function MessageActions({
           )}
         </div>
       )}
-      {anchor && !picking && <MessageMenu {...menu} anchor={anchor} onClose={close} primary={actions} />}
-      {moreAnchor && !picking && <MessageMenu {...menu} anchor={moreAnchor} onClose={() => setMoreAnchor(null)} primary={contextActions} side="top" />}
+      {menu && !picking && <MessageMenu
+        anchor={menu.anchor} onClose={close} primary={actions} more={menu.more}
+        itemId={itemId} text={text} rewindText={editText ?? text} messageId={messageId} isUser={isUser} onDelete={onDelete}
+      />}
       <SelectMessageText open={selecting} onClose={() => setSelecting(false)} text={text} />
     </div>
   );

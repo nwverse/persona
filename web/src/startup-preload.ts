@@ -356,6 +356,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
 // Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
 // en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
+// #8650 retains the stricter pre-merge cap: closed message controls and lazy dialogs' words load on intent.
 export const FIRST_SCREEN_BUDGET = 480_639;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").

@@ -123,7 +123,7 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Menu-only actions and their live disabled reasons load with the existing reply controls, not the transcript. */
-export function MessageMenu({ anchor, onClose, primary, itemId, text, rewindText, messageId, isUser, onDelete, side }: {
+export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, rewindText, messageId, isUser, onDelete, more }: {
   anchor: HTMLElement | { x: number; y: number };
   onClose: () => void;
   primary: Action[];
@@ -133,11 +133,12 @@ export function MessageMenu({ anchor, onClose, primary, itemId, text, rewindText
   messageId?: string;
   isUser?: boolean;
   onDelete?: () => void;
-  side?: "top";
+  more?: boolean;
 }) {
   const chat = useChatActions();
   const rewind = isUser ? chat?.rewind : undefined;
   const block = useWhileOpen(rewind?.block, true, "");
+  const primary = more ? actions.filter((a) => a.key === "forward" || a.key === "context") : actions;
   const extras = [
     ...moreActions(itemId, chat?.fork, chat?.assistant),
     ...rewindActions(messageId, rewindText, rewind && { block, code: rewind.code, run: rewind.run }),
@@ -151,7 +152,7 @@ export function MessageMenu({ anchor, onClose, primary, itemId, text, rewindText
       point={anchor instanceof HTMLElement ? undefined : anchor}
       onClose={onClose}
       items={items}
-      side={side}
+      side={more ? "top" : undefined}
       width={items.some((i) => i.hint) ? 200 : 168}
     />
   );
