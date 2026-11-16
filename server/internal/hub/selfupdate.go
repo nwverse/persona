@@ -274,15 +274,15 @@ func startWatchdog(prev, pendingPath string) error {
 // dying (in a service manager's restart loop) goes back after updateMaxStarts starts; an old version that finds a
 // marker for an update it is not (the watchdog or a person put it back) clears it for recording. A marker a watchdog
 // claimed and then died with (update.Unclaim) counts as the marker. It says whether this process has an update of its
-// own to confirm.
-func (u *updater) boot() (pending bool) {
+// own to confirm. Recovery failures stop startup before config/database work.
+func (u *updater) boot() (bool, error) {
 	if err := update.Unclaim(update.PendingPath(u.dir)); err != nil {
 		u.h.logf("update: put back the watchdog's claim on the pending marker: %v", err)
 	}
 	var p update.Pending
 	ok, err := update.Load(update.PendingPath(u.dir), &p)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	if !ok {
 		// The adoption journal is durable before the first replacement. A
@@ -291,11 +291,14 @@ func (u *updater) boot() (pending bool) {
 		if err == nil && ok && p.RecoveryReady && p.Development != nil &&
 			(u.h.build.Number == p.FromBuild || u.h.build.Number == p.ToBuild) {
 			if u.h.build.Number == p.ToBuild {
-				u.rollback(p, su(u.h.userLang(), "reason_went_back"))
-				return true // exec normally does not return
+				if err := u.rollback(p, su(u.h.userLang(), "reason_went_back")); err != nil {
+					return false, err
+				}
+				return true, nil // exec normally does not return
 			}
 			if err := update.RestoreAll(p); err != nil {
 				u.h.logf("update: interrupted adoption recovery retained: %v", err)
+				return false, err
 			} else {
 				u.markRolledBack(p, su(u.h.userLang(), "reason_went_back"))
 				update.ClearDevelopmentAdoption(u.dir, p)
@@ -304,14 +307,14 @@ func (u *updater) boot() (pending bool) {
 				}
 			}
 		}
-		return false
+		return false, nil
 	}
 	if p.ToBuild != u.h.build.Number {
 		if u.h.build.Number == p.FromBuild {
 			if p.Development != nil {
 				if err := update.RestoreAll(p); err != nil {
 					u.h.logf("update: restore failed, recovery retained: %v", err)
-					return false
+					return false, err
 				}
 				update.ClearDevelopmentAdoption(u.dir, p)
 			}
@@ -319,7 +322,7 @@ func (u *updater) boot() (pending bool) {
 		} else {
 			_ = os.Remove(update.PendingPath(u.dir)) // replaced by a build deployed straight from master: not a failure
 		}
-		return false
+		return false, nil
 	}
 	u.confirmed = false
 	p.Starts++
@@ -327,13 +330,17 @@ func (u *updater) boot() (pending bool) {
 		// Without the count on disk every restart reads the same Starts, so a build that keeps crashing would never
 		// reach updateMaxStarts: go back to the version that ran before while this process still can.
 		u.h.logf("update: save start count: %v", err)
-		u.rollback(p, su(u.h.userLang(), "reason_marker_unsaved"))
-		return true
+		if err := u.rollback(p, su(u.h.userLang(), "reason_marker_unsaved")); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if p.Starts > updateMaxStarts {
-		u.rollback(p, su(u.h.userLang(), "reason_no_start", i18n.Args{"count": p.Starts - 1}))
+		if err := u.rollback(p, su(u.h.userLang(), "reason_no_start", i18n.Args{"count": p.Starts - 1})); err != nil {
+			return false, err
+		}
 	}
-	return true
+	return true, nil
 }
 
 // start loads the settings, records an update that went back, confirms one under way, removes the downloads nothing
@@ -487,7 +494,7 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 	if u.edgeConfirmed != nil {
 		u.edgeConfirmed()
 	}
-	nodeErr := u.updateNodes(ctx, p.Nodes, p.FromVersion, p.Development != nil)
+	nodeErr := u.updateNodes(ctx, p.Nodes, p.FromVersion, p.Development)
 	why := ""
 	if nodeErr != nil {
 		why = su(u.h.userLang(), "err_computer_packages")
@@ -530,15 +537,16 @@ func (u *updater) offline(ids []string) []string {
 
 // rollback restores the complete transaction before recording success or
 // deleting recovery material. It returns only when restoring or exec fails.
-func (u *updater) rollback(p update.Pending, reason string) {
+func (u *updater) rollback(p update.Pending, reason string) error {
 	u.h.logf("update: going back to %s: %s", p.FromVersion, reason)
 	if err := update.RestoreAll(p); err != nil {
 		u.h.logf("update: restore %s: %v", p.Prev, err)
-		return
+		return err
 	}
 	u.markRolledBack(p, reason)
-	update.ClearDevelopmentAdoption(u.dir, p)
-	if !u.adoptionUnresolved() {
+	// Keep development recovery evidence until the restored executable runs.
+	// A successful exec never returns; the old build clears the journal at boot.
+	if p.Development == nil && !u.adoptionUnresolved() {
 		u.removeDownloads(u.stagedDir(p.ToBuild))
 	}
 	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (lnmode.go).
@@ -547,13 +555,19 @@ func (u *updater) rollback(p update.Pending, reason string) {
 	}
 	if err := u.exec(p.RunPath()); err != nil {
 		u.h.logf("update: run %s: %v", p.RunPath(), err)
+		return err
 	}
+	update.ClearDevelopmentAdoption(u.dir, p)
+	if !u.adoptionUnresolved() {
+		u.removeDownloads(u.stagedDir(p.ToBuild))
+	}
+	return nil
 }
 
 // updateNodes puts the release's node binaries where "Redeploy" takes them (the manager's, internal/devices deploy.go)
 // and has the manager redeploy each connected machine whose node is not this build, one at a time. With node updates
 // off, the hub moved on from version from alone: the builds of that version it leaves in bin/nodes go aside.
-func (u *updater) updateNodes(ctx context.Context, staged, from string, development ...bool) error {
+func (u *updater) updateNodes(ctx context.Context, staged, from string, development ...*update.DevelopmentCandidate) error {
 	dir := identity.NodeBinaryDir()
 	info, err := os.Lstat(dir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -563,7 +577,7 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 	// A release publisher owns this pointer and both immutable release trees.
 	// Only it may activate packages after the hub is confirmed healthy.
 	managed := info != nil && info.Mode()&os.ModeSymlink != 0
-	dev := len(development) > 0 && development[0]
+	dev := len(development) > 0 && development[0] != nil
 	if dev && managed {
 		return errors.New("development package directory changed to a managed pointer")
 	}
@@ -577,9 +591,13 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 		return nil
 	}
 	if dev && from != "" && from != u.h.version {
-		// A smaller platform set must not leave unrebuilt packages labelled as
-		// this Hub's new version. The staged platforms replace these below.
-		if _, err := setAsideOldNodes(dir); err != nil {
+		if development[0].BackupID != "" {
+			// A saved version may cover fewer platforms. Keep other usable
+			// packages, explicitly labelled with their pre-rollback version.
+			if err := labelUnstagedNodes(dir, staged, from); err != nil {
+				return err
+			}
+		} else if _, err := setAsideOldNodes(dir); err != nil {
 			return err
 		}
 	}

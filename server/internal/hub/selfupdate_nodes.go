@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -112,4 +113,79 @@ func setAsideOldNodes(dir string) ([]string, error) {
 		moved = append(moved, name)
 	}
 	return moved, first
+}
+
+// labelUnstagedNodes preserves omitted backup platforms without advertising them
+// as the restored Hub's version. Existing explicit version identities stay intact.
+func labelUnstagedNodes(dir, staged, from string) error {
+	stagedEntries, err := os.ReadDir(staged)
+	if err != nil {
+		return err
+	}
+	present := map[string]bool{}
+	for _, e := range stagedEntries {
+		if e.Type().IsRegular() && nodeBuildName.MatchString(e.Name()) {
+			present[e.Name()] = true
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !nodeBuildName.MatchString(e.Name()) || present[e.Name()] {
+			continue
+		}
+		marker := filepath.Join(dir, e.Name()+".version")
+		if info, err := os.Lstat(marker); err == nil {
+			if !info.Mode().IsRegular() {
+				return errors.New("retained Node package has an invalid version marker")
+			}
+			version, err := os.ReadFile(marker)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(version)) == "" {
+				return errors.New("retained Node package has an empty version marker")
+			}
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := writeRetainedNodeVersion(marker, from); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeRetainedNodeVersion(marker, version string) error {
+	f, err := os.CreateTemp(filepath.Dir(marker), ".retained-node-version-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if _, err := f.WriteString(version + "\n"); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// Link atomically only when the destination is still absent.
+	if err := os.Link(f.Name(), marker); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(marker))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

@@ -51,7 +51,14 @@ Stopping a service that the Hub immediately respawns does not establish this con
 use no-op hooks on real data. Missing coordination disables installation and automatic opt-in.
 
 The host needs Git, Python 3.11+, Node matching `web/package.json`, Go matching `server/go.mod`,
-and compatible `pg_dump`/`pg_restore` tools with access to every included database. Git uses the
+and compatible `pg_dump`/`pg_restore` tools with access to every included database. Their libpq
+shared library must be discoverable by Python. The helper parses URI and keyword connections
+with libpq, then passes their explicit fields through libpq environment variables. It does not
+put connection strings or passwords in process arguments or receipts. Invalid connections and
+parameters without a safe environment binding fail before pausing writers. Existing private
+`PGPASSFILE`/`PGSERVICE` settings remain usable; credentials in a URI are kept in the private
+child environment, which is not protection from the installation user or privileged processes.
+Git uses the
 installation user's existing HTTPS credential mechanism, with interactive prompts disabled.
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
@@ -75,6 +82,15 @@ backup does not invalidate those staged copies. Missing/damaged selections fail 
 `GET /api/v1/hub/update/backups` lists program-version metadata;
 `POST /api/v1/hub/update/backups/{id}/apply` accepts an owned retained ID, never an arbitrary path.
 Only snapshots with complete program version/build/commit/platform metadata are selectable.
+Startup recovery errors stop both standalone and edge-slot startup before configuration/database
+initialization. Failed program restoration or exec retains the development journal and staging
+for operator repair; the attempted build cannot continue as an ordinary startup.
+Listing validates the full manifest schema, typed hashes and exact artifact mappings, without
+rehashing payloads. Verification and preparation additionally check the physical inventory,
+compressed and native program hashes and history members. Staged programs get an independent
+native-hash check after copying. Malformed metadata is rejected as `ValueError`; unknown or
+damaged snapshots stay on disk for manual inspection and are not pruned as verified material.
+Invalid schemas are omitted from listings; payload damage is checked before application.
 
 Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
 working turns, conversations awaiting blocking user input, and active redeploys can hold the update.
@@ -148,14 +164,19 @@ off, so **Redeploy** can use the matching build. Fleet installation still requir
 `auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
 for all currently known platforms; otherwise it stops before adoption. With fleet updates off,
 remote Nodes keep their current programs and available saved packages are installed locally.
+A backup replaces only its staged platforms. Other regular local packages remain usable at
+their normal paths; an unlabelled retained package receives its **pre-rollback** `.version`
+identity, while an existing valid explicit identity is preserved. An invalid retained version
+marker stops package adoption and keeps staging for inspection.
 Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
 fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
 There is no platform configuration or fixed platform matrix. Offline computers with a known
 platform are included. A computer that has never reported its platform supplies no build target;
 once it connects, the next development update includes its platform. With no known remote
-platforms, only the Hub's platform is built. Old unversioned packages are set aside before the
-new packages are installed, so an omitted platform is never mistaken for the new version.
-If an old package cannot be set aside, package preparation fails and fleet deployment does not start.
+platforms, only the Hub's platform is built. For a freshly compiled development update, old
+unversioned packages are set aside before installation so omitted platforms are not mistaken
+for the new version. A saved-version application instead retains and labels omitted packages
+as described above. Any set-aside or version-label failure stops fleet deployment.
 Independent/remote managers have their own binaries, data and package sources: this local build
 path refuses their machine ownership instead of claiming those computers were upgraded. Use
 their original update channel. A publisher-owned `bin/nodes` symlink is likewise an explicit
@@ -174,8 +195,15 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 2. Verify the chosen snapshot offline:
    `python3 server/internal/update/webdev.py verify /absolute/path/to/snapshot-<id>`.
    Do not continue on a failed checksum or archive check.
-3. Extract `files.tar.gz` into an **empty recovery directory**, using Python's `tarfile` data
-   extraction filter. `manifest.json` maps `root-0`, `root-1`, etc. to their original roots.
+3. Extract history offline with
+   `python3 server/internal/update/webdev.py extract-history /absolute/path/to/snapshot-<id> /absolute/path/to/empty-recovery-directory`.
+   The destination must be absent or empty and cannot be a symlink. This command verifies the
+   snapshot and applies the same canonical member/link checks before extraction, with Python's
+   data filter as an additional layer. It rejects absolute, drive/UNC, backslash, noncanonical
+   and duplicate paths, hard links and non-directory parents. A relative symlink must point
+   directly to a file or directory actually inside this archive; dangling links, link chains
+   and links used as parent directories are rejected. Snapshot creation also refuses hard links.
+   `manifest.json` maps `root-0`, `root-1`, etc. to their original roots.
    Inspect the archived configs privately to identify each database. Restore the dumps with
    `pg_restore` into fresh, empty databases, using a private `PGSERVICE`/`PGPASSFILE`; then select
    those databases in the restored configuration. Preserve the failed databases until recovery

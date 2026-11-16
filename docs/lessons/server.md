@@ -9,11 +9,25 @@ an intent whose rename never ran and a Web directory already restored by an earl
 Restore first; only successful restoration permits deleting markers or staging. Startup pruning
 must honor retained recovery ownership too. Exercise abrupt process exits between the actual
 renames and pending publication, not only returned installation errors.
+Propagate restoration and exec failures through both Hub startup entry points: a boolean
+"update pending" cannot block a failed recovery when no pending marker exists. Keep the
+adoption journal and staging until the restored executable runs, so a failed exec can retry.
 
 Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
 escalate within bounded waits, and defer repeated cancellation while resuming paused writers.
 A failed resume keeps its coordination marker; successful resume does not make an interrupted
 snapshot publishable.
+
+`pg_dump` does not expand a connection URI stored in `PGDATABASE`: real libpq treats it
+as the database name. Parse URI or keyword connections with `PQconninfoParse` and pass
+explicit fields through their documented environment bindings; reject unsupported fields
+before pausing writers. A fake dump cannot prove this works. Use an owned PostgreSQL cluster,
+restore its synthetic dump, and inspect the actual child command line for credential leaks.
+
+Recovery metadata is editable input even when the snapshot has an ownership marker.
+Validate its complete schema and exact artifact mapping before reading payloads, then check
+the staged native hash independently. History verification and extraction must share the
+same canonical path and link rules; a checksum alone cannot make an unsafe tar safe.
 
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 

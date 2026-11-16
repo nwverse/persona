@@ -4,14 +4,17 @@ Requests arrive on stdin; credentials and command output never go into the recei
 Run `python3 webdev.py verify BACKUP` to verify a retained recovery point offline.
 """
 import datetime
+import ctypes
+import ctypes.util
 import contextlib
 import fcntl
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import ntpath
 import shutil
 import shlex
 import signal
@@ -20,6 +23,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zlib
 from urllib.parse import urlsplit, urlunsplit
 
 OWNER = "persona-web-development-backup-v1"
@@ -188,42 +192,144 @@ def build(request):
     return {"ancestors": ancestors, "artifacts": str(artifacts)}
 
 
-def verify(path):
+def native_digest(path):
+    try:
+        native = hashlib.sha256()
+        with gzip.open(path, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                native.update(chunk)
+        return native.hexdigest()
+    except (OSError, EOFError, zlib.error) as exc:
+        raise ValueError("invalid recovery program archive") from exc
+
+
+def absolute_metadata_path(value):
+    return (isinstance(value, str) and value.startswith("/") and
+            "\\" not in value and "\x00" not in value and ".." not in PurePosixPath(value).parts)
+
+
+def read_manifest(path):
     if path.is_symlink() or not path.is_dir() or not NAME.fullmatch(path.name):
         raise ValueError("not an owned snapshot directory")
-    manifest_path = path / "manifest.json"
-    if manifest_path.is_symlink():
+    file = path / "manifest.json"
+    if file.is_symlink():
         raise ValueError("linked snapshot manifest")
-    manifest = json.loads(manifest_path.read_text())
-    if manifest.get("owner") != OWNER or manifest.get("id") != path.name:
-        raise ValueError("snapshot ownership mismatch")
-    files = manifest.get("files", {})
-    if "files.tar.gz" not in files or not any(n.endswith(".dump") for n in files):
-        raise ValueError("snapshot is missing history or database data")
+    m = json.loads(file.read_text())
+    keys = {"owner", "id", "commit", "from_version", "from_commit", "from_build", "from_updated_at",
+            "created_at", "platform", "roots", "databases", "programs", "nodes", "files"}
+    if not isinstance(m, dict) or set(m) != keys or m["owner"] != OWNER or m["id"] != path.name:
+        raise ValueError("invalid snapshot recovery schema")
+    for key in ("commit", "from_commit"):
+        value = m[key]
+        if not isinstance(value, str) or ((value or key == "commit") and not re.fullmatch(r"[a-f0-9]{40}", value)):
+            raise ValueError("invalid snapshot commit")
+    if (not isinstance(m["from_version"], str) or any(c in m["from_version"] for c in "\r\n\x00") or
+            type(m["from_build"]) is not int or m["from_build"] < 0 or
+            not isinstance(m["platform"], str) or m["platform"] not in PLATFORMS | {""}):
+        raise ValueError("invalid saved version metadata")
+    for key in ("created_at", "from_updated_at"):
+        value = m[key]
+        if not isinstance(value, str) or (not value and key == "created_at"):
+            raise ValueError("invalid snapshot timestamp")
+        if value:
+            try:
+                if datetime.datetime.fromisoformat(value).tzinfo is None:
+                    raise ValueError("timestamp needs an offset")
+            except ValueError as exc:
+                raise ValueError("invalid snapshot timestamp") from exc
+    if (not isinstance(m["roots"], list) or not m["roots"] or
+            not all(absolute_metadata_path(v) for v in m["roots"]) or
+            len(set(m["roots"])) != len(m["roots"]) or
+            type(m["databases"]) is not int or m["databases"] < 1):
+        raise ValueError("invalid snapshot inventory")
+    files = m["files"]
+    if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) and
+            re.fullmatch(r"[a-f0-9]{64}", v) for k, v in files.items()):
+        raise ValueError("invalid snapshot file checksums")
+    if m["databases"] > len(files):
+        raise ValueError("snapshot database count exceeds its inventory")
+    expected = {"files.tar.gz", "effective-databases.json"} | {f"database-{i}.dump" for i in range(m["databases"])}
+    for field, allowed, prefix in (("programs", {"personad", "persona-hub", "persona-manager"}, "program-"),
+                                   ("nodes", PLATFORMS, "node-")):
+        entries = m[field]
+        if not isinstance(entries, dict) or not set(entries) <= allowed or (field == "programs" and "personad" not in entries):
+            raise ValueError("invalid recovery program inventory")
+        for name, info in entries.items():
+            artifact = prefix + name + ".gz"
+            fields = {"file", "sha256", "target"} if field == "programs" else {"file", "sha256"}
+            if (not isinstance(info, dict) or set(info) != fields or info["file"] != artifact or
+                    not isinstance(info["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", info["sha256"]) or
+                    (field == "programs" and not absolute_metadata_path(info["target"]))):
+                raise ValueError("invalid recovery program metadata")
+            expected.add(artifact)
+    if set(files) != expected:
+        raise ValueError("snapshot artifacts do not match their recovery inventory")
+    return m
+
+
+def archive_path(name):
+    if (not isinstance(name, str) or not name or "\\" in name or "\x00" in name or
+            name.startswith("/") or ntpath.splitdrive(name)[0]):
+        raise ValueError("unsafe history archive path")
+    parts = name.split("/")
+    if any(p in ("", ".", "..") or ":" in p for p in parts):
+        raise ValueError("noncanonical history archive path")
+    return PurePosixPath(name)
+
+
+def history_members(archive, roots):
+    members = archive.getmembers()
+    by_name = {}
+    root_names = {f"root-{i}" for i in range(len(roots))}
+    for member in members:
+        path = archive_path(member.name)
+        if (path.parts[0] not in root_names or
+                not (member.isfile() or member.isdir() or member.issym()) or member.name in by_name):
+            raise ValueError("invalid or duplicate history archive member")
+        by_name[member.name] = member
+    for name, member in by_name.items():
+        path = PurePosixPath(name)
+        for parent in path.parents:
+            if str(parent) != "." and (str(parent) not in by_name or not by_name[str(parent)].isdir()):
+                raise ValueError("history archive parent is not a directory")
+        if member.issym():
+            target = str(path.parent / archive_path(member.linkname))
+            if target not in by_name or not (by_name[target].isfile() or by_name[target].isdir()):
+                raise ValueError("history symlink target is not an archived file or directory")
+    if any(f"root-{i}" not in by_name or not by_name[f"root-{i}"].isdir() for i in range(len(roots))):
+        raise ValueError("history archive is missing an inventory root")
+    return members
+
+
+def verify(path):
+    manifest = read_manifest(path)
+    files = manifest["files"]
     if {p.name for p in path.iterdir()} != set(files) | {"manifest.json"}:
         raise ValueError("snapshot contains unowned entries")
     for name, expected in files.items():
-        if Path(name).name != name:
-            raise ValueError("invalid snapshot member")
         item = path / name
         if item.is_symlink() or not item.is_file() or digest(item) != expected:
             raise ValueError("snapshot checksum mismatch")
-    for program in list(manifest.get("programs", {}).values()) + list(manifest.get("nodes", {}).values()):
-        if program["file"] not in files:
-            raise ValueError("recovery program is missing")
-        native = hashlib.sha256()
-        with gzip.open(path / program["file"], "rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                native.update(chunk)
-        if native.hexdigest() != program["sha256"]:
+    for program in list(manifest["programs"].values()) + list(manifest["nodes"].values()):
+        if native_digest(path / program["file"]) != program["sha256"]:
             raise ValueError("recovery program checksum mismatch")
-    with tarfile.open(path / "files.tar.gz", "r:gz") as archive:
-        for member in archive:
-            if member.name.startswith("/") or ".." in Path(member.name).parts or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-                raise ValueError("invalid history archive member")
-            if (member.issym() or member.islnk()) and (member.linkname.startswith("/") or ".." in Path(member.linkname).parts):
-                raise ValueError("unsafe history archive link")
+    try:
+        with tarfile.open(path / "files.tar.gz", "r:gz") as archive:
+            history_members(archive, manifest["roots"])
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
+        raise ValueError("invalid history archive") from exc
     return manifest
+
+
+def extract_history(path, destination):
+    # Operator-only, offline extraction. Apply backup never calls this path.
+    manifest = verify(path)
+    if destination.is_symlink() or (destination.exists() and (not destination.is_dir() or any(destination.iterdir()))):
+        raise ValueError("recovery destination must be an empty directory")
+    with tarfile.open(path / "files.tar.gz", "r:gz") as archive:
+        members = history_members(archive, manifest["roots"])
+        destination.mkdir(mode=0o700, exist_ok=True)
+        archive.extractall(destination, members=members, filter="data")
 
 
 def backup_store(request):
@@ -234,18 +340,9 @@ def backup_store(request):
 
 
 def backup_version(path):
-    # Listing reads only metadata. Full payload verification happens before use.
-    if path.is_symlink() or not path.is_dir() or not NAME.fullmatch(path.name):
-        raise ValueError("not an owned snapshot directory")
-    file = path / "manifest.json"
-    if file.is_symlink():
-        raise ValueError("linked snapshot manifest")
-    m = json.loads(file.read_text())
-    if (not isinstance(m, dict) or m.get("owner") != OWNER or m.get("id") != path.name or
-            not isinstance(m.get("from_commit"), str) or not re.fullmatch(r"[a-f0-9]{40}", m["from_commit"]) or
-            not m.get("from_version") or not isinstance(m.get("from_build"), int) or m["from_build"] <= 0 or
-            not isinstance(m.get("platform"), str) or m["platform"] not in PLATFORMS or
-            not isinstance(m.get("programs"), dict) or "personad" not in m["programs"]):
+    # Schema validation is shared; payload checks still happen before use.
+    m = read_manifest(path)
+    if not m["from_commit"] or not m["from_version"] or not m["from_build"] or not m["platform"]:
         raise ValueError("snapshot has no installable program version")
     return {"id": path.name, "version": m["from_version"], "build": m["from_build"],
             "commit": m["from_commit"], "updated_at": m.get("from_updated_at", ""),
@@ -266,7 +363,7 @@ def backups(request):
 
 def prepare_backup(request):
     ident = request["backup_id"]
-    if not NAME.fullmatch(ident):
+    if not isinstance(ident, str) or not NAME.fullmatch(ident):
         raise ValueError("invalid snapshot ID")
     store = backup_store(request)
     with (store / ".lock").open("a") as lock:
@@ -293,6 +390,8 @@ def prepare_backup(request):
             shutil.copyfile(path / info["file"], target)
             if digest(target) != m["files"][info["file"]]:
                 raise ValueError("staged program checksum mismatch")
+            if native_digest(target) != info["sha256"]:
+                raise ValueError("staged native program checksum mismatch")
         return {"artifacts": str(artifacts)}
 
 
@@ -327,8 +426,59 @@ def inventory(request):
     return runtime, roots, list(dict.fromkeys(databases))
 
 
+class ConninfoOption(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_char_p) for name in ("keyword", "envvar", "compiled", "val", "label", "dispchar")] + [("dispsize", ctypes.c_int)]
+
+
+def database_environment(database):
+    if not isinstance(database, str) or not database or "\x00" in database:
+        raise ValueError("invalid database connection")
+    env = dict(os.environ)
+    if "=" not in database and not database.startswith(("postgres://", "postgresql://")):
+        env["PGDATABASE"] = database
+        return env
+    # Use the same libpq parser as PostgreSQL tools, including escaped passwords,
+    # query options and keyword strings. Never put the connection string in argv.
+    library = ctypes.util.find_library("pq")
+    if not library:
+        raise ValueError("development backups require libpq beside PostgreSQL tools")
+    pq = ctypes.CDLL(library)
+    pq.PQconninfoParse.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+    pq.PQconninfoParse.restype = ctypes.POINTER(ConninfoOption)
+    pq.PQconninfoFree.argtypes = [ctypes.POINTER(ConninfoOption)]
+    pq.PQconninfoFree.restype = None
+    pq.PQfreemem.argtypes = [ctypes.c_void_p]
+    pq.PQfreemem.restype = None
+    error = ctypes.c_void_p()
+    try:
+        encoded = database.encode()
+    except UnicodeError as exc:
+        raise ValueError("invalid database connection encoding") from exc
+    options = pq.PQconninfoParse(encoded, ctypes.byref(error))
+    if not options:
+        if error.value:
+            pq.PQfreemem(error)
+        raise ValueError("invalid database connection parameters")
+    env.pop("PGDATABASE", None)
+    try:
+        i = 0
+        while options[i].keyword:
+            option = options[i]
+            if option.val is not None:
+                if not option.envvar:
+                    raise ValueError("database parameter has no safe environment binding")
+                env[option.envvar.decode()] = option.val.decode()
+            i += 1
+    except UnicodeError as exc:
+        raise ValueError("invalid database connection encoding") from exc
+    finally:
+        pq.PQconninfoFree(options)
+    return env
+
+
 def snapshot(request):
     runtime, roots, databases = inventory(request)
+    database_envs = [database_environment(database) for database in databases]
     backup = request["config"]["backup"]
     if not backup.get("quiesce") or not backup.get("resume"):
         raise ValueError("configure writer quiesce and resume commands before updating")
@@ -359,12 +509,12 @@ def snapshot(request):
                 run(backup["quiesce"], timeout=60)
                 # Hooks must stop every DB/file writer in this snapshot's scope,
                 # including independent managers, before returning successfully.
-                for i, database in enumerate(databases):
+                for i, database_env in enumerate(database_envs):
                     print(f"development backup: database {i}", flush=True)
                     target = temporary / f"database-{i}.dump"
-                    # The DSN goes in the environment, never argv or the receipt.
+                    # Parsed libpq fields go in the environment, never argv or the receipt.
                     run(["pg_dump", "--format=custom", "--no-owner", "--no-acl", "--file", str(target)],
-                        env=dict(os.environ, PGDATABASE=database))
+                        env=database_env)
                     with target.open("rb") as stream:
                         header = stream.read(5)
                     if target.stat().st_size < 5 or header != b"PGDMP":
@@ -382,11 +532,13 @@ def snapshot(request):
                     original = roots[int(root_index.removeprefix("root-"))].joinpath(*parts)
                     if any(original == p or original.is_relative_to(p) for p in excluded):
                         return None
+                    archive_path(info.name)
+                    if info.islnk():
+                        raise ValueError("history hard links require an explicit snapshot boundary")
                     if info.issym():
                         # Absolute and escaping links need their own explicitly
                         # inventoried root; fail instead of making a hollow backup.
-                        if Path(info.linkname).is_absolute() or ".." in Path(info.linkname).parts:
-                            raise ValueError("history contains a link requiring an explicit snapshot boundary")
+                        archive_path(info.linkname)
                     if not (info.isfile() or info.isdir() or info.issym() or info.islnk()):
                         return None
                     count += info.isfile()
@@ -486,6 +638,10 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] == "verify":
         verify(Path(sys.argv[2]))
         print("Snapshot verified")
+        return
+    if len(sys.argv) == 4 and sys.argv[1] == "extract-history":
+        extract_history(Path(sys.argv[2]), Path(sys.argv[3]))
+        print("History extracted into the empty recovery directory")
         return
     request = json.load(sys.stdin)
     # No interactive credentials or indefinite network prompt in an updater.

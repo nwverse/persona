@@ -128,8 +128,14 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 				if data, _ := os.ReadFile(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); !strings.Contains(string(data), version.Version) {
 					t.Fatal("rollback lost the staged historical Node package")
 				}
-				if data, _ := os.ReadFile(stale + ".prev"); string(data) != "newer package before rollback" {
-					t.Fatal("rollback did not preserve the stale live Node package")
+				if u.nodesEnabled() {
+					t.Fatal("fixture requires fleet auto-update off")
+				}
+				if data, err := os.ReadFile(stale); err != nil || string(data) != "newer package before rollback" {
+					t.Fatal("backup confirmation removed an unstaged platform package", err)
+				}
+				if data, err := os.ReadFile(stale + ".version"); err != nil || strings.TrimSpace(string(data)) != pending.FromVersion {
+					t.Fatal("retained package must keep its original version identity", err)
 				}
 				if u.view().State != "updated" || u.view().Development.CurrentUpdatedAt == "" {
 					t.Fatal("missing successful installation time")
@@ -252,7 +258,7 @@ func TestDevelopmentRejectsUnrebuiltPackagesThatCannotBeSetAside(t *testing.T) {
 	if err := os.Mkdir(stale+".prev", 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.upd.updateNodes(context.Background(), t.TempDir(), "previous-version", true); err == nil {
+	if err := h.upd.updateNodes(context.Background(), t.TempDir(), "previous-version", &update.DevelopmentCandidate{}); err == nil {
 		t.Fatal("accepted stale packages that still claim the new version")
 	}
 }
@@ -471,7 +477,7 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				// Restore the unavailable preimage and simulate a fresh old-build
 				// startup. Web was already restored by the first attempt.
 				os.WriteFile(target+".prev", []byte("#!/bin/sh\necho old\n"), 0700)
-				if u.boot() || u.adoptionUnresolved() {
+				if bootUpdater(t, u) || u.adoptionUnresolved() {
 					t.Fatal("recovery could not be retried")
 				}
 				data, _ := os.ReadFile(target)
@@ -534,6 +540,54 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			}
 			if u.view().State != "updated" {
 				t.Fatal(u.view().State)
+			}
+		})
+	}
+}
+
+func TestDevelopmentBackupKeepsUnstagedPackageIdentity(t *testing.T) {
+	for _, broken := range []bool{false, true} {
+		t.Run(fmt.Sprint(broken), func(t *testing.T) {
+			h := newTestHub(t)
+			h.version = "saved-hub-version"
+			dir, staged := t.TempDir(), t.TempDir()
+			t.Setenv("PERSONA_NODE_BINARIES", dir)
+			write := func(path, data string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(dir, "personad-linux-arm64"), "retained unlabelled")
+			write(filepath.Join(dir, "personad-windows-amd64"), "retained labelled")
+			write(filepath.Join(dir, "personad-windows-amd64.version"), "explicit-old-version\n")
+			write(filepath.Join(staged, "personad-linux-amd64"), "saved package")
+			if broken {
+				write(filepath.Join(dir, "personad-linux-arm64.version"), "")
+			}
+			err := h.upd.updateNodes(context.Background(), staged, "before-rollback", &update.DevelopmentCandidate{BackupID: "snapshot-fixture"})
+			if broken {
+				if err == nil {
+					t.Fatal("accepted an unknown retained version")
+				}
+				if _, err := os.Stat(filepath.Join(staged, "personad-linux-amd64")); err != nil {
+					t.Fatal("lost staging", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range map[string]string{
+				"personad-linux-arm64":           "retained unlabelled",
+				"personad-linux-arm64.version":   "before-rollback\n",
+				"personad-windows-amd64":         "retained labelled",
+				"personad-windows-amd64.version": "explicit-old-version\n",
+				"personad-linux-amd64":           "saved package",
+			} {
+				if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != want {
+					t.Fatal(name, string(got), err)
+				}
 			}
 		})
 	}

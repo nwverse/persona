@@ -151,10 +151,13 @@ func RunSlot(ctx context.Context, b update.Build) error {
 	slot.Hello(b.Version, b.Number)
 	logger := slotLogger(slot)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
-	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger, slot: slot}).boot()
 	fail := func(err error) error {
 		slot.Failed(err.Error())
 		return err
+	}
+	updating, err := newUpdater(&Hub{build: b, version: b.Version, logger: logger, slot: slot}).boot()
+	if err != nil {
+		return fail(fmt.Errorf("update recovery: %w", err))
 	}
 	cfg, err := LoadConfig()
 	if err != nil {
