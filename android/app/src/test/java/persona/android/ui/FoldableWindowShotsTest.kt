@@ -187,12 +187,17 @@ class FoldableWindowShotsTest {
                     val assistantKey = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
                     val chrome = NavEntryDecorator<NavKey> { entry ->
                         val primary = entry.contentKey in rootKeys
+                        val tabSplit = LocalAgentsTabSplit.current
+                        val entrySplit = rememberEntrySplitDetail(tabSplit, entry.contentKey)
                         val page: @Composable () -> Unit = {
-                            CompositionLocalProvider(LocalHomeChrome provides if (primary) HomeChrome(navigationItems(emptyMap()), selected.name,
-                                onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = remember { mutableIntStateOf(0) },
-                                leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {
-                                    if (entry.contentKey == assistantKey && regular) shown.value = !shown.value else drawerShown.value = true
-                                }) }) else null) { entry.Content() }
+                            val content: @Composable () -> Unit = {
+                                CompositionLocalProvider(LocalHomeChrome provides if (primary) HomeChrome(navigationItems(emptyMap()), selected.name,
+                                    onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = remember { mutableIntStateOf(0) },
+                                    leading = { JPersonaButton(PersonaState.Idle, "Sidebar", {
+                                        if (entry.contentKey == assistantKey && regular) shown.value = !shown.value else drawerShown.value = true
+                                    }) }) else null) { entry.Content() }
+                            }
+                            if (tabSplit != null) CompositionLocalProvider(LocalSplitDetail provides entrySplit, content = content) else content()
                         }
                         if (entry.contentKey == assistantKey) {
                             val split = sidebarSplit(width.value, emptyList())
@@ -206,6 +211,13 @@ class FoldableWindowShotsTest {
                     val stack = stacks.getValue(selected)
                     val listDetail = rememberShellListDetail(selected, directive, width, emptyList(), detailOf(stack) != null,
                         store = dividerStore, collapsible = canCollapseList(stack))
+                    val agentsTabSplit = rememberAgentsTabSplit(
+                        tab = selected,
+                        stack = stack,
+                        twoPanes = directive.maxHorizontalPartitions > 1 && !over,
+                        listHidden = listDetail.listHidden,
+                        onShowList = listDetail::expand,
+                    )
                     val overlay = rememberAgentsOverlayStrategy(over && selected == AppTab.Agents, agentsOverShown) {
                         CompositionLocalProvider(LocalHomeChrome provides HomeChrome(navigationItems(emptyMap()), selected.name,
                             onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
@@ -216,9 +228,10 @@ class FoldableWindowShotsTest {
                     }
                     Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
                         JShellDrawer(drawerShown.value, onDismiss = { drawerShown.value = false }, drawer = sidebar) {
-                            NavDisplay(backStack = stack, onBack = navigator::back,
-                                entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator(), chrome),
-                                sceneStrategies = listOf(overlay, listDetail),
+                            CompositionLocalProvider(LocalAgentsTabSplit provides agentsTabSplit) {
+                                NavDisplay(backStack = stack, onBack = navigator::back,
+                                    entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator(), chrome),
+                                    sceneStrategies = listOf(overlay, listDetail.strategy),
                                 transitionSpec = { ContentTransform(EnterTransition.None, ExitTransition.None) },
                                 popTransitionSpec = { ContentTransform(EnterTransition.None, ExitTransition.None) },
                                 entryProvider = { key ->
@@ -246,6 +259,7 @@ class FoldableWindowShotsTest {
                                     }
                                     NavEntry(key, entry.contentKey, entry.metadata + metadata) { entry.Content() }
                                 })
+                            }
                         }
                     }
                 }
