@@ -11,10 +11,12 @@ import (
 
 // ---- token usage by machine (docs/server/machines.md "Token usage") ----
 
-// UsageMinuteStep is the step of a row as a node reported it; UsageRolledStep of ten minutes rolled up.
+// UsageMinuteStep is the step of a row as a node reported it; UsageRolledStep of ten minutes rolled up; UsageHourStep
+// of an hour, rolled up from the ten-minute rows past a week and kept for the calendar's year.
 const (
 	UsageMinuteStep = 60
 	UsageRolledStep = 600
+	UsageHourStep   = 3600
 )
 
 const putUsageSQL = `INSERT INTO machine_usage (machine_id, ts, step, model, launcher, input, cache_write, cache_read,
@@ -60,17 +62,28 @@ func (d *DB) PutUsages(ctx context.Context, writes []UsageWrite) (rejected []err
 // model and launcher. Moving and summing is one statement, so a minute is rolled up once; a ten-minute row already
 // there (a node that sent an old minute again) is added to.
 func (d *DB) RollupUsage(ctx context.Context, before time.Time) (int64, error) {
+	return d.rollupUsage(ctx, UsageMinuteStep, UsageRolledStep, before)
+}
+
+// RollupUsageHours sums the ten-minute rows before before (rounded down to the hour) into one row a machine, hour,
+// model and launcher, as RollupUsage does the minutes.
+func (d *DB) RollupUsageHours(ctx context.Context, before time.Time) (int64, error) {
+	return d.rollupUsage(ctx, UsageRolledStep, UsageHourStep, before)
+}
+
+// rollupUsage moves the rows of step from before before (rounded down to step to) into rows of step to.
+func (d *DB) rollupUsage(ctx context.Context, from, to int, before time.Time) (int64, error) {
 	tag, err := d.pool.Exec(ctx, `WITH moved AS (
-			DELETE FROM machine_usage WHERE step = 60 AND ts < to_timestamp($1) RETURNING *
+			DELETE FROM machine_usage WHERE step = $2 AND ts < to_timestamp($1) RETURNING *
 		)
 		INSERT INTO machine_usage AS u (machine_id, ts, step, model, launcher, input, cache_write, cache_read, output, requests)
-		SELECT machine_id, date_bin('10 minutes', ts, timestamptz 'epoch'), 600, model, launcher, sum(input), sum(cache_write),
-			sum(cache_read), sum(output), sum(requests)
+		SELECT machine_id, date_bin(make_interval(secs => $3), ts, timestamptz 'epoch'), $3, model, launcher, sum(input),
+			sum(cache_write), sum(cache_read), sum(output), sum(requests)
 		FROM moved GROUP BY 1, 2, 4, 5
 		ON CONFLICT (machine_id, ts, step, model, launcher) DO UPDATE SET input = u.input + excluded.input,
 			cache_write = u.cache_write + excluded.cache_write, cache_read = u.cache_read + excluded.cache_read,
 			output = u.output + excluded.output, requests = u.requests + excluded.requests`,
-		before.Truncate(10*time.Minute).Unix())
+		before.Truncate(time.Duration(to)*time.Second).Unix(), from, to)
 	if err != nil {
 		return 0, err
 	}
@@ -107,6 +120,46 @@ func (d *DB) UsageSeries(ctx context.Context, machine string, from, to time.Time
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// UsageSpan is the tokens of one span of UsageSpans' bounds: every machine's, or one machine's.
+type UsageSpan struct {
+	Span       int    // bounds[Span] to bounds[Span+1]
+	Machine    string // "" when summed over the machines
+	Input      int64  // not from the cache
+	CacheWrite int64
+	CacheRead  int64
+	Output     int64
+	Requests   int
+}
+
+// UsageSpans sums every machine's rows into the spans between bounds (in time order: a span is [bounds[i],
+// bounds[i+1])), and with byMachine each machine's apart; only the spans with rows, in order. A row counts in the
+// span its start is in: the days and hours of a zone the clock is not a whole hour from UTC in split the hour rows
+// at the hour (docs/server/machines.md "Token usage").
+func (d *DB) UsageSpans(ctx context.Context, bounds []time.Time, byMachine bool) ([]UsageSpan, error) {
+	if len(bounds) < 2 {
+		return nil, nil
+	}
+	rows, err := d.pool.Query(ctx, `SELECT width_bucket(ts, $1::timestamptz[]) - 1, CASE WHEN $2::boolean THEN machine_id ELSE '' END,
+			sum(input)::bigint, sum(cache_write)::bigint, sum(cache_read)::bigint, sum(output)::bigint, sum(requests)::bigint
+		FROM machine_usage WHERE ts >= $3 AND ts < $4
+		GROUP BY 1, 2 ORDER BY 1, 2`, bounds, byMachine, bounds[0], bounds[len(bounds)-1])
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageSpan
+	for rows.Next() {
+		var s UsageSpan
+		var req int64
+		if err := rows.Scan(&s.Span, &s.Machine, &s.Input, &s.CacheWrite, &s.CacheRead, &s.Output, &req); err != nil {
+			return nil, err
+		}
+		s.Requests = int(req)
+		out = append(out, s)
 	}
 	return out, rows.Err()
 }
