@@ -362,7 +362,10 @@ test("a detached descendant survives original-group observation and cannot autho
 });
 
 test("stdin failures remain observable beside a genuine child close", async () => {
-  const result = await runCaptured("/bin/sh", ["-c", "exec 0<&-; sleep 0.1"], { input: "x".repeat(128 * 1024), timeout: 2000 });
+  // 128 KiB can fit in a Linux socket buffer before fd 0 closes, producing no write error.
+  // Keep a real write pending, and confirm that the child actually closed its input.
+  const result = await runCaptured("/bin/sh", ["-c", "exec 0<&-; printf 'stdin closed\\n'; sleep 0.1"], { input: "x".repeat(8 * 1024 * 1024), timeout: 2000 });
+  assert.equal(result.stdout, "stdin closed\n");
   assert.equal(result.code, 0);
   assert.equal(result.closed, true);
   assert.match(result.error, /stdin:.*EPIPE/);
