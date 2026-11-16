@@ -26,11 +26,16 @@ import persona.core.domain.FixtureReader
 class ContinuityAdapterFixtureTest(
     private val name: String,
     private val fixture: FixtureReader.Case,
-    private val rust: Boolean,
+    private val selection: String,
 ) {
     @Test fun replay() = runBlocking {
-        val driver = if (rust) RustContinuityDriver(FlushContinuityFrameScheduler()) else null
-        val adapter: ContinuityAdapter = if (driver == null) KotlinContinuityAdapter(CHAT) else RustContinuityAdapter(CHAT, driver)
+        val driver = if (selection == "rust") RustContinuityDriver(FlushContinuityFrameScheduler()) else null
+        val mismatches = java.util.concurrent.ConcurrentLinkedQueue<ContinuityMismatch>()
+        val adapter: ContinuityAdapter = when (selection) {
+            "rust" -> RustContinuityAdapter(CHAT, requireNotNull(driver))
+            "shadow" -> ShadowContinuityAdapter(CHAT, sink = { mismatches.add(it) }, afterFirstFrame = { it() })
+            else -> KotlinContinuityAdapter(CHAT)
+        }
         try {
             val input = fixture.value.getValue("input").jsonObject
             val initial = input.getValue("initial").jsonObject
@@ -67,7 +72,7 @@ class ContinuityAdapterFixtureTest(
                     result.state.items.map { it.id })
                 // Gap is the Kotlin reducer's step result, not a Rust boundary field. Rust verification is
                 // tested through ChatPatch.verified; do not rebuild a second continuity state machine here.
-                if (!rust) assertEquals("$label gap", want.text("gap"), when (result.gap) {
+                if (selection != "rust") assertEquals("$label gap", want.text("gap"), when (result.gap) {
                     Gap.None -> "none"
                     Gap.Fill -> "fill"
                     Gap.Reload -> "reload"
@@ -76,6 +81,8 @@ class ContinuityAdapterFixtureTest(
             }
         } finally {
             adapter.close()
+            ShadowContinuityDiagnostics.awaitIdle()
+            assertEquals("$name shadow mismatches", emptyList<ContinuityMismatch>(), mismatches.toList())
             driver?.close()
         }
     }
@@ -85,8 +92,8 @@ class ContinuityAdapterFixtureTest(
 
         @JvmStatic @Parameterized.Parameters(name = "{0}")
         fun cases(): List<Array<Any>> = FixtureReader.read("continuity").flatMap { fixture ->
-            listOf(false, true).map { rust ->
-                arrayOf("${if (rust) "rust" else "kotlin"}/${fixture.value.getValue("name").jsonPrimitive.content}", fixture, rust)
+            listOf("kotlin", "rust", "shadow").map { selection ->
+                arrayOf("$selection/${fixture.value.getValue("name").jsonPrimitive.content}", fixture, selection)
             }
         }
     }
