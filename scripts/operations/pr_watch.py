@@ -474,7 +474,7 @@ class Watcher:
 
     def success_review(self, repo, number, pr, results, base_failures=None):
         visual_missing = any(result.get("name", "").startswith("Visual acceptance not performed:") for result in results)
-        checks = "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes"
+        checks = "\n".join("- `%s`" % r["name"] for r in results if r.get("ok") and not r.get("skipped")) or "- No additional successful lanes"
         if base_failures:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
                     "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
@@ -890,6 +890,11 @@ class Watcher:
                 try:
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
                     if rounds >= REPAIR_LIMIT:
+                        current = self.state.get(repo, number)
+                        if current.get("head") != head or current.get("evidence_key") != evidence_key:
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           base=pr["baseRefOid"], repair_rounds=rounds,
+                                           repair_exhausted=False)
                         if not self.state.get(repo, number).get("repair_exhausted"):
                             self.exhaust_repair(repo, number, pr, evidence_key,
                                                 "The PR still conflicts with main after %d repair rounds; no further base update was attempted." % REPAIR_LIMIT)
