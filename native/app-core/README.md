@@ -48,7 +48,9 @@ unchanged fixtures through every pure C projection: sort's `empty_list`, `person
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
-`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can

@@ -489,6 +489,11 @@ Phase 3 lands in several PRs.
     extended-grapheme-count-derived size. `FoldImage.ref`
     synthesis is outside the pure leaf. This is not full `ChatLine`, multiple viewed lines, UI loading, actual tool
     execution or performance evidence.
+  - The C ABI `persona_core_project_viewed_images` follows the same JSON/buffer ownership contract (#9017). The
+    independently compiled C11 client compares the complete post-overlay ordinary viewed object and a complete
+    source-derived folded object, including path/size identities and array order. It rejects malformed input, no-image
+    no-line and deliberately wrong expected objects, and the header/export check covers the new function. This is
+    Linux C ABI evidence, not Swift, Apple ABI, NAPI or device acceptance.
   - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
     boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
