@@ -574,10 +574,15 @@ nonisolated struct LauncherQuota: Decodable, Hashable, Sendable {
 
     nonisolated struct Usage: Decodable, Hashable, Sendable {
         var label: String
+        /// What `label` covers: `day`, `week` or `month`; nil when the extension does not say (shown by the label alone,
+        /// never added up).
+        var period: String?
         var requests: Int64
         var tokens: Int64
         var costUSD: Double?
-        enum CodingKeys: String, CodingKey { case label, requests, tokens; case costUSD = "cost_usd" }
+        enum CodingKeys: String, CodingKey { case label, period, requests, tokens; case costUSD = "cost_usd" }
+
+        static let day = "day"
     }
 
     nonisolated struct Pool: Decodable, Hashable, Sendable {

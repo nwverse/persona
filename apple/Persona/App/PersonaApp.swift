@@ -101,6 +101,7 @@ struct PersonaApp: App {
                 }
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                RemindersImporter.shared.activate(model) // Reminders imported as to-dos, when that is on (#4009)
                 #endif
             } else if new == .background {
                 #if os(iOS)

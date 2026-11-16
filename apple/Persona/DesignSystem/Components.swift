@@ -574,8 +574,14 @@ struct CloseAgentSheet: View {
             .padding(.horizontal, Theme.Space.xl)
 
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                fact(Theme.Icon.end, String(localized: "Stops the current task, quits \(session.agentLabel), and closes its terminal tab (only this pane when split)"))
-                fact(Theme.Icon.retry, String(localized: "The chat history is kept; continue later with \(session.resumeCommand)"))
+                if session.canTerminal {
+                    fact(Theme.Icon.end, String(localized: "Stops the current task, quits \(session.agentLabel), and closes its terminal tab (only this pane when split)"))
+                    fact(Theme.Icon.retry, String(localized: "The chat history is kept; continue later with \(session.resumeCommand)"))
+                } else {
+                    // A session without a terminal (a runtime's, #6294) ends where it runs; whether its history stays is
+                    // its runtime's, so the sheet does not promise it.
+                    fact(Theme.Icon.end, String(localized: "Stops the current task and ends this session"))
+                }
             }
             .padding(Theme.Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)

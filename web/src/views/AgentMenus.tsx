@@ -2,7 +2,7 @@
 // and the confirmation of "Mark all as seen". What they do is in lib/agent-actions.ts.
 import { attachLive, flipMute, flipPin, handToPersona } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
-import { resumeCommand, sessionCan, sessionDeletable, sessionMenuActions } from "../lib/format";
+import { resumeCommand, sessionCanRename, sessionDeletable, sessionMenuActions } from "../lib/format";
 import { appArchiveDeps, archiveAgent, archiveOffers, deleteInsteadOfArchive } from "../lib/agent-archives";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
@@ -29,7 +29,8 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
   return [
     ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attachLive(s) }] : []),
     { key: "pin", label: o.pinned ? t("agentmenus.unpin") : t("agentmenus.pin"), icon: "pin", accel: "p", onSelect: () => void flipPin(s) },
-    ...(sessionCan(s, "send") && !s.source_kind ? [{ key: "rename", label: t("agentmenus.rename"), icon: "pencil" as const, accel: "r", onSelect: () => onRename(s) }] : []),
+    // as the chat's ⋯: by capabilities.rename where the node says so (a runtime's session, #6294)
+    ...(sessionCanRename(s) ? [{ key: "rename", label: t("agentmenus.rename"), icon: "pencil" as const, accel: "r", onSelect: () => onRename(s) }] : []),
     { key: "mute", label: o.muted ? t("agentmenus.unmute") : t("agentmenus.mute"), icon: o.muted ? "bell" : "bellOff", onSelect: () => void flipMute(s) },
     { key: "persona", label: t("agentmenus.hand_to_persona"), icon: "spark", onSelect: () => void handToPersona(s, machineWithHub(s.machine_id, getState().machines)) },
     // on a todo, the same dialog moves it to another (the hub releases the old link), so it says so (#2348)

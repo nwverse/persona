@@ -117,8 +117,8 @@ type Service struct {
 	gates    map[string]*gate
 	busy     map[string]bool // connectors whose subscriptions are running now
 	running  int
-	asked    map[string]bool // subscriptions asked to run now
-	kicked   map[string]bool // subscriptions their connector's changed event made due (ConnectorChanged)
+	asked    map[string]bool      // subscriptions asked to run now
+	kicked   map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
 	wake     chan struct{}
 
 	// Push sources (push.go): one push at a time, and each device's items in the last hour.
@@ -162,7 +162,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]bool{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
@@ -323,7 +323,7 @@ func (s *Service) catalog(ctx context.Context, c ConnectorInfo, fresh time.Durat
 	}
 	cctx, cancel := context.WithTimeout(ctx, catalogWait)
 	defer cancel()
-	sources, err := connector.ReadCatalog(cctx, c.Conn)
+	sources, err := connector.ReadCatalog(cctx, withInboxThings(c.Conn)) // with the generic inbox_things (#6381)
 	s.mu.Lock()
 	kept := c
 	kept.Conn = nil
@@ -399,12 +399,17 @@ func catalogOf(c ConnectorInfo, sources []connector.CatalogSource, err error, al
 		return out
 	}
 	for _, src := range sources {
+		tools := peopleTools(src.Tools)
+		if len(tools) == 0 && len(src.Tools) > 0 {
+			continue // only the Inbox's own rows (#6381): no source of people's
+		}
+		recipes := slices.DeleteFunc(slices.Clone(src.Recipes), func(r Recipe) bool { return r.Tool == InboxThingsTool })
 		cs := CatalogSource{ID: src.ID, Name: src.Name, Icon: src.Icon, Service: src.Service, MinIntervalSeconds: src.MinIntervalSeconds,
-			MaxCallsPerHour: src.MaxCallsPerHour, Tools: []CatalogTool{}, Recipes: slices.Clone(src.Recipes), Subscriptions: []string{}}
+			MaxCallsPerHour: src.MaxCallsPerHour, Tools: []CatalogTool{}, Recipes: recipes, Subscriptions: []string{}}
 		if cs.Recipes == nil {
 			cs.Recipes = []Recipe{}
 		}
-		for _, t := range src.Tools {
+		for _, t := range tools {
 			ct := CatalogTool{Name: t.Name, Title: t.Title, Description: t.Description, InputSchema: t.InputSchema, Refused: refusal(t)}
 			ct.Subscribable = ct.Refused == nil
 			cs.Tools = append(cs.Tools, ct)
@@ -544,7 +549,7 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 	if sub != nil {
 		label = sub.Label
 	}
-	pl := pull(ctx, c.Conn, sourceID, t.recipe, since, s.now(), loc, label, nil, t.tool.InputSchema)
+	pl := pull(ctx, withInboxThings(c.Conn), sourceID, t.recipe, since, s.now(), loc, label, nil, t.tool.InputSchema)
 	dr.Shape, dr.ItemsPath = pl.shape, pl.itemsPath
 	if t.recipe.ItemsPath == "" && t.recipe.Mode != wire.ConnectorSubscriptionModeSnapshot {
 		t.recipe.ItemsPath = pl.itemsPath // saved as found: later runs read the same place
@@ -664,9 +669,15 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 	if !ok {
 		return Subscription{}, notFound("connector")
 	}
+	if in.Recipe != nil && in.Recipe.Tool == InboxThingsTool {
+		return Subscription{}, inboxThingsOnly()
+	}
 	dr, t := s.check(ctx, c, in.Source, in.Recipe, nil, -1, "")
 	if !dr.OK {
 		return Subscription{}, refused(dr)
+	}
+	if t.recipe.Tool == InboxThingsTool {
+		return Subscription{}, inboxThingsOnly()
 	}
 	now := s.now()
 	origin := OriginExtension
@@ -786,6 +797,9 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	}
 	if IsPush(*cur) && (p.Recipe != nil || p.IntervalSeconds != nil || p.DailyAt != nil) {
 		return Subscription{}, pushOnly("recipe or schedule")
+	}
+	if p.Recipe != nil && (p.Recipe.Tool == InboxThingsTool || IsMigration(cur.ID)) {
+		return Subscription{}, inboxThingsOnly() // a built-in's rows: its default subscription's recipe is the manager's
 	}
 	if p.Existing != "" && (p.Recipe == nil || !slices.Contains([]string{ExistingDigest, ExistingBaseline, ExistingDeliver}, p.Existing)) {
 		return Subscription{}, errorf(http.StatusBadRequest, CodeBadRequest, "existing is digest, baseline or deliver, with a recipe")
@@ -947,6 +961,10 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 // changedGap is the least time between a subscription's last run and one its connector's changed event starts (#6247).
 const changedGap = time.Minute
 
+// changedDebounce is how long after a connector's changed event a switched built-in's default subscription runs
+// (#6381): as the Inbox's own kick of the built-in (extmgr's inboxDebounce), so a burst of events runs it once.
+const changedDebounce = 3 * time.Second
+
 // ConnectorChanged runs soon the subscriptions of connector id that are on and pull items on a schedule: the connector
 // said it has something new, as it kicks the Inbox for its own (#6247). A subscription is run so at most once a
 // changedGap after its last run, and never sooner than its source's own minimum; the connector's call gap, hourly
@@ -958,20 +976,30 @@ func (s *Service) ConnectorChanged(ctx context.Context, id string) {
 		s.o.Logf("subscriptions: %s changed: %v", id, err)
 		return
 	}
-	now, kicked := s.now(), false
+	now, kicked, later := s.now(), false, false
 	s.mu.Lock()
 	for _, sub := range all {
 		if sub.Connector != id || IsPush(sub) || !on(sub) || sub.Recipe.Mode == wire.ConnectorSubscriptionModeSnapshot {
 			continue
 		}
+		if _, switched := MigratedFrom(sub); switched {
+			// The built-in's own feed now (#6381): as fast as its kick of the Inbox, a burst once.
+			if at, pending := s.kicked[sub.ID]; !pending || !at.After(now) {
+				s.kicked[sub.ID], later = now.Add(changedDebounce), true
+			}
+			continue
+		}
 		if last := sub.LastRunAt; last != nil && now.Sub(*last) < max(changedGap, time.Duration(sub.SourceMin)*time.Second) {
 			continue
 		}
-		s.kicked[sub.ID], kicked = true, true
+		s.kicked[sub.ID], kicked = now, true
 	}
 	s.mu.Unlock()
 	if kicked {
 		s.poke()
+	}
+	if later {
+		time.AfterFunc(changedDebounce, s.poke)
 	}
 }
 

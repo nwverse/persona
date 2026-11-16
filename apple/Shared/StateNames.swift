@@ -19,7 +19,11 @@ nonisolated enum StateName: String, CaseIterable, Sendable {
     /// A to-do or task whose agent ended its turn but waits to be brought back: its background work, or the hub's wake-up (#3274).
     case taskWaiting
 
-    var text: String {
+    /// Resolved once per interface locale: these words are drawn on every redraw of the Agents list, its filter chips and
+    /// row badges, and each `interfaceText` lookup reads the localization tables (#5438).
+    var text: String { Self.kept("state." + rawValue) { resolve() } }
+
+    private func resolve() -> String {
         switch self {
         case .needsYou: interfaceText("Needs You [State Names]")
         case .working: interfaceText("Working [State Names]")

@@ -94,7 +94,9 @@ describe("the 常驻 rows' disclosure", () => {
     expect(lead.querySelector('a[href="/persona/lead-a"]')!.textContent).toContain("在做 1 · 等你 1");
     expect(host.textContent).not.toContain("书记官");
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("false");
-    expect(disclosure("lead-a").getAttribute("aria-label")).toBe(t("sidebar.direction_tasks", { name: "Product" }));
+    // #6214: the fold says the action in words, and flips to "collapse" once open
+    expect(disclosure("lead-a").getAttribute("aria-label")).toBe(t("sidebar.direction_tasks_expand", { name: "Product" }));
+    expect(disclosure("lead-a").getAttribute("title")).toBe(t("sidebar.direction_tasks_expand", { name: "Product" }));
     // a direction with no task has nothing to open, and says nothing of a fold: an invisible spacer keeps the column
     expect(direction("lead-b")!.querySelector("button[aria-expanded]")).toBeNull();
     expect(direction("lead-b")!.querySelector("span[aria-hidden].invisible")).not.toBeNull();
@@ -106,6 +108,7 @@ describe("the 常驻 rows' disclosure", () => {
     act(() => disclosure("lead-a").click());
     await flush();
     expect(disclosure("lead-a").getAttribute("aria-expanded")).toBe("true");
+    expect(disclosure("lead-a").getAttribute("aria-label")).toBe(t("sidebar.direction_tasks_collapse", { name: "Product" }));
     expect(localStorage.getItem("fold:direction:lead-a")).toBe("0");
     const open = direction("lead-a")!;
     expect([...open.querySelectorAll('a[href^="/todos?id="]')].map((a) => a.getAttribute("href"))).toEqual(["/todos?id=t-ask", "/todos?id=t-run"]);

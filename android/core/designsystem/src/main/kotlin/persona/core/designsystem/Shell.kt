@@ -281,7 +281,7 @@ fun HomeNavigation(
     Box(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight)
         .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xxs)) {
         Box(Modifier.align(Alignment.TopStart)) { leading() }
-        Box(Modifier.align(Alignment.TopCenter)) {
+        Box(Modifier.align(Alignment.TopCenter).padding(end = HomeTokens.segmentWidth)) {
             Row(Modifier.floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
                 items.forEach { item ->
                     val chosen = item.key == selected

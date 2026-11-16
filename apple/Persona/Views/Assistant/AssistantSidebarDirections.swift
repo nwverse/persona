@@ -108,6 +108,11 @@ struct AssistantSidebarDirection<Head: View>: View {
         .accessibilityLabel([name, direction.counts.label ?? ""].filter { !$0.isEmpty }
             .joined(separator: String(localized: ", ", comment: "Separator between the parts of a VoiceOver label")))
         .accessibilityValue(open ? String(localized: "Expanded") : String(localized: "Collapsed [Assistant Sidebar e64447]"))
+        // A Mac pointer gets a worded hover label too (#6214): the bare chevron alone did not say what it folds.
+        #if os(macOS)
+        .help(open ? String(localized: "Direction Collapse Help [Leader Actions 6214]")
+                   : String(localized: "Direction Expand Help [Leader Actions 6214]"))
+        #endif
         .accessibilityIdentifier("sidebar-direction-toggle")
     }
 

@@ -82,6 +82,8 @@ type sessionModes struct {
 	// Codex: an effort waiting for the phone's next turn/start on a Codex thread whose app-server has no
 	// thread/settings/update (codex_effort.go); nil none. Apart from Mode / Effort, which are Claude's.
 	Codex *codexPending
+	// App: the effort the phone set for the next turn of a chat of the Codex App (codex_desktop_effort.go); nil none.
+	App *codexAppPick
 	// Model: the model the app switched a Claude Code session to, shown until its transcript shows another (model_switch.go).
 	Model     *pendingModel
 	Ultracode *ultracodeState // independent, session-only workflow switch (ultracode.go)
@@ -288,6 +290,21 @@ func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
 	}
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
 		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上改权限模式和思考强度")
+	}
+	if mode != "" {
+		// Allow All for a claude that has no bypass flag: no key reaches it, so it is restarted in it once its turn is
+		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
+		if n.needsModeRestart(id, mode) {
+			if err := n.restartable(ctx, id); err == nil {
+				n.queueModeRestart(id, mode)
+				mode = ""
+				if effort == "" {
+					return nil
+				}
+			}
+		} else {
+			n.dropModeRestart(id)
+		}
 	}
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {

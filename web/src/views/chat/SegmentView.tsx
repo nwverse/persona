@@ -182,13 +182,13 @@ function BubbleText({ text: full, blocks, ts, mid, sid, own, pending }: { text: 
         </span>
       )}
       {split || forwards?.length ? (
-        <div className={`flex max-w-full flex-col gap-1.5 rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)}>
+        <div className={`flex max-w-full flex-col gap-1.5 rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)} data-hit-target>
           {forwards.length > 1 ? <ForwardCards blocks={blocks} count={forwards.length} /> : forwards.map((c, i) => <ForwardBlock key={i} c={c} />)}
           {split && <QuoteStack blocks={split.quotes} mid={mid} sid={sid} />}
           {words}
         </div>
       ) : (
-        <div className={`max-w-full rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)}>
+        <div className={`max-w-full rounded-[12px] ${fill} px-4 py-2.5 text-ink ${pending ? "opacity-60" : ""}`} title={clock(ts)} data-hit-target>
           {words}
         </div>
       )}

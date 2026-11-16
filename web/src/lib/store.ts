@@ -6,7 +6,7 @@ import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConv
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
-import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
+import { AGENTS_PAGE_COUNTS_FEATURE, agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode, setPersonalPageCounts } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
@@ -763,6 +763,7 @@ function onMessage(msg: Record<string, unknown>) {
       // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
       runtimeSessions.setRoots(state.features.includes(SESSIONS_HIERARCHY_FEATURE));
       setRuntimePageCounts(state.features.includes(SESSIONS_PAGE_COUNTS_FEATURE));
+      setPersonalPageCounts(state.features.includes(AGENTS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
       taskRowsAsked.clear();
       cardRowsAsked.clear();

@@ -135,3 +135,16 @@ func TestRouteScopes(t *testing.T) {
 			"then PERSONA_UPDATE_ROUTE_SCOPES=1 go test ./internal/hub -run TestRouteScopes and check the diff of testdata/route_scopes.txt")
 	}
 }
+
+func TestCodexTakeoverRequiresFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, method := range []string{"GET", "POST"} {
+		pattern := method + " /api/v1/machines/{mid}/codex/{sid}/takeover"
+		if !slices.Contains(patterns, pattern) {
+			t.Fatalf("missing takeover route: %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Fatalf("an extension token must not authorize takeover: %s has scope %s", pattern, scope)
+		}
+	}
+}

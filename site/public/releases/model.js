@@ -7,21 +7,29 @@ export const TESTFLIGHT = "https://testflight.apple.com/join/vsjfy3hE";
 
 // The devices, in the order the page lists them. arches: the files offered, the usual one first.
 export const DEVICES = [
-  { id: "ios", name: "iPhone 与 Apple Watch", sub: "TestFlight 公开测试 · 需要 iOS 26",
+  { id: "ios", short: "iPhone", name: "iPhone 与 Apple Watch", sub: "TestFlight 公开测试 · 需要 iOS 26",
     what: "主力 App：和助手聊天，看每个 Agent 做到哪了，替它们拿主意。手表版随 iPhone 版一起提供。", store: true },
-  { id: "android", name: "Android", sub: "APK 安装包 · Android 11 及以上",
+  { id: "android", short: "Android", name: "Android", sub: "APK 安装包 · Android 11 及以上",
     what: "和 iPhone 版一样：聊天、看进度、回答 Agent 的问题，通知也能直接处理。", arches: [""] },
-  { id: "macos", name: "Mac", sub: "Apple 芯片和 Intel 芯片",
+  { id: "macos", short: "Mac", name: "Mac", sub: "Apple 芯片和 Intel 芯片",
     what: "装在电脑上：可以当 hub，替你保管所有数据；也可以连上 hub，让这台电脑跑 Agent。",
     caveat: "还没有经过苹果公证。打开时如果被拦下，到「系统设置 › 隐私与安全性」里点「仍要打开」。", arches: ["arm64", "amd64"] },
-  { id: "windows", name: "Windows", sub: "x64 和 ARM",
+  { id: "windows", short: "Windows", name: "Windows", sub: "x64 和 ARM",
     what: "装在电脑上：连上 hub，让这台电脑跑 Agent，也能收发文件和通知。",
     caveat: "程序还没有签名。Windows 提示有风险时，点「更多信息 › 仍要运行」。", arches: ["amd64", "arm64"] },
-  { id: "linux", name: "Linux", sub: "x86-64 和 ARM64",
+  { id: "linux", short: "Linux", name: "Linux", sub: "x86-64 和 ARM64",
     what: "适合长期开着的机器当 hub，也可以连上 hub 跑 Agent。", arches: ["amd64", "arm64"] },
-  { id: "web", name: "网页版", sub: "已经在你的 hub 上",
-    what: "不用安装：浏览器打开 hub 的地址就能用，电脑上还可以装成应用。只有自己托管网页时才需要下载。", arches: [""] },
+  { id: "web", short: "网页版", name: "网页版", sub: "不用安装，打开就能用",
+    what: "网页版就在你的 hub 上，用浏览器打开就行：", guide: true },
 ];
+
+// How to reach the web app: it is served by the hub, so there is nothing to download (docs/operations/getting-started.md).
+export const WEB_GUIDE = [
+  { title: "打开 hub 的地址", text: "装 hub 时终端里打出的管理页地址，去掉末尾的 /admin 就是，比如", code: "http://<局域网地址>:18660" },
+  { title: "用手机扫码登录", text: "在已连上的手机里打开「设置 › 设备 › 连接新设备」，选「浏览器」，扫网页上的二维码。" },
+  { title: "装成应用（可选）", text: "Chrome、Edge 点地址栏里的「安装」；Safari 选「文件 › 添加到程序坞」。" },
+];
+export const GETTING_STARTED = "https://github.com/nwverse/persona/blob/main/docs/operations/getting-started.md";
 
 const ARCH = {
   macos: { arm64: "Apple 芯片", amd64: "Intel 芯片" },

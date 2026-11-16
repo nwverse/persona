@@ -713,10 +713,13 @@ private fun ChatPage(
     val rewindMenu = if (actionsService != null && canSend && !readOnly && renderStyle != ChatRenderStyle.Assistant) RewindMenu(
         block = rewindBlock?.let { res.getString(when (it) {
             Rewind.Block.ClaudeOnly -> R.string.chat_rewind_block_claude_only
+            Rewind.Block.Unsupported -> R.string.chat_rewind_block_unsupported
             Rewind.Block.Offline -> R.string.chat_rewind_block_offline
             Rewind.Block.NeedsYou -> R.string.chat_rewind_block_needs_you
             Rewind.Block.Working -> R.string.chat_rewind_block_working
         }) },
+        // "Code and conversation" only where the node says it puts files back too (#6294), or says nothing (a Claude terminal).
+        code = Rewind.restoresCode(session),
         run = { target, restore ->
             val at = Rewind.target(snapshot.items, target.id)
             val on = session
@@ -730,7 +733,9 @@ private fun ChatPage(
                         // The message goes back into the composer, as Claude's own /rewind puts it back in its box.
                         if (done.inputCleared) composer.edit(target.editText)
                         notice = res.getString(when {
-                            !done.inputCleared -> R.string.chat_rewind_input_kept
+                            // Claude's own box on the computer: only Claude's /rewind in its terminal (a session whose node
+                            // declares no rewind of its own) has one to say this of; a runtime or Codex goes back itself (#6294).
+                            !done.inputCleared && on.capabilities?.rewind != true -> R.string.chat_rewind_input_kept
                             restore == RewindRestore.CodeAndConversation && !done.codeRestored -> R.string.chat_rewind_done_no_code_changes
                             done.codeRestored -> R.string.chat_rewind_done_code_and_conversation
                             else -> R.string.chat_rewind_done_conversation

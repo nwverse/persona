@@ -263,7 +263,7 @@ func (p *pages) plain(s subscriptions.Subscription, src *subscriptions.CatalogSo
 // originShort is who made the recipe, in a word or two for its row.
 func (p *pages) originShort(origin string) string {
 	switch origin {
-	case subscriptions.OriginExtension, subscriptions.OriginModel:
+	case subscriptions.OriginExtension, subscriptions.OriginModel, subscriptions.OriginPersona:
 		return p.t("origin_short." + origin)
 	}
 	return p.t("origin_short.user")
@@ -274,6 +274,8 @@ func (p *pages) origin(s subscriptions.Subscription) string {
 	switch s.RecipeOrigin {
 	case subscriptions.OriginExtension:
 		return p.t("origin.extension")
+	case subscriptions.OriginPersona:
+		return p.t("origin.persona")
 	case subscriptions.OriginModel:
 		return p.t("origin.model", i18n.Args{"date": date})
 	}

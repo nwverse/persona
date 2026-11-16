@@ -35,6 +35,8 @@ struct MeetingPage: View {
     @State private var sync = RecordingSync.shared
     @State private var live = MeetingLive.shared
     @State private var speaker = MeetingSpeaker.shared
+    /// The meeting call (#3862 phase 4): Stop Speaking while its voice speaks.
+    @State private var meetingCall = MeetingCall.shared
     /// This page's hold on the meeting's state (`MeetingConversation.watch`): the live page fading out and the after page
     /// fading in each hold their own, so neither ends the other's.
     @State private var owner = UUID()
@@ -78,8 +80,12 @@ struct MeetingPage: View {
         .themedGroupedPage()
         .navigationTitle(close == nil ? String(localized: "Meeting") : "")
         .navigationBarTitleDisplayMode(.inline)
-        // `meeting_live` and reconnects read the meeting again only while a page shows it (or it records here).
-        .onTabVisibility(appear: { watch(id) }, disappear: { unwatch() })
+        // `meeting_live` and reconnects read the meeting again only while a page shows it (or it records here). A Talk
+        // held on it ends as it goes (#3862 phase 4): nothing else would let it go.
+        .onTabVisibility(appear: { watch(id) }, disappear: {
+            unwatch()
+            meetingCall.endHold(id)
+        })
         .onChange(of: id) { _, new in
             guard watching != nil else { return }
             unwatch()
@@ -419,14 +425,19 @@ struct MeetingPage: View {
             .animation(reduceMotion ? nil : (following ? Theme.Motion.conceal : Theme.Motion.reveal), value: following)
     }
 
-    /// Stop Speaking for an answer the thread draws as a room message (one drawn as an exchange card has its own).
+    /// Stop Speaking for an answer the thread draws as a room message (one drawn as an exchange card has its own), and
+    /// while the meeting call's voice speaks (#3862 phase 4).
     private var showsStopSpeaking: Bool {
+        if mode == .live, meetingCall.call(for: id)?.speaking == true { return true }
         guard let speaking = speaker.speaking else { return false }
         return !shown.exchangeRows.contains(speaking)
     }
 
     private var stopSpeaking: some View {
-        Button { MeetingAsk.shared.stopSpeaking() } label: {
+        Button {
+            MeetingAsk.shared.stopSpeaking()
+            meetingCall.interruptVoice(id)
+        } label: {
             Label("Stop Speaking", systemImage: Theme.Icon.interrupt)
                 .font(Theme.Font.bodyStrong)
                 .lineLimit(1)

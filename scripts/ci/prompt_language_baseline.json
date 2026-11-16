@@ -198,11 +198,12 @@
     ]
   },
   "mcp/voice": {
-    "count": 5,
+    "count": 6,
     "files": [
       "mcp/voice/ask_persona.md",
       "mcp/voice/delegate_task.md",
       "mcp/voice/list_agents.md",
+      "mcp/voice/meeting_delegate_task.md",
       "mcp/voice/search_knowledge.md",
       "mcp/voice/send_to_agent.md"
     ]

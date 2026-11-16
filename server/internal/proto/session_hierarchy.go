@@ -33,6 +33,11 @@ func (s Session) IsSubtask() bool {
 // pointer (Session.Hierarchy, nil when every member is empty): the four fields inline would take every row past its
 // size class (TestSessionFitsItsSizeClass), and only a few rows have any of them.
 type SessionHierarchy struct {
+	// ParentAgentID is the session on the same machine this one is drawn under while staying a session of its own: its
+	// own row, state, sends, unread and counts (docs/protocol/protocol.md "Session hierarchy"). Unlike
+	// parent_session_id it makes no child: nothing folds it, and it is no subagent. Set by the node: a Claude desktop
+	// app's side session names the session it was started from, while that one is listed too (claudedesktop.go, #5935).
+	ParentAgentID string `json:"parent_agent_id,omitempty"`
 	// StartedAt is when the session began: its transcript's first line, a runtime's created time. Set by the node where
 	// it knows it (Codex rollouts, runtime rows); zero when it does not.
 	StartedAt time.Time `json:"started_at,omitzero"`
@@ -90,7 +95,7 @@ type SessionChildren struct {
 }
 
 func (h *SessionHierarchy) empty() bool {
-	return h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
+	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
 		h.Children == nil && len(h.EngineHistory) == 0
 }
 
@@ -115,6 +120,25 @@ func (s *Session) setHierarchy(h SessionHierarchy) {
 		return
 	}
 	s.Hierarchy = &h
+}
+
+// ParentAgentID is the session this one is drawn under while staying its own (SessionHierarchy.ParentAgentID); "" when
+// none.
+func (s *Session) ParentAgentID() string {
+	if s.Hierarchy == nil {
+		return ""
+	}
+	return s.Hierarchy.ParentAgentID
+}
+
+// SetParentAgentID sets the session this one is drawn under ("" for none), with no new hierarchy when it already is.
+func (s *Session) SetParentAgentID(id string) {
+	if s.ParentAgentID() == id {
+		return
+	}
+	h := s.hierarchy()
+	h.ParentAgentID = id
+	s.setHierarchy(h)
 }
 
 // StartedAt is when the session began (SessionHierarchy.StartedAt); zero when not known.

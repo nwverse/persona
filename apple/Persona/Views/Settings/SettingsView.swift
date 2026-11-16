@@ -668,6 +668,8 @@ struct PhoneDataView: View {
             } footer: {
                 Text("When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.")
             }
+            // Reminders imported as to-dos (#4009): only while Persona may read Reminders.
+            if isOn(.reminders) { RemindersImportSection() }
             #endif
         }
         .themedPage()
@@ -716,6 +718,53 @@ struct PhoneDataView: View {
         }
     }
 }
+
+#if os(iOS)
+/// Settings › Phone Data › Reminders: import the reminders of the lists picked as to-dos, one way (#4009,
+/// `RemindersImport`). Off by default; every list until the user turns some off.
+private struct RemindersImportSection: View {
+    @Environment(AppModel.self) private var model
+    @StoredValue(RemindersImport.enabledKey) private var importOn = false
+    @State private var lists: [RemindersImport.ReminderList] = []
+    /// nil: every list. Read with the lists in `.task`, not as the initial value (P3).
+    @State private var picked: Set<String>?
+
+    var body: some View {
+        Section {
+            Toggle(isOn: Binding(get: { importOn }, set: { on in
+                importOn = on
+                RemindersImporter.shared.activate(model, force: on)
+            })) {
+                Text("Import into To-dos") // a switch's title: wraps at large sizes
+            }
+            .accessibilityIdentifier("reminders-import")
+            if importOn {
+                ForEach(lists) { list in
+                    Toggle(isOn: Binding(get: { picked?.contains(list.id) ?? true }, set: { on in choose(list.id, on) })) {
+                        Text(list.title)
+                    }
+                }
+            }
+        } header: {
+            Text("Reminders")
+        } footer: {
+            Text("Incomplete reminders in the lists you choose become to-dos, and later changes to their title, notes or due date follow. Nothing is written back to Reminders; completing or deleting a reminder leaves its to-do as it is. Imports happen while Persona is open.")
+        }
+        .task {
+            picked = RemindersImport.lists // before the rows, which only show once the lists are read
+            lists = await RemindersImport.availableLists()
+        }
+    }
+
+    private func choose(_ id: String, _ on: Bool) {
+        var now = picked ?? Set(lists.map(\.id))
+        if on { now.insert(id) } else { now.remove(id) }
+        picked = now
+        UserDefaults.standard.set(Array(now).sorted(), forKey: RemindersImport.listsKey)
+        RemindersImporter.shared.sync(model, force: true)
+    }
+}
+#endif
 
 /// A data source's icon: the iPhone app it comes from, else its symbol on a tile of the same size and shape.
 private struct SourceIcon: View {

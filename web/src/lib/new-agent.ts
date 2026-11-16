@@ -222,6 +222,10 @@ export interface NewAgentPreset {
   images?: DraftImage[];
   /** An exact workspace destination takes precedence over the legacy machine/folder preset. */
   workspace?: WorkspaceTarget;
+  /** Hears the Agent started from this opening once its launch is ready, its first message sent (Inbox's "Hand to AI" ›
+   *  "New agent…", #5933: it files the item and remembers the Agent; lib/new-agent-started.ts). Never for a cancelled
+   *  sheet or a launch dropped before that. */
+  onStarted?: (session: Session) => void;
 }
 
 const openers = new Set<(preset: NewAgentPreset) => void>();

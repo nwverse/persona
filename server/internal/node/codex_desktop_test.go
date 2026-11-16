@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,20 @@ type fakeCodexBus struct {
 	turns  chan map[string]any
 	stops  chan map[string]any // interrupt requests the owning window took
 	asked  chan bool           // the client answered the bus's discovery question
+
+	// The owning window's thread settings (codex_desktop_effort.go): the updates it took, the effort it reads back,
+	// and how it answers an update (an error, not applied, applied but read back unchanged).
+	settings   chan map[string]any
+	mu         sync.Mutex
+	effort     *string
+	refuse     string
+	notApplied bool
+	unchanged  bool
+}
+
+// holds: the window owns the request's thread.
+func (b *fakeCodexBus) holds(params map[string]any) bool {
+	return params["conversationId"] == b.owned || b.opened.Load() && params["conversationId"] == b.later
 }
 
 func startFakeCodexBus(t *testing.T, owned string) (home string, bus *fakeCodexBus) {
@@ -35,7 +50,8 @@ func startFakeCodexBus(t *testing.T, owned string) (home string, bus *fakeCodexB
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	bus = &fakeCodexBus{owned: owned, turns: make(chan map[string]any, 1), stops: make(chan map[string]any, 1), asked: make(chan bool, 1)}
+	bus = &fakeCodexBus{owned: owned, turns: make(chan map[string]any, 1), stops: make(chan map[string]any, 1), asked: make(chan bool, 1),
+		settings: make(chan map[string]any, 4)}
 	go func() {
 		for {
 			conn, err := l.Accept()
@@ -87,7 +103,10 @@ func (b *fakeCodexBus) serve(conn net.Conn) {
 		}
 		switch {
 		case m["type"] == "client-discovery-response":
-			b.asked <- true
+			select { // one is enough to tell; a later connection's must not hold the bus
+			case b.asked <- true:
+			default:
+			}
 		case method == "initialize":
 			ok(map[string]any{"clientId": "persona"})
 			busWrite(conn, map[string]any{"type": "client-discovery-request", "requestId": "q1", "request": map[string]any{"method": "ide-context"}})
@@ -99,6 +118,24 @@ func (b *fakeCodexBus) serve(conn net.Conn) {
 		case method == "thread-follower-interrupt-turn" && version == 4 && m["targetClientId"] == "window" && params["conversationId"] == b.owned:
 			b.stops <- params
 			ok(map[string]any{"interruptedTurnId": "turn-1", "ok": true})
+		case method == "thread-follower-update-thread-settings" && version == 2 && m["targetClientId"] == "window" && b.holds(params):
+			b.settings <- params
+			b.mu.Lock()
+			refuse, applied := b.refuse, !b.notApplied
+			if e, _ := params["threadSettings"].(map[string]any)["effort"].(string); refuse == "" && applied && !b.unchanged {
+				b.effort = &e
+			}
+			b.mu.Unlock()
+			if refuse != "" {
+				busWrite(conn, map[string]any{"type": "response", "requestId": id, "resultType": "error", "error": refuse})
+				continue
+			}
+			ok(map[string]any{"applied": applied})
+		case method == "thread-follower-read-model-settings" && version == 1 && m["targetClientId"] == "window" && b.holds(params):
+			b.mu.Lock()
+			e := b.effort
+			b.mu.Unlock()
+			ok(map[string]any{"settings": map[string]any{"model": "gpt-x", "reasoningEffort": e, "modelProvider": "openai"}})
 		default:
 			fail()
 		}

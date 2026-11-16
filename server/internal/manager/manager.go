@@ -44,6 +44,9 @@ const Usage = `usage:
                        停掉并去掉常驻服务；它的数据库容器停掉、数据卷留着（--purge：连容器和数据卷一起删掉）
   personad manager capabilities [--json]   只读列出这个程序支持的管理者能力
   personad manager status [--dir 目录]      这台电脑上的管理者和它们的服务
+  personad manager search-reindex [--dir <directory>]
+                       empty this manager's chat search index in its database: it reads its chats again from the
+                       start
   personad manager install --builtin [--join <hub address>] | --check
                        install the built-in manager's own service (Linux: systemd user unit persona-manager-assistant;
                        Mac: launchd); --join: bind it first with the code in PERSONA_MANAGER_CODE, unless its binding
@@ -87,6 +90,8 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 		return cmdUninstall(ctx, e, args[1:])
 	case "status":
 		return cmdStatus(ctx, e, args[1:])
+	case "search-reindex":
+		return cmdSearchReindex(ctx, e, args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, clitext.Named(Usage)) // as the program was run (persona-manager, personad)
 		return nil

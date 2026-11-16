@@ -72,5 +72,5 @@ export function buildDirectionAgentTree(tree: DirectionTree, all: Session[], mac
     });
   }
   const rest = all.filter((s) => !placed.has(keyOf(s)));
-  return { projects, loose: buildTodoTree(rest, machines, [], mutes, now).loose };
+  return { projects, todos: [], loose: buildTodoTree(rest, machines, [], mutes, now).loose };
 }

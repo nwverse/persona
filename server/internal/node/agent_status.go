@@ -89,11 +89,12 @@ func (n *Node) claudeStatus(id string, a host.Agent, now time.Time) string {
 // state (ternAgent), so a Claude there was judged by its transcript alone (#6312): a question it asked read as working
 // while the transcript was fresh, then as unknown, which the overview does not list, and it never needed the user.
 // Claude Code keeps its own state in its sessions/<pid>.json (the pid of the block's claude, the file that names its
-// session): busy, idle, or waiting while a dialog of its own has the keyboard (a question, a permission, a picker;
-// claudebg.go reads the same field for the claudes no engine shows). Waiting is blocked, and its screen card is made as
-// for herdr's. Idle is a turn that ended, done as herdr calls a finished turn nobody has looked at, once there is a
-// transcript (hasFile); before its first message it is idle. Nothing to go by (no pid found for the block yet, a file
-// that names another session after a /clear, an older Claude Code that writes no status) is "".
+// session): busy, idle (or shell: idle with background commands running), or waiting while a dialog of its own has the
+// keyboard (a question, a permission, a picker; claudebg.go reads the same field for the claudes no engine shows).
+// Waiting is blocked, and its screen card is made as for herdr's. Idle is a turn that ended, done as herdr calls a
+// finished turn nobody has looked at, once there is a transcript (hasFile); before its first message it is idle.
+// Nothing to go by (no pid found for the block yet, a file that names another session after a /clear, an older Claude
+// Code that writes no status) is "".
 func (n *Node) ternClaudeStatus(id, pane string, hasFile bool) string {
 	n.mu.Lock()
 	pid := n.panePIDs[pane].pid

@@ -97,5 +97,9 @@ nonisolated extension Theme {
         /// stamped as its sentence begins. Few enough that the card stays a summary.
         static let contextBefore = 1
         static let contextAfter = 2
+        /// How much the meeting page's Talk grows while it is held (#3862 phase 4): the finger covers it, so the change
+        /// that says "Persona hears you" is its color and the words over the field; the size only confirms the touch.
+        /// None under Reduce Motion.
+        static let talkHeldScale: CGFloat = 1.06
     }
 }
