@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -372,6 +373,58 @@ func TestARunOfADeletedTaskDoesNotBringItBack(t *testing.T) {
 	}
 	if n := len(h.tasksView(context.Background(), nil)); n != 2 {
 		t.Fatalf("a different follow-up is its own task, have %d", n)
+	}
+}
+
+// A run that cancels its own repeating task and, in the same turn, schedules it again (the same title, to change its rule
+// or prompt) gets a new task: the conversation deleted it, the user did not (#9090). Deleted in the app or by another
+// conversation's tool while the run was going, it stays deleted (#4792).
+func TestARunThatCancelsItsOwnTaskCanScheduleItAgain(t *testing.T) {
+	ctx := context.Background()
+	const title = "Midday check"
+	args, _ := json.Marshal(map[string]any{"cron": "30 12 * * 1-5", "title": title, "prompt": "Look at how today's work is going."})
+	for _, tc := range []struct {
+		name, by string // by: "app", or the session whose cancel_followup deletes it
+		again    bool
+		told     string
+	}{
+		{"its own conversation", "run-1", true, ""},
+		{"the app", "app", false, "assistant-schedule.deleted_not_again"},
+		{"another conversation", "run-2", false, "assistant-schedule.deleted_elsewhere_not_again"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeHub()
+			f.settings = &Settings{Timezone: "Asia/Shanghai"}
+			h := newStorelessService(t, f)
+			setTasks(h, Task{ID: "fu_1", Title: title, Prompt: "Look at how the work is going.", Repeat: repeatCron, Cron: "30 12 * * *",
+				Enabled: true, LastRun: time.Now().Add(-27 * time.Minute), MachineID: "server", SessionID: "run-1"})
+			h.recordRun(ScheduleRun{Kind: "routine", RefID: "fu_1", Title: title, At: time.Now().Add(-27 * time.Minute), Status: runOK,
+				MachineID: "server", SessionID: "run-1"})
+			if tc.by == "app" {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/v1/assistant/tasks/fu_1", nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("delete in the app: %d %s", rec.Code, rec.Body)
+				}
+			} else if out, err := h.runTool(ctx, "server", tc.by, "cancel_followup", json.RawMessage(`{"id":"fu_1"}`)); err != nil || out != "Cancelled." {
+				t.Fatalf("cancel: %q %v", out, err)
+			}
+			out, err := h.toolScheduleFollowup(ctx, "server", "run-1", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tasks := h.tasksView(ctx, nil)
+			if !tc.again {
+				if want := i18n.T(h.lang(ctx), tc.told, i18n.Args{"id": "fu_1", "name": title}); out != want || len(tasks) != 0 {
+					t.Fatalf("stays deleted, told so: %q (want %q), %+v", out, want, tasks)
+				}
+				return
+			}
+			if len(tasks) != 1 || tasks[0].ID == "fu_1" || tasks[0].Title != title || tasks[0].Cron != "30 12 * * 1-5" ||
+				!strings.Contains(out, "Scheduled "+tasks[0].ID) {
+				t.Fatalf("scheduled again as a new task: %q, %+v", out, tasks)
+			}
+		})
 	}
 }
 

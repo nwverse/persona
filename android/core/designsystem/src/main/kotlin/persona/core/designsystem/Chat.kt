@@ -116,7 +116,15 @@ fun ChatTopBar(
             }
         }
     }
-    val back: @Composable () -> Unit = { onBack?.let { JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), it) } }
+    val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)
+    val back: @Composable () -> Unit = {
+        when (leading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick)
+            is DetailLeading.Back -> JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), leading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> Unit
+        }
+    }
     when (style) {
         AppStyle.Glass -> Box(modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp.row).floatingSurface(RoundedCornerShape(30.dp.corner)).padding(horizontal = 6.dp.dense), verticalAlignment = Alignment.CenterVertically) {
@@ -490,7 +498,7 @@ fun ComposerFrame(
     val trailingNow by rememberUpdatedState(trailing)
     val movableTrailing = remember { movableContentWithReceiverOf<RowScope> { trailingNow?.invoke(this) } }
     if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current != null) {
-        val shape = RoundedCornerShape(HomeTokens.composerRadius)
+        val shape = RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)
         val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
         val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
         Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
@@ -516,7 +524,7 @@ fun ComposerFrame(
     }
     when (PersonaTheme.style) {
         AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
-            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius)).then(keepsKeyboard).padding(Tokens.Space.s)) {
+            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)).then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!expanded) leading?.invoke(this)
@@ -582,7 +590,7 @@ fun ComposerTextField(
 ) {
     val palette = PersonaTheme.palette
     BasicTextField(
-        value, onValueChange, modifier.fillMaxWidth(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
+        value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
         textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
         decorationBox = { inner ->
             Box {

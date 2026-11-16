@@ -84,6 +84,7 @@ ELSEWHERE = {
     "internal/authflow/flow.go",  # in the cli/cli source (docs/extensions/connectors.md)
     "internal/plugin",  # the retired package name in the extension rename table (docs/extensions/extensions.md)
     "internal/larkcli",  # the planned adapter package (docs/plans/plan-lark-cli.md)
+    "spec/fixtures/sync-driver",  # the planned sync-domain fixture corpus (docs/plans/plan-rust-core-sync.md)
 }
 
 QUOTED = re.compile(r"`([^`\s]+)`")

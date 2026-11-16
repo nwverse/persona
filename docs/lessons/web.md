@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## Vite module IDs use forward slashes on Windows (#9341)
+
+`fileURLToPath` returns host-native paths, while Vite's module IDs use forward slashes. Normalize config directories
+with Vite's `normalizePath` before comparing allowlisted module IDs or removing build-machine paths from a graph.
+Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
+the rejection of an injected module outside the allowed graph.
+
 ## Translate the full item, not the page's preview (#8650)
 
 A hub-paged answer's `text` is only a prefix until `useFullText` loads its full item. Passing that prefix to a
@@ -17,6 +24,10 @@ can cost more than it removes. Menu-only actions and text selection can share th
 through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
 remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
 Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
+The fork action's label and callback belong in that same cold chunk; its opener needs only eligibility. Read the
+conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.
+Check whole startup namespaces: an already lazy dialog (such as New main chat) can still ship all its words there.
+Keep its header and immediate feedback keys eager, and let the existing dialog loader bring the rest.
 
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
@@ -842,6 +853,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 
 - A paging fallback must change its data source as well as its component (#6362). `useAgentSessions` exposes only the bounded window on paging hubs, and those hubs suppress full socket snapshots. Pins and groups require a query-free complete `/sessions` read, refreshed by invalidation hints and scoped to the fallback's lifetime. Test a pin beyond the first page without injecting a full socket list. Bulk actions must also accept displayed rows absent from the detail cache: iterating only cached rows silently skips them. Overlay changed local details without replacing newer HTTP rows with unchanged old cache entries.
 - Serializing full-list reads is not throttling (#6362): working agents can continuously invalidate display data, producing back-to-back complete downloads. Enforce a completion-based cooldown with one trailing read at a fixed deadline; preserve immediate reconnects and clear scheduled reads on reset/unmount.
+- A throttle that lets "a read is out" skip its window does nothing on a busy fleet (#9215): the next hint always lands mid-read, so `SessionList` read back to back and `loading` never cleared. Every Load more, infinite scroll and auto-load waits for `!loading`, so the button vanished under the pointer. Every hint waits for a window counted from when the last read came back, a page someone asked for goes before a queued refresh, and Load more hides only while its own page is out (`loadingMore`), never for a background refresh. The mock hub only shows this with `/mock/delay` plus `/mock/bump?what=rev` every few hundred ms.
 - Treat loading counts as unknown, not zero (#6362). Clearing scoped counts before a refresh, or copying a temporary null root count during rebaseline, removes state chips and changes list height. Keep the last successful counts until a valid replacement arrives, including real zero counts; test deferred responses after root-count changes as well as filter changes.
 
 - Never nest buttons in link rows: make row ⋯ a sibling of `<a>`, absolutely positioned with `group-hover/row:flex` (Tailwind v4 `group-hover` already works only under `@media (hover:hover)`). Row-end hints / badges yield on hover with

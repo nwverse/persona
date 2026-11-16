@@ -63,8 +63,7 @@ export interface Action extends Pick<MenuItem, "hint" | "disabled" | "danger" | 
   onSelect: () => void | Promise<unknown>;
 }
 
-function useActions(text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick, editText?: string): Action[] {
-  const chat = useChatActions();
+function messageActions(chat: ChatActions | null, text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick, editText?: string): Action[] {
   if (!text.trim()) return [];
   const out: Action[] = [{ key: "copy", label: t("chat-messageactions.copy"), icon: "copy", onSelect: () => void copyText(text) }];
   if (isNoHover()) out.push({ key: "select", label: t("chat-messageactions.select_text"), icon: "read", onSelect: select });
@@ -89,14 +88,6 @@ export function messageContextActions(text: string, chat: ChatActions | null, fo
     onSelect: () => addContext(chat.draftKey, newContext("context", title, "", text)),
   });
   return out;
-}
-
-/** "Start a new session" (cindy's words; "Start a new chat" in a Persona conversation, `chat`), on the reply bar and at the
- *  end of a reply's right-click menu, when the session can fork and the reply is a transcript line of its own
- *  (`<uuid>#<n>`; lines without a uuid are `line<seq>`, which the node cannot find). */
-export function moreActions(itemId: string | undefined, fork: ((itemId: string) => void) | undefined, chat?: boolean): Action[] {
-  if (!itemId || !fork || itemId.startsWith("line") || !itemId.includes("#")) return [];
-  return [{ key: "fork", label: t(chat ? "chat-messageactions.fork_chat" : "chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
 }
 
 /** Wraps a message: right-click / long press opens its menu. A hover bar goes beside it (`side`, your own bubbles: they had
@@ -157,20 +148,18 @@ export function MessageActions({
   const latest = useIsLatestMessage(ts);
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
-  const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true), pick, editText);
   const chat = useChatActions();
+  const actions = messageActions(chat, text, Boolean(isUser), ts, task, () => setSelecting(true), pick, editText);
   // the chat picks messages to forward (#3838): the checkbox over this one, when it is one to forward
   const picker = chat?.forward ? chat.pick : undefined;
   const picking = Boolean(picker);
   const PickRow = picker && pick && text.trim() ? pickParts.Row : null;
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | { x: number; y: number } | null>(null);
-  const rewind = isUser ? chat?.rewind : undefined;
-  const forks = moreActions(itemId, chat?.fork, chat?.assistant);
+  const canFork = Boolean(itemId && chat?.fork && !itemId.startsWith("line") && itemId.includes("#"));
   const contextActions = side ? actions.filter((a) => a.key === "forward" || a.key === "context") : [];
-  const save = Boolean(isUser && chat?.canCompose);
-  const hasMore = Boolean(contextActions.length || forks.length || (messageId && rewind && (editText ?? text).trim()) || save || onDelete);
-  const menu = { forks, text, rewindText: editText ?? text, messageId, rewind, save, onDelete };
+  const hasMore = Boolean(contextActions.length || canFork || (isUser && (chat?.canCompose || (messageId && chat?.rewind && (editText ?? text).trim()))) || onDelete);
+  const menu = { itemId, text, rewindText: editText ?? text, messageId, isUser, onDelete };
   // Your bubble's hover bar sits to its left; in a narrow window a wide bubble leaves no room there and the bar fell
   // off the screen, its buttons still reached by Tab (audit item 73). Measured when the pointer comes or focus moves in
   // (not for every bubble as the chat opens): with no room, the same buttons sit under the bubble instead, so the one
@@ -254,7 +243,7 @@ export function MessageActions({
       {canTranslate && translation.error && <p role="alert" className="mt-1 text-xs text-red">{translation.error}</p>}
       {picking ? null : bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} pinned={latest} fork={forks[0]} more={actions.filter((a) => a.key !== "copy" && a.key !== "select")} usage={usage} usageMs={usageMs} persona={chat?.assistant} translation={canTranslate ? translation : undefined} />
+          <ReplyBar text={text} ts={ts} pinned={latest} itemId={itemId} more={actions} usage={usage} usageMs={usageMs} persona={chat?.assistant} translation={canTranslate ? translation : undefined} />
         </Suspense>
       ) : (side || corner) && (
       <div

@@ -24,12 +24,14 @@ vi.mock("../../ui/media-query", async (original) => ({
 
 import { initI18n, t } from "../../i18n";
 import { MessageActions } from "./MessageActions";
+import { ChatActionsContext } from "./chat-actions";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 it("loads message menus and text selection only on intent, preserving the message, copy and dialog exit", async () => {
   await initI18n("en");
   const text = "First **line**\n\nSecond line.";
+  const fork = vi.fn();
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -50,13 +52,21 @@ it("loads message menus and text selection only on intent, preserving the messag
     await act(async () => { await vi.dynamicImportSettled(); });
   };
   try {
-    await act(async () => root.render(<MessageActions text={text} isUser side><p data-original>{text}</p></MessageActions>));
+    await act(async () => root.render(
+      <ChatActionsContext.Provider value={{ draftKey: "m/s", canCompose: false, speaker: "Agent", title: "Chat", images: () => [], fork }}>
+        <MessageActions text={text} itemId="u1#0" isUser side><p data-original>{text}</p></MessageActions>
+      </ChatActionsContext.Provider>,
+    ));
     expect(loading.started).not.toHaveBeenCalled();
     await open();
     await vi.waitFor(() => expect(loading.started).toHaveBeenCalledTimes(1));
     expect(host.querySelector("[data-original]")?.textContent).toBe(text);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     loading.release();
+    await settle();
+    await act(async () => item(t("chat-messageactions.fork")).click());
+    expect(fork).toHaveBeenCalledExactlyOnceWith("u1#0");
+    await open();
     await settle();
     await act(async () => item(t("chat-messageactions.select_text")).click());
     await settle();

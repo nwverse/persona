@@ -27,7 +27,20 @@ describe("startupMatcher", () => {
     ]) expect(configured(key), key).toBe(true);
     for (const key of [
       "chat-messageactions.translation_failed", "chat-messageactions.done", "chat-messageactions.save_as_prompt",
+      "chat-messageactions.fork", "chat-messageactions.fork_chat",
       "rewind.menu", "rewind.conversation", "rewind.code_and_conversation", "rewind.confirm_code",
     ]) expect(configured(key), key).toBe(false);
+  });
+
+  it("keeps main-chat header feedback eager without loading the new-main dialog's words", () => {
+    const configured = startupMatcher(startup);
+    for (const key of [
+      "back_to_main", "clear", "clear_failed", "close", "compact", "compacting", "compacted",
+      "compact_failed", "compact_start_failed", "copy_info", "details", "knowledge", "new_main_ellipsis", "new_main_elsewhere",
+    ]) expect(configured(`assistant-assistantchat.${key}`), key).toBe(true);
+    for (const key of [
+      "new_main_done_carried", "new_main_done", "new_main_failed", "new_main_title", "new_main", "new_main_body",
+      "carry_summary", "carry_summary_hint",
+    ]) expect(configured(`assistant-assistantchat.${key}`), key).toBe(false);
   });
 });

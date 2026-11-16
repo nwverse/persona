@@ -62,7 +62,7 @@ struct ShellSideRail<Buttons: View, Switcher: View>: View {
                     buttons
                     switcher.padding(.top, Theme.Space.s)
                 }
-                .frame(width: max(column, Theme.Shell.railSegment))
+                .frame(width: max(column, TabSwitchLayout.width))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: edge == .trailing ? .bottomTrailing : .bottomLeading)
                 .padding(.bottom, Theme.Space.l)
             }

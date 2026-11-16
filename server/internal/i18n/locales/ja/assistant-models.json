@@ -104,6 +104,7 @@
   "err_not_callable": "このプロバイダーのAPIはハブから直接呼び出せません",
   "err_not_api": "APIプロバイダーではありません",
   "err_api_protocol": "このAPIプロトコルには対応していません",
+  "err_tier_alias_unresolved": "「{model}」は Claude Code のティア名ですが、{provider} にはこのティアのモデルが設定されていません。具体的なモデルを選ぶか、{provider} でこのティアのモデルを設定してください。",
   "err_provider_type": "プロバイダーは文字列かnullにしてください",
   "err_field_type": "モデルの項目は文字列かnullにしてください",
   "err_field_invalid": "モデルの項目は空にしたり改行を含めたりできません",

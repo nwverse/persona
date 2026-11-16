@@ -21,10 +21,18 @@ import type { Action } from "./MessageActions";
 import { TurnUsage } from "./TurnUsage";
 import type { ReplyTranslation } from "../../lib/reply-translation";
 import { ReplyTranslationButton } from "./ReplyTranslationButton";
-import type { ChatActions } from "./chat-actions";
+import { useChatActions, type ChatActions } from "./chat-actions";
 import type { RewindRestore } from "../../lib/rewind";
 
 export { TurnUsage };
+
+/** "Start a new session" (cindy's words; "Start a new chat" in a Persona conversation, `chat`), on the reply bar and at the
+ *  end of a reply's right-click menu, when the session can fork and the reply is a transcript line of its own
+ *  (`<uuid>#<n>`; lines without a uuid are `line<seq>`, which the node cannot find). */
+export function moreActions(itemId: string | undefined, fork: ((itemId: string) => void) | undefined, chat?: boolean): Action[] {
+  if (!itemId || !fork || itemId.startsWith("line") || !itemId.includes("#")) return [];
+  return [{ key: "fork", label: t(chat ? "chat-messageactions.fork_chat" : "chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
+}
 
 /** Selection is opened from a message action, never drawn on the first screen. */
 export function SelectMessageText({ open, onClose, text }: { open: boolean; onClose: () => void; text: string }) {
@@ -99,24 +107,25 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Menu-only actions and their live disabled reasons load with the existing reply controls, not the transcript. */
-export function MessageMenu({ anchor, onClose, primary, forks, text, rewindText, messageId, rewind, save, onDelete, side }: {
+export function MessageMenu({ anchor, onClose, primary, itemId, text, rewindText, messageId, isUser, onDelete, side }: {
   anchor: HTMLElement | { x: number; y: number };
   onClose: () => void;
   primary: Action[];
-  forks: Action[];
+  itemId?: string;
   text: string;
   rewindText: string;
   messageId?: string;
-  rewind?: ChatActions["rewind"];
-  save: boolean;
+  isUser?: boolean;
   onDelete?: () => void;
   side?: "top";
 }) {
+  const chat = useChatActions();
+  const rewind = isUser ? chat?.rewind : undefined;
   const block = useWhileOpen(rewind?.block, true, "");
   const extras = [
-    ...forks,
+    ...moreActions(itemId, chat?.fork, chat?.assistant),
     ...rewindActions(messageId, rewindText, rewind && { block, code: rewind.code, run: rewind.run }),
-    ...(save ? savePromptActions(text) : []),
+    ...(isUser && chat?.canCompose ? savePromptActions(text) : []),
     ...deleteActions(onDelete),
   ];
   const items = [...primary, ...extras].map((a, i) => ({ ...a, divider: i === primary.length && i > 0 }));
@@ -144,10 +153,14 @@ async function copyQuietly(text: string): Promise<boolean> {
   return done || copyText(text);
 }
 
-/** `fork`: "Start a new session", when the session can. `more`: the ⋯ menu's actions; no ⋯ without any. `pinned`: the
+/** `itemId`: where "Start a new session" branches, when the conversation can. `more`: the message's actions (Copy and
+ *  Select have their own controls); no ⋯ without any others. `pinned`: the
  *  chat's last message, whose time stays shown without the pointer. `usage`: what the exchange used (lib/turn-usage.ts
  *  usageKey), `usageMs` its work time, `persona` a Persona conversation's plain cost. */
-export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona, translation }: { text: string; ts?: string; fork?: Action; more: Action[]; pinned?: boolean; usage?: string; usageMs?: number; persona?: boolean; translation?: ReplyTranslation }) {
+export function ReplyBar({ text, ts, itemId, more: actions, pinned, usage, usageMs, persona, translation }: { text: string; ts?: string; itemId?: string; more: Action[]; pinned?: boolean; usage?: string; usageMs?: number; persona?: boolean; translation?: ReplyTranslation }) {
+  const chat = useChatActions();
+  const branch = moreActions(itemId, chat?.fork, chat?.assistant)[0];
+  const more = actions.filter((a) => a.key !== "copy" && a.key !== "select");
   const ref = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -224,9 +237,9 @@ export function ReplyBar({ text, ts, fork, more, pinned, usage, usageMs, persona
         >
           <Icon name={copied ? "check" : "copy"} size={14} />
         </button>
-        {fork && (
-          <button type="button" aria-label={fork.label} title={fork.label} onClick={() => void fork.onSelect()} className={cx(BUTTON, "hover:text-ink")}>
-            <Icon name={fork.icon} size={14} />
+        {branch && (
+          <button type="button" aria-label={branch.label} title={branch.label} onClick={() => void branch.onSelect()} className={cx(BUTTON, "hover:text-ink")}>
+            <Icon name={branch.icon} size={14} />
           </button>
         )}
         {translation && <ReplyTranslationButton translation={translation} />}

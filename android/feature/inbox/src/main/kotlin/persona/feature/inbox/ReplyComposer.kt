@@ -5,8 +5,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.annotation.StringRes
@@ -256,9 +261,12 @@ internal fun ReplyComposerField(
     placeholder: String,
     modifier: Modifier = Modifier,
     sendEnabled: Boolean = true,
+    probePage: String? = null,
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val focus = remember { FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    InboxReplyDraftProbe(probePage, state.draft.text, focused)
     val keyboard = LocalSoftwareKeyboardController.current
     ComposerFrame(modifier,
         // Blank space around the field types too, as in the chat composer (#894, #4093).
@@ -278,6 +286,8 @@ internal fun ReplyComposerField(
                     state.delivery !in setOf(ReplyDelivery.Queued, ReplyDelivery.WaitingForNetwork, ReplyDelivery.Verifying))
         },
         field = {
-            ComposerTextField(state.draft.text, onUpdate, placeholder, Modifier.focusRequester(focus), enabled = state.canEdit)
+            ComposerTextField(state.draft.text, onUpdate, placeholder,
+                Modifier.focusRequester(focus).testTag("inbox-reply-field").onFocusChanged { focused = it.isFocused },
+                enabled = state.canEdit)
         })
 }

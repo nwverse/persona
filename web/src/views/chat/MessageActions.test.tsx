@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { t } from "../../i18n";
-import { MessageActions, moreActions } from "./MessageActions";
-import { rewindActions, savePromptActions } from "./ReplyBar";
+import { MessageActions } from "./MessageActions";
+import { moreActions, rewindActions, savePromptActions } from "./ReplyBar";
 
 const base: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Persona", images: () => [] };
 
@@ -39,6 +39,17 @@ describe("the reply bar", () => {
       </ChatActionsContext.Provider>,
     );
     expect(html).not.toContain(`aria-label="${t("chat-messageactions.more")}"`);
+  });
+
+  it("does not show an empty More menu for an unbranchable transcript line", () => {
+    for (const itemId of [undefined, "u1", "line12#0"]) {
+      const html = renderToStaticMarkup(
+        <ChatActionsContext.Provider value={{ ...base, canCompose: false, fork: () => {} }}>
+          <MessageActions text="Visible reply" itemId={itemId} isUser side><p>Visible reply</p></MessageActions>
+        </ChatActionsContext.Provider>,
+      );
+      expect(html).not.toContain(`aria-label="${t("chat-messageactions.more")}"`);
+    }
   });
 });
 
