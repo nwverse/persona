@@ -18,7 +18,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -187,6 +187,7 @@ export function ModelPill({
  *  to explain unsupported effort controls (including a terminal Agent that may switch engines, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
+  const scope = agentCatalogScope();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
@@ -194,7 +195,7 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
   const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
-  }, [opens, mid, own]);
+  }, [opens, mid, own, scope]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const key = `${mid}/${session.session_id}`;
@@ -204,17 +205,18 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
     if (!opens) setAnchor(null);
   }, [opens]);
   const close = useCallback(() => setAnchor(null), []);
+  useEffect(close, [close, scope]);
   const shown = Boolean(anchor) && opens;
   // every list again behind the one shown, once per opening (while the panel's code loads, the first time)
   useEffect(() => {
     if (shown) readForPanel(mid, own);
-  }, [shown, mid, own]);
+  }, [shown, mid, own, scope]);
 
   // a switch to another launcher that the next message carries out (#5035): its list names the model picked
   const target = session.pending_switch?.launcher;
   useEffect(() => {
     if (target && target !== own) void readModels(mid, target);
-  }, [target, own, mid]);
+  }, [target, own, mid, scope]);
 
   const pending = pendingView(session, (name) => modelList(mid, name));
   if (!opens && !view.model) return null;

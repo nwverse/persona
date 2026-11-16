@@ -58,6 +58,7 @@ const machineKey = (mid: string, scope = catalogScope()) => JSON.stringify([scop
 
 /** Changes when the assistant's catalog must be loaded again, including when the default manager becomes known. */
 export const assistantCatalogScope = (): string => JSON.stringify(catalogScope("assistant"));
+export const agentCatalogScope = (): string => JSON.stringify(catalogScope());
 onManagerChoice(changed);
 onDefaultManager(changed);
 onCredentialChange(changed);
