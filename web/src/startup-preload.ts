@@ -348,12 +348,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // list), a busy fleet's hints wait for a window counted from when the last read came back, and a reconnect reads the
 // Agents list at once. 80 B in ja, measured in one environment against main 211207fd5f: ja 480,708 B to 480,788 B
 // (en 477,579 B to 477,659 B, zh-Hans 478,398 B to 478,478 B). The budget takes the 53 B over.
-// #9158 (UI version 8) adds 84 B in each language, measured in one environment against main b48896c40 (ja 480,708 B to
-// 480,792 B; en 477,579 B to 477,663 B, zh-Hans 478,398 B to 478,482 B): readView keeps the columns layout and a
+// #9158 (UI version 8) adds 84 B in each language, measured in one environment against main b802a4d51c (ja 480,788 B to
+// 480,872 B; en 477,659 B to 477,743 B, zh-Hans 478,478 B to 478,562 B): readView keeps the columns layout and a
 // section's span, icon, link and columns (lib/extension-ui.ts readSection8), as it reads every other field, because the
-// assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx). Main's
-// 27 B of room is kept on top.
-export const FIRST_SCREEN_BUDGET = 9_999_999; // TEMP-MEASURE
+// assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx).
+export const FIRST_SCREEN_BUDGET = 480_872;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -570,11 +569,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // Conversation-deletion guards, file retirement and open-search invalidation (#6172):
 // main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
 // The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
-// And 302 B for UI version 8 (#9158): main b48896c40 sends 45,475 B at idle, the same tree with #9158 45,777 B, in one
+// And 291 B for UI version 8 (#9158): main b802a4d51c sends 45,484 B at idle, the same tree with #9158 45,775 B, in one
 // environment. The idle renderer (ViewBody.tsx) gains a section's rows side by side in Run, the head hook and the
 // lazy registration of ViewBody8.tsx; the columns grid and the section heads themselves (1.2 KB) load on intent with
-// the first view that has them. Main's 56 B of room is kept on top.
-export const IDLE_TIER_BUDGET = 9_999_999; // TEMP-MEASURE
+// the first view that has them. Main's 47 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 45_822;
 
 const gzip = promisify(gzipCompress);
 
