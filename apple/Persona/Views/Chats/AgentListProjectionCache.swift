@@ -33,9 +33,11 @@ nonisolated private enum AgentSortAdapter {
     /// The body observes publication, not the dictionaries or task bookkeeping mutated during lookup.
     private(set) var publication: UInt64 = 0
     @ObservationIgnored private(set) var publishedRevision: UInt64?
+    #if DEBUG
     @ObservationIgnored private(set) var shadowValue: (input: AgentListProjection.Input, projection: AgentListProjection, now: Date?)?
     @ObservationIgnored private var shadowNow: [UInt64: Date?] = [:]
     @ObservationIgnored private var shadowNowRevision = Set<UInt64>()
+    #endif
     @ObservationIgnored private var value: AgentListProjection?
     @ObservationIgnored private var publishedKey: Key?
     @ObservationIgnored private var requestedKey: Key?
@@ -171,9 +173,11 @@ nonisolated private enum AgentSortAdapter {
         requestedKey = nil
         publishedKey = nil
         publishedRevision = nil
+        #if DEBUG
         shadowValue = nil
         shadowNow = [:]
         shadowNowRevision = []
+        #endif
         value = nil
     }
 
