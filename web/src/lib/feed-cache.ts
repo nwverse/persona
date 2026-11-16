@@ -1,3 +1,4 @@
+import { conversationDeleted, onConversationDeleted } from "./conversation-deleted";
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
 import { credentialEpoch } from "./credential-epoch";
@@ -138,7 +139,7 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
     if (!raw) return null;
     if (new TextEncoder().encode(raw).length > FEED_CACHE_MAX_BYTES) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!validFeed(parsed)) return null;
+    if (!validFeed(parsed) || conversationDeleted(parsed.machineID, parsed.sessionID)) return null;
     // A record with embedded image bytes was not written by this version. Never hydrate an unsanitized record.
     // Nor one an older version wrote with a refusal record's whole line in it (#2528): it is never shown again.
     if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw) || parsed.items.some(hasPrivateRefusal)) {
@@ -186,6 +187,7 @@ function newestTurns(value: FeedCache): FeedCache {
 }
 
 export function writeFeedCache(scope: string | null, value: FeedCache): boolean {
+  if (conversationDeleted(value.machineID, value.sessionID)) return false;
   if (!scope || scope !== feedCacheScope()) return false;
   try {
     const page = newestTurns(value);
@@ -213,6 +215,7 @@ export function clearMemoryPages(): void {
 }
 
 export function readMemoryPage(scope: string | null, mid: string, sid: string): FeedCache | null {
+  if (conversationDeleted(mid, sid)) return null;
   if (!scope || scope !== feedCacheScope()) return null;
   const key = memoryKey(scope, mid, sid);
   const page = memory.get(key);
@@ -229,6 +232,7 @@ export function discardMemoryPage(scope: string | null, mid: string, sid: string
 
 /** An empty page is not kept: it would stand in for the loading state with nothing to show. */
 export function writeMemoryPage(scope: string | null, value: FeedCache): void {
+  if (conversationDeleted(value.machineID, value.sessionID)) return;
   if (!scope || scope !== feedCacheScope()) return;
   const key = memoryKey(scope, value.machineID, value.sessionID);
   memory.delete(key);
@@ -244,3 +248,15 @@ export function mainConversationMachine(assistant: AssistantInfo | null | undefi
     assistant.conversations.find((c) => c.session_id === assistant.main)?.machine_id ||
     assistant.machine_id;
 }
+
+// Do not retain a deleted transcript, including writes from an unmounting chat.
+onConversationDeleted((mid, sid) => {
+  for (const [key, page] of memory) if (page.machineID === mid && page.sessionID === sid) memory.delete(key);
+  const scope = feedCacheScope();
+  if (!scope) return;
+  try {
+    const raw = localStorage.getItem(storageKey(scope));
+    const page = raw ? JSON.parse(raw) as FeedCache : null;
+    if (page?.machineID === mid && page.sessionID === sid) discardFeedCache(scope);
+  } catch { /* A missing cache never blocks deletion. */ }
+});
