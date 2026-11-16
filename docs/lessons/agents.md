@@ -364,6 +364,32 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.
 
+## Claude Code plugins from a folder marketplace (2026-11-16, 2.1.291 and 2.1.308)
+
+Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while building the node's plugin keeper
+(`server/internal/claudeplugin`, `docs/operations/link.md` "Claude Code plugin"):
+
+- Every CLI run, even `claude plugin list`, writes the config directory's `.claude.json` (and a `backups/` copy). With
+  `CLAUDE_CONFIG_DIR` set to `~/.claude` that file lands inside `~/.claude` instead of the user's `~/.claude.json`: a second global
+  config. Run commands for the user's own directory with `CLAUDE_CONFIG_DIR` unset; name any other directory. Tests decide "the user's
+  own" from the process's real home, never a home a test passed in, so a test cannot reach the real `~/.claude`.
+- `claude plugin install` on a plugin that is installed but turned off turns it back on. Never call it to "make sure": read
+  `plugin list --json` first and leave a disabled plugin alone (`update` keeps it disabled, but updating a plugin the user turned off is
+  not ours to do either).
+- A marketplace that is a folder, with the plugin at a relative `source`, is read from that folder: `list --json` shows `readFromFolder`
+  and `folderVersion` beside the recorded `version`. Writing new files there reaches new sessions at once; `claude plugin update` moves
+  the recorded version (`updateOutcome: updated | up_to_date`). The folder must stay where it was added: `list` keeps showing the plugin
+  after the folder is gone, but nothing loads.
+- `marketplace add` of another folder under a name already added re-points that marketplace silently ("now points at …"), and adding the
+  same folder again is a no-op. Failures print `{"outcome":"failed","failureCode":…}` on stdout and exit 1:
+  `already_in_goal_state` (enable / disable), `not_installed` (uninstall), `not_configured` (marketplace remove), `not_found`.
+- Uninstalling leaves `"enabledPlugins": {}` and `"extraKnownMarketplaces": {}` in `settings.json`; every other key stays as it was.
+- Each command takes about 1.5 s on Windows. The desktop app (the Store build, Claude-3p) ships its own, newer CLI under
+  `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<build>\claude.exe` (2.1.308 there while `PATH` had 2.1.291): a computer with only the
+  desktop app still has a CLI to install with.
+- Its Code sessions use `~/.claude` (the node already starts desktop sessions without `CLAUDE_CONFIG_DIR`, `node/claudedesktop_new.go`), and a
+  user-scope plugin installed from the CLI loads there; inside the app `/plugin` is not available, only **+ › Plugins**.
+
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
 Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
@@ -1227,3 +1253,12 @@ aged out on its own clock. A start after a quiet spell waited for four probes on
 on a busy machine. Every caller now reads one kept probe per launcher and arguments (`keptProbe`): callers asking at
 once share one shell, and a probe in use is renewed in the background shortly before it ages out, so the bound still
 holds but no message waits for it. A renewal is not a use, or it would keep itself going forever.
+
+
+## A Paseo pin belongs to a workspace, not its project (#9300)
+
+Paseo's “Pin chat” persists on its workspace descriptor (`pinnedAt`). Persona's Paseo space is the entire project, which
+can contain multiple workspaces sharing a directory; importing a pin into `pins.spaces` would pin siblings too. Carry
+the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
+old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
+pin while the final catalog bytes equal the earlier unpinned snapshot.

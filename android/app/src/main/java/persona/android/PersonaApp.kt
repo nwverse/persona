@@ -81,6 +81,7 @@ class PersonaApp : Application() {
         errorReporting.installCrashHandler()
         continuityFactory // Capture before Hilt, and before a debug Activity can save the next selection.
         agentListAdapter
+        persona.core.domain.answer.AnswerAdapters.install(AnswerSelection.choose(this))
         super.onCreate()
         // The core modules' words (errors, the data repositories' state) in the shown language (docs/protocol/i18n.md).
         persona.core.contracts.CoreText.words = { it.resolve(this) }

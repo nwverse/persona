@@ -3,6 +3,8 @@
 //! (`jni`). Both carry bincode-encoded wire types. A panic never crosses the boundary: each entry point catches it and
 //! returns its failure value.
 
+#[cfg(not(feature = "release-android"))]
+mod answer_shadow;
 mod jni;
 
 use std::collections::HashMap;
@@ -392,6 +394,22 @@ pub unsafe extern "C" fn persona_core_project_stream_chunks(input: *const u8, le
             return PersonaCoreBytes::empty();
         };
         json_output(&persona_core_domain::stream_chunks::split(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Repairs a streaming fence, table or final-block marker (`persona_core::stream_repair::Input`). Returns the
+/// complete `{repaired, end}` JSON. Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_stream_repair(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::stream_repair::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::stream_repair::project(&input))
     }))
     .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }

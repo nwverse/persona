@@ -141,14 +141,36 @@ class HttpAgentCreationService(
     // The catalog covers every computer of the hub: only [machineId]'s rows. An older hub (404), an offline catalog or
     // any other failure shows no workspace choice, never an error.
     override suspend fun workspaces(machineId: String): List<AgentWorkspace> = try {
-        val body = read(request("api", "v1", "workspaces").build())
-        // Every computer's workspaces: decoded off the caller's (the form's main) thread.
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            JsonCodec.decodeFromJsonElement<List<AgentWorkspace>>(body["workspaces"] ?: JsonArray(emptyList()))
-                .filter { it.machineId == machineId }
-        }
+        workspaceCatalog(machineId).takeIf { it.complete }?.workspaces.orEmpty()
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (_: Exception) { emptyList() }
+
+    override suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog {
+        val body = read(request("api", "v1", "workspaces").build())
+        val workspaces = body["workspaces"] as? JsonArray ?: throw IllegalStateException("Malformed workspace catalog")
+        val errors = when (val value = body["errors"]) {
+            null, JsonNull -> JsonArray(emptyList())
+            is JsonArray -> value
+            else -> throw IllegalStateException("Malformed workspace catalog errors")
+        }
+        // Existing hubs flatten source failures to machine_id/error; never parse their localized error text.
+        val failed = errors.any { element ->
+            val error = element as? JsonObject ?: throw IllegalStateException("Malformed workspace catalog error")
+            val errorMachine = (error["machine_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("Malformed workspace catalog error machine")
+            val source = when (val value = error["source"]) {
+                null, JsonNull -> null
+                is JsonPrimitive -> value.takeIf { it.isString }?.content ?: throw IllegalStateException("Malformed workspace catalog error source")
+                else -> throw IllegalStateException("Malformed workspace catalog error source")
+            }
+            errorMachine == machineId && (source.isNullOrBlank() || source == "paseo")
+        }
+        // Every computer's workspaces: decoded off the caller's (the form's main) thread.
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            AgentWorkspaceCatalog(JsonCodec.decodeFromJsonElement<List<AgentWorkspace>>(workspaces)
+                .filter { it.machineId == machineId }, complete = !failed)
+        }
+    }
 
     // git can take a while on a big repository: the start's budget, not the list's.
     private suspend fun worktree(machineId: String, action: String, body: JsonObject) = read(
