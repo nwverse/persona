@@ -200,8 +200,8 @@ func TestCallAfterPeerClosedReturnsErrClosed(t *testing.T) {
 func TestCallDroppedWhileOutIsErrDropped(t *testing.T) {
 	closed := New("h", io.Discard)
 	closed.Close(io.EOF)
-	if err := closed.Call(context.Background(), "x", nil, nil); errors.Is(err, ErrDropped) {
-		t.Fatalf("not sent, yet dropped: %v", err)
+	if err := closed.Call(context.Background(), "x", nil, nil); errors.Is(err, ErrDropped) || !errors.Is(err, ErrNotSent) || !errors.Is(err, ErrClosed) {
+		t.Fatalf("not sent, yet dropped or not marked not sent: %v", err)
 	}
 	out := New("h", io.Discard)
 	go func() {
@@ -211,8 +211,8 @@ func TestCallDroppedWhileOutIsErrDropped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := out.Call(ctx, "x", nil, nil)
-	if !errors.Is(err, ErrDropped) || !errors.Is(err, ErrClosed) || err.Error() != ErrClosed.Error() {
-		t.Fatalf("want ErrDropped (as ErrClosed), got %v", err)
+	if !errors.Is(err, ErrDropped) || !errors.Is(err, ErrClosed) || err.Error() != ErrClosed.Error() || errors.Is(err, ErrNotSent) {
+		t.Fatalf("want ErrDropped (as ErrClosed), not marked not sent, got %v", err)
 	}
 }
 
@@ -374,8 +374,8 @@ func TestCallContextCancelled(t *testing.T) {
 	p.OnRequest = nil
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := p.Call(ctx, "x", nil, nil); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("want the context error, got %v", err)
+	if err := p.Call(ctx, "x", nil, nil); !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrNotSent) {
+		t.Fatalf("want the context error of a request that went out (not ErrNotSent), got %v", err)
 	}
 }
 
@@ -465,8 +465,9 @@ func TestCanceledCallDoesNotSend(t *testing.T) {
 			}
 			defer cancel()
 			wantErr := ctx.Err()
-			if err := p.Call(ctx, "session.start", map[string]string{"prompt": "hello"}, nil); !errors.Is(err, wantErr) {
-				t.Fatalf("call = %v, want %v", err, wantErr)
+			if err := p.Call(ctx, "session.start", map[string]string{"prompt": "hello"}, nil); !errors.Is(err, wantErr) ||
+				!errors.Is(err, ErrNotSent) || err.Error() != wantErr.Error() {
+				t.Fatalf("call = %v, want %v marked not sent", err, wantErr)
 			}
 			if wire.Len() != 0 {
 				t.Fatalf("canceled request reached wire: %s", wire.String())
@@ -488,8 +489,8 @@ func TestCallCanceledDuringMarshalDoesNotSend(t *testing.T) {
 		cancel()
 		return []byte(`{}`), nil
 	})
-	if err := p.Call(ctx, "session.start", params, nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("call = %v, want canceled", err)
+	if err := p.Call(ctx, "session.start", params, nil); !errors.Is(err, context.Canceled) || !errors.Is(err, ErrNotSent) {
+		t.Fatalf("call = %v, want canceled, not sent", err)
 	}
 	if wire.Len() != 0 {
 		t.Fatalf("canceled request reached wire: %s", wire.String())
@@ -557,8 +558,8 @@ func TestCallCanceledBeforeWriterAvailableDoesNotSend(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("call = %v, want canceled", err)
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrNotSent) {
+			t.Fatalf("call = %v, want canceled, not sent", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("canceled call did not return while the writer was busy")
@@ -582,8 +583,8 @@ func TestCallDeadlineWhileWriterBlocked(t *testing.T) {
 	go func() { done <- p.Call(ctx, "session.start", nil, nil) }()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("call = %v, want deadline exceeded", err)
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrNotSent) {
+			t.Fatalf("call = %v, want deadline exceeded, not sent", err)
 		}
 		if took := time.Since(start); took > time.Second {
 			t.Fatalf("call took %v, want about its 200ms deadline", took)
@@ -614,8 +615,8 @@ func TestCloseWakesWritersWaitingBehindStuckWrite(t *testing.T) {
 	for name, ch := range map[string]chan error{"call": callDone, "notify": notifyDone} {
 		select {
 		case err := <-ch:
-			if !errors.Is(err, ErrClosed) {
-				t.Fatalf("%s = %v, want ErrClosed", name, err)
+			if !errors.Is(err, ErrClosed) || !errors.Is(err, ErrNotSent) || errors.Is(err, ErrDropped) {
+				t.Fatalf("%s = %v, want ErrClosed, not sent", name, err)
 			}
 		case <-time.After(time.Second):
 			t.Fatalf("%s still blocked behind a stuck write after Close", name)

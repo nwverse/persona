@@ -41,6 +41,10 @@ const (
 	leaderWorkersMost = 8
 )
 
+// leaderListWait bounds only legacy one-shot/direct discovery while a leader start reaches its link. Revision-aware
+// watches use their cursor and heartbeat instead.
+var leaderListWait = 8 * time.Second
+
 func (a TodoAgent) active() bool { return a.ReleasedAt == nil && a.DismissedAt == nil }
 
 // linkSource is the todo_agents source and via the agent of plan task t is linked with.
@@ -202,7 +206,24 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
 		return leaderToolList()
 	}
-	// Linking later wakes MCP discovery; no startup timing assumption grants rights.
+	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
+		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
+	}
+	// A legacy one-shot peer asks before the start returns and has no cursor with which to recover later. Wait only
+	// while a leader is actually starting, and only until that leader's real link grants the tools.
+	if _, ok := s.taskOf(ctx, s.canonical(machine), session); ok {
+		return nil
+	}
+	for deadline := time.Now().Add(leaderListWait); s.leaderStarts.Load() > 0 && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+		if _, _, ok := s.leaderTask(ctx, machine, session); ok {
+			return leaderToolList()
+		}
+	}
 	return nil
 }
 
@@ -422,6 +443,14 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept); err != nil {
+		var escalated leaderEscalated
+		if errors.As(err, &escalated) {
+			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it
+			// twice, but release dedup and leave the turn untold so a manager restarted without either can deliver it.
+			rollback()
+			s.logf("supervise: %d signal(s) for stopped task leader %s escalated; keeping them recoverable", len(entries), short(lead.SessionID))
+			return false
+		}
 		s.logf("supervise: %d signal(s) for task leader %s: %v; trying again", len(entries), short(lead.SessionID), err)
 		rollback()
 		s.restoreDigest(kept, now, prev)
@@ -439,6 +468,13 @@ type leaderUnreachable struct{ err error }
 
 func (e leaderUnreachable) Error() string { return e.err.Error() }
 func (e leaderUnreachable) Unwrap() error { return e.err }
+
+// leaderEscalated is a refused send whose escalation and process-local retry are already running. It is not delivery:
+// the original turn stays untold and its dedup reservation is released so a restarted manager can recover it.
+type leaderEscalated struct{ err error }
+
+func (e leaderEscalated) Error() string { return e.err.Error() }
+func (e leaderEscalated) Unwrap() error { return e.err }
 
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. A closed agent is
 // resumed in the background (that takes minutes): when that fails the signals are escalated and retried
@@ -466,7 +502,7 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 		if refusedWith(err, proto.CodeAgentStopped) {
 			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
 			s.escalateLeaderMessage(lead, kept, text)
-			return nil
+			return leaderEscalated{err}
 		}
 		return leaderUnreachable{err}
 	}
@@ -640,6 +676,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			if wasOpen && closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
 				s.leaderTaskReviewed(lead, t.ID, verdict, v)
 			}
+		}
+		if verdict == reviewAccepted {
+			s.sendsAccepted(ctx, t.ID, time.Now()) // what was sent its agent before is answered: closed already, too (#7539)
 		}
 		if verdict == reviewCancelled {
 			s.stopTaskAgents(ctx, t)

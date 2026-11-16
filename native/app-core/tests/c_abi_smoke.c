@@ -59,22 +59,28 @@ static int check_projection(const char *input_path, const char *expected_path) {
     return failed;
 }
 
+static int check_empty_result(const unsigned char *input, size_t length, const char *label) {
+    PersonaCoreBytes result = persona_core_project_sort(input, length);
+    int failed = result.data || result.length != 0 || result.capacity != 0;
+    if (failed) {
+        fprintf(stderr, "%s did not return an empty buffer\n", label);
+    }
+    // Release the buffer this call actually returned, including an unexpected non-empty failure result.
+    persona_core_bytes_free(result);
+    return failed;
+}
+
 static int check_malformed(void) {
-    const unsigned char invalid[] = "{\"invalid\":true}";
-    PersonaCoreBytes result = persona_core_project_sort(invalid, sizeof(invalid) - 1);
-    if (result.data || result.length != 0 || result.capacity != 0) {
-        fprintf(stderr, "malformed JSON did not return an empty buffer\n");
+    const unsigned char wrong_schema[] = "{\"invalid\":true}";
+    if (check_empty_result(wrong_schema, sizeof(wrong_schema) - 1, "valid JSON with the wrong schema")) {
         return 1;
     }
-    persona_core_bytes_free(result);
+    const unsigned char invalid_json[] = "{\"sessions\":[}";
+    if (check_empty_result(invalid_json, sizeof(invalid_json) - 1, "syntactically invalid JSON")) {
+        return 1;
+    }
     const unsigned char empty[] = "";
-    result = persona_core_project_sort(empty, 0);
-    if (result.data || result.length != 0 || result.capacity != 0) {
-        fprintf(stderr, "empty input did not return an empty buffer\n");
-        return 1;
-    }
-    persona_core_bytes_free(result);
-    return 0;
+    return check_empty_result(empty, 0, "empty input");
 }
 
 int main(int argc, char **argv) {

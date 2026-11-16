@@ -25,7 +25,7 @@ cargo test --locked                                # unit tests and the shared f
 cargo run --locked -p persona-core-typegen          # regenerate the clients' codecs after changing a wire type
 cargo run --locked -p persona-core-typegen -- --check
 cargo build --locked --release -p persona-core-ffi # libpersona_core.{a,so,dylib}
-bash scripts/test-c-abi.sh                       # independent C11 client + dynamic C exports (Linux)
+bash scripts/test-c-abi.sh                        # independent C11 client + dynamic C exports (Linux)
 python3 -I scripts/ohos-napi-defs.py --check        # napi-derive definitions and index.d.ts
 python3 -I scripts/test_ohos_napi_defs.py           # declaration parser and drift-check regressions
 ```
@@ -48,7 +48,14 @@ importer, Apple ABI, NAPI/HAP, physical-device or performance test. Generated in
 ignored `native/app-core/target/` directory.
 
 Android's `:core:rustcore` tests build a host copy of
-the library and replay the same fixtures through the real JNI binding:
+the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
+turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
+Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
+lines, execute Swift or connect a production Android adapter. The operation replay (#8815) additionally drives
+`RustCore` dispatch/drain through JNI, preserves each raw JSON item and calls the turn projection at all 10 checkpoints
+in the four existing operation cases. It compares 13 complete turn objects and exact item IDs against the same checked-in
+corpus plus overlay, and separately replays the existing replacement through the standalone `replace` branch. These
+runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
