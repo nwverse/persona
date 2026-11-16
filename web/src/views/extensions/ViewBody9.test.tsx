@@ -65,10 +65,17 @@ describe("UI 9: a gauge's face", () => {
     expect(texts).toEqual(["50%", "Disk", "of 512 GB"]);
   });
 
-  it("draws no arc at 0 and a whole one at 1", () => {
+  it("draws no arc at 0 and a whole one at 1, and holds a ratio past them to them", () => {
     expect(arc(face({ title: "t", gauge: { ratio: 0 } }))).toBeNull();
     expect(face({ title: "t", gauge: { ratio: 0 } }).querySelectorAll("svg circle")).toHaveLength(1);
     expect(arc(face({ title: "t", gauge: { ratio: 1 } }))?.getAttribute("stroke-dashoffset")).toBe("0");
+    expect(arc(face({ title: "t", gauge: { ratio: 1.5 } }))?.getAttribute("stroke-dashoffset")).toBe("0");
+    expect(arc(face({ title: "t", gauge: { ratio: -1 } }))).toBeNull();
+  });
+
+  it("leaves out a unit that is not a word", () => {
+    const d = face({ title: "t", value: "3", gauge: { ratio: 0.5, unit: { x: 1 } } });
+    expect([...d.querySelectorAll("[data-gauge] span")].filter((s) => !s.children.length).map((s) => s.textContent)).toEqual(["3", "t"]);
   });
 
   it("takes the tile's color without one of its own, else the accent", () => {

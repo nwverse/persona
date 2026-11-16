@@ -7,7 +7,7 @@ import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { rowIcon, type UIAction, type UIItem } from "../../lib/extension-ui";
 import {
   aspectRatio, colorOf, controlText, controlValue, hue, hueTint, imageSrc, isHubImage, multilineRows, multiText, multiValues, sliderStep, snap, sparkColor, sparkPoints,
-  type UIImageSource, type UIRowAction, type UIRowControl, type UISpark, type UITile,
+  type UIGauge, type UIImageSource, type UIRowAction, type UIRowControl, type UISpark, type UITile,
 } from "../../lib/extension-ui-v6";
 import { t } from "../../i18n";
 import { cx, Dialog, Button, Menu, Spinner } from "../../ui/atoms";
@@ -26,7 +26,7 @@ import { lazyPage } from "../../lib/lazy-page";
 // Suspense, which adds no module to this chunk's imports (LazyImageViewer.tsx is the chat's).
 const ImageViewer = lazyPage(() => import("../chat/ImageViewer").then((m) => m.ImageViewer));
 // A tile's gauge (UI version 9, ViewBody9.tsx) is a chunk of its own too, loaded with the first tile that has one: the
-// tile shows its title in the ring's space meanwhile.
+// tile keeps the ring's space meanwhile, and is read out as it will be.
 const GaugeFace = lazyPage<{ tile: UITile; compact?: boolean }>(() => import("./ViewBody9").then((m) => m.GaugeFace));
 
 /** What UI version 6's components are drawn with, besides a view's handlers. */
@@ -324,11 +324,14 @@ export function useImage(src: UIImageSource | undefined, onImageFailed?: () => v
 /** A gauge's ratio as a whole percentage, 0 to 100: what its ring shows and is read out as (the hub's downgrade too). */
 export const gaugePercent = (ratio: number) => Math.round(Math.min(1, Math.max(0, ratio)) * 100);
 
-/** What a gauge tile is read out as: "5 hours: 4.69 USD, 94%", or "Disk: 50%" without a value. */
+/** A gauge's unit when it is a word ("" otherwise): readView keeps the gauge as sent. */
+export const gaugeUnit = (g: UIGauge) => (typeof g.unit === "string" ? g.unit : "");
+
+/** What a gauge tile is read out as, as a chart's title and text: "5 hours: 4.69 USD, 94%", or "Disk: 50%" without a value. */
 function gaugeLabel(tile: UITile): string {
-  const percent = `${gaugePercent(tile.gauge!.ratio)}%`;
-  if (!tile.value) return t("extensions-viewbody.gauge_label_percent", { title: tile.title, percent });
-  return t("extensions-viewbody.gauge_label", { title: tile.title, value: [tile.value, tile.gauge!.unit].filter(Boolean).join(" "), percent });
+  const g = tile.gauge!;
+  const text = [tile.value && [tile.value, gaugeUnit(g)].filter(Boolean).join(" "), `${gaugePercent(g.ratio)}%`].filter(Boolean).join(t("extensions-viewbody.read_sep"));
+  return t("extensions-extensionchart.titled", { title: tile.title, text });
 }
 
 type TileHandlers = V6Handlers & {
@@ -441,14 +444,7 @@ function TileView({ tile, compact, glyphs, busy, onPress, canPress, ...h }: Tile
   const gauge = tile.gauge;
   const label = (gauge ? [gaugeLabel(tile), tile.subtitle] : [tile.title, tile.subtitle, tile.value]).concat(on ? t("extensions-viewbody.tile_on") : "").filter(Boolean).join(t("extensions-viewbody.read_sep"));
   const body = gauge ? (
-    <Suspense
-      fallback={
-        <span className="flex min-w-0 flex-col items-center gap-0.5 p-3">
-          <span className={cx("mb-1.5 shrink-0", compact ? "size-20" : "size-24")} />
-          <span className="max-w-full truncate text-meta font-medium text-ink">{tile.title}</span>
-        </span>
-      }
-    >
+    <Suspense fallback={<span className={cx("m-3 self-center", compact ? "size-20" : "size-24")} />}>
       <GaugeFace tile={tile} compact={compact} />
     </Suspense>
   ) : (

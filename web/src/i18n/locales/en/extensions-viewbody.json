@@ -10,8 +10,6 @@
   "scroll_on": "Scroll on",
   "tile_on": "on",
   "read_sep": ", ",
-  "gauge_label": "{title}: {value}, {percent}",
-  "gauge_label_percent": "{title}: {percent}",
   "list_sep": ", ",
   "none_chosen": "None chosen",
   "chosen_count_one": "{count} chosen",

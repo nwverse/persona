@@ -125,10 +125,10 @@ export interface UITile {
   gauge?: UIGauge;
 }
 
-/** A tile's ring (UI version 9): ratio 0 to 1, a short unit under the value, a named color. */
+/** A tile's ring (UI version 9): ratio 0 to 1 (held to it where drawn), a short unit under the value, a named color. */
 export interface UIGauge {
   ratio: number;
-  unit?: string;
+  unit?: unknown;
   color?: UIColor | string;
 }
 
@@ -185,11 +185,9 @@ function readTile(raw: unknown): UITile[] {
   const spark = readSpark(raw.spark);
   if (spark) t.spark = spark;
   else delete t.spark;
-  // a gauge with a finite ratio, held to 0–1; anything else and the tile is drawn as one without it
-  const g = raw.gauge;
-  if (isObject(g) && typeof g.ratio === "number" && Number.isFinite(g.ratio))
-    t.gauge = { ratio: Math.min(1, Math.max(0, g.ratio)), ...(typeof g.unit === "string" && g.unit ? { unit: g.unit } : {}), ...(typeof g.color === "string" ? { color: g.color } : {}) };
-  else delete t.gauge;
+  // a gauge with a finite ratio, or the tile is drawn without one; where it is drawn (lazily) the ratio is held to 0–1,
+  // and a unit or a color that is not a known word is left out, so this first-screen reader stays small
+  if (!isObject(t.gauge) || !Number.isFinite(t.gauge.ratio)) delete t.gauge;
   return [t];
 }
 

@@ -2701,7 +2701,7 @@ Below version 6 the tile becomes a row as any other (see "UI version 6"), with t
 gets the same. Extensions may still draw an older app differently (`ui_version`).
 
 **The web** (#9337) draws all of it and sends `9` (`web/src/views/extensions/ViewBody9.tsx`, a chunk loaded with the first tile that has
-a gauge; the tile shows its title in the ring's space meanwhile). The ring is 96 px across on a page and 80 px in a card, its track the
+a gauge; the tile keeps the ring's space meanwhile and is already read out as it will be). The ring is 96 px across on a page and 80 px in a card, its track the
 color's tint, its arc with round ends; the value is in `text-xl` (`text-lg` in a card) with tabular figures, the unit and subtitle in
 `text-submeta`, the title in `text-meta`. The arc eases to a new ratio when the view is drawn again, and snaps with Reduce Motion. The
 tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone has two a line. The web's native stream still sends 7.

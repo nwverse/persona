@@ -356,7 +356,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
 // Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
 // en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
-export const FIRST_SCREEN_BUDGET = 480_986;
+// #9337 (UI version 9) adds 54 B in each language, measured in one environment against main e3f3b8018 (ja 480,986 B to
+// 481,040 B; en 477,857 B to 477,911 B, zh-Hans 478,676 B to 478,730 B): readView keeps a tile's gauge when its ratio is
+// a finite number (lib/extension-ui-v6.ts readTile), as the assistant's cards read views on the first screen too; the
+// ratio's bounds, its unit and the label are checked where the ring is drawn, a chunk loaded on intent (ViewBody9.tsx).
+export const FIRST_SCREEN_BUDGET = 481_040;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -577,7 +581,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // environment. The idle renderer (ViewBody.tsx) gains a section's rows side by side in Run, the head hook and the
 // lazy registration of ViewBody8.tsx; the columns grid and the section heads themselves (1.2 KB) load on intent with
 // the first view that has them. Main's 47 B of room is kept on top.
-export const IDLE_TIER_BUDGET = 45_822;
+// And 237 B for UI version 9 (#9337): main e3f3b8018 sends 45,770 B at idle, the same tree with #9337 46,007 B, in one
+// environment. The idle renderer (ViewBody6.tsx's TileView) gains a gauge tile's label and meter role, the ring's
+// space while it loads and the lazy registration of ViewBody9.tsx; the ring itself (about 1 KB) loads on intent with
+// the first tile that has a gauge. Main's 52 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 46_059;
 
 const gzip = promisify(gzipCompress);
 

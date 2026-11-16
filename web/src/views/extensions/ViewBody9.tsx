@@ -4,7 +4,7 @@
 // preload. TileView keeps the tile's surface, its press, badge, switch and menu; this draws what is inside.
 import { hue, hueTint, type UITile } from "../../lib/extension-ui-v6";
 import { cx } from "../../ui/atoms";
-import { gaugePercent } from "./ViewBody6";
+import { gaugePercent, gaugeUnit } from "./ViewBody6";
 
 /** The ring's geometry in its 100 × 100 box: a stroke of 9 inside the edge. */
 const R = 45.5;
@@ -22,6 +22,7 @@ export function GaugeFace({ tile, compact }: { tile: UITile; compact?: boolean }
   const color = hue(g.color, hue(tile.color, "var(--accent)"));
   const track = hueTint(g.color, hueTint(tile.color, "color-mix(in srgb, var(--accent) 14%, transparent)"));
   const centre = tile.value || `${pct}%`;
+  const unit = tile.value && gaugeUnit(g);
   return (
     <span data-gauge className="flex min-w-0 flex-col items-center gap-0.5 p-3 text-center">
       <span className={cx("relative mb-1.5 grid shrink-0 place-items-center", compact ? "size-20" : "size-24")}>
@@ -46,7 +47,7 @@ export function GaugeFace({ tile, compact }: { tile: UITile; compact?: boolean }
         </svg>
         <span className="relative flex max-w-[72%] min-w-0 flex-col items-center leading-tight">
           <span className={cx("max-w-full truncate font-semibold text-ink tabular-nums", compact ? "text-lg" : "text-xl")}>{centre}</span>
-          {tile.value && g.unit && <span className="max-w-full truncate text-submeta text-ink-3">{g.unit}</span>}
+          {unit && <span className="max-w-full truncate text-submeta text-ink-3">{unit}</span>}
         </span>
       </span>
       <span className="max-w-full truncate text-meta font-medium text-ink">{tile.title}</span>

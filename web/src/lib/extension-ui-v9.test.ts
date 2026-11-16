@@ -26,10 +26,9 @@ describe("UI 9: reading a tile's gauge", () => {
     expect(tiles(readView(example("gauge-percent"))).map((t) => t.gauge)).toEqual([{ ratio: 0 }, { ratio: 1 }]);
   });
 
-  it("holds the ratio to 0–1 and leaves out what it cannot use", () => {
-    expect(gaugeOf({ ratio: 1.5 })).toEqual({ ratio: 1 });
-    expect(gaugeOf({ ratio: -2, unit: "", color: "teal" })).toEqual({ ratio: 0, color: "teal" });
-    for (const raw of [{ ratio: "0.5" }, { unit: "USD" }, { ratio: Number.NaN }, { ratio: Number.POSITIVE_INFINITY }, 0.5, null, "ring"])
+  it("keeps a gauge with a finite ratio as sent (the drawing holds it to 0–1), and leaves out any other", () => {
+    expect(gaugeOf({ ratio: 1.5, unit: "GB", color: "teal" })).toEqual({ ratio: 1.5, unit: "GB", color: "teal" });
+    for (const raw of [{ ratio: "0.5" }, { unit: "USD" }, { ratio: Number.NaN }, { ratio: Number.POSITIVE_INFINITY }, 0.5, null, "ring", [0.5]])
       expect(gaugeOf(raw), JSON.stringify(raw)).toBeUndefined();
   });
 });
