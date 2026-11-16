@@ -24407,7 +24407,14 @@ def markets_route(handler, p, body):
             ui += PLUGINS[volc_mock.EXT]["ui"]
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
-                    "placement": "nav_page", "size": "full", "icon": "calendar"}]
+                    "placement": "nav_page", "size": "full", "icon": "calendar",
+                    **({"group": {"id": "workbench", "title": "工作台"}} if SIDEBAR_GROUPS else {})}]
+        if SIDEBAR_GROUPS and placement in ("", "nav_page"):
+            # made-up pages naming the sidebar's groups (#9071): two more for 工作台, one each for 资产 and 家里
+            ui += [{"plugin": "example-console", "plugin_name": "Example Console", "id": i, "title": title, "placement": "nav_page",
+                    "size": "full", "icon": icon, "group": {"id": g, "title": gt}}
+                   for i, title, icon, g, gt in (("lark", "Lark", "list", "workbench", "工作台"), ("calendar", "Calendar", "calendar", "workbench", "工作台"),
+                                                 ("assets", "Assets", "money", "assets", "资产"), ("home", "Home devices", "gauge", "home", "家里"))]
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
@@ -26630,12 +26637,16 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "hidden": op == "hide"})
         if p == "/api/v1/navigation" and self.command == "PUT":
             if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
-            start = json.loads(self.last_body or b"{}").get("start")
-            if not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)):
-                return self.send_json({"error": "start must be empty, a page's key or p:<extension>/<page>"}, 400)
-            NAVIGATION["start"] = start
+            body = json.loads(self.last_body or b"{}")
+            start, pages = body.get("start"), body.get("pages")
+            if (start is None and pages is None) or (start is not None and (not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)))) \
+                    or (pages is not None and not isinstance(pages, dict)):
+                return self.send_json({"error": "start or pages, of their shapes"}, 400)
+            event = {"type": "navigation"}
+            if start is not None: NAVIGATION["start"] = event["start"] = start
+            if pages is not None: NAVIGATION["pages"] = event["pages"] = pages
             for c in list(CLIENTS.values()):
-                try: c["send"]({"type": "navigation", "start": start})
+                try: c["send"](event)
                 except Exception: pass
             return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
@@ -29009,6 +29020,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
@@ -29619,6 +29631,8 @@ def plugins_route(handler, p, body):
 # each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
 # bottom rows push a plain page of the card's (its state); a row's own action answers a toast. All names are invented.
 COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
+# MOCK_SIDEBAR_GROUPS=1 (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1): nav_pages naming sidebar groups (#9071)
+SIDEBAR_GROUPS = os.environ.get("MOCK_SIDEBAR_GROUPS") == "1"
 
 
 def _today_row(key, title, subtitle="", value="", **extra):

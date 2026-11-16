@@ -13,8 +13,8 @@
   "error": "Error",
   "image": "Image",
   "cut": "{n} more characters not included",
-    "cutUnknown": "Some text was not included.",
-  "partial": "Starts at {from}: earlier messages were not read."
+  "cutUnknown": "Some text was not included.",
+  "partial": "Some messages could not be read. Earliest retained message: {from}."
  },
  "meta": {
   "title": "Fix the  login\nredirect",
@@ -348,7 +348,7 @@
      "text": "…and that was the fix."
     }
    ],
-   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n> Starts at 2026-11-14 10:30: earlier messages were not read.\n\n## Claude Code · 2026-11-14 10:30\n\n…and that was the fix.\n"
+   "markdown": "# Fix the login redirect\n\n- Agent: Claude Code\n- Computer: MacBook\n- Folder: ~/code/app\n- Exported: 2026-11-14 18:00\n\n> Some messages could not be read. Earliest retained message: 2026-11-14 10:30.\n\n## Claude Code · 2026-11-14 10:30\n\n…and that was the fix.\n"
   }
  ]
 }

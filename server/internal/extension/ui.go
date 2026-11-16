@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -39,7 +40,19 @@ type UIItem struct {
 	// its own (WidgetRefreshDefault when 0). A widget's only.
 	Families       []string `json:"families,omitempty"`
 	RefreshMinutes int      `json:"refresh_minutes,omitempty"`
+	// Group is the sidebar group a nav_page goes in unless the user put it elsewhere (#9071, docs/extensions/extensions.md
+	// "UI slots"): pages of any extension naming the same id share it. Its title is translated in l10n's groups.
+	Group *UIGroup `json:"group,omitempty"`
 }
+
+// UIGroup is a sidebar group a nav_page names: its id (a-z, 0-9, -) and its title in the manifest's language.
+type UIGroup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// uiGroupID is a group id's shape.
+var uiGroupID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Refresh is how often widget u is drawn again on its own.
 func (u UIItem) Refresh() time.Duration {

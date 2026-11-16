@@ -25,6 +25,8 @@ export interface ExportWords {
   cutUnknown: string;
   /** The document stops before the conversation's start: where it begins. */
   partial: (from: string) => string;
+  /** The document is partial but no message has a usable timestamp. */
+  partialUnknown: string;
 }
 
 /** What the document says before the messages. `agent`: who writes the replies (Claude Code, the assistant's name). */
@@ -105,7 +107,7 @@ export function transcriptMarkdown(items: readonly Item[], meta: ExportMeta, o: 
   for (const [k, v] of facts) if (v?.trim()) out.push(`- ${k}: ${v.trim()}`);
   out.push("");
   const first = items.find((i) => i.ts && time(i.ts));
-  if (o.partial && first?.ts) out.push(`> ${w.partial(time(first.ts))}`, "");
+  if (o.partial) out.push(`> ${first?.ts ? w.partial(time(first.ts)) : w.partialUnknown}`, "");
 
   // each tool call's result, so the call is written with it
   const results = new Map<string, Item>();
@@ -238,7 +240,7 @@ export async function readConversation(o: ReadOptions): Promise<{ items: Item[];
     add(first.items);
     let more = Boolean(first.has_more) && (first.items?.length ?? 0) > 0;
     let pages = 1;
-    let partial = false;
+    let partial = Boolean(first.has_more) && !first.items?.length;
     let changed = false;
     o.progress?.(bySeq.size);
     while (more) {
@@ -253,10 +255,25 @@ export async function readConversation(o: ReadOptions): Promise<{ items: Item[];
         changed = true;
         break;
       }
-      const before = bySeq.size;
-      add(p.items);
+      const older: Item[] = [];
+      const seen = new Set<string>();
+      for (const item of p.items ?? []) {
+        if (item.seq >= oldest || bySeq.has(item.id) || seen.has(item.id)) {
+          partial = true;
+        } else {
+          older.push(item);
+          seen.add(item.id);
+        }
+      }
+      add(older);
       pages++;
-      more = Boolean(p.has_more) && bySeq.size > before; // a page that adds nothing would loop
+      // A promised older page must actually move the cursor, even if it says there is no more history or returns
+      // different IDs at the same/newer sequence. Otherwise the exported document would silently claim completeness.
+      if (!older.length) {
+        partial = true;
+        break;
+      }
+      more = Boolean(p.has_more);
       o.progress?.(bySeq.size);
     }
     if (changed) {

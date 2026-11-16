@@ -29,7 +29,7 @@ class Socket {
 
 const TODAY = "p:example-today/today";
 // what the made-up hub keeps: undefined until something is stored; "missing" for a hub without the route
-let hub: { start?: string } | "missing";
+let hub: { start?: string; pages?: unknown } | "missing";
 let puts: unknown[];
 
 beforeEach(() => {
@@ -47,9 +47,9 @@ beforeEach(() => {
       if (url.pathname !== "/api/v1/navigation") return Response.json({});
       if (hub === "missing") return Response.json({ error: "not found" }, { status: 404 });
       if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as { start: string };
+        const body = JSON.parse(String(init.body)) as { start?: string; pages?: unknown };
         puts.push(body);
-        hub = { start: body.start };
+        hub = { ...hub, ...body };
       }
       return Response.json(hub);
     }),
@@ -209,6 +209,65 @@ describe("the hub's choice", () => {
     const next = await load();
     next.openStartPage();
     expect(location.pathname).toBe("/extension/example-today/today");
+  });
+});
+
+describe("the sidebar's arrangement (groups, #9071)", () => {
+  const arrangement = { order: ["routines"], shown: [], hidden: [], groups: [{ id: "u:life", title: "生活" }], assign: { routines: "u:life" } };
+
+  it("two devices: what one arranges, the other draws from its hello and on the push", async () => {
+    const laptop = await load();
+    await laptop.hello();
+    const pages = await import("./sidebar-pages");
+    const life = pages.addPageGroup([""], "生活");
+    pages.setPageGroup("routines", life);
+    await flush();
+    expect(hub).toMatchObject({ pages: { groups: [{ id: "" }, { id: life, title: "生活" }], assign: { routines: life } } });
+    laptop.store.disconnect();
+    vi.resetModules();
+    localStorage.clear();
+    localStorage.setItem("persona.token", "test-token");
+    const phone = await load();
+    await phone.hello();
+    const phonePages = await import("./sidebar-pages");
+    expect(phonePages.getSidebarPrefs().assign).toEqual({ routines: life });
+    expect(JSON.parse(localStorage.getItem("sidebar.pages")!).groups[1]).toEqual({ id: life, title: "生活" });
+    // another device renames it: the push brings it here
+    Socket.last.push({ type: "navigation", pages: { ...arrangement, groups: [{ id: life, title: "Life" }], assign: { routines: life } } });
+    expect(phonePages.getSidebarPrefs().groups).toEqual([{ id: life, title: "Life" }]);
+  });
+
+  it("is handed this browser's arrangement when the hub has none", async () => {
+    hub = { start: "" };
+    localStorage.setItem("sidebar.pages", JSON.stringify(arrangement));
+    const { hello } = await load();
+    await hello();
+    expect(puts).toEqual([{ pages: arrangement }]);
+  });
+
+  it("keeps a change the hub did not take and sends it again at the next hello", async () => {
+    hub = { pages: { order: [], shown: [], hidden: [] } };
+    const { hello } = await load();
+    await hello();
+    const pages = await import("./sidebar-pages");
+    vi.mocked(fetch).mockImplementationOnce(async () => Response.json({ error: "database down" }, { status: 503 }));
+    pages.setPageShown("kb", false);
+    await flush();
+    expect(pages.getSidebarPrefs().hidden).toEqual(["kb"]);
+    await hello();
+    expect(pages.getSidebarPrefs().hidden).toEqual(["kb"]);
+    expect(hub).toMatchObject({ pages: { hidden: ["kb"] } });
+  });
+
+  it("stays in this browser on a hub without the route", async () => {
+    hub = "missing";
+    const { hello } = await load();
+    await hello();
+    const pages = await import("./sidebar-pages");
+    pages.setPageShown("kb", false);
+    await flush();
+    expect(JSON.parse(localStorage.getItem("sidebar.pages")!).hidden).toEqual(["kb"]);
+    expect(vi.mocked(fetch).mock.calls.filter(([, i]) => (i as RequestInit | undefined)?.method === "PUT")).toEqual([]);
   });
 });
 
