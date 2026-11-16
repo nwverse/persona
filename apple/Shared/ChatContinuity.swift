@@ -51,6 +51,7 @@ nonisolated struct NativeContinuityObservation: Sendable {
     let snapshot: NativeContinuitySnapshot
     let native: NativeContinuityResult
     let gap: ChatStore.Gap?
+    let coreInput: NativeContinuityInput
 }
 
 /// This is deliberately the native method boundary, not a second reducer. The same input reaches the current
@@ -82,7 +83,9 @@ extension ChatStore: ChatContinuityAdapting {
         let snapshot = initialContinuitySnapshot ?? nativeSnapshot()
         let result = nativeResult()
         initialContinuitySnapshot = nativeSnapshot()
-        hook(self, input, .init(snapshot: snapshot, native: result, gap: gap))
+        var core = input
+        core.items = Self.withImageRefs(core.items.publicRefusals(), key)
+        hook(self, input, .init(snapshot: snapshot, native: result, gap: gap, coreInput: core))
     }
 
     /// A caller outside the production adapter keeps the DEBUG shadow's cache baseline without mirroring its input.

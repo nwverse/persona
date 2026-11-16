@@ -42,6 +42,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         let native: NativeContinuityResult
         let gap: ChatStore.Gap?
         let fold: Item?
+        let storeKey: SessionKey
     }
 
     private struct WeakChatStore {
@@ -57,7 +58,6 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "Persona.ContinuityShadow", qos: .utility)
-    private let timeoutQueue = DispatchQueue(label: "Persona.ContinuityShadow.Timeout", qos: .utility)
     private let effects = Effects()
     private let enabled = Mutex(true)
     private var client: PersonaCoreClient?
@@ -95,7 +95,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             return
         }
         ChatStore.installContinuityShadowForTests { [weak self] store, input, observation in
-            self?.accept(input, into: store, snapshot: observation.snapshot, native: observation.native, gap: observation.gap)
+            self?.accept(observation.coreInput, into: store, snapshot: observation.snapshot, native: observation.native, gap: observation.gap)
         }
     }
 
@@ -107,7 +107,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     @MainActor func accept(_ input: NativeContinuityInput, into store: ChatStore, snapshot: NativeContinuitySnapshot,
                 native: NativeContinuityResult, gap: ChatStore.Gap?) {
         guard enabled.withLock({ $0 }) else { return }
-        let value = Input(snapshot: snapshot, value: input, native: native, gap: gap, fold: input.fold)
+        let value = Input(snapshot: snapshot, value: input, native: native, gap: gap, fold: input.fold, storeKey: store.key)
         // The immutable input captures content for this queued comparison; identity is assigned only on this queue.
         enqueue { [weak self, weak store] in
             guard let self, let store, let id = self.generation(for: store) else { return }
@@ -142,22 +142,22 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         removeChat(id)
     }
 
-    private func start(_ id: UInt, snapshot: NativeContinuitySnapshot) throws {
+    private func start(_ id: UInt, snapshot: NativeContinuitySnapshot, storeKey: SessionKey) throws {
         guard chats[id] == nil else { return }
         chats[id] = Chat()
-        try core().dispatch(.openChat(chat: chatID(id), snapshot: Self.snapshot(snapshot)))
-        try core().flush(timeoutMilliseconds: 16)
+        try core().dispatch(.openChat(chat: chatID(id), snapshot: Self.snapshot(snapshot, storeKey: storeKey)))
+        try flush(id, input: nil)
         try applyInitialSnapshot(id, snapshot: snapshot)
     }
 
     @MainActor func loadOlder(_ store: ChatStore) {
         let snapshot = store.nativeSnapshot()
         let native = store.nativeResult()
-        let input = Input(snapshot: snapshot, value: .event(.loadOlder), native: native, gap: nil, fold: nil)
+        let input = Input(snapshot: snapshot, value: .event(.loadOlder), native: native, gap: nil, fold: nil, storeKey: store.key)
         enqueue { [weak self, weak store] in
             guard let self, let store, let id = self.generation(for: store) else { return }
             do {
-                try self.start(id, snapshot: snapshot)
+                try self.start(id, snapshot: snapshot, storeKey: store.key)
                 try self.core().dispatch(try Self.action(id, input: input))
                 try self.flush(id, input: input)
                 try self.compareQueued(id, shape: "kind=loadOlder items=0")
@@ -168,11 +168,11 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     @MainActor func failed(_ kind: NativeContinuityInput.Kind, in store: ChatStore, fold: Item? = nil) {
         let snapshot = store.nativeSnapshot()
         let native = store.nativeResult()
-        let input = Input(snapshot: snapshot, value: .event(kind, fold: fold), native: native, gap: nil, fold: fold)
+        let input = Input(snapshot: snapshot, value: .event(kind, fold: fold), native: native, gap: nil, fold: fold, storeKey: store.key)
         enqueue { [weak self, weak store] in
             guard let self, let store, let id = self.generation(for: store) else { return }
             do {
-                try self.start(id, snapshot: snapshot)
+                try self.start(id, snapshot: snapshot, storeKey: store.key)
                 try self.core().dispatch(try Self.action(id, input: input))
                 try self.flush(id, input: input)
                 try self.compareQueued(id, shape: "kind=\(kind.rawValue) items=0")
@@ -226,35 +226,23 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private func process(_ id: UInt, input: Input) {
         do {
-            try start(id, snapshot: input.snapshot)
+            try start(id, snapshot: input.snapshot, storeKey: input.storeKey)
             try core().dispatch(try Self.action(id, input: input))
             try flush(id, input: input)
             try compareQueued(id, input: input, shape: Self.shape(input.value))
         } catch PersonaCoreError.flushTimedOut {
-            // `flush` retries this exact observation on the utility queue, without a main-actor wait or a tombstone.
+            // The serial queue retries a slow core once; this is not a continuity mismatch or a tombstone.
         } catch {
             fail(id, rule: "core-input", shape: Self.shape(input.value))
         }
     }
 
-    private func flush(_ id: UInt, input: Input) throws {
+    private func flush(_ id: UInt, input: Input?) throws {
         do { try core().flush(timeoutMilliseconds: 16) }
         catch PersonaCoreError.flushTimedOut {
-            // Retry this exact observation later on a utility queue. A timeout is not a continuity mismatch and must
-            // neither tombstone the chat nor silently skip the comparison; the main actor never waits for the core.
-            timeoutQueue.async { [weak self] in
-                guard let self else { return }
-                do {
-                    try self.core().flush(timeoutMilliseconds: 100)
-                    self.enqueue { [weak self] in
-                        do { try self?.compareQueued(id, input: input, shape: Self.shape(input.value)) }
-                        catch { self?.fail(id, rule: "core-input", shape: Self.shape(input.value)) }
-                    }
-                } catch {
-                    self.enqueue { [weak self] in self?.fail(id, rule: "core-flush", shape: Self.shape(input.value)) }
-                }
-            }
-            throw PersonaCoreError.flushTimedOut
+            // Retry in this same serial queue so no later input can consume the earlier patch/effect first. A timeout
+            // is not a continuity mismatch, but a sustained core failure is reported instead of being silently ignored.
+            try core().flush(timeoutMilliseconds: 100)
         }
     }
 
@@ -442,20 +430,22 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private static func identifier(_ chat: String) -> UInt? { UInt(chat, radix: 16) }
 
-    static func encode(_ items: [Item]) throws -> String {
-        guard let value = String(data: try JSON.encoder.encode(items), encoding: .utf8) else { throw PersonaCoreError.invalidPatch }
+    static func encode(_ items: [Item], storeKey: SessionKey) throws -> String {
+        // Mirror the same public/native normalization before the Rust reducer sees an item, not after comparison.
+        let normalized = ChatStore.withImageRefs(items, storeKey)
+        guard let value = String(data: try JSON.encoder.encode(normalized), encoding: .utf8) else { throw PersonaCoreError.invalidPatch }
         return value
     }
 
     private static func itemJSON(_ json: String) throws -> Item { try JSON.decoder.decode(Item.self, from: Data(json.utf8)) }
 
-    static func snapshot(_ native: NativeContinuitySnapshot) throws -> ChatSnapshot {
-        ChatSnapshot(itemsJson: try encode(native.items), history: native.history, covered: Int64(native.covered),
+    static func snapshot(_ native: NativeContinuitySnapshot, storeKey: SessionKey) throws -> ChatSnapshot {
+        ChatSnapshot(itemsJson: try encode(native.items, storeKey: storeKey), history: native.history, covered: Int64(native.covered),
                      hasMore: native.hasMore, loadedOnce: native.loadedOnce)
     }
 
-    static func batch(_ input: NativeContinuityInput) throws -> WireBatch {
-        WireBatch(itemsJson: try encode(input.items), history: input.span.history,
+    static func batch(_ input: NativeContinuityInput, storeKey: SessionKey) throws -> WireBatch {
+        WireBatch(itemsJson: try encode(input.items, storeKey: storeKey), history: input.span.history,
                   fromSeq: input.span.from.map(Int64.init), toSeq: input.span.to.map(Int64.init),
                   backlog: input.backlog, hasMore: input.hasMore, moreAfter: input.moreAfter)
     }
@@ -463,16 +453,16 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private static func action(_ id: UInt, input: Input) throws -> Action {
         let event: ChatEvent
         switch input.value.kind {
-        case .latest: event = .latest(batch: try batch(input.value))
-        case .pushed: event = .pushed(batch: try batch(input.value))
-        case .after: event = .after(batch: try batch(input.value))
+        case .latest: event = .latest(batch: try batch(input.value, storeKey: input.storeKey))
+        case .pushed: event = .pushed(batch: try batch(input.value, storeKey: input.storeKey))
+        case .after: event = .after(batch: try batch(input.value, storeKey: input.storeKey))
         case .reloaded:
-            event = .reloaded(items_json: try encode(input.value.items), history: input.value.span.history,
+            event = .reloaded(items_json: try encode(input.value.items, storeKey: input.storeKey), history: input.value.span.history,
                               to_seq: input.value.span.to.map(Int64.init), has_more: input.value.hasMore ?? false)
         case .older:
-            event = .older(items_json: try encode(input.value.items), has_more: input.value.hasMore ?? false)
+            event = .older(items_json: try encode(input.value.items, storeKey: input.storeKey), has_more: input.value.hasMore ?? false)
         case .range:
-            event = .range(fold_id: input.fold?.id, items_json: try encode(input.value.items), more: input.value.rangeMore)
+            event = .range(fold_id: input.fold?.id, items_json: try encode(input.value.items, storeKey: input.storeKey), more: input.value.rangeMore)
         case .reconnected: event = .reconnected
         case .openFold:
             event = .openFold(fold_id: input.fold?.id ?? "")

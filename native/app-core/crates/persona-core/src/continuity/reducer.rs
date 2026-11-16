@@ -300,6 +300,8 @@ impl Reducer {
             !(old.kind != "fold" && old.is_work() && folds.iter().any(|fold| fold.folds(old))
                 || old.kind == "fold" && batch_work.iter().any(|work| old.folds(work)))
         });
+        let retained_ids: HashSet<String> = self.items.iter().map(|item| item.id.clone()).collect();
+        self.ids.retain(|id| retained_ids.contains(id));
         self.ids.extend(fresh.iter().map(|item| item.id.clone()));
         let incoming_ids: HashSet<&str> = fresh.iter().map(|item| item.id.as_str()).collect();
         self.items.retain(|item| !incoming_ids.contains(item.id.as_str()));
@@ -390,6 +392,37 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(reducer.items()[0].json()).unwrap(),
             serde_json::json!({"id":"1#0","seq":1,"kind":"text","text":"新版","supervision_user":true})
         );
+    }
+
+    #[test]
+    fn replaced_fold_work_keeps_ids_for_later_pages() {
+        let mut reducer = Reducer::new();
+        reducer.restore(
+            Item::list_from_json(r#"[{"id":"fold:1#0","seq":1,"role":"assistant","kind":"fold","fold":{"through_seq":4,"through_id":"4#0"}}]"#).unwrap(),
+            Some("h".into()),
+            4,
+            Some(false),
+            true,
+        );
+        let first = Item::list_from_json(r#"[{"id":"1#0","seq":1,"role":"assistant","kind":"thinking","text":"第一步"},{"id":"2#0","seq":2,"role":"assistant","kind":"tool_use","tool_name":"Read"}]"#).unwrap();
+        reducer.merge(first, false, None);
+        assert!(reducer.items().iter().any(|item| item.id == "1#0"));
+        assert!(reducer.ids.contains("1#0"));
+        let next =
+            Item::list_from_json(r#"[{"id":"3#0","seq":3,"role":"assistant","kind":"tool_result","text":"后续"}]"#)
+                .unwrap();
+        reducer.merge(next, false, None);
+        assert_eq!(
+            reducer.items().iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            ["1#0", "2#0", "3#0"]
+        );
+        let repeated =
+            Item::list_from_json(r#"[{"id":"1#0","seq":1,"role":"assistant","kind":"thinking","text":"更新"}]"#)
+                .unwrap();
+        reducer.merge(repeated, false, None);
+        assert_eq!(reducer.items().len(), 3);
+        assert_eq!(reducer.ids.len(), 3);
+        assert!(reducer.items()[0].json().contains("更新"));
     }
 
     #[test]
