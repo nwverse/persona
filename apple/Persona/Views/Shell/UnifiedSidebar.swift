@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// The Sidebar layout (Settings › Appearance › Navigation, #6332; docs/apple/ios.md「Sidebar layout」): one sidebar with
 /// the main conversation, the pages, Persona's chats and the Agents list, as the web app's, and the page picked in it
@@ -249,7 +250,8 @@ struct SidebarNeedsJump: View {
 /// has every window.
 struct SidebarUsageStrip: View {
     @Environment(AppModel.self) private var model
-    var openMachines: () -> Void
+    /// Not `openMachines`: a stored property's name stays in the Release binary, and that is a DEBUG launch switch (#8306).
+    var onOpenMachines: () -> Void
     private let store = UsageWindowsStore.shared
 
     var body: some View {
@@ -259,7 +261,7 @@ struct SidebarUsageStrip: View {
             Color.clear.frame(height: Theme.Size.nonvisualProbe)
                 .tabActiveTask(id: model.groupIDs.joined(separator: ",")) { await store.keepFresh(model) }
             if !accounts.isEmpty {
-                Button(action: openMachines) {
+                Button(action: onOpenMachines) {
                     HStack(spacing: Theme.Space.l) {
                         ForEach(accounts) { a in
                             let used = UsageWindows.fullest(a)

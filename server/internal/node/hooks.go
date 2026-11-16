@@ -18,8 +18,10 @@ import (
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -81,12 +83,12 @@ func (n *Node) sockGone() string {
 func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 	path := nodeclient.SocketPath()
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return nil, err
 	}
 	// Never unlink on close: by then the path may belong to a newer node.
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.(*osproc.UnixListener).SetUnlinkOnClose(false)
 	_ = os.Chmod(path, 0o600)
 	if _, err := ensureLaunchKey(nodeclient.LaunchKeyPath()); err != nil { // before any personad launch reads it
 		n.logf("launch key: %v", err)
@@ -187,7 +189,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			resp = inventory
 		}
 	case "preflight": // personad node doctor's path-access check, read with this node's permissions (preflight.go)
-		resp = n.preflight(ctx)
+		resp = n.preflightIn(ctx, i18n.Resolve(req.Locale).Or(i18n.Default))
 	case "ask": // personad ask (scriptcli.go)
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
@@ -199,9 +201,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "secret.env": // personad launch --ticket (secretenv.go)
 		resp = n.secretEnvFor(req)
 	case "mcp.tools":
-		var res struct {
-			Tools []proto.Tool `json:"tools"`
-		}
+		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant := n.mcpSession(c, req)
 		if session == "" && !assistant {
@@ -209,9 +209,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
-		if err := n.peer.Call(ctx, "mcp.tools", map[string]any{"assistant": assistant, "session_id": session, "guest": guest}, &res); err != nil {
+		params := mcpToolsParams(req.Input, session, assistant, guest)
+		if err := n.peer.Call(ctx, "mcp.tools", params, &res); err != nil {
 			resp = map[string]any{"tools": []proto.Tool{}, "error": err.Error()}
 		} else {
+			if res == nil {
+				res = map[string]any{}
+			}
+			res["session"] = session
 			resp = res
 		}
 	case "cli.call": // personad tg: the node, not the caller, says whether it is the assistant (clicall.go)

@@ -275,6 +275,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	n.starts.recovered(id)
 	_ = launch.NameAgent(ctx, created.Pane, "j-"+id[:6])
 	n.holdResume(ctx, launch, pane, id, spec) // herdr's restore resumes it through the launcher (herdrresume.go)
+	// The goal goes after the first prompt is in (startgoal.go): only a new Claude's.
+	goal := ""
+	if kind == "claude" && resume == "" {
+		goal = execution.Goal
+	}
 	// Before the first prompt; never a failed start: Claude is up, and ultracode_note says why it is not on.
 	if n.startUltracode(ctx, id, pane, execution.Ultracode) && prompt != "" {
 		// The command may still sit in the input box: the first prompt would be typed after it and sent with it. Left
@@ -289,10 +294,13 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			prompt = ""
 		}
 	}
+	if prompt == "" && goal != "" {
+		n.logf("start %s: no first message went in, so no goal is set", id)
+	}
 	if prompt != "" {
 		// Checked against the transcript and typed again when it was dropped; one that never goes in leaves the
 		// session needing the user, with why, not idle (firstprompt.go).
-		if err := n.firstPrompt(ctx, pane, id, prompt, a); err != nil {
+		if err := n.firstPrompt(ctx, pane, id, prompt, a, goal); err != nil {
 			if adoptedPane(ctx) != nil && !errors.Is(err, host.ErrNotDelivered) && !errors.Is(err, host.ErrNoAgent) {
 				return nil, unconfirmedStart(err) // a switch's message (engine_switch.go) may be in the claude
 			}
@@ -476,10 +484,15 @@ func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
 
 // close quits any Claude running in the machine's engine (started by Persona or by hand) and closes its pane: herdr
 // closes its tab, or in a split tab only its own pane, so the other panes survive; herdr-core ends its terminal.
+// Its user-action callers hold the recovery and typing locks, including retire's already-checked turn.
 func (n *Node) close(ctx context.Context, id string) error {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
+	if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+		return err
+	}
+	defer n.state.stopped(id, proto.StopUser)
 	a, ok := n.agent(id)
 	if !ok {
 		if _, mine := n.state.get(id); mine {
@@ -511,6 +524,10 @@ func exitCommand(text string) bool {
 // the shell, retire.go), and one already stopped is left as it is rather than resumed in a new tab just to quit there.
 // It runs inside send's turn for the session, so it does not take the typing lock again as stop does.
 func (n *Node) exitAgent(ctx context.Context, id string) error {
+	if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+		return err
+	}
+	defer n.state.stopped(id, proto.StopUser)
 	a, ok := n.agent(id)
 	if !ok {
 		return nil

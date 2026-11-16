@@ -556,6 +556,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Goal string `json:"goal"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if strings.TrimSpace(fields.Goal) != "" { // its own code: the caller starts again without the goal
+			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
+		}
+	}
 	if !nodeHas(info, nodeproto.AssistantConfigDir) && (method == "assistant.send" || method == "assistant.warm" || method == "session.send") {
 		raw, _ := json.Marshal(params)
 		var fields struct {
@@ -564,6 +574,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		_ = json.Unmarshal(raw, &fields)
 		if fields.ConfigDir != "" {
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_config_dir")}
+		}
+	}
+	if !nodeHas(info, nodeproto.AssistantSupervisionInstructions) && (method == "assistant.send" || method == "assistant.warm" || method == "session.send") {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Instructions string `json:"supervision_instructions"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if fields.Instructions != "" {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_node_outdated")}
 		}
 	}
 	if method == "assistant.send" && !nodeHas(info, nodeproto.AssistantServiceTier) {
@@ -606,7 +626,7 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
@@ -727,6 +747,13 @@ func (m *Machine) sessionList() []proto.Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return slices.Clone(m.sessions)
+}
+
+// appendSessions appends the machine's sessions to dst (Devices.AppendSessions).
+func (m *Machine) appendSessions(dst []proto.Session) []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append(dst, m.sessions...)
 }
 
 // sessionsWhere copies out the sessions keep accepts (Devices.SessionsWhere).

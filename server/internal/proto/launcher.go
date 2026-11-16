@@ -2,6 +2,7 @@ package proto
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -22,6 +23,12 @@ type Launcher struct {
 	// queues that pane for cleanup when the start fails (#5504; docs/integrations/terminal.md, section 21). Older
 	// nodes leave it out: Run Agent Here offers them Claude Code only.
 	RunHere bool `json:"run_here,omitempty"`
+	// PermissionModes are the permission modes a start on a runtime's launcher takes when its agent is not Claude Code
+	// (whose five the apps know), Persona's ids (#8261): default, the agent's own approval, which the apps send as no
+	// mode, and bypassPermissions where it has an Allow all (Paseo's Auto Accept and Codex's full-access). A list
+	// tells the apps the start takes what the runtime says: the modes listed (a choice only with two or more) and the
+	// efforts its models list. Older nodes and runtimes leave it out; the apps then keep their own rule.
+	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
 	// AutoAccept: a runtime's launcher whose agents ask for approval unless a switch is on, which a start in
@@ -29,6 +36,9 @@ type Launcher struct {
 	// docs/integrations/paseo.md). The Agents Persona itself starts on it run with the switch on, as Claude Code's run in
 	// bypassPermissions (#8141). Older nodes and runtimes leave it out.
 	AutoAccept bool `json:"auto_accept,omitempty"`
+	// DisplayName is what the apps call it: a Persona-managed provider's own name (the manager sets it,
+	// launcher_auto_name), or a runtime's name for a provider it runs (Paseo's label, "Grok"; #8261). Empty: Name.
+	DisplayName string `json:"display_name,omitempty"`
 	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
 	// "Persona's model providers").
 	Pi bool `json:"pi,omitempty"`
@@ -276,9 +286,22 @@ type ProviderModel struct {
 	Name string `json:"name,omitempty"`
 	// ContextWindow in tokens; 0 is unknown (Claude Code then assumes 200K).
 	ContextWindow int `json:"context_window,omitempty"`
-	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered).
-	Efforts       []string `json:"efforts,omitempty"`
+	// MaxOutputTokens: the longest reply the gateway says the model writes; 0 is unknown.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered),
+	// unless NoEffort says it takes none.
+	Efforts []string `json:"efforts,omitempty"`
+	// AllEfforts: every level the gateway reported, present only when some fall outside EffortLevels: in discovery's
+	// answer the gateway's own words (EffortWords), once saved those the provider's agent or API takes (Codex's
+	// minimal and ultra, a direct API's none). Efforts is always these as Claude Code takes them
+	// (ProjectEfforts(AllEfforts, EffortLevels)), so a reader that knows only Efforts never gets a level it can't use.
+	AllEfforts    []string `json:"all_efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// NoEffort: the gateway said the model takes no thinking level (Efforts is then empty, which alone is unknown).
+	NoEffort bool `json:"no_effort,omitempty"`
+	// ImageInput and ToolCalls: whether the gateway says the model takes images and tools; nil is unknown.
+	ImageInput *bool `json:"image_input,omitempty"`
+	ToolCalls  *bool `json:"tool_calls,omitempty"`
 	// InheritedFrom is the catalog id an unlisted newer generation took a missing context window or thinking
 	// level from. Empty for an exact catalog entry, and when the gateway already reported every one of those.
 	InheritedFrom string `json:"inherited_from,omitempty"`
@@ -362,6 +385,16 @@ func (l ManagedLauncher) LaunchBaseURL() string {
 	return l.BaseURL
 }
 
+// AnthropicAPIHost is the host of Anthropic's own API: where Claude Code goes with no Base URL.
+const AnthropicAPIHost = "api.anthropic.com"
+
+// AnthropicAPI: base (a Base URL) is Anthropic's own API, not a relay, a gateway or another vendor. The probe's
+// error reading (the manager's models_probe.go) and the node's provider environment (launcherenv.go) both ask.
+func AnthropicAPI(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	return err == nil && strings.EqualFold(u.Hostname(), AnthropicAPIHost)
+}
+
 // MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add
 // /v1/messages themselves, so the /v1 many gateways put at the end of their documented address would make
 // /v1/v1/messages: the /v1 ending the path goes with any trailing slashes, a deployment prefix before it stays
@@ -388,3 +421,21 @@ func MessagesBaseURL(base string) string {
 		path = strings.TrimRight(rest, "/")
 	}
 }
+
+// The agents the node starts without Claude Code's permission mode and effort (Codex takes its own sandbox and
+// effort): the hub matches what the node does with one a start names (assistant/launcher_modes.go), and node
+// TestStartModeAgentTypesMatchTheNode keeps these lists and the node's together.
+//
+// WorkAgentTypes are the work agents (docs/integrations/launchers.md "Work agents"): pi, the Cursor CLI and the
+// Antigravity CLI. The node starts them with the two ignored rather than refusing the start (node/control.go, #8151).
+var WorkAgentTypes = []string{"pi", "cursor", "agy"}
+
+// NoModeAgentTypes are the other agents the node starts in a terminal, traex and Oh My Pi: it refuses a start of one
+// that names a permission mode or effort (node/control.go).
+var NoModeAgentTypes = []string{"traex", "omp"}
+
+// IsWorkAgentType: agent is one of WorkAgentTypes.
+func IsWorkAgentType(agent string) bool { return slices.Contains(WorkAgentTypes, agent) }
+
+// IsNoModeAgentType: agent is one of NoModeAgentTypes.
+func IsNoModeAgentType(agent string) bool { return slices.Contains(NoModeAgentTypes, agent) }

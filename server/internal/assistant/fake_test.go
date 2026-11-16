@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -36,10 +37,17 @@ type fakeHub struct {
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
 	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
-	hello         Hello
-	settings      *Settings
-	launcherList  []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
-	zshrc         map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
+	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
+	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
+	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
+	// call's context, after beforeSend (a request that went out).
+	beforeSend   func()
+	afterList    map[string]func()
+	sendHangs    bool
+	hello        Hello
+	settings     *Settings
+	launcherList []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
+	zshrc        map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
 	hostLaunchers map[string][]proto.Launcher
@@ -89,6 +97,7 @@ type fakeHub struct {
 	refuseNotify  error            // notify.request is the hub's refusal (answered) while set
 	notifyResult  NotifyResult     // the held/reason answer notify.request returns once it succeeds
 	events        []string         // the type of each event the apps were sent
+	onBroadcast   func()           // runs once an event is recorded, while Broadcast has not returned yet
 	liveEvents    []map[string]any // the meeting_live events as sent
 	snaps         []Snapshot
 
@@ -99,6 +108,7 @@ type fakeHub struct {
 	offline      map[string]bool
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -148,7 +158,8 @@ type fakeHub struct {
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
-	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	// refuseConfigDir: assistant.send or assistant.warm with a config_dir fails as the hub refuses it for a node too old
+	// for one
 	refuseConfigDir bool
 	// elsewhere: the conversations in another profile than meetingProfile, by id: a resume that asks for a config_dir
 	// fails, as the node refuses to move a conversation to another profile
@@ -222,8 +233,31 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			hook() // what happens while a card is being made: its "where" reads the machines
 		}
 	}
+	if p.Method == DeviceSessionSend {
+		f.mu.Lock()
+		hook, hangs := f.beforeSend, f.sendHangs
+		f.beforeSend = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		if hangs {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method != DeviceSessionItems {
-		return f.deviceCall(ctx, p)
+		out, err := f.deviceCall(ctx, p)
+		if p.Method == DeviceSessionsList {
+			f.mu.Lock()
+			hook := f.afterList[p.Device]
+			delete(f.afterList, p.Device)
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
+		return out, err
 	}
 	f.mu.Lock()
 	f.itemReads++
@@ -260,6 +294,19 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, p)
+	if p.Method == DeviceAssistantWarm && f.refuseConfigDir && strings.Contains(string(p.Params), `"config_dir"`) {
+		return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
+	}
+	if p.Method == DeviceAssistantWarm {
+		var w struct {
+			Launcher  string `json:"launcher"`
+			ConfigDir string `json:"config_dir"`
+		}
+		_ = json.Unmarshal(p.Params, &w)
+		if w.ConfigDir != "" && launcherAgent(w.Launcher) != "claude" { // node/assistant_spare.go's preflight
+			return nil, errors.New(assistantwire.ConfigDirClaudeOnly)
+		}
+	}
 	if p.Method == "session.interrupt" && f.failInterrupt != nil {
 		return nil, f.failInterrupt
 	}
@@ -495,6 +542,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.refuseUltra != nil && a["ultracode"] == true {
 			return nil, f.refuseUltra
 		}
+		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
+			return nil, f.refuseGoal
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -679,10 +729,13 @@ func (f *fakeHub) Broadcast(_ context.Context, b Broadcast) {
 		_ = json.Unmarshal(b.Message, &live)
 		f.liveEvents = append(f.liveEvents, live)
 	}
-	receipt := f.readHooks.receipt
+	receipt, during := f.readHooks.receipt, f.onBroadcast
 	f.mu.Unlock()
 	if receipt != nil && ev.Type == "assistant_feed" && ev.Item.Kind == feedReceipt {
 		receipt(ev.Item)
+	}
+	if during != nil {
+		during()
 	}
 }
 
@@ -937,7 +990,7 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 // newTestService is an assistant on f with an in-memory store.
 // testLogf is t.Logf until the test ends, nothing after: the service's goroutines (a run's watcher, a snapshot being
 // published) can still log when the test is over, and t.Logf then panics and fails the whole package.
-func testLogf(t *testing.T) func(string, ...any) {
+func testLogf(t testing.TB) func(string, ...any) {
 	var mu sync.Mutex
 	done := false
 	t.Cleanup(func() {
@@ -1001,17 +1054,26 @@ func kbEng(t *testing.T, s *Service) *kb.Engine {
 // newStorelessService is an assistant on f with no database: its state lives in memory only.
 func newStorelessService(t *testing.T, f *fakeHub) *Service {
 	t.Helper()
+	return storelessService(t, f)
+}
+
+// storelessService is newStorelessService for a benchmark too.
+func storelessService(t testing.TB, f *fakeHub) *Service {
+	t.Helper()
 	return withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t)}))
 }
 
 // newServiceOn is an assistant on f with st as its database.
-func newServiceOn(t *testing.T, f *fakeHub, st Store) *Service {
+func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 	t.Helper()
+	if database, ok := st.(*db.DB); ok {
+		st = repositorystore.New(database)
+	}
 	return withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
 }
 
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
-func withSettings(t *testing.T, f *fakeHub, s *Service) *Service {
+func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
@@ -1027,7 +1089,7 @@ func withSettings(t *testing.T, f *fakeHub, s *Service) *Service {
 }
 
 // setSettings changes s's own settings, and the hub is told (the snapshot's profile).
-func setSettings(t *testing.T, s *Service, fn func(*Settings)) {
+func setSettings(t testing.TB, s *Service, fn func(*Settings)) {
 	t.Helper()
 	if _, err := s.updateSettings(context.Background(), func(v *Settings) error { fn(v); return nil }); err != nil {
 		t.Fatal(err)
@@ -1202,7 +1264,7 @@ func launcherAgent(name string) string {
 // itself): a Messages API that answers a tab's name with f.tabReply, the Agents triage with f.triage and the done
 // judge with f.judge (each an error when empty), and the others with f.replies in turn (an error with noModel),
 // keeping what was asked.
-func (f *fakeHub) fakeModel(t *testing.T) {
+func (f *fakeHub) fakeModel(t testing.TB) {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1335,5 +1397,22 @@ func setModel(t *testing.T, s *Service, purpose string, b ModelBinding) {
 	r := modelRecordOf(t, s, purpose)
 	if err := s.saveModel(context.Background(), purpose, modelRecord{Revision: r.Revision, Binding: b}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// todosTold waits (real time) until no {"type":"todos"} waits for the rest of its write (todosPushSoon): the events
+// the apps were sent so far include every to-do change made so far.
+func todosTold(t testing.TB, s *Service) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) { // sleep-ok: waits for the settle timer
+		s.tpush.mu.Lock()
+		n := s.tpush.sending
+		s.tpush.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a todos event still waits after 5 s")
+		}
 	}
 }
