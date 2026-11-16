@@ -37,9 +37,13 @@ function redactPathString(text, run, paths) {
   const mappings = redactPaths(run, paths);
   let output = "";
   for (let start = 0; start < text.length;) {
-    const match = /^(?:[a-z]:[\\/]|\\\\|\/)[^\s"'`;,:)}\]]*/i.exec(text.slice(start));
+    const rest = text.slice(start);
+    const match = /^(?:[a-z]:[\\/]|\\\\|\/)[^\r\n"'`;,:)}\]]*/i.exec(rest);
     if (!match) { output += text[start++]; continue; }
-    const raw = match[0];
+    // Spaces can belong to a path. Keep the whole field unless another absolute path starts;
+    // unknown paths may redact extra words, but must not expose a private suffix after a space.
+    const nextPath = /\s+(?=(?:[\w.-]+=)?(?:[a-z]:[\\/]|\\\\|\/))/i.exec(rest);
+    const raw = rest.slice(0, Math.min(match[0].length, nextPath?.index ?? rest.length)).trimEnd();
     if (raw === "/") { output += raw; start += raw.length; continue; }
     const candidates = mappings.filter(({ path }) => classifyOwnedPath(path, raw) !== "outside").sort((a, b) => b.path.length - a.path.length);
     if (candidates.length) {
@@ -50,7 +54,7 @@ function redactPathString(text, run, paths) {
       const kind = classifyOwnedPath(run, raw);
       output += kind === "root" ? "<run>" : kind === "descendant" ? `<run>/${receiptPath(run).relative(run, raw).split(receiptPath(run).sep).join("/")}` : "<path>";
     }
-    start += match[0].length;
+    start += raw.length;
   }
   return output;
 }
