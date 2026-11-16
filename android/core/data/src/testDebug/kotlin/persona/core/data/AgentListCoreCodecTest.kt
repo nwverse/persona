@@ -26,9 +26,12 @@ class AgentListCoreCodecTest {
         ), stateSince = "2025-12-31T23:59:00Z")
         val encoded = AgentListCoreCodec.encode(AgentListAdapter.Input(
             sessions = listOf(row), machines = listOf(Machine("machine-a~g1234abc", "synthetic machine")),
-            pins = AgentPreferences(sessions = listOf("machine-a~g1234abc/session-a")),
-            mutes = AgentPreferences(sessions = listOf("machine-a~g1234abc/session-a"), allowed = setOf("machine-a~g1234abc/session-a")),
-            settings = AgentListSettings(grouping = AgentGrouping.Space, sort = AgentSort.Updated, query = "synthetic query"),
+            pins = AgentPreferences(sessions = listOf("machine-a~g1234abc/session-a"), spaces = listOf("machine-a~g1234abc/space")),
+            mutes = AgentPreferences(sessions = listOf("machine-a~g1234abc/session-a"), spaces = listOf("machine-a~g1234abc/space"),
+                allowed = setOf("machine-a~g1234abc/session-a")),
+            settings = AgentListSettings(grouping = AgentGrouping.Space, sort = AgentSort.Updated, query = "synthetic query",
+                folded = setOf("machine-a~g1234abc/space"), expandedIdle = setOf("machine-a~g1234abc/space"),
+                expandedQuiet = setOf("machine-a~g1234abc/space")),
             held = "machine-a~g1234abc/session-a", now = Instant.parse("2026-01-01T00:01:00Z"),
         ))
         val json = JsonCodec.parseToJsonElement(encoded).jsonObject
@@ -44,6 +47,10 @@ class AgentListCoreCodecTest {
         assertEquals("g1234abc|machine-a/session-a", settings.getValue("held").jsonPrimitive.content)
         assertEquals("2026-01-01T00:01:00Z", settings.getValue("now").jsonPrimitive.content)
         assertEquals("g1234abc|machine-a/session-a", json.getValue("pins").jsonObject.getValue("sessions").jsonArray.single().jsonPrimitive.content)
+        assertEquals("g1234abc|machine-a/space", json.getValue("pins").jsonObject.getValue("spaces").jsonArray.single().jsonPrimitive.content)
+        assertEquals("g1234abc|machine-a/space", settings.getValue("folded").jsonArray.single().jsonPrimitive.content)
+        assertEquals("g1234abc|machine-a/space", settings.getValue("expanded_idle").jsonArray.single().jsonPrimitive.content)
+        assertEquals("g1234abc|machine-a/space", settings.getValue("expanded_quiet").jsonArray.single().jsonPrimitive.content)
     }
 
     @Test fun rejectsUnsupportedGroupingWithoutPassingContentToRust() {
@@ -87,6 +94,6 @@ class AgentListCoreCodecTest {
         shadow.project(AgentListAdapter.Input(sessions = listOf(AgentSession(Session(machineId = "machine~g1234abc", sessionId = "one"))),
             machines = listOf(Machine("machine~g1234abc"))))
         ShadowAgentListDiagnostics.awaitIdle()
-        assertEquals(1, shadow.mismatchCount)
+        assertTrue(shadow.mismatchCount > 0) // #9027: core pin identity does not match iOS multi-hub SessionKey.path.
     }
 }

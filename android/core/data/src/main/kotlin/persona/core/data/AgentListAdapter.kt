@@ -8,7 +8,7 @@ import persona.core.domain.sort.AgentListResult
 import persona.core.domain.sort.AgentListSettings
 import persona.core.domain.sort.AgentPreferences
 import persona.core.domain.sort.AgentSession
-import persona.core.domain.sort.buildAgentList
+import persona.core.domain.sort.buildFlatAgentList
 
 /** One Agents-list projection boundary. Kotlin remains the only implementation that supplies rows to the UI. */
 interface AgentListAdapter {
@@ -32,6 +32,7 @@ interface AgentListAdapter {
 /** The production behavior, kept byte-for-byte behind the new boundary. */
 class KotlinAgentListAdapter : AgentListAdapter {
     override fun project(input: AgentListAdapter.Input): AgentListResult = with(input) {
-        buildAgentList(sessions, machines, pins, mutes, settings.copy(now = now), todos, directions)
+        // scopedAgentList retains range, forest and history preprocessing outside this boundary.
+        buildFlatAgentList(sessions, machines, pins, mutes, settings.copy(now = now), todos, directions)
     }
 }

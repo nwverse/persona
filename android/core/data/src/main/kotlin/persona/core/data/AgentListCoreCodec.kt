@@ -39,11 +39,11 @@ internal object AgentListCoreCodec {
                 }
             }
             put("pins", buildJsonObject {
-                putJsonArray("spaces") { input.pins.spaces.forEach { add(JsonPrimitive(it)) } }
+                putJsonArray("spaces") { input.pins.spaces.forEach { add(JsonPrimitive(it.corePreference())) } }
                 putJsonArray("sessions") { input.pins.sessions.forEach { add(JsonPrimitive(it.corePreference())) } }
             })
             put("mutes", buildJsonObject {
-                putJsonArray("spaces") { input.mutes.spaces.forEach { add(JsonPrimitive(it)) } }
+                putJsonArray("spaces") { input.mutes.spaces.forEach { add(JsonPrimitive(it.corePreference())) } }
                 putJsonArray("sessions") { input.mutes.sessions.forEach { add(JsonPrimitive(it.corePreference())) } }
                 putJsonArray("allowed") { input.mutes.allowed.forEach { add(JsonPrimitive(it.corePreference())) } }
             })
@@ -78,11 +78,13 @@ internal object AgentListCoreCodec {
         })
         put("sort", settings.sort.name.lowercase())
         put("query", settings.query)
-        put("machine_filter", settings.machineFilter)
-        putJsonArray("kept") { settings.kept.forEach { add(JsonPrimitive(it)) } }
-        putJsonArray("folded") { settings.folded.forEach { add(JsonPrimitive(it)) } }
-        putJsonArray("expanded_idle") { settings.expandedIdle.forEach { add(JsonPrimitive(it)) } }
-        putJsonArray("expanded_quiet") { settings.expandedQuiet.forEach { add(JsonPrimitive(it)) } }
+        put("machine_filter", settings.machineFilter.coreIdentity().let { (group, machine) ->
+            if (group == null) machine else "$group|$machine"
+        })
+        putJsonArray("kept") { settings.kept.forEach { add(JsonPrimitive(it.corePreference())) } }
+        putJsonArray("folded") { settings.folded.forEach { add(JsonPrimitive(it.coreGroupPreference())) } }
+        putJsonArray("expanded_idle") { settings.expandedIdle.forEach { add(JsonPrimitive(it.coreGroupPreference())) } }
+        putJsonArray("expanded_quiet") { settings.expandedQuiet.forEach { add(JsonPrimitive(it.coreGroupPreference())) } }
         held?.let { put("held", it.corePreference()) }
         put("now", now)
     }
@@ -96,6 +98,13 @@ internal object AgentListCoreCodec {
     private fun String.corePreference(): String {
         val separator = lastIndexOf('/')
         if (separator < 0) return this
+        val (group, machine) = substring(0, separator).coreIdentity()
+        return if (group == null) this else "$group|$machine${substring(separator)}"
+    }
+
+    private fun String.coreGroupPreference(): String {
+        val separator = indexOf('/')
+        if (separator <= 0) return this
         val (group, machine) = substring(0, separator).coreIdentity()
         return if (group == null) this else "$group|$machine${substring(separator)}"
     }

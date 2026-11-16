@@ -39,6 +39,7 @@ class ShadowAgentListAdapter(
     private val progress: (compared: Int, mismatches: Int) -> Unit = { _, _ -> },
 ) : AgentListAdapter {
     private val count = AtomicInteger()
+    private val unsupportedCount = AtomicInteger()
     private var compared = 0
     val mismatchCount: Int get() = count.get()
 
@@ -50,24 +51,38 @@ class ShadowAgentListAdapter(
         return result
     }
 
-    private fun compare(input: AgentListAdapter.Input, expected: AgentListResult) {
+    private fun compare(input: AgentListAdapter.Input, originalExpected: AgentListResult) {
         val shape = input.shape()
         unsupported(input)?.let { report(it, shape); return }
-        val input = if (input.settings.grouping == AgentGrouping.Repo) {
-            // The core owns the project/space projection; Android's repository tree is a later grouping layer.
-            input.copy(settings = input.settings.copy(grouping = AgentGrouping.Space))
-        } else input
-        val raw = try { AgentListCoreCodec.encode(input) } catch (_: Throwable) {
+        val coreGrouping = when (input.settings.grouping) {
+            AgentGrouping.Repo, AgentGrouping.MachineSpace -> AgentGrouping.Space
+            else -> input.settings.grouping
+        }
+        val expected: AgentListResult
+        val coreInput: AgentListAdapter.Input
+        if (coreGrouping == input.settings.grouping) {
+            expected = originalExpected
+            coreInput = input
+        } else {
+            expected = kotlin.project(input.copy(settings = input.settings.copy(grouping = AgentGrouping.Space)))
+            val spaceIds = expected.groups.map { it.id }.toSet()
+            fun Set<String>.spaceOnly() = filter { it in spaceIds }.toSet()
+            coreInput = input.copy(settings = input.settings.copy(grouping = coreGrouping,
+                folded = input.settings.folded.spaceOnly(), expandedIdle = input.settings.expandedIdle.spaceOnly(),
+                expandedQuiet = input.settings.expandedQuiet.spaceOnly()))
+        }
+        val raw = try { AgentListCoreCodec.encode(coreInput) } catch (_: Throwable) {
             report("input-conversion", shape); return
         }
         val projection = try { projectRust(raw) } catch (_: Throwable) {
             report("rust-failure", shape); return
         }
         if (projection.isEmpty()) { report("rust-failure", shape); return }
-        val actual = try { JsonCodec.decodeFromString<CoreProjection>(projection) } catch (_: Throwable) {
+        val actual = try { JsonCodec.decodeFromString<CoreProjection>(projection).toAndroidIdentities() } catch (_: Throwable) {
             report("rust-output", shape); return
         }
-        compareProjection(input, expected, actual, shape)
+        compareProjection(coreInput, expected, actual, shape)
+        if (coreGrouping != input.settings.grouping) unsupportedCount.incrementAndGet()
         compared++
         if (compared % 10 == 0) reportProgress()
     }
@@ -75,22 +90,10 @@ class ShadowAgentListAdapter(
     private fun compareProjection(input: AgentListAdapter.Input, expected: AgentListResult, actual: CoreProjection, shape: String) {
         AgentQuickFilter.values().forEach { filter ->
             filter.coreKey?.let { key ->
-                if ((expected.counts[filter] ?: 0) != (actual.counts[key] ?: 0)) report("quick-filter-counts", shape)
+                if (actual.counts[key] == null || expected.counts[filter] != actual.counts.getValue(key)) report("quick-filter-counts", shape)
             }
         }
-        if (input.settings.grouping == AgentGrouping.Space) compareProjectGroups(expected, actual, shape)
-        else if (input.settings.grouping == AgentGrouping.Repo) {
-            // The tree's section membership is Android-only; compare each leaf's own ordering, never IDs across trees.
-            val actualGroups = actual.groups.associateBy { it.id }
-            expected.groups.filter { it.rows.isNotEmpty() && it.id != "pinned" }.forEach { group ->
-                val rust = actualGroups[group.id]
-                if (rust == null) report("unsupported-grouping-tree", shape)
-                else {
-                    if (group.rows.map { it.id } != rust.rows) report("order", shape)
-                    if (group.visibleRows.map { it.id } != rust.visibleRows) report("visible-rows", shape)
-                }
-            }
-        }
+        if (input.settings.grouping == AgentGrouping.Space) compareGroups(expected, actual, shape)
         else if (expected.groups.map { it.id } != actual.groups.map { it.id }) report("grouping", shape)
         else expected.groups.zip(actual.groups).forEach { (kotlin, rust) ->
             if (kotlin.rows.map { it.id } != rust.rows) report("order", shape)
@@ -105,15 +108,16 @@ class ShadowAgentListAdapter(
         if (input.settings.grouping == AgentGrouping.Space && expected.quietTitle?.let { CoreText.words(it) } != actual.quietTitle) report("quiet-title", shape)
     }
 
-    private fun compareProjectGroups(expected: AgentListResult, actual: CoreProjection, shape: String) {
-        val kotlin = expected.groups.associate { group ->
-            group.id to (group.rows.map { it.id } to group.visibleRows.map { it.id })
-        }
-        if (kotlin.keys != actual.groups.map { it.id }.toSet()) { report("grouping", shape); return }
-        for (rust in actual.groups) {
-            val expectedGroup = kotlin[rust.id] ?: continue
-            if (expectedGroup.first != rust.rows) report("order", shape)
-            if (expectedGroup.second != rust.visibleRows) report("visible-rows", shape)
+    private fun compareGroups(expected: AgentListResult, actual: CoreProjection, shape: String) {
+        if (expected.groups.map { it.id } != actual.groups.map { it.id }) { report("grouping", shape); return }
+        expected.groups.zip(actual.groups).forEach { (kotlin, rust) ->
+            if (kotlin.rows.map { it.id } != rust.rows) report("order", shape)
+            if (kotlin.visibleRows.map { it.id } != rust.visibleRows) report("visible-rows", shape)
+            if (kotlin.folded != rust.folded) report("folding", shape)
+            if (CoreText.words(kotlin.title) != rust.title) report("grouping-titles", shape)
+            if (kotlin.parent != rust.parent) report("quiet-folding", shape)
+            if (kotlin.stateCounts?.toCore() != rust.stateCounts) report("grouping-counts", shape)
+            if (kotlin.spoken?.let { CoreText.words(it) } != rust.spoken) report("grouping-summary", shape)
         }
     }
 
@@ -169,15 +173,41 @@ private val AgentQuickFilter.coreKey: String? get() = when (this) {
     else -> null
 }
 
+private fun CoreProjection.toAndroidIdentities(): CoreProjection {
+    fun String.androidId(): String {
+        val slash = lastIndexOf('/')
+        val pipe = indexOf('|')
+        if (pipe <= 0 || slash <= pipe) return this
+        return substring(pipe + 1, slash) + "~" + substring(0, pipe) + substring(slash)
+    }
+    fun String.androidPath(): String {
+        val slash = indexOf('/')
+        if (slash < 0) return this
+        val pipe = indexOf('|')
+        if (pipe <= 0 || pipe > slash) return this
+        return substring(pipe + 1, slash) + "~" + substring(0, pipe) + substring(slash)
+    }
+    return copy(
+        groups = groups.map { it.copy(id = it.id.androidPath(), rows = it.rows.map(String::androidId),
+            visibleRows = it.visibleRows.map(String::androidId)) },
+        unreadShown = unreadShown.map(String::androidId),
+    )
+}
+
 private fun unsupported(input: AgentListAdapter.Input): String? = when {
-    input.settings.grouping !in listOf(AgentGrouping.State, AgentGrouping.Space, AgentGrouping.Machine, AgentGrouping.Repo) -> "unsupported-grouping"
+    input.settings.grouping !in listOf(AgentGrouping.State, AgentGrouping.Space, AgentGrouping.Machine,
+        AgentGrouping.Repo, AgentGrouping.MachineSpace) -> "unsupported-grouping"
     input.settings.quick !in listOf(AgentQuickFilter.All, AgentQuickFilter.NeedsYou, AgentQuickFilter.Unread,
         AgentQuickFilter.Working, AgentQuickFilter.BackgroundWaiting) -> "unsupported-quick-filter"
-    input.settings.queryAncestors.isNotEmpty() || input.todos.isNotEmpty() || input.directions != null -> "unsupported-context"
-    input.settings.hideBotmux || input.settings.hierarchy || input.settings.includeCodexHistory -> "unsupported-input"
-    input.sessions.any { it.session.machineId.contains('~') } || input.machines.any { it.id.contains('~') } ||
-        (input.pins.sessions + input.mutes.sessions + input.mutes.allowed + input.settings.kept + input.held).any { it?.contains('~') == true } ||
-        input.settings.machineFilter.contains('~') -> "unsupported-identity"
+    input.settings.queryAncestors.isNotEmpty() -> "unsupported-query-ancestors"
+    input.settings.includeCodexHistory -> "unsupported-history"
+    input.settings.hideBotmux -> "unsupported-botmux"
+    input.settings.hierarchy && input.sessions.any { it.hierarchyKnown || it.session.foldedUnder != null || it.session.children != null } ->
+        "unsupported-hierarchy"
+    input.settings.grouping in listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace) &&
+        input.settings.folded.any { it.startsWith("machine/") } -> "unsupported-group-state"
+    input.sessions.any { it.session.machineId.contains('~') } != input.machines.any { it.id.contains('~') } ->
+        "unsupported-partial-identity"
     else -> null
 }
 

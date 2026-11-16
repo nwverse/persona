@@ -199,7 +199,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNI
     }
 }
 
-/// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
+/// Projects the Agents list from a JSON input string. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
     mut env: JNIEnv<'a>,

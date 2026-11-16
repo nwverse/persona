@@ -17,6 +17,7 @@ import persona.core.domain.sort.AgentListSettings
 import persona.core.domain.sort.AgentPreferences
 import persona.core.domain.sort.AgentQuickFilter
 import persona.core.domain.sort.AgentSession
+import persona.core.contracts.Session
 import persona.core.domain.sort.AgentSort
 import persona.core.rustcore.RustCoreSort
 
@@ -43,7 +44,52 @@ class AgentListAdapterFixtureTest {
             }
         }
         assertEquals(30, names.size)
+        assertEquals(setOf(
+            "active_space_uses_rank_not_slots", "compact_expands_idle_without_reordering", "cross_machine_same_session_id",
+            "cross_machine_same_session_id_reversed", "empty_list", "filter_all", "filter_needsyou", "filter_unread", "filter_working",
+            "folded_machine_hides_rows", "folded_space_keeps_counts", "folded_state_and_expanded_idle", "kept_cannot_escape_base",
+            "machine_search_before_counts", "machine_uses_registry_order", "mute_allow_and_explicit_override", "pinned_offline_is_visible",
+            "pinned_sessions_use_pin_order_once", "quick_filter_ignores_rank", "quick_spaces_use_updated_time", "rank_all_states_and_mutes",
+            "search_expands_idle", "space_header_counts", "space_time_tie", "space_time_tie_reversed", "spaces_pin_busy_muted_quiet",
+            "unread_keeps_seen_rows", "unread_reselected_drops_seen_rows", "working_since_then_id", "working_since_then_id_reversed",
+        ), names)
         assertEquals("production adapter parity: $reports", 0, shadow.mismatchCount)
+    }
+
+    @Test fun heldMultiHubAndConditionalQueriesUseRealJni() {
+        val reports = mutableListOf<AgentListMismatch>()
+        val shadow = ShadowAgentListAdapter(projectRust = RustCoreSort::project, sink = reports::add)
+        val rows = listOf(
+            AgentSession(Session(machineId = "m~g1234abc", sessionId = "pinned", state = "idle", updatedAt = "2026-01-01T00:00:00Z")),
+            AgentSession(Session(machineId = "m~g1234abc", sessionId = "held", state = "idle", updatedAt = "2026-01-02T00:00:00Z")),
+        )
+        for (query in listOf("is:pinned", "machine:m", "is:error", "since:7d")) {
+            val reports = mutableListOf<AgentListMismatch>()
+            val shadow = ShadowAgentListAdapter(projectRust = RustCoreSort::project, sink = reports::add)
+            shadow.project(AgentListAdapter.Input(rows, listOf(Machine("m~g1234abc", "Example")),
+                pins = AgentPreferences(sessions = listOf("m~g1234abc/pinned")),
+                settings = AgentListSettings(grouping = AgentGrouping.State, query = query),
+                held = "m~g1234abc/held", now = Instant.parse("2026-01-03T00:00:00Z")))
+            ShadowAgentListDiagnostics.awaitIdle()
+            // Filed against the implementations' different rules; never a blanket waiver of this rule or other cases.
+            // #9027 covers multi-hub pins; #9033 covers Android's missing heldInList. `machine:` has no held group.
+            val expectedPinMismatches = when (query) {
+                "since:7d" -> 1 // #9027: multi-hub pin identity, the only grouping difference in this input
+                "is:error" -> 0 // no row; neither differing rule is exercised
+                else -> 1 // #9027's pin; no held group is emitted
+            }
+            assertEquals(query, expectedPinMismatches, reports.count { it.rule == "grouping" })
+            assertTrue("other mismatch: $reports (#9027 multi-hub pin; #9033 Android heldInList)", reports.all { it.rule == "grouping" })
+        }
+    }
+    @Test fun heldIsObservedAsAndroidAlignmentIssue9033() {
+        val reports = mutableListOf<AgentListMismatch>()
+        val shadow = ShadowAgentListAdapter(projectRust = RustCoreSort::project, sink = reports::add)
+        val row = AgentSession(Session(machineId = "m", sessionId = "held", state = "idle", updatedAt = "2026-01-01T00:00:00Z"))
+        shadow.project(AgentListAdapter.Input(listOf(row), listOf(Machine("m")),
+            settings = AgentListSettings(grouping = AgentGrouping.State, folded = setOf("!state/idle")), held = "m/held"))
+        ShadowAgentListDiagnostics.awaitIdle()
+        assertEquals(listOf("grouping"), reports.map { it.rule })
     }
 }
 

@@ -138,14 +138,23 @@ JVM tests with `-Ppersona.sort=shadow`, or launch `DebugEntryActivity` with `--e
 and relaunch (`off` disables it). Reports use the `PersonaCoreShadow` tag and hold only `agents-list-sort`, a rule code
 and counts/flags/enum values: never titles, paths, queries, identifiers or exception messages.
 
-The core's `state`, `machine` and `space` projections compare complete published outputs. The default `Repo` grouping
-uses the core's `space` projection and compares project/leaf ordering without pretending the core owns Android's
-repository-tree, to-do, direction, history or multi-hub grouping extensions; unsupported inputs are named by rule, not
-silently called parity. Input conversion includes the core's `held` field when the host supplies iOS `heldInList` state.
-The production Kotlin path still owns `retainOpenedRows`, history and children. A caller-supplied instant makes `since:`
-searches deterministic. The 30 checked-in `agents_list` fixtures run through both production Kotlin and the real host
-JNI projection; conversion, redaction, native failure, production entry and Release isolation have focused JVM tests.
-This is host evidence only: no physical-device shadow run, UI change, Rust promotion or iOS behavior change.
+The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
+use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
+headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
+identity and includes the core's `held` field from the shell's visible Agent chat when the row remains Unread. The
+production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
+instant makes `since:` searches deterministic. The 30 checked-in `agents_list` fixtures pass through both production
+Kotlin and the real host JNI projection; additional real-JNI cases found #9027 (multi-hub pin identity in the core)
+and #9033 (Android does not yet implement iOS's `heldInList`). Those differences are recorded, not hidden or changed
+to match Rust.
+
+Release has no sort-shadow implementation and its native library does not export `Java_..._projectSort`. The app still
+packages the other core entry points for the existing packaging work: this is a strict boundary for this shadow, not a
+claim that the whole native library is absent. `buildAndroidReleaseCore` builds its own Cargo target and checks both
+ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally prove that no shadow class is on the
+classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
+production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
+not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
 
 ## Reproducing phase-1 evidence
 

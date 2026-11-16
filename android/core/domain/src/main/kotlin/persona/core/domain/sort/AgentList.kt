@@ -27,6 +27,8 @@ data class AgentListSettings(
     val hideBotmux: Boolean = false,
     /** sessions_hierarchy: even an orphan without rollup fields stays an ordinary, counted row. */
     val hierarchy: Boolean = false,
+    /** UI-only row-cap expansion, distinct from [expandedIdle] so Show All never unfolds idle agents. */
+    val expandedAll: Set<String> = emptySet(),
     /** The caller's instant for `since:`; the list projection never reads a clock. */
     val now: java.time.Instant = java.time.Instant.now(),
 )
