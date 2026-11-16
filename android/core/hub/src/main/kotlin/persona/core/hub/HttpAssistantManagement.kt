@@ -1,6 +1,7 @@
 package persona.core.hub
 
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.decodeStandingAuthorizations
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
@@ -77,6 +78,14 @@ class HttpAssistantManagement private constructor(
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String): Boolean =
         (request("DELETE", listOf("api", "v1", "assistant", "conversations", session.sessionId, "always", keyHash), client = compactHttp)
             ["restart_required"] as? JsonPrimitive)?.booleanOrNull ?: false
+
+    override suspend fun standingAuthorizations() = decodeStandingAuthorizations(assistant("GET", "standing-authorizations"))
+
+    override suspend fun revokeStandingAuthorization(id: String) {
+        require(id.isNotBlank())
+        // One path segment, so a slash or a question mark in an id cannot change the route.
+        assistant("DELETE", "standing-authorizations", id)
+    }
     // The hub waits up to 12 s for the computer's self-check, and a probe runs a real one-word turn on top of it.
     override suspend fun readiness(probe: Boolean): AssistantReadiness = JsonCodec.decodeFromJsonElement(
         request("GET", listOf("api", "v1", "assistant", "readiness"), client = if (probe) runHttp else http,

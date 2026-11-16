@@ -180,4 +180,6 @@ private class RoutedAssistantManagement(
     override suspend fun skills() = api().skills()
     override suspend fun alwaysGrants(session: SessionKey) = api().alwaysGrants(session)
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = api().revokeAlwaysGrant(session, keyHash)
+    override suspend fun standingAuthorizations() = api().standingAuthorizations()
+    override suspend fun revokeStandingAuthorization(id: String) = api().revokeStandingAuthorization(id)
 }

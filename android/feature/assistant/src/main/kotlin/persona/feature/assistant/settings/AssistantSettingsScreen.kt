@@ -55,13 +55,15 @@ internal fun AssistantSettingsScreen(
     onOpenConversation: (SessionKey) -> Unit = {},
     /** Opens Settings › Models for a purpose (a task's model); null leaves those rows out. */
     onModelConfiguration: ((String, String) -> Unit)? = null,
+    /** Opens Settings › Standing Authorizations; null leaves the row out (shots of this page stay as they were). */
+    onStandingAuthorizations: (() -> Unit)? = null,
     initialManager: String? = null,
 ) {
     // The current assistant's profile (docs/assistant/managers.md "Clients"); another one current, the page reads that one's.
     val owner = initialManager?.takeIf(String::isNotBlank) ?: persona.core.designsystem.currentAssistant().id
     key(management, owner) {
         val scoped = remember(management, owner) { management.forManager(owner) }
-        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration, owner)
+        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration, onStandingAuthorizations, owner)
     }
 }
 
@@ -69,6 +71,7 @@ internal fun AssistantSettingsScreen(
 private fun AssistantSettingsDetails(
     management: AssistantManagement, machines: List<Machine>, onBack: () -> Unit, onMoved: suspend () -> Unit,
     inPlace: Boolean, onOpenConversation: (SessionKey) -> Unit, onModelConfiguration: ((String, String) -> Unit)?,
+    onStandingAuthorizations: (() -> Unit)?,
     owner: String,
 ) {
     val context = LocalContext.current
@@ -144,6 +147,17 @@ private fun AssistantSettingsDetails(
             controller.loadPlaces()
         }
     }
+    var standingCount by remember { mutableIntStateOf(0) }
+    val showStanding = onStandingAuthorizations != null
+    LaunchedEffect(management, showStanding) {
+        standingCount = if (!showStanding) 0 else try {
+            management.standingAuthorizations().authorizations.size
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            0
+        }
+    }
     when (part) {
         SettingsPart.Home -> SettingsHome(shown, machine, machineName, controller.phoneZone, onBack, ::refresh,
             open = { part = it }, sheet = { sheet = it }, follow = { scope.launch { controller.setFollowPhone(it) } },
@@ -152,6 +166,7 @@ private fun AssistantSettingsDetails(
             nextSuggestions = { scope.launch { controller.setNextSuggestions(it) } },
             superviseOwn = { scope.launch { controller.setMainSupervisesOwnTasks(it) } },
             supervisorModel = onModelConfiguration?.let { open -> { open(BackgroundSupervisor.PURPOSE, owner) } },
+            onStandingAuthorizations = onStandingAuthorizations, standingCount = standingCount,
             owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } })
         SettingsPart.Notes -> NotesPart(shown, onBack = { part = SettingsPart.Home }) { text -> controller.saveNotes(text) }
         SettingsPart.Memory -> MemoryPart(shown, machine, machineName, onBack = { part = SettingsPart.Home },
@@ -241,6 +256,9 @@ private fun SettingsHome(
     superviseOwn: (Boolean) -> Unit = {},
     /** Opens the background supervisor's model (Settings › Models); null leaves the row out. */
     supervisorModel: (() -> Unit)? = null,
+    /** Opens Standing Authorizations; null leaves the row out. [standingCount] is shown when it is at least one. */
+    onStandingAuthorizations: (() -> Unit)? = null,
+    standingCount: Int = 0,
     owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
     permission: (String) -> Unit = {},
 ) {
@@ -280,10 +298,18 @@ private fun SettingsHome(
             }
 
             item("proactive") { JSectionHeader(stringResource(R.string.assistant_settings_proactive_header)) }
-            rows("proactive", listOf(
-                { JRow(stringResource(R.string.assistant_settings_proactive), subtitle = stringResource(R.string.assistant_settings_proactive_subtitle),
-                    leadingIcon = PhIcons.Clock, onClick = { open(SettingsPart.Proactive) }) },
-            ))
+            val proactive: @Composable () -> Unit = {
+                JRow(stringResource(R.string.assistant_settings_proactive), subtitle = stringResource(R.string.assistant_settings_proactive_subtitle),
+                    leadingIcon = PhIcons.Clock, onClick = { open(SettingsPart.Proactive) })
+            }
+            val standing: (@Composable () -> Unit)? = onStandingAuthorizations?.let { open ->
+                val row: @Composable () -> Unit = {
+                    JRow(stringResource(R.string.assistant_standing_title), value = standingCount.takeIf { it > 0 }?.toString(),
+                        leadingIcon = PersonaIcons.privacy, onClick = open)
+                }
+                row
+            }
+            rows("proactive", if (standing == null) listOf(proactive) else listOf(proactive, standing))
             item("proactive-caption") { Caption(stringResource(R.string.assistant_settings_proactive_caption)) }
 
             item("data") { JSectionHeader(stringResource(R.string.assistant_settings_data_header)) }
