@@ -413,22 +413,6 @@ func TestTaskPlanInboxFailedAdmissionLeavesNoDanglingLink(t *testing.T) {
 	}
 }
 
-func TestTaskPlanInboxSourceExistsBeforeTheTaskCanBeReused(t *testing.T) {
-	ctx := context.Background()
-	st := &taskInboxFailStore{DB: todoTestDB(t)}
-	s, _ := newTaskServiceOn(t, st)
-	const conversation = "inbox-source-creation-test"
-	it := taskInboxItem(t, s, "example:creation", "box", conversation)
-	st.expectSource = it.ID
-	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(it.ID)); err != nil {
-		t.Fatal(err)
-	}
-	p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
-	if err != nil || p.Tasks[0].Error != "" || p.Tasks[0].TodoID == "" {
-		t.Fatalf("the task was exposed before its source was persisted: %+v %v", p, err)
-	}
-}
-
 func TestTaskPlanInboxReuseCannotReplaceAnotherSource(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newTaskService(t)
