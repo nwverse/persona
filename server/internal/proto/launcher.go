@@ -13,6 +13,9 @@ type Launcher struct {
 	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go), "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go) "claude_desktop" (claude-desktop, a new session in Claude's desktop app, node/claudedesktop_new.go) or "codex_app" (codex-app, a new chat in the Codex App, node/codexapp_new.go). Empty
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
+	// RuntimeFallback is node-local discovery provenance: an ordinary CLI command yields to a connected runtime
+	// offering the same launcher. Explicit shell definitions never do. This flag is not part of the wire protocol.
+	RuntimeFallback bool `json:"-"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
 	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
@@ -286,9 +289,22 @@ type ProviderModel struct {
 	Name string `json:"name,omitempty"`
 	// ContextWindow in tokens; 0 is unknown (Claude Code then assumes 200K).
 	ContextWindow int `json:"context_window,omitempty"`
-	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered).
-	Efforts       []string `json:"efforts,omitempty"`
+	// MaxOutputTokens: the longest reply the gateway says the model writes; 0 is unknown.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered),
+	// unless NoEffort says it takes none.
+	Efforts []string `json:"efforts,omitempty"`
+	// AllEfforts: every level the gateway reported, present only when some fall outside EffortLevels: in discovery's
+	// answer the gateway's own words (EffortWords), once saved those the provider's agent or API takes (Codex's
+	// minimal and ultra, a direct API's none). Efforts is always these as Claude Code takes them
+	// (ProjectEfforts(AllEfforts, EffortLevels)), so a reader that knows only Efforts never gets a level it can't use.
+	AllEfforts    []string `json:"all_efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// NoEffort: the gateway said the model takes no thinking level (Efforts is then empty, which alone is unknown).
+	NoEffort bool `json:"no_effort,omitempty"`
+	// ImageInput and ToolCalls: whether the gateway says the model takes images and tools; nil is unknown.
+	ImageInput *bool `json:"image_input,omitempty"`
+	ToolCalls  *bool `json:"tool_calls,omitempty"`
 	// InheritedFrom is the catalog id an unlisted newer generation took a missing context window or thinking
 	// level from. Empty for an exact catalog entry, and when the gateway already reported every one of those.
 	InheritedFrom string `json:"inherited_from,omitempty"`
@@ -370,6 +386,16 @@ func (l ManagedLauncher) LaunchBaseURL() string {
 		return MessagesBaseURL(l.BaseURL)
 	}
 	return l.BaseURL
+}
+
+// AnthropicAPIHost is the host of Anthropic's own API: where Claude Code goes with no Base URL.
+const AnthropicAPIHost = "api.anthropic.com"
+
+// AnthropicAPI: base (a Base URL) is Anthropic's own API, not a relay, a gateway or another vendor. The probe's
+// error reading (the manager's models_probe.go) and the node's provider environment (launcherenv.go) both ask.
+func AnthropicAPI(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	return err == nil && strings.EqualFold(u.Hostname(), AnthropicAPIHost)
 }
 
 // MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add

@@ -196,6 +196,8 @@ public final class Lint {
     var configNames: [[String]] = []        // per config: the targets that have it
 
     var typesByName: [String: [(file: Int, index: Int)]] = [:]
+    /// The cases of the enums of the sources, by the enum's name.
+    var enumCases: [String: Set<String>] = [:]
     var extensionsByName: [String: [(file: Int, index: Int)]] = [:]
     var functionsByName: [String: [(file: Int, frame: Int)]] = [:]
     var callsByName: [String: [(file: Int, index: Int)]] = [:]
@@ -207,6 +209,9 @@ public final class Lint {
     var typeVariables: Set<String> = []
     var metatypes: Set<String> = []
     var declaredFunctionNames: Set<String> = []
+    /// An `appendInterpolation` of the sources takes, unlabeled, a value that may be a function, so `"\(x.name)"` may
+    /// call what it names: see `mayHoldFunction`.
+    var interpolationTakesFunctions = false
     var propertyFramesByName: [String: [(file: Int, frame: Int)]] = [:]
 
     public struct Input: Sendable {
@@ -243,9 +248,11 @@ public final class Lint {
             perFile.append(mine)
         }
         configs = perFile
+        var interpolated: [Parameter] = []
         for (f, file) in files.enumerated() {
             for (i, type) in file.types.enumerated() {
                 typesByName[type.name, default: []].append((f, i))
+                if type.kind == .enum { enumCases[type.name, default: []].formUnion(type.cases) }
                 if type.attributes.contains("globalActor") { globalActors.insert(type.name) }
             }
             for (i, ext) in file.extensions.enumerated() {
@@ -255,6 +262,9 @@ public final class Lint {
                 if case .function(let info) = frame.kind {
                     functionsByName[info.name, default: []].append((f, i))
                     declaredFunctionNames.insert(info.name)
+                    if info.name == "appendInterpolation", let first = info.parameters.first, first.label == nil {
+                        interpolated.append(first)
+                    }
                 }
                 if case .property(let info) = frame.kind {
                     for name in info.names { propertyFramesByName[name, default: []].append((f, i)) }
@@ -274,9 +284,37 @@ public final class Lint {
             typeVariables.formUnion(file.typeVariables)
             metatypes.formUnion(file.metatypes)
         }
+        // After every file: the type names and type variables of all of them decide.
+        interpolationTakesFunctions = interpolated.contains { $0.isFunctionType || mayHoldFunction($0.heldType) }
     }
 
     private struct ConfigKey: Hashable { var defaultMain: Bool; var nonsending: Bool }
+
+    /// The reference reads a value and cannot hand a function on: see `NameReference.readsValue` and `.interpolated`.
+    func readsValue(_ reference: NameReference) -> Bool {
+        reference.readsValue || (reference.interpolated && !interpolationTakesFunctions)
+    }
+
+    /// A value held as `type` (`Collector.heldType`) may be a function, so an `appendInterpolation` that takes it may
+    /// call one, where the default interpolation only describes it. Only a concrete type is known to hold none: a
+    /// struct, enum, class or actor of the sources, one of `Known.concrete` (`Int`, `String`), an array, a dictionary,
+    /// a tuple or a metatype. Everything else may: `Any`, a protocol (`CustomStringConvertible`, one of the sources),
+    /// `some P` / `any P`, a generic parameter or associated type (`T`, `T.Element`), a function type, a name the lint
+    /// does not know, and a type's name that is also a protocol, generic parameter, associated type or type alias
+    /// anywhere in the sources (the lint keeps those by name). A function conforms to no protocol except marker ones
+    /// such as `Sendable` (an `appendInterpolation<T: Sendable>(_ value: T)` is chosen for `"\(f)"` and can call `f`);
+    /// the lint does not tell protocols apart, so every one counts.
+    func mayHoldFunction(_ type: String?) -> Bool {
+        guard let type else { return true }
+        if type == "(value)" { return false }
+        let name = Self.last(type)
+        if isTypeVariable(name) || files.contains(where: { $0.typealiases.contains { $0.name == name } }) { return true }
+        let declared = (typesByName[name] ?? []).map { files[$0.file].types[$0.index] }
+        if declared.contains(where: { $0.kind == .protocol }) { return true }
+        // `Outer.Inner` only when a type of the sources is declared at that path.
+        if type.contains(".") { return !declared.contains { $0.qualified == type } }
+        return declared.isEmpty && !Known.concrete.contains(name)
+    }
 
     static func last(_ qualified: String) -> String {
         qualified.split(separator: ".").last.map(String.init) ?? qualified
@@ -676,7 +714,7 @@ public final class Lint {
                 let ownerType = ownerName(f, owner(f, frame))
                 let member = Member(file: f, ownerType: ownerType, local: nil, isStatic: property.isStatic || ownerType == nil,
                                     privateScope: property.modifiers.contains("private") || property.modifiers.contains("fileprivate"))
-                return reaches(receiver, file: node.file, frame: node.frame, member) != .no
+                return reaches(receiver, file: node.file, frame: node.frame, member.named(name)) != .no
             }
             return stored.isEmpty ? .stored : .memberwise(stored, "the property \(name)")
         case .argument(let callee, let receiver, let label, let trailingIndex, let argumentIndex):
@@ -789,9 +827,10 @@ public final class Lint {
         var unseen: [String] = []
         for (f, frame) in stored {
             guard case .property(let info) = files[f].frames[frame].kind else { continue }
-            let member = Member(file: f, ownerType: ownerName(f, owner(f, frame)), local: nil, isStatic: info.isStatic,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
+            let declared = Member(file: f, ownerType: ownerName(f, owner(f, frame)), local: nil, isStatic: info.isStatic,
+                                  privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
             for (at, name) in info.names.enumerated() {
+                let member = declared.named(name)
                 let arity = at < info.arities.count ? info.arities[at] : nil
                 for (file, index) in callsByName[name] ?? [] {
                     let call = files[file].calls[index]
@@ -806,7 +845,7 @@ public final class Lint {
                 for (file, index) in referencesByName[name] ?? [] {
                     let reference = files[file].references[index]
                     if reference.indirect != .no { unseen.append("\(files[file].path):\(reference.line) names the property in a key path"); continue }
-                    guard !reference.readsValue, reaches(reference.receiver, file: file, frame: reference.frame, member) != .no else { continue }
+                    guard !readsValue(reference), reaches(reference.receiver, file: file, frame: reference.frame, member) != .no else { continue }
                     unseen.append("\(files[file].path):\(reference.line) may read the closure without calling it")
                 }
             }
@@ -863,7 +902,7 @@ public final class Lint {
                 for one in config { nodes.append(Edge(node: Node(file: f, frame: call.frame, config: one), line: call.line)) }
             }
             for reference in files[f].references where reference.name == parameter.name && reference.receiver == .none
-                && !reference.readsValue && isInside(f, reference.frame, frame) {
+                && !readsValue(reference) && isInside(f, reference.frame, frame) {
                 called = true
                 unseen.append("\(here) passes the closure on at line \(reference.line)")
             }
@@ -1146,7 +1185,7 @@ public final class Lint {
                 let ownerType = ownerName(f, owner(f, declared))
                 let member = Member(file: f, ownerType: ownerType, local: localScope(f, declared), isStatic: function.isStatic || ownerType == nil,
                                     privateScope: function.modifiers.contains("private") || function.modifiers.contains("fileprivate"))
-                guard reaches(base, file: file, frame: frame, member) != .no else { continue }
+                guard reaches(base, file: file, frame: frame, member.named(name)) != .no else { continue }
                 guard let returns = function.returns else { return nil }
                 out.append(returns)
             }
@@ -1193,6 +1232,14 @@ public final class Lint {
         var isStatic: Bool
         /// `private` or `fileprivate`: used in its own file only.
         var privateScope: Bool
+        /// The name it is called or read by (nil: not checked against enum cases).
+        var name: String? = nil
+
+        func named(_ name: String) -> Member {
+            var copy = self
+            copy.name = name
+            return copy
+        }
     }
 
     /// Whether an expression with this receiver, written in `frame` of `file`, can name the member.
@@ -1227,6 +1274,9 @@ public final class Lint {
         case .type(let name):
             guard isStatic else { return .no }
             if related(name, ownerType) { return .yes }
+            // `Failure.read(errno)`: a case of an enum of the sources named so makes a value, it is not this member of
+            // another type, even where the name may also stand for any type (a generic parameter, an alias) (#8994).
+            if let called = member.name, enumCases[name]?.contains(called) == true { return .no }
             return isTypeVariable(name) ? .maybe : .no
         case .implicit, .metatype:
             return isStatic ? .maybe : .no
@@ -1307,7 +1357,8 @@ public final class Lint {
         switch frame.kind {
         case .function(let info) where info.kind == .function && !decl.asInitializerOfOwner:
             let member = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate") || local != nil)
+                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate") || local != nil,
+                                name: info.name)
             for (file, index) in callsByName[info.name] ?? [] {
                 let call = files[file].calls[index]
                 var reach = reaches(call.receiver, file: file, frame: call.frame, member)
@@ -1325,7 +1376,7 @@ public final class Lint {
                 let reference = files[file].references[index]
                 // A key path names a property. `.name` alone is a value of the type the context asks for, and what
                 // is read, indexed or assigned to is not a function handed on.
-                if reference.indirect == .keyPath || reference.readsValue || reference.receiver == .implicit { continue }
+                if reference.indirect == .keyPath || readsValue(reference) || reference.receiver == .implicit { continue }
                 // `return x.name` from a function that returns a named type: a value, not a function.
                 if reference.returned, case .function(let around) = files[file].frames[reference.frame].kind,
                    let returns = around.returns, returns != "(function)", !isTypeVariable(returns), aliases[returns] == nil { continue }
@@ -1406,9 +1457,10 @@ public final class Lint {
                 }
             }
         case .property(let info):
-            let member = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
+            let declared = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
+                                  privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
             for name in info.names {
+                let member = declared.named(name)
                 for (file, index) in referencesByName[name] ?? [] {
                     let reference = files[file].references[index]
                     if reference.indirect != .no {

@@ -59,6 +59,34 @@ void persona_core_free(PersonaCore *core);
 // Pure function: no core handle, no dispatch, no drain. Free the result with persona_core_bytes_free.
 PersonaCoreBytes persona_core_project_sort(const uint8_t *input, size_t length);
 
+// Classifies one WebSocket frame through the production transport decoder (#8995). Returns a JSON classification;
+// a refusal carries only a reason code and protocol key names. Pure function, no core handle or payload projection.
+PersonaCoreBytes persona_core_transport_frame(const uint8_t *input, size_t length);
+
+// The pure projections below share the sort contract: one UTF-8 JSON document in, one UTF-8 JSON document out, no
+// core handle, and an empty buffer on any decode, projection or encode failure. The caller frees every returned
+// buffer with persona_core_bytes_free, including an empty one.
+
+// Applies one question-answer operation (answer::Input) and returns the complete Transition JSON. An operation that
+// cannot produce a transition (invalid page, out-of-range option) returns an empty buffer.
+PersonaCoreBytes persona_core_project_answer(const uint8_t *input, size_t length);
+// Formats a question option's display text and recommendation flag. The input is a bare JSON string (the option
+// label), not an object; the output is the Display JSON.
+PersonaCoreBytes persona_core_display_answer(const uint8_t *input, size_t length);
+// Splits streamed text into finished blocks and an unfinished tail (stream_chunks::Input). Returns the complete
+// {done, tail} JSON.
+PersonaCoreBytes persona_core_project_stream_chunks(const uint8_t *input, size_t length);
+// Projects static transcript rows into turns (turns::Input). Returns a JSON array of complete turn objects. The
+// caller applies the checked-in current-iOS overlay (spec/fixtures/lines/ios/differences.json) to the fixture's
+// expected turns before comparing; the core never applies it.
+PersonaCoreBytes persona_core_project_turns(const uint8_t *input, size_t length);
+// Projects the first represented work segment's viewed-image line (viewed_images::Input). Returns the complete
+// {id, image_ids, is_input, type} JSON, or an empty buffer when no image produces a viewed line.
+PersonaCoreBytes persona_core_project_viewed_images(const uint8_t *input, size_t length);
+// Projects background-task calls, descriptions and notice status sequences (task_index::Input). Returns the complete
+// Index JSON.
+PersonaCoreBytes persona_core_project_task_index(const uint8_t *input, size_t length);
+
 #ifdef __cplusplus
 }
 #endif

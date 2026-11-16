@@ -88,6 +88,14 @@ type TranscriptionItem struct {
 	Name string `json:"name,omitempty"`
 }
 
+// SpeechItem is a contribution to speech: reading a text aloud for the apps (docs/extensions/extensions.md "Speech"), over
+// the extension's own socket under /speech/<id>/ with the voice extension's read-aloud contract (a meeting answer the
+// iPhone says aloud).
+type SpeechItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // ComputerItem is a contribution to computer: operating the user's computers for the assistant (the built-in plugin
 // cua, docs/extensions/computer-use.md).
 type ComputerItem struct {
@@ -740,6 +748,18 @@ var Points = map[string]Point{
 		}
 		if !idPattern.MatchString(v.ID) {
 			return v.ID, fmt.Errorf("transcription id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// speech: a text read aloud for the apps (SpeechItem); served over the program's HTTP socket, reached through the
+	// apps' forward to the extension.
+	"speech": {Name: "speech", Namespace: "speech", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v SpeechItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("speech id %q: a-z0-9_-", v.ID)
 		}
 		return v.ID, nil
 	}},

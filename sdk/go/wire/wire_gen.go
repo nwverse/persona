@@ -267,6 +267,7 @@ type Contributes struct {
 	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Transcription   []NamedItem          `json:"transcription,omitempty"`
+	Speech          []NamedItem          `json:"speech,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
 	Iphone          []NamedItem          `json:"iphone,omitempty"`
@@ -301,7 +302,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -333,7 +334,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -629,7 +630,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -1562,9 +1563,9 @@ const (
 var Platforms = []string{"ios", "mac", "android", "web"}
 
 // NavIcon: the fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the
-// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's).
-// Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old
-// name).
+// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8
+// a section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin
+// is its old name).
 const (
 	NavIconPlugin      = "plugin"
 	NavIconChart       = "chart"
@@ -1671,6 +1672,14 @@ type Section struct {
 	Items  []Component `json:"items"`
 	More   *More       `json:"more,omitempty"`
 	Pane   string      `json:"pane,omitempty"`
+	Span   string      `json:"span,omitempty"`
+	// Drawn before the title.
+	Icon      string       `json:"icon,omitempty"`
+	IconColor string       `json:"icon_color,omitempty"`
+	Link      *SectionLink `json:"link,omitempty"`
+	// How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+	// screen and when absent. Other components keep the whole width.
+	Columns int `json:"columns,omitempty"`
 }
 
 // Component: one component of a view, told apart by type. A type an app does not know is skipped and the rest drawn.
@@ -1937,14 +1946,17 @@ type Tile struct {
 
 // Layout: stack: sections one under another. split: on a wide screen the side pane's sections in a column at the
 // start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that
-// opens as a sheet.
+// opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three
+// when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow
+// one a single column, as stack. An older app gets stack.
 const (
-	LayoutStack = "stack"
-	LayoutSplit = "split"
+	LayoutStack   = "stack"
+	LayoutSplit   = "split"
+	LayoutColumns = "columns"
 )
 
 // Layouts are the values of Layout, in order.
-var Layouts = []string{"stack", "split"}
+var Layouts = []string{"stack", "split", "columns"}
 
 // Pane: where a section of a split view goes.
 const (
@@ -1954,6 +1966,23 @@ const (
 
 // Panes are the values of Pane, in order.
 var Panes = []string{"main", "side"}
+
+// SectionSpan: how much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one
+// column. Other layouts ignore it.
+const (
+	SectionSpanFull = "full"
+)
+
+// SectionSpans are the values of SectionSpan, in order.
+var SectionSpans = []string{"full"}
+
+// SectionLink: A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls
+// ui.action with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as
+// the section's last row.
+type SectionLink struct {
+	Title  string `json:"title"`
+	Action Action `json:"action"`
+}
 
 // Values of FileStatus.
 const (
@@ -4502,6 +4531,8 @@ type KBEntry struct {
 	Extra string `json:"extra,omitempty"`
 	// A chat's source (lark, mail, wechat, github…).
 	Source string `json:"source,omitempty"`
+	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
+	RecordingKind string `json:"recording_kind,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -6199,6 +6230,7 @@ var newDef = map[string]func() any{
 	"RowAction":                     func() any { return new(RowAction) },
 	"Spark":                         func() any { return new(Spark) },
 	"Tile":                          func() any { return new(Tile) },
+	"SectionLink":                   func() any { return new(SectionLink) },
 	"Tabs":                          func() any { return new(Tabs) },
 	"Tab":                           func() any { return new(Tab) },
 	"Fact":                          func() any { return new(Fact) },

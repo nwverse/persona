@@ -20,6 +20,7 @@
   "empty_people": "还没有人",
   "empty_docs": "还没有文档",
   "empty_meetings": "还没有会议",
+  "empty_meetings_body": "在手机上开的会议、记的笔记，和从飞书等连接的应用导入的会议，都会出现在这里。",
   "empty_events": "还没有日程",
   "empty_body": "Persona 会自动把飞书和邮件里的会话整理成项目、人、文档和会议，并按重要级和相关性排好。",
   "empty_events_body": "连上日历（比如飞书日历）后，里面的日程会出现在这里。",

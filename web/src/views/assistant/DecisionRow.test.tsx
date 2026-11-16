@@ -57,6 +57,7 @@ let turnError: boolean;
 let needsInput: boolean;
 let postGate: Promise<void> | undefined;
 let listStatus: number;
+let refusal: Record<string, unknown> | undefined; // a POST's error body other than the offline one
 
 async function mount() {
   todo = { id: "decision-task", title: "Demo release", origin: conversation, plan_id: plan.id, created_at: at, updated_at: at,
@@ -66,7 +67,7 @@ async function mount() {
     if (init?.method === "POST") {
       posts.push({ path, body: JSON.parse(String(init.body)) });
       if (postGate) await postGate;
-      if (status !== 200) return new Response(JSON.stringify({ error: "The computer is offline" }), { status, headers: { "Content-Type": "application/json" } });
+      if (status !== 200) return new Response(JSON.stringify(refusal ?? { error: "The computer is offline" }), { status, headers: { "Content-Type": "application/json" } });
       if (path.endsWith("/decision-dismiss")) {
         todo = { ...todo, decision_review: { review_at: at, dismissal_id: "dismiss-demo" } };
         return new Response(JSON.stringify(todo.decision_review), { headers: { "Content-Type": "application/json" } });
@@ -75,7 +76,7 @@ async function mount() {
         todo = { ...todo, decision_review: { review_at: at } };
         return new Response(JSON.stringify(todo.decision_review), { headers: { "Content-Type": "application/json" } });
       }
-      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(refusal ?? { ok: true }), { headers: { "Content-Type": "application/json" } });
     }
     if (path.includes("/todos") && listStatus !== 200) return new Response("{}", { status: listStatus });
     const body = path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] }
@@ -114,6 +115,7 @@ beforeEach(() => {
   needsInput = false;
   postGate = undefined;
   listStatus = 200;
+  refusal = undefined;
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -192,6 +194,15 @@ describe("a decision in the Needs you tray", () => {
     expect(optionButtons()).toEqual([]);
   });
 
+  it("records the decision when the hub says no Agent received it", async () => {
+    refusal = { delivered: "none", ok: true };
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-brief.recorded_not_delivered"));
+    expect(optionButtons()).toEqual([]);
+  });
+
   it("posts a fixed response from the menu", async () => {
     await mount();
     openMenu();
@@ -213,6 +224,49 @@ describe("a decision in the Needs you tray", () => {
     act(() => optionButtons()[0].click());
     await flush();
     expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-brief.handled"));
+  });
+
+  // A dialog in the Agent's terminal kept the answer from it (#7343): 423 dialog_open, which is not "handled". The row
+  // keeps its buttons and says so itself, with the dialog's first line and the way to that terminal; while the hub
+  // answered it 409, the row read it as an answered round and showed nothing, so the press seemed to do nothing.
+  it("says a dialog in the Agent's terminal blocks the answer, and opens that terminal", async () => {
+    setAgentOpenMode("page");
+    status = 423;
+    refusal = { code: "dialog_open", delivered: "none", retryable: false, error: "a dialog is open", dialog: "Approaching rate limits", machine_id: "demo", session_id: "worker" };
+    const toast = vi.spyOn(atoms, "toast");
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(posts).toHaveLength(1);
+    expect(row().querySelector("[data-decision-done]")).toBeNull();
+    const blocked = row().querySelector<HTMLElement>("[data-decision-blocked]")!;
+    expect(blocked.textContent).toContain(t("assistant-decisionrow.dialog_open", { dialog: "Approaching rate limits" }));
+    expect(blocked.textContent).toContain("Approaching rate limits");
+    expect(toast).not.toHaveBeenCalled();
+    expect(optionButtons()[0].hasAttribute("disabled")).toBe(false);
+    const open = [...blocked.querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.open_terminal"))!;
+    act(() => open.click());
+    expect(opened()).toMatch(/\/s\/demo\/worker\b.*view=term/);
+    // pressed again once the dialog is gone: the notice goes and the answer is taken
+    status = 200;
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(row().querySelector("[data-decision-blocked]")).toBeNull();
+    expect(row().querySelector("[data-decision-done]")).not.toBeNull();
+    toast.mockRestore();
+  });
+
+  // A hub that answered the refusal 409 (#7350 before 423) is not taken for an answered round either: its code says why.
+  it("says a dialog blocks it without its line or a terminal to open when the hub did not say them", async () => {
+    status = 409;
+    refusal = { code: "dialog_open", delivered: "none", error: "a dialog is open" };
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    const blocked = row().querySelector<HTMLElement>("[data-decision-blocked]")!;
+    expect(blocked.textContent).toBe(t("assistant-decisionrow.dialog_open_unnamed"));
+    expect(blocked.querySelector("button")).toBeNull();
+    expect(row().querySelector("[data-decision-done]")).toBeNull();
   });
 
   it("opens the task from Other…", async () => {

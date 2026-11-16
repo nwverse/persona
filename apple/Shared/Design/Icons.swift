@@ -596,8 +596,10 @@ extension Theme {
         static let chatBot = "message.badge.waveform"
         /// Settings › Channels: the ways of talking to Persona (docs/extensions/channels.md).
         static let channels = "ellipsis.bubble"
-        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat).
-        static let voiceChannel = "waveform.and.mic"
+        /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat): a
+        /// handset, since it is a call with Persona and sits beside dictation's microphone (#8730). Filled, apart from
+        /// `phoneCall` (the phone's own calls).
+        static let voiceChannel = "phone.fill"
         /// The voice conversation's bar (docs/assistant/voice.md「UI」). Mute: turns the call's microphone off; muted, the button
         /// shows `voiceUnmute` (Unmute), the same mic filled like a toggle that is on, as the iOS Phone app's Mute. The muted
         /// orb wears `voiceMute`.
@@ -733,8 +735,11 @@ extension Theme {
         static let sideSessions = "rectangle.portrait.on.rectangle.portrait"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
-        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording, the drawer's
+        /// Meetings, #8731).
         static let meeting = "person.2.wave.2"
+        /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
+        static let invite = "person.badge.plus"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.

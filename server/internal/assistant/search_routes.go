@@ -53,7 +53,8 @@ type searchResult struct {
 }
 
 type searchAnswer struct {
-	Results []searchResult `json:"results"`
+	candidates []proto.Session // Query scope retained only until the final deletion check; never serialized.
+	Results    []searchResult  `json:"results"`
 	// Partial: some conversations are not in the index yet (it is still reading them), or it could not be searched.
 	Partial bool `json:"partial"`
 	Indexed struct {
@@ -72,7 +73,7 @@ func (s *Service) searchRoutes() {
 		if limit <= 0 {
 			limit = searchLimit
 		}
-		apierr.WriteJSON(w, s.searchChats(r.Context(), r.URL.Query().Get("q"), min(limit, searchMaxLimit)))
+		s.writeSearchAnswer(r.Context(), w, s.searchChats(r.Context(), r.URL.Query().Get("q"), min(limit, searchMaxLimit)))
 	})
 }
 
@@ -88,6 +89,7 @@ func searchTitleOf(c proto.Session, main string) string {
 func (s *Service) searchChats(ctx context.Context, q string, limit int) searchAnswer {
 	ans := searchAnswer{Results: []searchResult{}}
 	list, main := s.searchConversations(ctx)
+	ans.candidates = list
 	ans.Indexed.Total = len(list)
 	ans.Indexed.Done = s.searchProgress(list)
 	ans.Partial = ans.Indexed.Done < ans.Indexed.Total

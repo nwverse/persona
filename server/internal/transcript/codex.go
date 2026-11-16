@@ -394,6 +394,9 @@ func (m *Meta) codexWorked(items []proto.Item) {
 
 // codexItemLines maps one finished item (UserMessage, AgentMessage, CommandExecution…) to chat items, once per id.
 func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.Item {
+	if it.Type == "CommandExecution" { // its call and result can be on two lines (backgrounded, then its end)
+		return codexCommandLines(seq, ts, it, meta)
+	}
 	if it.ID != "" {
 		if meta.codexSeen[it.ID] {
 			return nil
@@ -471,20 +474,6 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 		t := mk(0, it.ID, "assistant", proto.KindThinking)
 		t.Text = clip(text)
 		return []proto.Item{t}
-	case "CommandExecution":
-		input, _ := json.Marshal(map[string]string{"command": shellCommand(it.Command)})
-		out := it.AggregatedOutput
-		if out == "" {
-			out = strings.TrimSpace(it.Stdout + "\n" + it.Stderr)
-		}
-		failed := it.Status == "failed" || (it.ExitCode != nil && *it.ExitCode != 0)
-		if it.ExitCode != nil && *it.ExitCode != 0 { // older apps read the exit code from the text: it stays there too
-			out = strings.TrimSpace(out + fmt.Sprintf("\n(exit code %d)", *it.ExitCode))
-		}
-		items := codexTool(mk, it.ID, "Bash", input, out, failed)
-		o := items[1].Outcome
-		o.Status, o.ExitCode, o.DurationMS = codexStatus(it.Status, failed), it.ExitCode, it.Duration.ms
-		return items
 	case "FileChange":
 		// One Edit per file, the patch as a unified diff (the apps draw "diff" when there is no old/new string).
 		// In path order: map order would give the same file a different id on every parse.
@@ -564,6 +553,105 @@ func codexItemLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.It
 	n := mk(0, it.ID, "system", proto.KindNotice)
 	n.Text = "Codex 事件：" + it.Type + "（完整记录在原会话中）"
 	return []proto.Item{n}
+}
+
+// codexPendingKept bounds the backgrounded command ids a Meta keeps: a rollout that starts commands and never records
+// their end must not grow the parser's state with every one.
+const codexPendingKept = 1024
+
+// codexSeenAdd marks an item id as read in the turn under way.
+func (m *Meta) codexSeenAdd(id string) {
+	if m.codexSeen == nil {
+		m.codexSeen = map[string]bool{}
+	}
+	m.codexSeen[id] = true
+}
+
+// codexPendingAdd remembers a backgrounded command until its terminal record. codexPendingIDs holds exactly the pending
+// ids, oldest first, so the cap evicts the oldest genuinely pending command.
+func (m *Meta) codexPendingAdd(id string) {
+	if m.codexPending == nil {
+		m.codexPending = map[string]bool{}
+	}
+	if m.codexPending[id] {
+		return
+	}
+	m.codexPending[id] = true
+	m.codexPendingIDs = append(m.codexPendingIDs, id)
+	for len(m.codexPending) > codexPendingKept && len(m.codexPendingIDs) > 0 {
+		oldest := m.codexPendingIDs[0]
+		m.codexPendingIDs = m.codexPendingIDs[1:]
+		delete(m.codexPending, oldest)
+	}
+}
+
+// codexPendingDone says whether id is a backgrounded command waiting for this terminal record, and stops waiting. Its
+// queue entry goes too: a later command that reuses the id starts a new entry and is not tied to this one.
+func (m *Meta) codexPendingDone(id string) bool {
+	if !m.codexPending[id] {
+		return false
+	}
+	delete(m.codexPending, id)
+	for i, pending := range m.codexPendingIDs {
+		if pending == id {
+			m.codexPendingIDs = append(m.codexPendingIDs[:i], m.codexPendingIDs[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// codexCommandLines maps a CommandExecution to its call and result. A backgrounded command is still running: its call
+// is shown at once, without a result, and the terminal record with the same id (completed, failed or declined) gives
+// the result later, in this turn or a later one. A record with no backgrounded call before it is a synchronous call
+// and still gives both items on its line.
+func codexCommandLines(seq int, ts time.Time, it *codexItem, meta *Meta) []proto.Item {
+	mk := func(idx int, id, role, kind string) proto.Item {
+		if id == "" {
+			id = fmt.Sprintf("line%d", seq)
+		}
+		return proto.Item{ID: fmt.Sprintf("%s#%d", id, idx), Seq: seq, TS: ts, Role: role, Kind: kind}
+	}
+	input, _ := json.Marshal(map[string]string{"command": shellCommand(it.Command)})
+	if it.Status == "backgrounded" {
+		if it.ID != "" {
+			// A genuinely pending command suppresses its repeated background record, even after task_started (the
+			// record can be written again in a later turn); a terminal record of this turn suppresses a late repeat.
+			if meta.codexPending[it.ID] || meta.codexSeen[it.ID] {
+				return nil
+			}
+			meta.codexPendingAdd(it.ID)
+		}
+		use := mk(0, it.ID, "assistant", proto.KindToolUse)
+		use.ToolUseID, use.ToolName, use.ToolInput = it.ID, "Bash", clipJSON(input)
+		return []proto.Item{use}
+	}
+	out := it.AggregatedOutput
+	if out == "" {
+		out = strings.TrimSpace(it.Stdout + "\n" + it.Stderr)
+	}
+	failed := it.Status == "failed" || (it.ExitCode != nil && *it.ExitCode != 0)
+	if it.ExitCode != nil && *it.ExitCode != 0 { // older apps read the exit code from the text: it stays there too
+		out = strings.TrimSpace(out + fmt.Sprintf("\n(exit code %d)", *it.ExitCode))
+	}
+	if it.ID != "" && meta.codexPendingDone(it.ID) {
+		// The terminal record of a backgrounded call: only its result, under the call already shown.
+		res := mk(1, it.ID, "user", proto.KindToolResult)
+		res.ToolUseID, res.Text, res.IsError = it.ID, clip(out), failed
+		res.Outcome = &proto.ToolOutcome{Status: codexStatus(it.Status, failed), ExitCode: it.ExitCode, DurationMS: it.Duration.ms, Tail: outputTail(out)}
+		meta.codexSeenAdd(it.ID) // a repeat of this terminal record is dropped
+		return []proto.Item{res}
+	}
+	if it.ID != "" {
+		if meta.codexSeen[it.ID] { // a finished command recorded again in this turn
+			return nil
+		}
+		meta.codexSeenAdd(it.ID)
+	}
+	items := codexTool(mk, it.ID, "Bash", input, out, failed)
+	o := items[1].Outcome
+	o.Status, o.ExitCode, o.DurationMS = codexStatus(it.Status, failed), it.ExitCode, it.Duration.ms
+	return items
 }
 
 // LocalMachine is the id the hub gave this node's machine (set by the node): links to its sessions name it.

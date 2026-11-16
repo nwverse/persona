@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -166,11 +165,11 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
                     enabled = !LocalInPicture.current) },
                 codeFence = { model ->

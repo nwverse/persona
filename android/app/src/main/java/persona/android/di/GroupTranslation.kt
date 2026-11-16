@@ -199,6 +199,8 @@ internal fun ChatComposerService.inGroup(names: GroupNames, scope: CoroutineScop
     return object : ChatComposerService {
         override val deliveries = source.deliveries.mapIn(scope) { map -> map.mapValues { delivery(it.value) } }
         override suspend fun upload(session: SessionKey, name: String, file: File) = source.upload(names.raw(session), name, file)
+        override suspend fun upload(session: SessionKey, name: String, file: File, destination: String) =
+            source.upload(names.raw(session), name, file, destination)
         override suspend fun interrupt(session: SessionKey) = source.interrupt(names.raw(session))
         override suspend fun retryRefused(clientMessageId: String, clearDraft: Boolean) =
             delivery(source.retryRefused(clientMessageId, clearDraft))
@@ -243,6 +245,9 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun claudeDirs(machineId: String) = source.claudeDirs(names.rawMachine(machineId))
         override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
             source.setBlockedClaudeDirs(names.rawMachine(machineId), blocked)
+        override suspend fun claudeLiveReplies(machineId: String) = source.claudeLiveReplies(names.rawMachine(machineId))
+        override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean) =
+            source.setClaudeLiveReplies(names.rawMachine(machineId), on)
         override suspend fun doctor(machineId: String) = source.doctor(names.rawMachine(machineId))
         override suspend fun fixDoctor(machineId: String) = source.fixDoctor(names.rawMachine(machineId))
         override suspend fun browser(machineId: String) = source.browser(names.rawMachine(machineId))

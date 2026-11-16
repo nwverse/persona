@@ -391,6 +391,7 @@ data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -424,6 +425,7 @@ private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -452,7 +454,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -464,6 +466,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = fields.connectors,
             voice = fields.voice,
             transcription = fields.transcription,
+            speech = fields.speech,
             computer = fields.computer,
             browser = fields.browser,
             iphone = fields.iphone,
@@ -498,6 +501,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = value.connectors,
             voice = value.voice,
             transcription = value.transcription,
+            speech = value.speech,
             computer = value.computer,
             browser = value.browser,
             iphone = value.iphone,
@@ -908,7 +912,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(
@@ -2075,8 +2079,9 @@ object ExtensionPlatform {
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 object ExtensionNavIcon {
     const val PLUGIN = "plugin"
@@ -2194,6 +2199,18 @@ data class ExtensionSection(
     val items: List<ExtensionComponent> = emptyList(),
     val more: ExtensionMore? = null,
     val pane: String? = null,
+    val span: String? = null,
+    /**
+     * Drawn before the title.
+     */
+    val icon: String? = null,
+    @SerialName("icon_color") val iconColor: String? = null,
+    val link: ExtensionSectionLink? = null,
+    /**
+     * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a
+     * narrow screen and when absent. Other components keep the whole width.
+     */
+    val columns: Int? = null,
 )
 
 /**
@@ -2882,12 +2899,15 @@ data class ExtensionTile(
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
 object ExtensionLayout {
     const val STACK = "stack"
     const val SPLIT = "split"
-    val ALL = listOf("stack", "split")
+    const val COLUMNS = "columns"
+    val ALL = listOf("stack", "split", "columns")
 }
 
 /**
@@ -2898,6 +2918,26 @@ object ExtensionPane {
     const val SIDE = "side"
     val ALL = listOf("main", "side")
 }
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+object ExtensionSectionSpan {
+    const val FULL = "full"
+    val ALL = listOf("full")
+}
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+@Serializable
+data class ExtensionSectionLink(
+    val title: String = "",
+    val action: ExtensionAction = ExtensionAction(),
+)
 
 /**
  * Values of FileStatus.

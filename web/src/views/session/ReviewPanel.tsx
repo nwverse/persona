@@ -540,6 +540,8 @@ function Failed({ failure, cwd, target, onRetry, onScope }: { failure: Failure; 
   switch (failure.code) {
     case "not_git":
       return <Empty icon="git" title={t("review.not_git")} detail={shortPath(cwd)} />;
+    case "no_folder":
+      return <Empty icon="folder" title={t("review.no_folder")} detail={shortPath(cwd)} />;
     case "node_outdated":
       return <Empty icon="warning" title={t("review.outdated")} detail={t("review.outdated_detail")} />;
     case "no_default_branch":

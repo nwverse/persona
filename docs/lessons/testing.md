@@ -445,6 +445,14 @@ setup.
 
 `scripts/mock/mock_hub.py` answers every request whatever the credential, so a watch feature checked only in a simulator against it can be refused on a real hub. The watch's Milk Frog shipped that way: its art requests got 403 from `allowed()` (the watch's `answer` token reads only `answerReads`), and the frog never appeared on a real watch. A new request from the watch (or any `answer`, `link` or extension credential) needs its path in the hub's allowlist, a case in `TestAnswerRoleOnlyWhatTheWatchDoes`, and one end-to-end call with a real token through `h.routes()` (`TestDeviceTokens`).
 
+## One machine can't show what a phone's network change does (2026-11-16, #8709)
+
+The live screen's route acceptance (#6398) ran the simulator on the same Mac as the node, so the hub relay and the direct route never shared a network the test could take away. On a real iPhone they do: both leave over Wi-Fi. Turning Wi-Fi off took the relays down with the direct route, their sockets said nothing, and the session sat on dead relays until the user opened the screen again.
+
+- Before calling a fallback done, ask what else leaves on the interface that fails. A path you fall back to can fail in the same event.
+- A transport that is a fallback needs its own silence rule. "The socket will throw" is not enough on a vanished interface.
+- With no screenshots, the timeline comes from the node's `screenlink:` lines in the hub journal, the hub's per-minute `traffic` lines (start, `elapsed_ms`) and the Mac's `log show` for `screensharingd` (each new sign-in is a new session, not a rejoin).
+
 ## A client's wire fixture comes from the hub's real answer (2026-11-15, #8310)
 
 The iPhone's Add to To-Dos decoded `todos[].item` as `{"id": …}` while the hub sent the bare row id, so every tap made the to-do, filed the row and then showed "The data couldn't be read because it isn't in the correct format" (`DecodingError.typeMismatch`). The app's unit test and `scripts/mock/mock_hub.py` were both written from the client's guess, so everything passed until a real hub answered. When a client starts reading a new answer, take its fixture from the hub's own handler output (a Go test's response body) or the protocol table, and pin the shape on the hub side with a test that decodes it the way the shipped client does (`TestInboxTodoReplyItemIsAnObject`). A decoding error on a 200 means the shapes disagree: fix the hub first so installed apps work again, then make the client accept both.
@@ -629,6 +637,13 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   screen, so `waitForExistence` on a row below the first screen never succeeds. `TodoPlanTests` waited for the NAS to-do, and a new section above
   it in the mock pushed it down: the test failed at its first check. Wait for the list's first row, then drag the list up slowly until the row is
   wholly inside the list's frame (`TodoPlanTests.scrollIntoView`), rather than counting on where the mock's rows land.
+- **What shows for a few seconds is gone by the next query** (2026-11-16, #9225). `waitForExistence` checks about once a second, so it takes
+  a second even when the element is already there, and each scroll and query adds more. `MeetingAttendanceUITests` waited for the answer, then
+  for its Speaking label, then read Stop Speaking with a bare `.exists`. The mock's 3-second answer kept that row up for 4.3 s, and the
+  read came 0.1 s after it went. The button looked missing while the screen recording showed it with the label the whole time. Make what
+  you check on last long (the mock's `speak_seconds`, restored in `addTeardownBlock`) and end it yourself (tap Stop Speaking).
+  To tell a race from a missing element, line up the result bundle's screen recording with its activity times.
+  The app's terminate and relaunch are good anchors.
 - Body-count tests (`RenderBudgetTests`) wait for the page to settle before measurement (2026-11-03, #475). Launch still loads/layouts history, and the first measured `rev` push
   gets blamed for those bubbles, looking like "unchanged-screen push redraws 6 bubbles"; order changes or a second measurement remove it. Now wait for unchanged counts for 1 second (`settled()`).
 

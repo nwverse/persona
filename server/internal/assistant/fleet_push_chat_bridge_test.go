@@ -3,6 +3,7 @@ package assistant
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -39,6 +40,19 @@ func bridgeSession(t *testing.T) proto.Session {
 	return proto.Session{}
 }
 
+// bridgeHerdrSession is supAgentSession in a pane of the herdr session a chat bridge runs its agents in on its herdr
+// backend (#8845): named as the bridge's own panes are, as the node writes a named session's pane (herdr.QualifyID).
+func bridgeHerdrSession(t *testing.T) proto.Session {
+	t.Helper()
+	bridge, _, _ := strings.Cut(bridgeSession(t).PaneID, ":")
+	sess := supAgentSession()
+	sess.PaneID = "@" + bridge + ":wCD:p1"
+	if got := sessionorigin.Of(sess); got != "terminal" {
+		t.Fatalf("a herdr pane's origin = %q, want terminal", got)
+	}
+	return sess
+}
+
 // finishOnce drives one finished turn of sess (supAgent on mac) and decides it at once.
 func (e *supervisedEnv) finishOnce(sess proto.Session) {
 	e.t.Helper()
@@ -51,12 +65,23 @@ func (e *supervisedEnv) finishOnce(sess proto.Session) {
 // phone's "finished" push nor Persona's own Lark card, every turn, on Claude Code and Codex alike. The Agents list
 // still has it finished and unseen. Before the fix each of these pushed and posted a card.
 func TestChatBridgeNormalFinishIsNotPushed(t *testing.T) {
-	for _, agent := range []string{"claude", "", "codex"} {
-		t.Run("agent="+agent, func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent string
+		pane  func(*testing.T) proto.Session
+	}{
+		{"claude", "claude", bridgeSession},
+		{"claude, no agent named", "", bridgeSession},
+		{"codex", "codex", bridgeSession},
+		{"traex", "traex", bridgeSession},                                    // #8845: a Codex rollout, its failures told as Codex's
+		{"codex on the bridge's herdr backend", "codex", bridgeHerdrSession}, // #8845
+		{"claude on the bridge's herdr backend", "claude", bridgeHerdrSession},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newSupervisedEnv(t, true)
 			for _, last := range []string{"改好了", "又改了一处"} {
-				sess := bridgeSession(t)
-				sess.Agent, sess.LastText = agent, last
+				sess := tc.pane(t)
+				sess.Agent, sess.LastText = tc.agent, last
 				e.finishOnce(sess)
 			}
 			if got := e.agentDoneCards(); len(got) != 0 {
@@ -97,7 +122,23 @@ func TestChatBridgeFailedFinishAndTerminalStillPushed(t *testing.T) {
 			s.Work = &proto.WorkState{Phase: proto.WorkBlocked, Line: "等数据库权限"}
 		}},
 		{"another agent", func(s *proto.Session) { s.Agent = "dsh" }},
+		{"traex model error", func(s *proto.Session) { s.Agent, s.TurnError = "traex", "stream disconnected before completion" }},
+		{"traex usage limit", func(s *proto.Session) {
+			s.Agent, s.TurnError, s.TurnErrorKind = "traex", "usage limit", proto.TurnErrorUsageLimit
+		}},
+		{"herdr backend, model error", func(s *proto.Session) {
+			*s = bridgeHerdrSession(t)
+			s.Agent, s.TurnError = "codex", "exit status 1"
+		}},
+		{"herdr backend, cut off", func(s *proto.Session) {
+			*s = bridgeHerdrSession(t)
+			s.LastText = "API Error: 529 overloaded"
+		}},
 		{"terminal session", func(s *proto.Session) { *s = supAgentSession() }},
+		{"another named herdr session", func(s *proto.Session) {
+			*s = supAgentSession()
+			s.PaneID = "@work:w1:p2"
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newSupervisedEnv(t, true)
@@ -106,9 +147,7 @@ func TestChatBridgeFailedFinishAndTerminalStillPushed(t *testing.T) {
 			tc.edit(&sess)
 			driveAgentDone(e.fleetTest, sess)
 			waitFor(t, "the finished card", func() bool { return len(e.agentDoneCards()) == 1 })
-			if got := e.donePushes(); len(got) != 1 {
-				t.Fatalf("pushed %d finished pushes, want 1: %+v", len(got), got)
-			}
+			e.oneDonePush(t)
 			waitFor(t, "the line saying it was sent", func() bool {
 				return len(e.logged("bots: card sent: kind=agent_done machine=mac session="+supAgent)) == 1
 			})

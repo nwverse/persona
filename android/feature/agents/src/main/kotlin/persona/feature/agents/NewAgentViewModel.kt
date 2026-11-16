@@ -8,6 +8,8 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.feature.chat.ComposerUploadLimiter
+import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,6 +21,12 @@ import kotlinx.coroutines.channels.Channel
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+
+/** The catalog source and engine `host` of a Paseo workspace (#7259), and the `kind` its worktrees are made by (#8856). */
+private const val PaseoHost = "paseo"
+
+/** What the Git status of the folder picked is asked by: the computer, the folder, a space, and the engine asked. */
+private data class RepoQuery(val machineId: String, val cwd: String, val space: AgentSpacePreset?, val kind: String?)
 
 /** A new tab in an existing herdr workspace: machine and directory are fixed. */
 internal data class AgentSpacePreset(val machineId: String, val workspaceId: String, val cwd: String, val name: String)
@@ -136,10 +144,13 @@ internal data class NewAgentState(
         else -> null
     }
     /**
-     * The folder is in a Git repository and this is not a tab in an existing space, nor an existing workspace picked
-     * (#7259, the start goes into it): the worktree switch shows (#4532).
+     * The folder is in a Git repository and this is not a tab in an existing space: the worktree switch shows (#4532).
+     * A workspace picked (#7259, the start goes into it) offers it only when Paseo's (#8856): Paseo makes the worktree
+     * as a workspace of its own; an Orca one's worktrees go through Orca's own New Worktree.
      */
-    val worktreeOffered: Boolean get() = space == null && workspace == null && repo?.path?.isNotEmpty() == true
+    val worktreeOffered: Boolean get() = space == null && (workspace == null || paseoWorkspace) && repo?.path?.isNotEmpty() == true
+    /** The workspace picked is Paseo's, whose worktrees Paseo makes (`kind` "paseo" for `worktree/status` and `add`). */
+    val paseoWorkspace: Boolean get() = workspace?.source == PaseoHost
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
     /** An empty launcher follows the model configuration, when the hub has one. */
     val following: Boolean get() = follow != null && selection.launcher.isEmpty()
@@ -231,15 +242,18 @@ internal class NewAgentViewModel(
     private var modelsJob: Job? = null
     private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
+    private val uploadLimiter = ComposerUploadLimiter()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
         viewModelScope.launch {
-            mutable.map { Triple(it.machineId, it.selection.cwd, it.space) }.distinctUntilChanged().collectLatest { (machine, cwd, space) ->
+            // A Paseo workspace picked asks Paseo, which says where its worktree goes (#8856).
+            mutable.map { RepoQuery(it.machineId, it.selection.cwd, it.space, if (it.paseoWorkspace) PaseoHost else null) }
+                .distinctUntilChanged().collectLatest { (machine, cwd, space, kind) ->
                 mutable.update { it.copy(repo = null) }
                 if (space != null || cwd.isBlank() || machines.value.none { it.id == machine && it.online }) return@collectLatest
                 delay(400)
-                val status = service.worktreeStatus(machine, cwd)
+                val status = service.worktreeStatus(machine, cwd, kind)
                 mutable.update { if (it.machineId == machine && it.selection.cwd == cwd) it.copy(repo = status) else it }
             }
         }
@@ -348,16 +362,19 @@ internal class NewAgentViewModel(
             mutable.update { if (it.machineId == machineId && it.space == null) it.copy(workspaces = sections) else it }
         }
     }
-    /** Starts in [workspace], one of the rows offered: its folder replaces the one picked until "Choose by folder". */
+    /**
+     * Starts in [workspace], one of the rows offered: its folder replaces the one picked until "Choose by folder". The
+     * worktree switch goes off, as on the web: one turned on for another choice never carries over (#8856).
+     */
     fun pickWorkspace(workspace: persona.core.contracts.api.AgentWorkspace) {
         val current = state.value
         if (current.locked || current.loading || current.space != null || workspace.machineId != current.machineId) return
         browseJob?.cancel()
         mutable.update { it.copy(workspace = workspace, folderBeforeWorkspace = if (it.workspace == null) it.selection.cwd else it.folderBeforeWorkspace,
             selection = it.selection.copy(cwd = workspace.cwd), browsing = false, browser = null, error = null, pickedSetup = null,
-            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }) }
+            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }, inWorktree = false) }
     }
-    /** "Choose by folder": no workspace, and the folder picked before it back. */
+    /** "Choose by folder": no workspace, the folder picked before it back, and the worktree switch off. */
     fun chooseByFolder() {
         if (state.value.locked) return
         mutable.update {
@@ -365,14 +382,14 @@ internal class NewAgentViewModel(
             else {
                 val cwd = it.folderBeforeWorkspace.ifEmpty { it.selection.cwd }
                 it.copy(workspace = null, folderBeforeWorkspace = "", selection = it.selection.copy(cwd = cwd),
-                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd })
+                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd }, inWorktree = false)
             }
         }
     }
-    /** A recent folder: the start goes there, by folder (any workspace picked is no longer). */
+    /** A recent folder: the start goes there, by folder (any workspace picked is no longer, nor its worktree switch). */
     fun useFolder(path: String) {
         if (state.value.locked || state.value.loading) return
-        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "") }
+        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "", inWorktree = it.inWorktree && it.workspace == null) }
         selection(state.value.selection.copy(cwd = path))
     }
     /**
@@ -551,9 +568,11 @@ internal class NewAgentViewModel(
         viewModelScope.launch {
             try {
                 // In a worktree of its own (#4532): made first; a failure says why, and nothing starts.
+                // From a Paseo workspace picked (#8856), Paseo makes it from the workspace's folder, as a workspace of its own.
                 val worktree = if (previous == null && current.worktreeOffered && current.inWorktree) try {
                     service.addWorktree(current.machineId, current.selection.cwd,
-                        AgentWorktree.nameHint(current.prompt, current.selection.cwd), current.worktreeBranch).path
+                        AgentWorktree.nameHint(current.prompt, current.selection.cwd), current.worktreeBranch,
+                        PaseoHost.takeIf { current.paseoWorkspace })
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     // A refusal says why in the node's words (git's, for worktree_failed), as iOS does; anything else as usual.
@@ -575,17 +594,20 @@ internal class NewAgentViewModel(
      * message goes the same way once the hub answers ([NewAgentState.firstMessageAfterStart], iOS and the web). Codex
      * takes its first message with the start, and so does any start without a sender.
      */
-    private fun newOperation(current: NewAgentState, agentType: String, worktree: String? = null): AgentStartOperation {
+    private fun newOperation(current: NewAgentState, agentType: String, worktree: WorktreeAdded? = null): AgentStartOperation {
         val typed = current.prompt.trim().takeIf { it.isNotEmpty() }
         val async = sender != null && current.firstMessageAfterStart
         // The photos and the uploaded files go with the first message as the composer writes them (#2321); the tab is
         // named from what was typed, as on iOS.
         val first = if (async && current.attachments.isNotEmpty())
-            NewAgentAttachments.firstMessage(typed.orEmpty(), current.attachments, uploads?.photosOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
+            NewAgentAttachments.firstMessage(current.prompt.takeIf(String::isNotBlank).orEmpty(), current.attachments,
+                uploads?.photosOnly?.invoke().orEmpty(), uploads?.filesOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
         else typed
         val efforts = current.modelEfforts
-        // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder.
+        // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder; with a worktree
+        // made from it (#8856), into the workspace made for the worktree, on the same engine.
         val workspace = current.workspace?.takeIf { current.space == null }
+        val workspaceId = current.space?.workspaceId ?: if (worktree != null) worktree.workspaceId.takeIf { workspace != null } else workspace?.sourceId
         // Claude Code's mode and effort (its effort only one the model that will run takes); a launcher that lists its own
         // modes (#8261) takes one of those picked here, its own approval going as none, and an effort its model lists;
         // Codex and the rest take neither.
@@ -595,9 +617,9 @@ internal class NewAgentViewModel(
         val effort = if (claude) current.selection.effort.takeIf { it.isNotEmpty() && (efforts == null || it in efforts) }
             else current.providerEffort.takeIf { it.isNotEmpty() && it in current.providerEfforts }
         val request = AgentStartRequest(
-            current.machineId, worktree ?: workspace?.cwd ?: current.selection.cwd, current.selection.launcher,
+            current.machineId, worktree?.path ?: workspace?.cwd ?: current.selection.cwd, current.selection.launcher,
             typed.takeUnless { async }, mode, effort,
-            current.space?.workspaceId ?: workspace?.sourceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
+            workspaceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
             nameHint = typed.takeIf { async }, model = current.sentModel,
             ultracode = true.takeIf { current.ultracode && agentType == "claude" },
             host = workspace?.source,
@@ -665,11 +687,13 @@ internal class NewAgentViewModel(
     fun canUpload(machineId: String): Boolean = machineId.isNotEmpty() && uploads?.service?.invoke(machineId) != null
     /** How many more photos fit (iOS `MessagePhotos.limit`, 4). */
     fun photoRoom(): Int = (NewAgentAttachments.MAX_PHOTOS - state.value.attachments.count { it.media }).coerceAtLeast(0)
+    /** How many more ordinary files fit; this is separate from the photo/video places. */
+    fun fileRoom(): Int = (NewAgentAttachments.MAX_FILES - state.value.attachments.count { !it.media }).coerceAtLeast(0)
     private val noticeChannel = Channel<AgentText>(Channel.BUFFERED)
     /** What the form's toast says (iOS `model.toast`): a pick not taken, an upload that failed. */
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
-    /** Picked photos and files join the form and go to the computer picked, each on its own (iOS `NewAgentAttachments.upload`). */
+    /** Picked photos and files join the form and go to the computer picked, three at a time. */
     fun attach(picked: List<persona.feature.chat.ComposerAttachment>) {
         val uploads = uploads
         val current = state.value
@@ -677,8 +701,30 @@ internal class NewAgentViewModel(
             picked.forEach { uploads?.discard?.invoke(it) }
             return
         }
-        mutable.update { it.copy(attachments = it.attachments + picked, attachedOn = it.machineId, attachNote = null) }
-        picked.forEach { upload(it.id) }
+        var files = fileRoom()
+        var media = photoRoom()
+        val accepted = picked.filter { attachment ->
+            if (attachment.media) (media > 0).also { if (it) media-- }
+            else (files > 0).also { if (it) files-- }
+        }
+        val refused = picked.filterNot { it in accepted }
+        refused.forEach(uploads.discard)
+        if (refused.isNotEmpty()) notice(AgentText(
+            if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
+        if (accepted.isEmpty()) return
+        mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
+        accepted.forEach { upload(it.id) }
+    }
+    /** A failed file stays in the form; Retry goes through the same three-slot pump. */
+    fun retryAttachment(id: String) {
+        val attachment = state.value.attachments.firstOrNull { it.id == id } ?: return
+        if (attachment.error == null || attachment.uploadState == DraftUploadState.Invalid || state.value.locked) return
+        mutable.update { current ->
+            current.copy(attachments = current.attachments.map {
+                if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Pending) else it
+            })
+        }
+        upload(id)
     }
     /** ✕ on a photo or a file: an upload still going stops. */
     fun removeAttachment(id: String) {
@@ -694,7 +740,7 @@ internal class NewAgentViewModel(
         clearAttachments()
     }
     private fun clearAttachments() {
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val gone = state.value.attachments
         mutable.update { it.copy(attachments = emptyList(), attachedOn = "", attachNote = null) }
@@ -720,29 +766,62 @@ internal class NewAgentViewModel(
         // The services of the hub group this computer belongs to (bindingsFor): the group's own machine id goes up.
         val service = uploads.service(machine)
         if (service == null) {
-            // No hub to send it with: it goes, as iOS's upload without an API does.
-            drop(id)
+            if (attachment.image) {
+                // The existing photo UI has no retained failure row; ordinary files do.
+                drop(id)
+            } else {
+                // The picker can return after the hub went away. Keep the document and make Retry explain the offline failure.
+                val error = ComposerOperationException(persona.core.contracts.CoreText.of(
+                    persona.core.contracts.CoreText.Key.ComposerUploadOffline))
+                notice(uploadFailure(attachment.name, error))
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, error), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
+            }
             return
         }
-        mutable.update { s -> s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it }) }
-        uploadJobs[id] = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
-                val path = uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment)
+                val path = uploadLimiter.withSlot {
+                    mutable.update { s ->
+                        s.copy(attachments = s.attachments.map {
+                            if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it
+                        })
+                    }
+                    uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment) { size ->
+                        mutable.update { s ->
+                            s.copy(attachments = s.attachments.map {
+                                if (it.id == id) it.copy(size = size) else it
+                            })
+                        }
+                    }
+                }
                 // Another computer picked meanwhile: this one's path is no use there.
                 mutable.update { s ->
                     if (s.attachedOn != machine) s
                     else s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it })
                 }
-                uploadJobs.remove(id)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                uploadJobs.remove(id)
                 if (state.value.attachedOn != machine) return@launch
-                // As iOS (`FileUploads.run`): a toast says why, and the attachment goes.
+                // A failed upload stays as a row with its reason and Retry; its local content is not discarded.
                 notice(uploadFailure(attachment.name, e))
-                drop(id)
+                if (attachment.image) {
+                    drop(id)
+                    return@launch
+                }
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, e), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
             }
         }
+        uploadJobs[id] = job
+        // An older cancelled job must not unregister its replacement for the same attachment id.
+        job.invokeOnCompletion { uploadJobs.remove(id, job) }
     }
     /**
      * Another computer was picked (iOS `computerChanged`): files are on the one picked before, so they come out with a
@@ -753,7 +832,7 @@ internal class NewAgentViewModel(
         val current = state.value
         val from = current.attachedOn
         if (from.isEmpty() || from == to) return
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val files = current.attachments.filterNot { it.image }
         val photos = current.attachments.filter { it.image }.map { it.copy(path = null, error = null, uploadState = DraftUploadState.Pending) }

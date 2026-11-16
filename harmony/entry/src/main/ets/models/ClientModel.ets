@@ -113,12 +113,13 @@ export class ClientModel {
   @Trace reply: string = '';
   @Trace operationState: string = '';
   @Trace mainId: string = '';
+  @Trace mainMachineId: string = '';
   private preferenceTask: Promise<void> = Promise.resolve();
   private async changePreferences(action: () => Promise<void>): Promise<void> { const task = this.preferenceTask.then(action, action); this.preferenceTask = task.catch(() => {}); await task; }
   @Trace language: string = 'default';
   @Trace languageChanging: boolean = false;
   @Trace appearance: number = 0;
-  @Trace style: string = 'glass';
+  @Trace style: string = 'system';
   @Trace alerts: boolean = true;
   @Trace terminalText: string = '';
   @Trace terminalControl: boolean = false;
@@ -131,6 +132,7 @@ export class ClientModel {
   setDeviceEvents(handler: ((payload: string) => void) | undefined): void { this.deviceEvent = handler; }
   private workspace: SessionWorkspace | undefined;
   setWorkspace(workspace: SessionWorkspace | undefined): void { if (this.workspace && this.workspace !== workspace) this.workspace.hide(); this.workspace = workspace; }
+  @Trace transcriptHistoryReady: boolean = false;
   private transcript: TranscriptModel | undefined;
   private transcriptKey: string = '';
   private revisionItems: TranscriptItem[] = [];
@@ -354,7 +356,9 @@ export class ClientModel {
     this.vault = new CredentialVault(context);
     await this.local.open(context);
     const preferences = Wire.parse(await this.local.get('preferences'));
-    this.appearance = Wire.number(preferences, 'appearance'); this.style = Wire.text(preferences, 'style', 'glass');
+    this.appearance = Wire.number(preferences, 'appearance');
+    const savedStyle = Wire.text(preferences, 'style', 'system');
+    this.style = ['system', 'glass', 'brief', 'board'].includes(savedStyle) ? savedStyle : 'system';
     this.alerts = Wire.bool(preferences, 'alerts', true); this.language = Wire.text(preferences, 'language', 'default');
     if (!['default', 'en-US', 'zh-CN', 'ja-JP'].includes(this.language)) this.language = 'default';
     i18n.System.setAppPreferredLanguage(this.language); initializeClientLanguage(this.language);
@@ -398,7 +402,7 @@ export class ClientModel {
     await this.changePreferences(async (): Promise<void> => {
       const mode = change.appearance === undefined ? this.appearance : change.appearance;
       const requested = change.style === undefined ? this.style : change.style;
-      const style = ['glass', 'brief', 'board'].includes(requested) ? requested : 'glass';
+      const style = ['system', 'glass', 'brief', 'board'].includes(requested) ? requested : 'system';
       const alerts = change.alerts === undefined ? this.alerts : change.alerts;
       try { await this.local.put('preferences', JSON.stringify({ appearance: mode, style: style, alerts: alerts, language: this.language })); }
       catch (_) { this.error = 'cache_unavailable'; return; }
@@ -489,7 +493,7 @@ export class ClientModel {
     const generation = ++this.generation; this.selectionGeneration++; const selection = this.selected;
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.features = []; this.managers = [];
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.features = []; this.managers = [];
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
@@ -584,7 +588,7 @@ export class ClientModel {
       this.profile = new HubProfile(); this.connected = false; this.selected = new ResourceRow();
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
-      this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = '';
+      this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = '';
       this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
     }
     this.publishDirectory();
@@ -655,7 +659,7 @@ export class ClientModel {
         if (selected) this.selected = selected;
         else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.clearPendingDecisions(); }
       }
-      this.mainId = Wire.text(assistant, 'main');
+      this.mainId = Wire.text(assistant, 'main'); this.mainMachineId = Wire.text(assistant, 'main_machine_id', Wire.text(assistant, 'machine_id'));
       this.conversations = Wire.rows(assistant, 'conversations').map((data: Record<string, Object>) => {
         const row = ResourceRow.from(data, 'conversation'); row.manager = this.profile.manager;
         if (!row.machine) row.machine = Wire.text(assistant, 'machine_id'); if (!row.session) row.session = row.id;
@@ -672,7 +676,7 @@ export class ClientModel {
     const generation = this.generation, scope = this.scope(), repository = this.repository;
     await this.refresh();
     if (!this.owns(generation, scope) || this.repository !== repository) throw new Error('request_updated');
-    let row = this.conversations.find((item: ResourceRow) => item.id === this.mainId);
+    let row = this.conversations.find((item: ResourceRow) => item.id === this.mainId && (!this.mainMachineId || item.machine === this.mainMachineId));
     if (!row) {
       row = await this.repo().newConversation(true, util.generateRandomUUID());
       if (!this.owns(generation, scope) || this.repository !== repository) throw new Error('request_updated');
@@ -831,7 +835,7 @@ export class ClientModel {
     this.clearPendingDecisions(); this.error = 'offline';
   }
   async loadChat(row: ResourceRow): Promise<void> {
-    if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], false); this.hasMoreMessages = false; await this.refreshDecisions(); return; }
+    if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], false); this.hasMoreMessages = false; this.transcriptHistoryReady = true; await this.refreshDecisions(); return; }
     const generation = this.generation, scope = this.scope(), target = this.target(row);
     if (!this.connected) { await this.cachedChat(row); return; }
     const sequence = ++this.decisionRefreshSequence;
@@ -842,9 +846,9 @@ export class ClientModel {
     if (decisionsRead) this.replacePendingDecisions(interactions, row, target, generation, scope, sequence);
     if (!this.transcript || this.transcriptKey !== target) {
       this.closeTranscript(); this.transcriptKey = target;
-      this.transcript = new TranscriptModel(row, this.repo(), this.local, target, (items: readonly TranscriptItem[], hasMore: boolean) => {
+      this.transcript = new TranscriptModel(row, this.repo(), this.local, target, (items: readonly TranscriptItem[], hasMore: boolean, historyReady: boolean) => {
         if (!this.owns(generation, scope) || this.target() !== target) return;
-        this.hasMoreMessages = hasMore; this.publishTranscript(items, row.state === 'working' || Wire.bool(row.data(), 'working'));
+        this.hasMoreMessages = hasMore; this.transcriptHistoryReady = historyReady; this.publishTranscript(items, row.state === 'working' || Wire.bool(row.data(), 'working'));
       }, (error: Error) => { if (this.owns(generation, scope) && this.target() === target) this.failure(error); });
       await this.transcript.open();
     } else await this.transcript.latest();
@@ -883,10 +887,10 @@ export class ClientModel {
     return [name, Object.keys(input).length ? JSON.stringify(input, null, 2) : step.use.text || '',
       step.results.map((item: TranscriptItem) => item.text || '').join('\n')].filter((value: string) => !!value).join('\n');
   }
-  private closeTranscript(): void { this.transcript?.close(); this.transcript = undefined; this.transcriptKey = ''; this.revisionItems = []; }
+  private closeTranscript(): void { this.transcriptHistoryReady = false; this.transcript?.close(); this.transcript = undefined; this.transcriptKey = ''; this.revisionItems = []; }
   showConversation(row: ResourceRow): void { this.chatVisible = true; this.loadChat(row).catch((error: Error) => this.failure(error)); }
   hideConversation(releaseTools: boolean = true): void { this.chatVisible = false; this.closeTranscript(); this.clearPendingDecisions(); if (releaseTools) this.releaseTerminal(); this.persistDraft().catch(() => this.error = 'failed'); }
-  async loadOlder(): Promise<void> { try { await this.transcript?.older(); } catch (error) { this.failure(error as Error); } }
+  async loadOlder(): Promise<boolean> { try { if (!this.transcript) return false; await this.transcript.older(); return true; } catch (error) { this.failure(error as Error); return false; } }
   async expandWork(message: ChatMessage): Promise<void> {
     try {
       const items: TranscriptItem[] = JSON.parse(message.raw) as TranscriptItem[];
@@ -903,7 +907,8 @@ export class ClientModel {
     return decision;
   }
   prepareMessageText(text: string = this.draft): string { return withSourceContext(text, this.sourceContext, this.features); }
-  async send(): Promise<boolean> {
+  async send(admit?: () => boolean): Promise<boolean> {
+    if (admit && !admit()) return false;
     const text = this.draft;
     if (utf8Bytes(text) > 100000) { this.error = 'chat_attachment_text_too_large'; return false; }
     if (this.draftLoading || this.decision || !this.canSend() || !text.trim() || ['pending', 'unknown'].includes(this.operationState)) return false;
@@ -913,16 +918,16 @@ export class ClientModel {
       catch (error) { this.failure(error as Error); return false; }
     }
     const preparedText = this.prepareMessageText(text); if (utf8Bytes(preparedText) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
-    return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext);
+    return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext, '', admit);
   }
-  async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string): Promise<boolean> {
-    if (!prepared.repository || this.draftLoading || this.decision || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
+  async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string, admit?: () => boolean): Promise<boolean> {
+    if (admit && !admit() || !prepared.repository || this.draftLoading || this.decision || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
       !this.owns(prepared.generation, prepared.scope) || this.target() !== prepared.modelTarget || this.repository !== prepared.repository ||
       this.target(prepared.row) !== prepared.modelTarget || (!prepared.text.trim() && !prepared.images.length)) return false;
     if (this.draft !== draft || this.sourceContext !== context) { this.error = 'chat_attachment_selection_changed'; return false; }
-    return this.dispatchMessage(prepared.repository, prepared.row, prepared.text, prepared.images, prepared.generation, prepared.scope, prepared.modelTarget, draft, context, JSON.stringify(prepared.snapshot));
+    return this.dispatchMessage(prepared.repository, prepared.row, prepared.text, prepared.images, prepared.generation, prepared.scope, prepared.modelTarget, draft, context, JSON.stringify(prepared.snapshot), admit);
   }
-  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = ''): Promise<boolean> {
+  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = '', admit?: () => boolean): Promise<boolean> {
     const store = new ChatDraftStore(this.local), entry = new ChatOutboxEntry();
     if (!this.draftRevision) this.draftRevision = util.generateRandomUUID();
     entry.id = util.generateRandomUUID(); entry.target = target; entry.revision = this.draftRevision; entry.text = text; entry.context = context; entry.draft = draft; entry.imageCount = images.length; entry.attachmentSnapshot = attachmentSnapshot; entry.at = Date.now(); entry.localEpoch = this.local.revision('outbox:' + scope);
@@ -930,11 +935,11 @@ export class ClientModel {
     try {
       const captured = new ChatDraft(); captured.text = draft; captured.context = context; captured.revision = entry.revision;
       await store.save(target, captured);
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
+      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
       await store.stage(scope, entry); staged = true;
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
+      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
-      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
+      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
     } catch (error) {
       if (entry.state === 'done') {
         this.activeMessages.delete(entry.id);
@@ -966,17 +971,31 @@ export class ClientModel {
     this.draftRevision = util.generateRandomUUID();
     try { await this.persistDraft(); } catch (_) { if (this.owns(generation, scope) && this.target() === target) this.error = 'cache_unavailable'; }
   }
-  async stop(): Promise<void> {
-    if (!this.canInterrupt()) return;
+  @Trace interruptPendingKey: string = '';
+  private interruptIdentity(): string { return JSON.stringify([this.generation, this.target()]); }
+  private turnWorking(): boolean {
+    const row = this.sessions.find((item: ResourceRow) => item.machine === this.selected.machine && (item.session || item.id) === (this.selected.session || this.selected.id)) || this.selected;
+    return row.state === 'working' || Wire.text(row.data(), 'status') === 'working' || Wire.bool(row.data(), 'working');
+  }
+  stopPending(): boolean { return this.interruptPendingKey === this.interruptIdentity(); }
+  canStop(): boolean {
+    const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
+    return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
+  }
+  async stop(admission?: () => boolean): Promise<void> {
+    if (!this.canStop() || admission && !admission()) return;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
-    try { await repo.stop(row); } catch (error) {
+    const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
+    this.interruptPendingKey = pending;
+    try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
       return;
-    }
+    } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
   }
-  async answer(option: string, values: Record<string, Object>, expected?: Decision): Promise<void> {
+  async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
+    if (admit && !admit()) return;
     if (!this.canApprove()) return;
     const row = this.selected, target = this.target();
     let decision = expected ? this.pendingDecisions.find((item: Decision): boolean => item.id === expected.id && item.raw === expected.raw) : this.decision;
@@ -997,12 +1016,21 @@ export class ClientModel {
     const current = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo &&
       (this.pendingDecisionTarget === target ? this.pendingDecisions.some((item: Decision): boolean => item === decision) :
         !this.pendingDecisionTarget && this.pendingDecisions.length === 0 && this.decision === decision);
+    const ownedDecision = decision, previousState = this.operationState; let retiredBeforeSend = false;
+    const dispatch = (): boolean => { const allowed = current() && ownedDecision.status === 'pending' && ownedDecision.raw === request.raw && this.canApprove() && (!admit || admit()); if (!allowed) retiredBeforeSend = true; return allowed; };
     decision.status = 'pending';
     if (!personaQuestion) this.operationState = 'pending';
     try {
-      await repo.resolve(request, option, values, util.generateRandomUUID());
+      await repo.resolve(request, option, values, util.generateRandomUUID(), dispatch);
     } catch (error) {
       if (!current()) return;
+      if (retiredBeforeSend) {
+        if (decision.status === 'pending' && decision.raw === request.raw) {
+          decision.status = 'open';
+          if (!personaQuestion && this.operationState === 'pending') this.operationState = previousState;
+        }
+        return;
+      }
       decision.status = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'open';
       if (!personaQuestion) this.operationState = ['pending', 'unknown'].includes(decision.status) ? decision.status : 'failed';
       this.failure(error as Error);
@@ -1048,6 +1076,31 @@ export class ClientModel {
       await this.listResources(row.kind); return this.owns(generation, scope) && this.target() === target;
     } catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); return false; }
   }
+  private draftContexts(context: string): Record<string, Object>[] {
+    const saved = Wire.parse(context), contexts = Wire.rows(saved, 'contexts').slice();
+    if (!contexts.length && Wire.text(saved, 'kind')) contexts.push(saved);
+    return contexts;
+  }
+  async addDraftContext(row: ResourceRow, expectedTarget: string, generation: number, scope: string): Promise<boolean> {
+    const current = (): boolean => this.owns(generation, scope) && this.target() === expectedTarget && this.canCompose() &&
+      (!row.group || row.group === this.profile.id) && row.manager === this.profile.manager;
+    if (!current() || this.draftLoading || !['knowledge', 'todo', 'inbox'].includes(row.kind)) return false;
+    const previous = this.sourceContext, previousRevision = this.draftRevision;
+    const contexts = this.draftContexts(previous);
+    if (contexts.some((item: Record<string, Object>) => Wire.text(item, 'id') === row.id && Wire.text(item, 'kind') === row.kind && Wire.text(item, 'manager') === row.manager && (row.kind !== 'knowledge' || Wire.text(item, 'entry_kind') === row.path))) return true;
+    const reference = Wire.payload(['kind', 'id', 'title', 'manager'], [row.kind, row.id, row.title || row.id, row.manager]);
+    if (row.kind === 'knowledge') reference['entry_kind'] = row.path;
+    contexts.push(reference);
+    const next = JSON.stringify(Wire.payload(['contexts'], [contexts]));
+    if (next.length > 65536 || contexts.length > 16 || !current()) return false;
+    const revision = util.generateRandomUUID(); this.sourceContext = next; this.draftRevision = revision;
+    try { await this.persistDraft(); return current() && this.draftRevision === revision; }
+    catch (_) {
+      if (current() && this.draftRevision === revision) { this.sourceContext = previous; this.draftRevision = previousRevision; this.error = 'cache_unavailable'; }
+      return false;
+    }
+  }
+
   async handoff(row: ResourceRow): Promise<ResourceRow> {
     const owner = row.manager, generation = this.generation, scope = this.scope();
     const view = await this.viewFor(row);
@@ -1055,7 +1108,7 @@ export class ClientModel {
     if (view !== this) { const target = await view.handoff(row); if (!this.owns(generation, scope)) throw new Error('request_updated'); return target; }
     const target = await this.openMain();
     if (!this.owns(generation, scope) || this.selected.key() !== target.key()) throw new Error('request_updated');
-    const contexts = this.sourceContext ? Wire.rows(Wire.parse(this.sourceContext), 'contexts') : [];
+    const contexts = this.draftContexts(this.sourceContext);
     const ref = Wire.payload(['kind', 'id', 'title', 'manager'], [row.kind, row.id, row.title, owner]);
     if (!contexts.some((item: Record<string, Object>) => Wire.text(item, 'id') === row.id && Wire.text(item, 'kind') === row.kind)) contexts.push(ref);
     this.sourceContext = JSON.stringify(Wire.payload(['contexts'], [contexts])); this.draftRevision = util.generateRandomUUID();
@@ -1213,7 +1266,7 @@ export class ClientModel {
   private refreshDemo(): void {
     const demo = this.demoRepository; if (!this.demo || !demo) return;
     const roster = demo.roster(); this.features = roster.features; this.mainId = roster.mainId;
-    this.sessions = roster.sessions; this.sessionsReady = true; this.machines = roster.machines; this.conversations = roster.conversations;
+    this.sessions = roster.sessions; this.sessionsReady = true; this.machines = roster.machines; this.conversations = roster.conversations; this.mainMachineId = roster.conversations.find((row: ResourceRow) => row.id === roster.mainId)?.machine || '';
     this.todos = roster.todos; this.knowledge = roster.knowledge; this.inbox = roster.inbox;
     this.managers = [new ResourceRow('demo', tr('local_demo'), 'manager')];
     if (this.selected.kind === 'session') { const current = this.sessions.find((row: ResourceRow) => row.id === this.selected.id && row.machine === this.selected.machine); if (current) this.selected = current; }

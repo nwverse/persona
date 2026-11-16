@@ -3,6 +3,8 @@
 //! (`jni`). Both carry bincode-encoded wire types. A panic never crosses the boundary: each entry point catches it and
 //! returns its failure value.
 
+#[cfg(not(feature = "release-android"))]
+mod answer_shadow;
 mod jni;
 
 use std::collections::HashMap;
@@ -286,6 +288,46 @@ pub unsafe extern "C" fn persona_core_free(core: *mut PersonaCore) {
     }
 }
 
+/// Decodes a UTF-8 JSON projection input. Every pure projection entry point shares the sort contract: the input is
+/// one JSON document, the output is one JSON document, and any decode, projection or encode failure returns an empty
+/// buffer instead of an error string.
+fn json_input<T: serde::de::DeserializeOwned>(input: *const u8, length: usize) -> Option<T> {
+    let input = unsafe { slice(input, length) };
+    let input_str = std::str::from_utf8(input).ok()?;
+    serde_json::from_str::<T>(input_str).ok()
+}
+
+fn json_output<T: serde::Serialize>(projection: &T) -> PersonaCoreBytes {
+    match serde_json::to_string(projection) {
+        Ok(json) => PersonaCoreBytes::from_vec(json.into_bytes()),
+        Err(_) => PersonaCoreBytes::empty(),
+    }
+}
+
+/// Decodes one WebSocket frame through the production transport decoder. The result is a JSON classification used by
+/// host binding tests; a refusal carries only the same code and protocol keys as `DecodeError`. No core handle.
+/// `Frame::Other` is `{"frame":"other"}`; an `items` frame reports its identity and count. This does not decode any
+/// other event's associated payload.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_transport_frame(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input = unsafe { slice(input, length) };
+        let result = match persona_core_domain::transport::decode_frame(input) {
+            Ok(persona_core_domain::transport::Frame::Other) => serde_json::json!({"frame": "other"}),
+            Ok(persona_core_domain::transport::Frame::Items(frame)) => serde_json::json!({
+                "frame": "items", "machine_id": frame.machine_id, "session_id": frame.session_id,
+                "item_count": frame.items.len(),
+            }),
+            Err(error) => serde_json::json!({"error": {"code": error.code(), "detail": error.detail()}}),
+        };
+        json_output(&result)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
 /// Projects the Agents list from a JSON input. The input is a UTF-8 JSON document matching `persona_core::sort::Input`;
 /// the returned bytes are a UTF-8 JSON document matching `persona_core::sort::Projection`. This is a pure function: no
 /// core handle, no dispatch, no drain. The caller frees the result with `persona_core_bytes_free`.
@@ -295,18 +337,116 @@ pub unsafe extern "C" fn persona_core_free(core: *mut PersonaCore) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn persona_core_project_sort(input: *const u8, length: usize) -> PersonaCoreBytes {
     catch_unwind(AssertUnwindSafe(|| {
-        let input = unsafe { slice(input, length) };
-        let Ok(input_str) = std::str::from_utf8(input) else {
+        let Some(input) = json_input::<persona_core_domain::sort::Input>(input, length) else {
             return PersonaCoreBytes::empty();
         };
-        let Ok(input) = serde_json::from_str::<persona_core_domain::sort::Input>(input_str) else {
+        json_output(&persona_core_domain::sort::project(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Applies one question-answer operation (`persona_core::answer::Input`). Returns the complete `Transition` JSON, or
+/// an empty buffer when the operation is not allowed to produce one (invalid page, out-of-range option). Pure
+/// function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_answer(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::answer::Input>(input, length) else {
             return PersonaCoreBytes::empty();
         };
-        let projection = persona_core_domain::sort::project(&input);
-        let Ok(json) = serde_json::to_string(&projection) else {
+        let Some(transition) = persona_core_domain::answer::project(&input) else {
             return PersonaCoreBytes::empty();
         };
-        PersonaCoreBytes::from_vec(json.into_bytes())
+        json_output(&transition)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Formats a question option's display text and recommendation flag. Unlike the other projections the input is a
+/// bare JSON string (the option label), not an object; the output is the `Display` JSON. Pure function, same buffer
+/// ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_display_answer(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(label) = json_input::<String>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::answer::display(&label))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Splits streamed text into finished blocks and an unfinished tail (`persona_core::stream_chunks::Input`). Returns
+/// the complete `{done, tail}` JSON. Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_stream_chunks(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::stream_chunks::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::stream_chunks::split(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Projects static transcript rows into turns (`persona_core::turns::Input`). Returns a JSON array of complete turn
+/// objects; the caller applies the checked-in current-iOS overlay to the fixture's expected turns before comparing.
+/// Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_turns(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::turns::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::turns::project(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Projects the first represented work segment's viewed-image line (`persona_core::viewed_images::Input`). Returns
+/// the complete `{id, image_ids, is_input, type}` JSON, or an empty buffer when no image produces a viewed line.
+/// Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_viewed_images(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::viewed_images::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        let Some(projection) = persona_core_domain::viewed_images::project(&input) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&projection)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Projects background-task calls, descriptions and notice status sequences (`persona_core::task_index::Input`).
+/// Returns the complete `Index` JSON. Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_task_index(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::task_index::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::task_index::project(&input))
     }))
     .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }
