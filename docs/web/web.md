@@ -1770,6 +1770,7 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
   Closing or deleting an agent whose folder is one of Persona's worktrees (`ours`) adds a section: **Keep worktree** (the default) or **Remove**, optionally with its branch. When that would lose changed files, or commits the main branch lacks, the counts are shown and the button waits for **I know these changes will be lost** (then `force`).
   `worktree/remove` runs after the close succeeds, retried for a few seconds while the node still lists the agent (`worktree_in_use`); the outcome is a toast. Logic in `lib/worktree.ts`, the section is `WorktreeCleanup` in `views/chat/SessionDialogs.tsx`; routes in `docs/integrations/terminal.md` ("A new agent in a worktree").
   Mock hub: `MOCK_AGENT_WORKTREE=1` with `MOCK_WORKTREES=1` (the widget agent's worktree has 2 changed files and 3 unmerged commits; a branch containing `taken` is refused).
+  With the switch on, a **Runs** choice (1–4) under it starts the same task several times, each in a worktree of its own ("Compare runs (#8916)" below).
 - **Recent setups** (#2134, the same rules as iOS, Mac and Android: `spec/fixtures/recents/README.md`): **New agent** opens with up to three cards above **Computer**, each a setup that started an agent: the folder's last component · the computer, then the launcher (or "Model settings") · the model when not the default · the permission mode · the effort (mode and effort only for Claude Code; **Full access** in orange with the warning icon). A card's computer that is offline is dimmed, says so and can't be picked; one the hub no longer lists has no card. A tap fills computer, folder, launcher, model, permission mode and effort, marks the card (while the form still holds it) and puts the focus in the first message; it never starts. Opening the sheet or picking a computer brings back that computer's default (Model settings, else the launcher used there last) with the model of that computer's latest setup for it; a model picked in the panel goes along to another computer that has its launcher and can start it (#5104). The ⋯ on the section has **Remove from Recent** (one card) and **Clear recent setups**. There are no cards when another page opened the sheet on a folder of its own (a space's or a knowledge entry's **New agent**).
   `start()` records the setup when the agent is launched (the folder picked, not a worktree made from it; the model and effort sent). The list (`lib/recent-setups.ts`) is the newest 20 in localStorage `persona.recentSetups` (one per sub-path), ids only, never a message.
 
@@ -2280,6 +2281,43 @@ and Android follow in #5117.
   MOCK_NEW_AGENT_PANEL=1 MOCK_ULTRACODE=1` (codex also lists glm-5.3; the Mac Studio has no codex launcher; the
   ultracode feature for the switch): `node web/e2e/new-agent-model.mjs <web URL> --hub <mock hub URL> [--shots <dir>]`
   (wide / 390 × light / dark in Chinese, and wide light in English).
+
+## Compare runs (#8916)
+
+For people who work with coding Agents (Agents, not Assistant): start one task several times and keep the best result, as
+Codex cloud's best-of-N or Conductor's parallel workspaces do. Web first; iOS and Android follow in their own issues.
+
+- **Where**: **New agent**, under **In a new worktree** once that switch is on: **Runs** 1 / 2 / 3 / 4, 1 each time the sheet
+  opens. With 1 nothing changes. With 2–4 the hint says what happens, Start reads **Start N**, and every run starts with the
+  same first message, attachments, model, effort, permission mode, engine and ultracode as a single start would (one
+  `target` in `views/NewAgent.tsx`); Runs never picks a model of its own. Not offered for a start that waits for one Agent
+  (Inbox's **New agent…**, `onStarted`), nor for a desktop app's temporary session.
+- **Branches**: the branch typed, or the one a single start would get, with `-1` … `-N` (`runBranches`).
+- **Feedback first** (principle 7): Start closes the sheet and opens `/compare/<id>` in the same frame, before any request
+  returns, and clears the draft (the task stays in this tab for retries). `web/src/lib/compare-runner.ts` then makes each
+  run's worktree in turn (two `worktree/add` on one repository at once would fight over its lock) and hands its start to
+  `launchAgent(…, { open: false })`, so the start keeps its own receipt, op ids and retry (`lib/new-agent.ts`). A refused
+  worktree fails that run alone and the next one goes on; a computer that went offline, or a sign-out or another pairing,
+  stops the runs not yet begun.
+- **The page** (`views/CompareRuns.tsx`): the computer, the folder and when, then a card per run (two columns from `sm`).
+  Before it is a session a card says how far it got: **Waiting for its turn**, **Making its worktree…**, **Starting…**, or
+  **Didn't start** with the reason. As a session it has the sidebar's state mark and words (`StatusMark`, `STATE_LABEL`),
+  its title (`sessionTitle`), its branch and what it changed since its branch left the main one (`git/review` at the
+  Branch scope: files and lines added / removed; read when the card shows, when the session's state moves and on the
+  header's refresh, never on a timer; hidden on a hub without `git_review`), with **Open** and **Review changes** (the
+  session's Review panel at Branch). Nothing on the page merges, deletes or removes a worktree; keeping one result is the
+  Git panel's and the worktree cleanup's job.
+- **Retry**: a run whose worktree failed takes its turn again (into the worktree already made, if it was); a failed start is
+  delivered again under its own op ids; a start whose outcome the hub could not tell is never retried from here: **Open**
+  takes it to its own page, which asks the person.
+- **Kept in this browser** (`web/src/lib/compare-runs.ts`, `persona.compareRuns[.<base>]`, the latest 20), like the recent
+  setups: ids only (the computer, folders, branches, worktree paths, session ids, the start's choices), never the task's
+  words, which live only in the tab that started the runs. After a reload a run already handed over is found again by its
+  worktree (a session whose folder is the run's), one not begun says it stopped (Retry only in the tab that still holds
+  the task), and an unknown id says the comparison is not here. A run's chat has ⋯ › **Compare runs** back to the page
+  (`groupOfSession`). Groups that follow you across devices would need a hub record; not built.
+- Tests: `lib/compare-runs.test.ts`, `views/NewAgent.runs.test.tsx` (the real sheet, runner and starts over synthetic HTTP),
+  `views/CompareRuns.test.tsx`.
 
 ## Attention signals (tab title, icon badge, alert sound, system notifications, #2332, #2971)
 
