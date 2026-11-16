@@ -46,6 +46,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/admin/usage-sources/{id}
 -                    DELETE /api/v1/agent-shares/{share_id}
 -                    DELETE /api/v1/agents/sessions/{id}/messages/{clientId}
+-                    DELETE /api/v1/assistant/conversations/{id}
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/conversations/{id}/model
 -                    DELETE /api/v1/assistant/directions/offers/{id}

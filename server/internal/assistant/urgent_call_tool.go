@@ -108,7 +108,7 @@ func (s *Service) toolUrgentCall(ctx context.Context, machine, self string, args
 		Title: a.Title, Body: a.Body, Why: a.Why, Happening: a.Happening, OwnerQuote: a.OwnerQuote, InteractionID: a.InteractionID,
 		State: callRinging, Attempt: 1, CreatedAt: now}
 	if a.Why == urgentWhyRule {
-		c.RuleID, c.RuleText = rule.ID, urgentRuleText(rule)
+		c.RuleID, c.RuleText = rule.ID, urgentRuleText(rule, s.urgentLanguage(ctx))
 	}
 	res, err := s.ringNew(ctx, st, &c, now)
 	if err != nil {
