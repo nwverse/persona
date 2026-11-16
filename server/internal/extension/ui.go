@@ -124,10 +124,10 @@ var (
 // answering with lines or with components in place; 6 pictures, controls in rows, candlestick, area, donut and pie
 // charts and sparks, a row's extra actions, grids and carousels, date, time, multiple choice and multi-line fields,
 // title styles, named colors and more icons (#5464); 7 a section's key for the native stream (#5956), which needs no
-// downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158). An app says which it draws
-// (context.ui_version, 1 when it says nothing); the hub leaves out of a View what the app does not know, or draws it
-// with what it knows (Fit).
-const UIVersion = 8
+// downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158); 9 a tile's gauge (#9337). An app
+// says which it draws (context.ui_version, 1 when it says nothing); the hub leaves out of a View what the app does not
+// know, or draws it with what it knows (Fit).
+const UIVersion = 9
 
 // PageSlot says whether placement is the extension's own page: extension_page, or plugin_page as it was called.
 func PageSlot(placement string) bool {
