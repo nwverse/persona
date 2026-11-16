@@ -142,11 +142,18 @@ import UserNotifications
     }
 
     /// Persona answers out loud from now on, or not (`RecordingCapture.setPlaysAloud`); out loud, with the experiment on,
-    /// the room meeting's echo cancellation comes on too (`RecordingCapture.turnOnEchoCancellation`).
+    /// the room meeting's echo cancellation comes on too (`RecordingCapture.turnOnEchoCancellation`), after the change is
+    /// drawn: the engine's restart takes a moment, and the speaker answers the tap first.
     private func setSpeaks(_ on: Bool) {
         capture.setPlaysAloud(on)
         let experiment = UserDefaults.standard.bool(forKey: Self.echoWithSpeakerKey)
-        if Self.echoWithSpeaker(speaks: on, experiment: experiment, simulator: VoiceCapture.simulator) { capture.turnOnEchoCancellation() }
+        guard Self.echoWithSpeaker(speaks: on, experiment: experiment, simulator: VoiceCapture.simulator) else { return }
+        // A few frames later, so the tap's new state is on screen before the main actor is busy with the engine (a main
+        // queue block can run before the frame it follows is drawn).
+        Task { [capture] in
+            try? await Task.sleep(for: .milliseconds(50))
+            capture.turnOnEchoCancellation()
+        }
     }
 
     /// The activity's Talk and Done (#3862 phase 4): `open` is what the button showed (Talk: true, Done: false; nil from an
