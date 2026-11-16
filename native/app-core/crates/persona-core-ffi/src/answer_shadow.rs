@@ -76,9 +76,11 @@ mod tests {
     #[test]
     fn real_worker_projects_and_displays_without_retaining_an_input_queue() {
         let input = r#"{"interaction":{"kind":"question","questions":[{"question":"One","options":[{"label":"A"}]}]},"operation":{"action":"pick_option","page":0,"picks":{},"other":{},"sending":false,"option_index":0}}"#.to_owned();
-        assert!(project(&input).is_some(), "the direct projection must return before testing its worker");
-        let projected = call(Operation::Project, input)
-            .expect("the real answer worker must return a transition");
+        assert!(
+            project(&input).is_some(),
+            "the direct projection must return before testing its worker"
+        );
+        let projected = call(Operation::Project, input).expect("the real answer worker must return a transition");
         assert!(projected.contains(r#""allowed":true"#));
         let shown = call(Operation::Display, "A (Recommended)".to_owned()).expect("display must return");
         assert_eq!(shown, r#"{"text":"A","recommended":true}"#);
