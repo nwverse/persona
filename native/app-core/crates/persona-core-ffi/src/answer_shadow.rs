@@ -138,6 +138,8 @@ mod tests {
                 .as_deref(),
             Some("done")
         );
-        worker.join().expect("the controlled worker must finish without a panic");
+        worker
+            .join()
+            .expect("the controlled worker must finish without a panic");
     }
 }
