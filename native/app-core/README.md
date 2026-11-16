@@ -74,10 +74,11 @@ input, a wrong expectation and the U+200B boundary. This does not execute Swift,
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
-consumer state, UI badges or actual background execution. The viewed-image leaf (#8860) uses the existing turn
-projection to keep the image entry's owner, compares the complete post-overlay viewed line through real Kotlin/JNI,
-and checks duplicate/running/error/Read-extension and wrong-expectation cases. It does not cover full ChatLine,
-folded images, UI image loading or actual tool execution.
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
+projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
+real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. This is not
+full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
@@ -128,6 +129,27 @@ Neither accept nor close waits for Rust; close preserves queued inputs. After ev
 and after draining on close, each shadow logs only `compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
+
+## HarmonyOS Agents-list adapter (#8957)
+
+`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
+ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
+`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
+core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
+replace the native rows, and snapshot/native failures affect only diagnostics.
+
+Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
+query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
+`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
+available in this environment.
+
+The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
+native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
+both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
+`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
+membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
+`devecocli`, so a release HAP was not built.
 
 ## Reproducing phase-1 evidence
 
