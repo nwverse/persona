@@ -73,9 +73,15 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
                 if existed and not path.exists():
                     leases.pop(str(path), None)
                     leases.pop(str(path) + "-base-check", None)
-                    if state is not None:
-                        atomic_leases(state_file, current)
                     removed += 1
+                    if state is not None:
+                        try:
+                            atomic_leases(state_file, current)
+                        except OSError:
+                            # The confirmed removal still freed storage. Keep
+                            # the in-memory lease cleanup for the next write;
+                            # a metadata outage must not undo that recovery.
+                            pass
             except (WatchError, OSError):
                 continue
         run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)

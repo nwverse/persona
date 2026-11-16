@@ -766,6 +766,23 @@ class WatcherTests(unittest.TestCase):
         changed.instance.close()
         self.assertNotEqual(pr_watch.State(self.watcher.state.path).data["config_fingerprint"], "previous")
 
+    def test_explicit_offline_migration_takes_the_lock_before_writing_state_or_marker(self):
+        self.watcher.state.data["config_fingerprint"] = "previous"
+        pr_watch.atomic_json(self.watcher.state.path, self.watcher.state.data)
+        changed = pr_watch.Watcher(self.watcher.config, allow_config_migration=True)
+        self.addCleanup(lambda: changed.instance and changed.instance.close)
+        original_flock = pr_watch.fcntl.flock
+        locked = []
+        def flock(fd, operation):
+            self.assertFalse(self.watcher.state.path.with_suffix(".config").exists())
+            self.assertEqual(pr_watch.State(self.watcher.state.path).data["config_fingerprint"], "previous")
+            locked.append(True)
+            return original_flock(fd, operation)
+        with patch.object(pr_watch.fcntl, "flock", side_effect=flock):
+            changed.single_instance()
+        self.assertTrue(locked)
+        self.assertNotEqual(pr_watch.State(self.watcher.state.path).data["config_fingerprint"], "previous")
+
     def test_base_change_invalidates_same_head_evidence(self):
         new_base = "d" * 40
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(baseRefOid=new_base), pr(baseRefOid=new_base)]), \

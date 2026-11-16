@@ -131,6 +131,21 @@ class RecoveryIntegrationTests(unittest.TestCase):
             self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state), 0)
         self.assertTrue(stale.exists())
 
+    def test_successful_removal_counts_even_if_lease_persistence_fails(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        pr_watch_recovery.atomic_leases(self.state, {"worktree_leases": {
+            str(stale): {"active": False, "heartbeat": 1}}})
+        state = type("State", (), {"lock": __import__("threading").RLock(),
+                                   "data": json.loads(self.state.read_text())})()
+        def remove(checkout, state_file, path):
+            stale.rmdir()
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=remove), \
+                patch.object(pr_watch_recovery, "atomic_leases", side_effect=OSError("disk full")):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 1)
+        self.assertFalse(stale.exists())
+        self.assertNotIn(str(stale), state.data["worktree_leases"])
+
     def test_reclamation_skips_leases_from_other_repositories(self):
         other = self.worktrees / "persona-extensions-7-old"
         other.mkdir()
