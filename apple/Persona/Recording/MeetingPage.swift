@@ -227,14 +227,14 @@ struct MeetingPage: View {
 
     /// Persona's role attends, but it can't be asked now (`MeetingAsk.canAsk`, the rule the bar and the asks follow).
     private func unreachable(_ entry: RecordingEntry, _ role: MeetingAttendance) -> Bool {
-        role.attends && !MeetingAsk.canAsk(entry, roomMissing: sync.roomMissing.contains(entry.id))
+        role.answers && !MeetingAsk.canAsk(entry, roomMissing: sync.roomMissing.contains(entry.id))
     }
 
     static func roleWords(_ role: MeetingAttendance) -> String {
         switch role {
         case .participant: String(localized: "Persona takes part")
         case .listener: String(localized: "Persona listens")
-        case .off: String(localized: "Persona is off")
+        case .off, .notes: String(localized: "Persona is off")
         }
     }
 
@@ -350,7 +350,7 @@ struct MeetingPage: View {
         switch role {
         case .participant: String(localized: "May be heard by the room")
         case .listener: String(localized: "Shown on this screen")
-        case .off: String(localized: "Persona is off")
+        case .off, .notes: String(localized: "Persona is off")
         }
     }
 
@@ -413,8 +413,8 @@ struct MeetingPage: View {
     private func pageMenu(_ entry: RecordingEntry) -> some View {
         let role = entry.attendance?.role ?? .off
         return Menu {
-            Picker(selection: Binding(get: { role }, set: { MeetingRecorder.shared.setRole($0, recordingID: id.uuidString) })) {
-                ForEach(MeetingAttendance.allCases, id: \.self) { Text($0.title).tag($0) }
+            Picker(selection: Binding(get: { role.shown }, set: { MeetingRecorder.shared.setRole($0, recordingID: id.uuidString) })) {
+                ForEach(MeetingAttendance.choices, id: \.self) { Text($0.title).tag($0) }
             } label: {
                 Text("Persona")
             }

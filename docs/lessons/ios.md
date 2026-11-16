@@ -36,9 +36,11 @@ the tapping test for the tap's own path.
 `PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
 session list in, the real page of a working agent (title, tabs, status, live work line, Stop), or without it, a generic
 page ("对话", no tabs, nothing live). The first reads about 50 ms/s of hitches, the second about 25, whatever the build.
-Once loaded its chat fits on one screen: the swipes scroll nothing and the header never folds, so the number is what a
-working chat costs sitting still (a SwiftUI animation keeps the display link running), not a long scroll. A fix to the
-header fold (#8793) was merged on an A/B whose "after" runs all happened to open the generic page; it was reverted.
+Once loaded its chat fits on one screen: the swipes scroll little, but each one folds and unfolds the header
+(`-holdChromeOpen` only stops the fold after 3 idle seconds), so the number is mostly what the header's fold costs on a
+working chat, not a long scroll. A fix to the header fold (#8793) was merged on an A/B whose "after" runs all happened to
+open the generic page; it was reverted. Since #8828 the test waits for the session's own title in the header and
+relaunches (up to three times) until the real page is there; about one run in five still never gets it and fails.
 
 Before trusting a before/after: take a screenshot during each run (`xcrun simctl io <udid> screenshot`) and check both
 builds measured the same page; sort runs by state before comparing. Also: Time Profiler leaves about nine samples in ten
@@ -546,6 +548,19 @@ page and the newest message stays over the composer. A fade drawn by the footer 
   footer's measured height: margins that track the footer would move the list on every card, tray and line of text.
 - **Whatever is drawn after the fade covers what is drawn before it.** The footer's gradient also dimmed Jump to Latest, which is
   an overlay of the list. The fog is now the list's first overlay; the navigator and the arrow come after it.
+
+## A blurred footer over a list beside the iPad's sidebar (2026-11-16, #9008)
+
+- `safeAreaBar(edge: .bottom)` gives a bar the system's scroll-edge blur, but beside the iPad's floating sidebar it took
+  12 pt off the list's leading margin, whatever the bar held: the to-do page's cards sat 8 pt from the sidebar and 20 pt
+  from the other side (iPhone unaffected). A ZStack around the list, `listSectionMargins`, `contentMargins`,
+  `listStyle(.insetGrouped)` and a narrower bar left it as it was. Its automatic edge was also the hard one there, a
+  lighter band with a line along its top; `.scrollEdgeEffectStyle(.soft)` removes the line, not the margin.
+- `floatingFooter` keeps `safeAreaInset` (margins as before) and draws its own blur under the bar: a material masked along
+  `EasedFade`, one fixed layer, so scrolling never redraws it. The material alone lit a black page gray in dark; washing
+  it halfway back to the page's color (`Theme.groupedPage` behind a grouped list) keeps dark black.
+- Check a bottom bar on an iPad in landscape beside the sidebar, both edges of the cards measured against the build
+  before, and in dark as well as light.
 
 ## Personal Agent entry availability (#2935)
 
@@ -1219,7 +1234,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   `ChromeHeader` had the same trap (2026-11-02): expanded / collapsed layers in ZStack used opacity / `allowsHitTesting`,
   leaving both Back buttons in accessibility. Expanded content moved into clipping after collapse; its Back was over the status bar, deemed hittable but tapping did not return.
   `accessibilityHidden` on layers or plain buttons still failed. Remove invisible layers from the tree (do not build collapsed strip before halfway;
-  expanded layer uses `.hidden()` after fading, retaining layout measurement). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
+  expanded layer gives way to a clear placeholder of its measured height after fading; a `.hidden()` copy kept measuring but
+  built the whole header again at every fold and unfold, #9103). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
   (`ChatView.somethingPresented`, `ChatHeaderPresentationTests`).
 - Do not measure per-frame drag / animation main-thread cost under XCUITest: accessibility adds substantial SwiftUI work each frame. Script display-frame-driven execution of the same path in-app,
   launched with `simctl launch` (`DrawerAutoDrag`, `docs/operations/testing.md` ("Sidebar dragging")).

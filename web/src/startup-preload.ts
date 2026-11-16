@@ -340,7 +340,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #9146: a table cell's short code chips kept whole (ui/ReplyBlocks.tsx rehypeLinkedCode marks them data-chip; styles.css
 // keeps them on one line) add 69 B in each language, measured in one environment against main c53557621 (ja 480,666 B
 // to 480,735 B; en 477,537 B to 477,606 B, zh-Hans 478,356 B to 478,425 B). The cells' 40em cap is the same bytes.
-export const FIRST_SCREEN_BUDGET = 480_735;
+// #9175: the inbox reads the hub's deltas (lib/inbox.ts, its cursor and applyInboxDelta), 124 B in ja; the Feishu card
+// text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
+// 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459; merged
+// with main 27a828ec48 (#9146 above): en 477,579 B, ja 480,708 B, zh-Hans 478,398 B, 27 B of room.
+// #9215: a paged list keeps Load more on screen while it refreshes (lib/session-list.ts loadingMore, read by the flat
+// list), a busy fleet's hints wait for a window counted from when the last read came back, and a reconnect reads the
+// Agents list at once. 80 B in ja, measured in one environment against main 211207fd5f: ja 480,708 B to 480,788 B
+// (en 477,579 B to 477,659 B, zh-Hans 478,398 B to 478,478 B). The budget takes the 53 B over.
+export const FIRST_SCREEN_BUDGET = 480_788;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

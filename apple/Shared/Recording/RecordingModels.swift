@@ -196,6 +196,8 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     var attended: Bool {
         active && isMeeting && source == .phone && attendance?.sentRole.attends == true && attendance?.stopped != .unsupported
     }
+    /// …and Persona is in it, answering when asked (not while the room only takes notes, #8851).
+    var answered: Bool { attended && attendance?.sentRole.answers == true }
     /// What every screen calls it (`RecordingTitle`, #8873): its own title, else the hub's name, else its kind and when it
     /// started.
     var displayTitle: String { RecordingTitle.text(self) }

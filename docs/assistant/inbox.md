@@ -113,7 +113,7 @@ failures with a bare 502.
   Exception: Reopen (single `done:false`, bulk `reopen` / Undo) does not check whether a newer item exists for the thread; it reopens the old one anyway, yielding two unhandled items.
   Later messages always merge into the newest (`UpdatedAt`, ties by ID, `threadIndex.openFor`, #3796); the old item stays unchanged.
 - Included Lark messages: gateway `unread` scope (Lark Unread, excluding muted chats) + `mentions` scope (mentions of me in muted groups still count).
-  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
+  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. Each context line marks whom its message @'s with the tier criteria's `（@了我）` / `（@所有人）` after the sender (both when it @'s the owner and everyone), taken from the message's structured mention ids, never from a display name another person may share (#9124). A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
   Search indexes most messages at once but some only minutes later (a direct message was seen arriving in search about ten minutes after it was sent), and a message indexed after the cursor passed its time used to be lost. So the cursor stays 10 minutes behind the newest message it saw. Each round also reads up to 10 direct chats from their own history since two hours ago (`+chat-messages-list --start`), rotating through the 50 most recently active direct chats (`+chat-list --types p2p --sort active_time`), which has no indexing delay; the `message_id` ledger drops what was already collected. The window leaves room to recover a missed conversation more than an hour after it was sent, including time spent investigating and rotating through the candidates; each chat read is still capped at 50 messages. Mentions in group chats still rely on search and its 10-minute overlap. A failed direct-chat read keeps what search found that round and reports the error (`server/internal/connector/larkcli/inbox.go`, `sweepDirectChats`).
   An owner reply settles only earlier incoming activity in the same chat or topic. A later peer follow-up stays open, including one found in the context read before search indexes it. Within a chat, source message positions resolve the CLI's minute-resolution timestamps; an opaque message ID or uncertain order never proves the owner replied later.
   As a maintainer opt-in addition, `larkcli` has an `inbox_all_chats` connector option containing chat ids whose every new incoming message is collected. The default is an empty list; this option is intentionally separate from the L4 collection rules.
@@ -222,8 +222,10 @@ a summary up to 40 characters, and a short reason:
   "请验收", "任务进展" and the like, which the app handles). When unsure, the question is whether someone waits on the owner or
   the owner's own work slips (it used to be "choose action"). @me no longer makes something Needs you by itself.
   A real person's direct message stays Needs you by default, even without a question, unless it is plainly small talk.
-  Grouping (`group.md`) also spells out what the batch's `（@了我）` / `（@所有人）` markers mean: without them a group message
-  did not @ the owner, and a name @'d in the text is someone else; and its input names the other side of a direct chat in
+  The tier criteria (`tiers.md`, shared by triage and grouping) spell out what the `（@了我）` / `（@所有人）` markers mean:
+  a message marked with both counts as @-ing the owner; a Lark group message (the Feishu plugin's batches and the `larkcli`
+  connector's context) without them did not @ the owner, and a name @'d in the text is someone else. Other sources write
+  no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
@@ -835,7 +837,8 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
 `bar_landing.json` and `bar_search.json`, replayed by web, iOS / iPadOS and Android (README "Section bar").
 
 - **Choices**: Needs you and All always; In progress and FYI while they have a row (or are chosen); Done while it has a row, the hub's
-  day counts name a done item (no filter or search on), or it is chosen. A choice shows that section alone, with its source or time
+  day counts name a done item (no filter or search on; the apps read the counts when the Inbox is shown, as Done already did), or it
+  is chosen. A choice shows that section alone, with its source or time
   groups and their folds as in "Grouping and selection". **All** is the page as it was: every section stacked, folding as before.
   Collapsed has no choice of its own; it stays folded near the end of All.
 - **Default**: the Inbox opens on Needs you each time it is entered (the sidebar, a widget, a quick action, "N more in Inbox", launch).
@@ -853,11 +856,20 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
 - **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
   and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
 - **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words
-  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet) with the other counts right above it. The filtered and
-  no-match states stay as in "Nothing open" below.
-- **Opening an item from outside the list** (a link, ⌘K, a Needs-you line, another item's chain) moves the list to the item's choice:
-  Done for a done item, All with Collapsed open for a collapsed one. Back returns to where you were. No notification opens an Inbox
-  item today; one that does follows the same rule.
+  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet), under them "The rest are in the other sections
+  above." (Done: "What you mark done shows up here."), with the other counts right above it. zh-Hans 没有需要你处理的 / 没有进行中的 /
+  没有要看的 / 还没有已处理的, 其余的在上面的其他分区里。 / 标为已处理的会出现在这里。; ja 対応が必要なものはありません / 進行中のものはありません /
+  読むものはありません / 完了したものはまだありません, 残りは上のほかの区分にあります。 / 対応済みにしたものがここに表示されます。 Apple writes the
+  English titles in title case. The filtered and no-match states stay as in "Nothing open" below.
+- **Opening an item from outside the Inbox** (a link, ⌘K, a Needs-you line) lands the list on the item's choice: Done for a done
+  item, All with Collapsed open for a collapsed one (its time group opened too). Beside the item on a wide screen its row is in sight
+  and marked; on a phone, closing the item shows the list there, so a link lands where the item lives. **Opening one from inside**
+  (another item's chain or relations) moves a list shown beside the item the same way and leaves a list that isn't shown alone;
+  Back or closing returns it to the choice it had. A list that already shows the item (All, or the item's own choice) does not move.
+  No notification opens an Inbox item today; one that does is an outside opening.
+- **When the choices don't fit** (a phone at large text, Japanese, a narrow list column), the strip scrolls sideways with a fade at
+  the cut edge, and choosing one, or landing on it, scrolls it fully into view; the web keeps All pinned whole beside the grouping
+  menu. The Inbox opens on Needs you, the first choice, so its count starts in sight.
 - **Selection**: Select All picks the rows in sight. Picks survive a switch, and the pick bar counts the ones out of sight as it
   counts folded rows. Clean up all keeps its scope (every open item under the filters).
 - **Wide screens** keep the same bar at the top of the list (iPad's detail column, the web's list column, Android's list pane). No

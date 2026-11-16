@@ -12,9 +12,30 @@ import java.util.Locale
 
 class AndroidPhoneTools(context: Context, private val foreground: () -> Boolean) {
     private val context = context.applicationContext
+
+    /** Reads and freezes the target before a before → after card is shown; all provider IO stays on IO. */
+    suspend fun prepareConfirmation(name: String, args: JsonObject): PhonePreparedConfirmation = withContext(Dispatchers.IO) {
+        when (name) {
+            "phone_contacts_update" -> {
+                val prepared = ContactsTool(context).prepareUpdate(args)
+                PhonePreparedConfirmation(prepared.text) { withContext(Dispatchers.IO) { ContactsTool(context).update(prepared) } }
+            }
+            "phone_calendar_update_event" -> {
+                val prepared = CalendarTools(context).prepareUpdate(args)
+                PhonePreparedConfirmation(prepared.text) { withContext(Dispatchers.IO) { CalendarTools(context).update(prepared) } }
+            }
+            "phone_calendar_delete_event" -> {
+                val prepared = CalendarTools(context).prepareDelete(args)
+                PhonePreparedConfirmation(prepared.text) { withContext(Dispatchers.IO) { CalendarTools(context).delete(prepared) } }
+            }
+            else -> error("Tool $name does not need confirmation preparation")
+        }
+    }
+
     suspend fun execute(name: String, args: JsonObject): PhoneToolResult = withContext(Dispatchers.IO) {
         when (name) {
             "phone_contacts_search" -> ContactsTool(context).search(args)
+            "phone_contacts_create" -> ContactsTool(context).create(args)
             "phone_calendar_events" -> CalendarTools(context).events(args)
             "phone_calendar_create_event" -> CalendarTools(context).create(args)
             "phone_photos_recent" -> PhotosTool(context).recent(args)
