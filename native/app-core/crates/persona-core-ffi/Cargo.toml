@@ -13,6 +13,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
 test-support = ["persona-core-runtime/test-support"]
+# The app excludes sort's shadow-only JNI entry point from its Release native libraries.
+release-android = []
 
 [dependencies]
 persona-core-runtime.workspace = true
