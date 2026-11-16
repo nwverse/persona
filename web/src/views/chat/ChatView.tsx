@@ -259,7 +259,18 @@ export interface PanelChrome {
   beside?: React.ReactNode;
 }
 
-export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
+const DeletedConversation = lazy(() => import("../DeletedConversation").then((m) => ({ default: m.DeletedConversation })));
+
+/** A deleted chat has no composer or retained transcript, wherever its old link is opened. */
+export function ChatView(props: Parameters<typeof ActiveChatView>[0]) {
+  const deleted = useStore(() => getSession(props.mid, props.sid)?.deleted === true);
+  if (deleted) return <Suspense fallback={<div className="flex h-full items-center justify-center"><Loading /></div>}>
+    <DeletedConversation onToggleSidebar={props.onToggleSidebar} />
+  </Suspense>;
+  return <ActiveChatView {...props} />;
+}
+
+function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
   mid: string;
   sid: string;
   assistant?: boolean;
@@ -1142,12 +1153,28 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
-  const feed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
+  const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
     if (!assistant) return;
     void loadFeed(sid);
     if (sid === mainConversation) void loadToday(sid);
   }, [assistant, sid, mainConversation]);
+  // Its urgent calls (docs/assistant/urgent-call.md), each a row at its time among the feed: read by a module of their own.
+  const [calls, setCalls] = useState<FeedItem[]>(NO_FEED);
+  useEffect(() => {
+    if (!assistant) return;
+    let stop: (() => void) | undefined;
+    let gone = false;
+    void import("../assistant/urgent-calls").then((m) => {
+      if (!gone) stop = m.watchCalls(sid, setCalls);
+    });
+    return () => {
+      gone = true;
+      stop?.();
+      setCalls(NO_FEED);
+    };
+  }, [assistant, sid]);
+  const feed = useMemo(() => (calls.length ? [...taskFeed, ...calls].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)) : taskFeed), [taskFeed, calls]);
   // The "Today" card's actions say something to Persona here.
   useEffect(() => {
     if (!assistant) return;

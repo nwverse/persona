@@ -121,6 +121,7 @@ lost alerts and Live Activity updates. Live Activity pushes carry `aps.timestamp
   report `apns_token`, `push_key`, `relay_url`, `relay_grant` together to the hub.
 - Notification Service Extension `PersonaNotify`: if `e` is present, decrypt it and swap in the title / subtitle / body / category (the notification's buttons) / thread / interruption level / userInfo;
   without `e` (direct pushes never carry `mutable-content`, so the extension isn't invoked) the notification is shown as-is.
+- Urgent calls (`../assistant/urgent-call.md`): only while the owner has them on, the App registers with PushKit, gets a grant for that token with topic `<bundle id>.voip` (cached apart from the notifications' grant) and reports `voip_token` / `voip_grant` / `voip_error` with its other fields; turning calls off unregisters and reports none. A VoIP push is opened in the App process with the same key and reported as a LiveCommunicationKit call at once.
 - Silent pushes (`background`) are decrypted in the App process; `persona_wake` wakes the connection as before, and `resolved_interaction_ids` removes the notifications of cards that are over (#4349, only to apps that registered with `features: ["withdraw"]`).
 - MCP forms and links (`INTERACTION_ELICITATION`, no buttons) are pushed only to apps that registered with `features: ["elicitation"]`, sealed like any other alert. Their alert carries neither the link to open nor a form's values ([protocol.md](../protocol/protocol.md) "MCP elicitation", #2433).
 

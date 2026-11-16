@@ -76,6 +76,9 @@ internal object NativeBridge {
 
     @JvmStatic external fun destroy(handle: Long)
 
+    /** Projects the source-derived WebSocket envelope. Pure diagnostic function; no runtime handle needed. */
+    @JvmStatic external fun projectWireEnvelope(input: String): String
+
     /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectSort(input: String): String
 
@@ -84,6 +87,9 @@ internal object NativeBridge {
 
     /** Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectStreamChunks(input: String): String
+
+    /** Repairs only an open code fence and reports this slice's code/text end state. Pure function. */
+    @JvmStatic external fun projectStreamRepair(input: String): String
 
     /** Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectAnswer(input: String): String
