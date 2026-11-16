@@ -147,7 +147,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const scope = JSON.stringify([owner, epoch, manager]);
   const account = JSON.stringify([owner, epoch]);
   const priorAccount = useRef(account);
-  const currentScope = useCallback(() => owner === credentialOwner() && epoch === conversationDeletionScope() && manager === shownManager(), [owner, epoch, manager]);
+  const currentScope = useCallback(() => scope === JSON.stringify([credentialOwner(), conversationDeletionScope(), shownManager()]), [scope]);
   const q = usePalette().query;
   const setQ = setPaletteQuery;
   const { mode, text } = parseQuery(q);
@@ -245,7 +245,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const asked = open && !managing && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
   useLayoutEffect(() => {
     if (priorAccount.current !== account) { priorAccount.current = account; onClose(); }
-  }, [account, onClose, setQ]);
+  }, [account, onClose]);
   useEffect(() => {
     setFound({ q: "", scope });
     if (!asked) return;
@@ -364,9 +364,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const card = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const kept = useRef<ReactNode>(null);
-  const keptScope = useRef({ scope, revision });
-  if (keptScope.current.scope !== scope || keptScope.current.revision !== revision) kept.current = null;
-  keptScope.current = { scope, revision };
+  const keptAt = JSON.stringify([scope, revision]);
+  const keptScope = useRef(keptAt);
+  if (keptScope.current !== keptAt) kept.current = null;
+  keptScope.current = keptAt;
   const exit = useExit(open, EXIT_MS.card, () => [
     backdrop.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS.card, easing: "ease-out", fill: "forwards" }),
     card.current?.animate(CARD_OUT, { duration: EXIT_MS.card, easing: EASE, fill: "forwards" }),
