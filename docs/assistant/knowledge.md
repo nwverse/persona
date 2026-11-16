@@ -93,6 +93,28 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 After searching the knowledge base, `kb_search` also searches `.md` files in these directories (skipping dot-prefixed directories such as `.git`); matching paths are absolute. The assistant's CLAUDE.md lists these directories
 and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Persona does not write, sync or index them.
 
+## Remote knowledge folders (`kb.remote_folders`)
+
+Add a named source in the manager's `manager.json` under `kb.remote_folders`. Use the connected personal computer's machine ID and an absolute path or `~/` path on that computer.
+
+```json
+{
+  "kb": {
+    "remote_folders": [{
+      "name": "handbook",
+      "machine": "laptop",
+      "path": "~/notes/handbook",
+      "exclude_dirs": ["private", "projects/drafts"],
+      "exclude_extensions": ["pdf", ".key"]
+    }]
+  }
+}
+```
+
+In a private assistant or Agent conversation, ask to search the source by name. The `kb_folder_search` tool lists source names when called without arguments, or searches file names and UTF-8 text for a case-insensitive literal substring. Use a returned relative path with `kb_folder_read`. The tools report an unreachable computer and flag partial results when a search reaches its work limit or a read reaches 64 KiB. Files can change between search and read.
+
+Exclusions are case-insensitive. Directory paths are relative to the configured folder with slash separators. Extension exclusions match filename suffixes. The node skips symlink entries and applies its ordinary remote-file protections. The manager keeps no index or archive of these folders. Text returned to a conversation is subject to that conversation's normal history and model processing. Restart the manager after editing this configuration, and reconnect the conversation’s tools if they were already loaded. Removing an entry and restarting revokes subsequent knowledge-folder calls. The tools are off by default and unavailable when the knowledge base is disabled.
+
 ## Why files
 
 - Files and grep are natural for Claude Code: the assistant, AI twin and Agents in herdr need no new API; `rg keyword ~/.persona/data` searches directly.
