@@ -682,6 +682,7 @@
       "tokens": [
         ".jarvis",
         "JARVIS_",
+        "X-Jarvis-Op-Id",
         "com.jarvis.hub",
         "com.jarvis.link",
         "com.jarvis.node",

@@ -43,12 +43,19 @@ import UIKit
             var state: String?
             var trimmedAt: String?
             var transcription: MeetingTranscriptionView?
-            enum CodingKeys: String, CodingKey { case state = "minutes_state", trimmedAt = "trimmed_at", transcription }
+            /// What the hub calls it and why (#8873).
+            var name: String?
+            var nameSource: String?
+            enum CodingKeys: String, CodingKey {
+                case state = "minutes_state", trimmedAt = "trimmed_at", transcription, name, nameSource = "name_source"
+            }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 state = try? c.decodeIfPresent(String.self, forKey: .state)
                 trimmedAt = try? c.decodeIfPresent(String.self, forKey: .trimmedAt)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+                nameSource = try? c.decodeIfPresent(String.self, forKey: .nameSource)
                 // Read leniently: a `transcription` this app can't read leaves the rest of the page as it was.
                 transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
             }
@@ -77,8 +84,10 @@ import UIKit
             status = answer.detail.meta?.state
             trimmed = answer.detail.meta?.trimmedAt?.isEmpty == false
             if transcription != answer.detail.meta?.transcription { transcription = answer.detail.meta?.transcription }
+            // The minutes' title names it from now on (#8873): read here, where the page waits for them.
+            if let meta = answer.detail.meta { RecordingSync.shared.hubNamed(entry.id, name: meta.name, source: meta.nameSource) }
             #if os(iOS)
-            MinutesRelay.shared.note(entry, state: state)
+            MinutesRelay.shared.note(RecordingLibrary.shared.entry(entry.id) ?? entry, state: state) // the watch gets the name too
             #endif
         } catch let error as APIError where error.status == 404 {
             state = meeting ? .waitingForSync : .none

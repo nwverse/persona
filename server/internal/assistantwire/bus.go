@@ -209,6 +209,7 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/sessions/{mid}/{sid}/autoname",
 	"POST /api/v1/assistant/conversations/{id}/archive",
+	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
 	"GET /api/v1/assistant/north-star",
@@ -247,6 +248,7 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/tasks/{id}",
 	"POST /api/v1/assistant/tasks/{id}/run",
 	"POST /api/v1/assistant/tasks/{id}/fresh",
+	"DELETE /api/v1/assistant/tasks/{id}/start-grant",
 	"GET /api/v1/assistant/places",
 	"GET /api/v1/assistant/repositories",
 	"GET /api/v1/assistant/repositories/{id}",
@@ -358,6 +360,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// The owner's name from the web (#8877).
+	"PUT /api/v1/recordings/{id}/title",
 	// All-day recordings' appends (kb_day.go there, #4741).
 	"POST /api/v1/recordings/{id}/segments",
 	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").

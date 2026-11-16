@@ -228,11 +228,27 @@ fn wire_fixtures() {
             let is_event = matches!(case.decoder.as_str(), "event" | "compat_event");
             let input: Value = serde_json::from_str(case.input.get()).expect("input");
             if is_event && input["type"] != "items" {
-                assert!(
-                    matches!(transport::decode_frame(case.input.get().as_bytes()), Ok(Frame::Other)),
-                    "{}: a frame of another type is not an items frame and not an error",
-                    case.name
-                );
+                let decoded = transport::decode_frame(case.input.get().as_bytes());
+                if case.expected.accepted || case.name == "unknown_event_ignored" {
+                    assert!(
+                        matches!(decoded, Ok(Frame::Other)),
+                        "{}: a valid or ignored non-items frame",
+                        case.name
+                    );
+                } else if matches!(
+                    case.name.as_str(),
+                    "session_bad_optional_field" | "interaction_unknown_kind"
+                ) {
+                    // The complete nested Session / Interaction model is explicitly outside #8995. It remains an
+                    // Other frame here; this is not an iOS full-model acceptance claim.
+                    assert!(
+                        matches!(decoded, Ok(Frame::Other)),
+                        "{}: nested models stay out of scope",
+                        case.name
+                    );
+                } else {
+                    assert!(decoded.is_err(), "{}: the iOS-derived refusal", case.name);
+                }
                 others.insert(case.name.clone());
                 continue;
             }
