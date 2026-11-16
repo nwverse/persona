@@ -26315,24 +26315,24 @@
         }
       }
     },
-    "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs." : {
+    "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs."
+            "value" : "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあり、上部で切り替えます。iPad では Persona と Agents のタブです。"
+            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあります。iPhone では上部、iPhone Duo では右下で切り替え、iPad では Persona と Agents のタブです。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "助手和 Agents 各占一页，在顶部切换。iPad 上是 Persona 和 Agents 两个标签。"
+            "value" : "助手和 Agents 各占一页。iPhone 上在顶部切换，iPhone Duo 上在右下角切换，iPad 上是 Persona 和 Agents 两个标签。"
           }
         }
       },

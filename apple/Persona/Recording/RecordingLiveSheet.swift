@@ -50,7 +50,7 @@ private struct RecordingLiveSheetPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $presented) { RecordingLiveSheet() }
+            .sheet(isPresented: $presented) { RecordingLiveSheet().overTabSwitch() }
             // A hidden shell page never gets onDisappear: the tab-aware pair keeps one host presenting at a time.
             .onTabVisibility(appear: {
                 visible = true

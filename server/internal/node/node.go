@@ -331,6 +331,9 @@ type Node struct {
 	// inputs: pixel scrolling (#7775, inputhelper.go): on a Mac, each paired 5900 stream is read for the phone's scroll
 	// records, which go to Persona Input. nil elsewhere: the streams pass as they come.
 	inputs *screenInputs
+	// phones: Phone Screen (#9314, phonescreen.go): on a Mac, the one live screen whose phone shows a window on a virtual
+	// display, through Persona Input. nil elsewhere: screen.phone answers unavailable.
+	phones *phoneScreens
 }
 
 func New(version string) (*Node, error) {
@@ -387,8 +390,9 @@ func New(version string) (*Node, error) {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
 	if runtime.GOOS == "darwin" {
-		n.screenStart = n.startScreenHelper                                         // Persona Screen, the live screen's video helper (#3954)
-		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn} // Persona Input (#7775)
+		n.screenStart = n.startScreenHelper                                                                   // Persona Screen, the live screen's video helper (#3954)
+		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn}                           // Persona Input (#7775)
+		n.phones = &phoneScreens{logf: n.logger.Printf, signed: n.screens.signedIn, attach: n.screens.attach} // Phone Screen (#9314)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
@@ -1929,6 +1933,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.portDial(ctx, params)
 	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
 		return n.screenDial(ctx, params)
+	case "screen.phone": // Phone Screen (#9314): the virtual display and its window, for a signed-in pair (phonescreen.go)
+		return n.screenPhone(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
 	case methodPreviewServers: // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
