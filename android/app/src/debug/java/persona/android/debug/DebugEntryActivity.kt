@@ -33,6 +33,11 @@ class DebugEntryActivity : ComponentActivity() {
             DebugAgentSort.persist(this, it == "on")
             source.removeExtra("debug.sortShadow")
         }
+        source.getStringExtra("debug.answerShadow")?.let {
+            require(it == "on" || it == "off")
+            DebugAnswer.persist(this, it == "on")
+            source.removeExtra("debug.answerShadow")
+        }
         if (source.getBooleanExtra("debug.automation", false)) AdaptiveProbe.enable(this)
         // Captures of several hub groups: `--es debug.addMockAddress http://<loopback>:<port>` pairs one more mock hub
         // next to the existing ones (settings › hub › "Add hub" does the same with a real pairing link).

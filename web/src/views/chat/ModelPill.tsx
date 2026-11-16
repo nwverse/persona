@@ -19,7 +19,7 @@ import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, us
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -253,8 +253,11 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
   const isMain = Boolean(session && assistant?.main === session.session_id);
-  const followsDefault = isMain || Boolean(session && (assistant?.leaders?.includes(session.session_id) || isBackgroundSupervisor(assistant, session.session_id)));
-  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher };
+  // Without a pick, what the next message runs on is a default: Main chat's for the main conversation, a leader and a
+  // scheduled task's own conversation (origin "task"); the supervisor's own model purpose for the background supervisor.
+  const supervisor = Boolean(session && isBackgroundSupervisor(assistant, session.session_id));
+  const followsDefault = isMain || supervisor || Boolean(session && (assistant?.leaders?.includes(session.session_id) || session.origin === "task"));
+  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(supervisor ? { def: superviseDefault(mid) } : {}) };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
@@ -264,8 +267,10 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
-    if (mid) void readAssistantLaunchers(mid);
-  }, [mid, scope]);
+    if (!mid) return;
+    void readAssistantLaunchers(mid);
+    if (supervisor) void readSuperviseDefault(mid);
+  }, [mid, scope, supervisor]);
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
   const lastRev = useRef<number | undefined>(session?.rev);
@@ -273,7 +278,8 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
     if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
     lastRev.current = session.rev;
     void readAssistantLaunchers(mid, { again: true });
-  }, [mid, scope, session?.rev]);
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
+  }, [mid, scope, session?.rev, supervisor]);
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -306,6 +312,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
   useEffect(() => {
     if (!shown) return;
     void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;
       for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });

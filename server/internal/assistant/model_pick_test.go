@@ -357,7 +357,7 @@ func TestSendRefusesAPickThatCantRun(t *testing.T) {
 	}
 	// The default's launcher that can't run it still gives way to one that can (finishMainChatModel), as before.
 	s, _ := pickFixture(t)
-	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.codex-gw"})
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.cx"})
 	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] == "codex-gw" || p["launcher"] == nil {
 		t.Fatalf("default fallback: %v %v", p, err)
 	}
@@ -676,4 +676,56 @@ func TestStartTakesAModelAndKeepsThePick(t *testing.T) {
 			t.Fatalf("kept: %v", picks)
 		}
 	})
+}
+
+// The hub's own messages to a conversation (supervision, notices, another conversation's) run on its pick like the
+// ones the user types, so the model the apps show is the next one's whoever writes next; and the background
+// supervisor, whoever writes to it, runs under its own purpose until it has a pick (#9248).
+func TestRelayedMessagesAndTheSupervisorRunOnTheirModel(t *testing.T) {
+	s, f := pickFixture(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) {
+		v.Leaders = []string{"lead"}
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg", "server"
+	})
+	setModel(t, s, purposeSupervise, ModelBinding{Provider: "launcher.cx"})
+	f.setSessions("server", proto.Session{SessionID: "main", Assistant: true, Launcher: "gw"},
+		proto.Session{SessionID: "lead", Assistant: true, Launcher: "gw"},
+		proto.Session{SessionID: "bg", Assistant: true, Launcher: "gw"})
+	f.mu.Lock()
+	f.known["lead"], f.known["bg"] = true, true
+	f.mu.Unlock()
+	relay := func(to string) map[string]any {
+		t.Helper()
+		if err := s.deliverRelay(ctx, "server", to, relayMsg{Tool: noticeTool, Text: "a notice"}); err != nil {
+			t.Fatal(err)
+		}
+		return f.lastSend(t)
+	}
+	if p := relay("lead"); p["launcher"] != nil {
+		t.Fatalf("a leader without a pick is sent as it was: %v", p)
+	}
+	if r := putPick(t, s, "lead", `{"launcher":"claude","model":"opus"}`); r.Code != 200 {
+		t.Fatalf("PUT lead: %d %s", r.Code, r.Body.String())
+	}
+	if p := relay("lead"); p["launcher"] != "claude" || p["model"] != "opus" {
+		t.Fatalf("a relayed message runs on the leader's pick: %v", p)
+	}
+	// without a pick the supervisor runs under its own purpose, typed to or relayed
+	if p, err := send(t, s, "bg", map[string]any{}); err != nil || p["launcher"] != "cx" {
+		t.Fatalf("a message typed to the supervisor: %v %v", p, err)
+	}
+	if p := relay("bg"); p["launcher"] != "cx" {
+		t.Fatalf("a relayed message to the supervisor: %v", p)
+	}
+	// with a pick, both run on it
+	if r := putPick(t, s, "bg", `{"launcher":"claude","model":"haiku"}`); r.Code != 200 {
+		t.Fatalf("PUT bg: %d %s", r.Code, r.Body.String())
+	}
+	if p, err := send(t, s, "bg", map[string]any{}); err != nil || p["launcher"] != "claude" || p["model"] != "haiku" {
+		t.Fatalf("typed to the supervisor on its pick: %v %v", p, err)
+	}
+	if p := relay("bg"); p["launcher"] != "claude" || p["model"] != "haiku" {
+		t.Fatalf("relayed to the supervisor on its pick: %v", p)
+	}
 }
