@@ -9,7 +9,6 @@ import { useEffect, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, credentialOwner, enc, onCredentialChange } from "./api";
 import { itemHeaders, stampedHeaders } from "./manager-choice";
-import type { ReplyTranslationValue } from "./reply-translation";
 
 // ── settings ─────────────────────────────────────────────
 
@@ -430,16 +429,14 @@ export function translateReply(text: string, target: string, manager: string): P
 }
 
 /** Both intent-loaded code and a paged source can arrive after the reply or credential has gone. */
-export async function nextReplyTranslation(
-  value: ReplyTranslationValue | undefined,
+export async function translateSelection(
   source: string | (() => Promise<string>),
   target: string,
   manager: string,
   active: () => boolean,
-): Promise<ReplyTranslationValue | undefined> {
+): Promise<string | undefined> {
   if (!active()) return;
-  if (value?.text) return { ...value, shown: !value.shown, pending: false };
   const text = typeof source === "string" ? source : await source();
   if (!active()) return;
-  return { text: await translateReply(text, target, manager), shown: true };
+  return translateReply(text, target, manager);
 }

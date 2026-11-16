@@ -81,8 +81,9 @@ function expectOriginal(text: string) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe("translation of hub-paged answers", () => {
@@ -218,6 +219,30 @@ describe("translation of hub-paged answers", () => {
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[data-answer]")?.textContent).toBe(replacement.text);
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
+  });
+
+  it("keeps the new source loading when the replaced source's full-text request fails", async () => {
+    const old = deferred<Item>();
+    const next = deferred<Item>();
+    const complete = `${whole}\n\nA different complete reply.`;
+    const replacement: Item = { ...item, id: "next-reply#0", text: "Next reply prefix", full_size: complete.length };
+    fullItem.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    await draw();
+    await settle(async () => translate().click());
+    await draw({ reply: replacement });
+    await settle(async () => translate().click());
+    expect(fullItem).toHaveBeenCalledTimes(2);
+    await settle(async () => old.reject(new Error("Previous full text failed")));
+    expect(host.querySelector("[data-full-text]")?.getAttribute("data-full-text")).toBe("loading");
+    expect(translate().disabled).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    await settle(async () => next.resolve({ ...replacement, text: complete }));
+    expect(request).toHaveBeenCalledExactlyOnceWith("/translate/message", expect.objectContaining({
+      json: { text: complete, target: "en" },
+    }));
+    await settle(async () => translate().click());
+    expectOriginal(complete);
+    expect(fullItem).toHaveBeenCalledTimes(2);
   });
 
   it("does not spend on a full-text result after the answer unmounts", async () => {

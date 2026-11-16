@@ -13,41 +13,36 @@ import { t } from "../../i18n";
 /** The visible text and full-text control. `getText` shares that control's pending load and cached complete text. */
 export function useFullText(item: Item | undefined, mid: string | undefined, sid: string | undefined): { text: string; more: ReactNode; getText: () => Promise<string> } {
   const key = item?.full_size ? JSON.stringify([mid, sid, item.id, item.text, item.full_size]) : "";
-  const current = useRef(key);
-  current.current = key;
-  const pending = useRef<{ key: string; promise: Promise<string> } | null>(null);
-  const [whole, setWhole] = useState<{ key: string; text: string } | null>(null);
-  const [status, setStatus] = useState<{ key: string; state: "idle" | "loading" | "failed" }>();
-  const state = status?.key === key ? status.state : "idle";
+  const current = useRef<{ key: string; promise?: Promise<string> }>({ key });
+  if (current.current.key !== key) current.current = { key };
+  const frame = current.current;
+  const [value, setValue] = useState<{ key: string; text?: string; state?: "loading" | "failed" }>();
+  const loaded = value?.key === key ? value : undefined;
   const raw = item?.text ?? "";
   const size = item?.full_size;
   const getText = (): Promise<string> => {
-    if (whole?.key === key) return Promise.resolve(whole.text);
+    if (loaded?.text !== undefined) return Promise.resolve(loaded.text);
     if (!size) return Promise.resolve(raw);
     if (!item || !mid || !sid) return Promise.reject(new Error(t("chat-fulltext.failed")));
-    if (pending.current?.key === key) return pending.current.promise;
-    setStatus({ key, state: "loading" });
+    if (frame.promise) return frame.promise;
+    setValue({ key, state: "loading" });
     const promise = fullItem(mid, sid, item.id).then((it) => {
       const text = it.text ?? "";
-      if (current.current === key) {
-        setWhole({ key, text });
-        setStatus({ key, state: "idle" });
-      }
+      if (current.current === frame) setValue({ key, text });
       return text;
     }, (error: unknown) => {
-      if (current.current === key) setStatus({ key, state: "failed" });
+      if (current.current === frame) setValue({ key, state: "failed" });
       throw error;
     }).finally(() => {
-      if (pending.current?.promise === promise) pending.current = null;
+      if (frame.promise === promise) frame.promise = undefined;
     });
-    pending.current = { key, promise };
+    frame.promise = promise;
     return promise;
   };
-  if (whole?.key === key) return { text: whole.text, more: null, getText };
-  if (!size || !mid || !sid) return { text: raw, more: null, getText };
+  const paged = size && mid && sid;
   return {
-    text: withoutCutMark(raw),
-    more: <FullTextButton size={size} state={state} onClick={() => { void getText().catch(() => {}); }} />,
+    text: loaded?.text ?? (paged ? withoutCutMark(raw) : raw),
+    more: loaded?.text === undefined && paged ? <FullTextButton size={size!} state={loaded?.state ?? "idle"} onClick={() => { void getText().catch(() => {}); }} /> : null,
     getText,
   };
 }

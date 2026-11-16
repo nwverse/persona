@@ -11,6 +11,7 @@ not only `MessageActions` around already complete text; assert the exact full pa
 
 Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
 owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
+Keep the full-text view in one keyed snapshot so its loaded text and loading/failure state cannot disagree.
 
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 

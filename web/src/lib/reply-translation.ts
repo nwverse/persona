@@ -12,8 +12,6 @@ export interface ReplyTranslation {
   toggle: () => void;
 }
 
-export type ReplyTranslationValue = Partial<Pick<ReplyTranslation, "text" | "shown" | "pending" | "error">>;
-
 /** A paged reply's stable identity and the loader that returns its complete, not merely visible, words. */
 export interface ReplyTranslationSource {
   key: string;
@@ -32,7 +30,7 @@ export function useReplyTranslation(text: string, source?: ReplyTranslationSourc
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const [state, setState] = useState<ReplyTranslationValue & { key: string }>();
+  const [state, setState] = useState<{ key: string; text?: string; shown?: boolean; pending?: boolean; error?: string }>();
   const value = state?.key === key ? state : undefined;
   return {
     ...value,
@@ -41,13 +39,19 @@ export function useReplyTranslation(text: string, source?: ReplyTranslationSourc
     label: t(value?.pending ? "chat-messageactions.translating" : value?.shown ? "chat-messageactions.show_original" : "chat-messageactions.translate"),
     toggle: () => {
       if (value?.pending) return;
-      setState({ ...value, key, pending: true });
+      if (value?.text) {
+        setState({ ...value, shown: !value.shown });
+        return;
+      }
+      setState({ key, pending: true });
       const active = () => mounted.current && current.current === key && credentialOwner() === owner;
       void import("./translate")
-        .then(({ nextReplyTranslation }) => nextReplyTranslation(value, source?.load ?? text, target, manager, active))
-        .catch((error: unknown) => ({ error: errorText(error) }))
-        .then((next) => {
-          if (next && active()) setState({ key, ...next });
+        .then(({ translateSelection }) => translateSelection(source?.load ?? text, target, manager, active))
+        .then((text) => {
+          if (text !== undefined && active()) setState({ key, text, shown: true });
+        })
+        .catch((error: unknown) => {
+          if (active()) setState({ key, error: errorText(error) });
         });
     },
   };
