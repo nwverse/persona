@@ -110,7 +110,7 @@ it.each([
 ])("retains last good output and offers Retry after a real response failure", async bad => {
   draw(); await flush(); fetcher.mockResolvedValueOnce(bad()); await tick();
   expect(text()).toBe("sample output"); expect(host.querySelector('[role="alert"]')).not.toBeNull();
-  fetcher.mockResolvedValueOnce(response("recovered")); act(() => button("common.retry").click()); await flush();
+  fetcher.mockResolvedValueOnce(response("recovered")); act(() => button("app.retry").click()); await flush();
   expect(text()).toBe("recovered"); expect(host.querySelector('[role="alert"]')).toBeNull();
 });
 
@@ -191,6 +191,8 @@ it.each(["owner", "manager"])("does not send a late retired %s 401 into sign-in 
 it("shows elapsed time only while the command is still listed as running", async () => {
   draw({ task: { ...task, started_at: new Date(Date.now() - 5000).toISOString() } }); await flush();
   expect(host.querySelector("[data-command-elapsed]")?.textContent).toBe("5s");
+  expect(host.querySelector("[data-command-elapsed]")?.closest('[role="status"]')).toBeNull();
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("lib-tasks.loop_running_short");
   await tick(1000); expect(host.querySelector("[data-command-elapsed]")?.textContent).toBe("6s");
   draw({ running: false }); await flush(); expect(host.querySelector("[data-command-elapsed]")).toBeNull();
   expect(host.querySelector('[role="status"]')?.textContent).toBe("chat-activity.output_not_running");
@@ -200,9 +202,9 @@ it("disables Retry immediately during a pending retry and preserves the last goo
   draw(); await flush(); fetcher.mockResolvedValueOnce(new Response("failed", { status: 502 })); await tick();
   let resolve!: (r: Response) => void;
   fetcher.mockImplementationOnce(() => new Promise<Response>(r => { resolve = r; }));
-  act(() => button("common.retry").click());
-  expect(button("common.retry").disabled).toBe(true); expect(button("common.retry").getAttribute("aria-busy")).toBe("true");
-  expect(text()).toBe("sample output"); act(() => button("common.retry").click()); await tick(6000);
+  act(() => button("app.retry").click());
+  expect(button("app.retry").disabled).toBe(true); expect(button("app.retry").getAttribute("aria-busy")).toBe("true");
+  expect(text()).toBe("sample output"); act(() => button("app.retry").click()); await tick(6000);
   expect(fetcher).toHaveBeenCalledTimes(3); expect(text()).toBe("sample output");
   resolve(response("recovered")); await flush(); expect(text()).toBe("recovered"); expect(host.querySelector('[role="alert"]')).toBeNull();
 });

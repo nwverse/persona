@@ -205,6 +205,18 @@ describe("a background task", () => {
     expect(document.activeElement).toBe(q('[data-bg-task="b1"] [data-bg-row-button]'));
   });
 
+  it("keeps the last output on read failure and offers a translated Retry action", async () => {
+    put({ background: [shell] }); draw({ kind: "background", mid: "m", sid: "s", task: "b1" }); await flush();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ error: "Synthetic unavailable" }), { status: 502 }));
+    act(() => vi.advanceTimersByTime(2000)); await flush();
+    expect(q("[data-command-output] pre")!.textContent).toBe("Sample output\n");
+    const retry = all('[role="alert"] button').find(button => button.textContent === "重试");
+    expect(retry).toBeDefined();
+    act(() => retry!.click()); await flush();
+    expect(q('[role="alert"]')).toBeNull();
+    expect(q("[data-command-output] pre")!.textContent).toBe("Sample output\n");
+  });
+
   it("honors an explicit command ask and ignores a missing one that arrives later", async () => {
     put({ background: [shell] }); draw({ kind: "background", mid: "m", sid: "s", task: "b1" });
     await flush();

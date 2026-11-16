@@ -127,8 +127,8 @@ export function BackgroundCommandDetail({ mid, sid, cwd, task, running, focus, o
         {task.command && <IconButton icon="copy" label={t("chat-activity.copy_command")} size={24} iconSize={14} onClick={() => { if (scopeCurrent()) void copyText(task.command!); }} />}
         <Button tone="quiet" size="sm" data-bg-open-file onClick={() => { if (scopeCurrent()) onOpenFile(); }}>{t("chat-activity.open_output_file")}</Button>
       </div>
-      <p className="px-3 py-2 text-label text-ink-3" role="status">{t(running ? "lib-tasks.loop_running_short" : "chat-activity.output_not_running")}{running && Number.isFinite(started) && <> · <span data-command-elapsed>{workDuration(Math.max(0, now - started))}</span></>}</p>
-      {shown.error && <div role="alert" className="flex items-center gap-2 px-3 py-2 text-label text-red"><span>{shown.error}</span><Button tone="quiet" size="sm" busy={shown.loading} onClick={() => { if (!shown.loading) { setOutput(old => ({ ...old, loading: true })); setRetry(n => n + 1); } }}>{t("common.retry")}</Button></div>}
+      <div className="flex items-center gap-1 px-3 py-2 text-label text-ink-3"><span role="status">{t(running ? "lib-tasks.loop_running_short" : "chat-activity.output_not_running")}</span>{running && Number.isFinite(started) && <> · <span data-command-elapsed>{workDuration(Math.max(0, now - started))}</span></>}</div>
+      {shown.error && <div role="alert" className="flex items-center gap-2 px-3 py-2 text-label text-red"><span>{shown.error}</span><Button tone="quiet" size="sm" busy={shown.loading} onClick={() => { if (!shown.loading) { setOutput(old => ({ ...old, loading: true })); setRetry(n => n + 1); } }}>{t("app.retry")}</Button></div>}
       {shown.tail && <p className="px-3 pb-2 text-label text-ink-3">{t("chat-activity.output_tail")}</p>}
       <div ref={body} className="min-h-0 flex-1 overflow-auto px-3 pb-3" data-command-output onScroll={() => {
         const el = body.current!; follows.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
