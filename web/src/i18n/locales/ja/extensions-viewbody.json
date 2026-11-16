@@ -10,6 +10,8 @@
   "scroll_on": "次へスクロール",
   "tile_on": "オン",
   "read_sep": "、",
+  "gauge_label": "{title}：{value}、{percent}",
+  "gauge_label_percent": "{title}：{percent}",
   "list_sep": "、",
   "none_chosen": "未選択",
   "chosen_count_other": "{count} 件選択",

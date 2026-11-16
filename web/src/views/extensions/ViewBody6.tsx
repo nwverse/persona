@@ -25,6 +25,9 @@ import { lazyPage } from "../../lib/lazy-page";
 // (view-sections-lazy.tsx), and the viewer need not come with it. As with the renderer's charts, lazyPage under a
 // Suspense, which adds no module to this chunk's imports (LazyImageViewer.tsx is the chat's).
 const ImageViewer = lazyPage(() => import("../chat/ImageViewer").then((m) => m.ImageViewer));
+// A tile's gauge (UI version 9, ViewBody9.tsx) is a chunk of its own too, loaded with the first tile that has one: the
+// tile shows its title in the ring's space meanwhile.
+const GaugeFace = lazyPage<{ tile: UITile; compact?: boolean }>(() => import("./ViewBody9").then((m) => m.GaugeFace));
 
 /** What UI version 6's components are drawn with, besides a view's handlers. */
 export interface V6Handlers {
@@ -318,6 +321,16 @@ export function useImage(src: UIImageSource | undefined, onImageFailed?: () => v
 
 // ── grid, carousel, tile ────────────────────────────────
 
+/** A gauge's ratio as a whole percentage, 0 to 100: what its ring shows and is read out as (the hub's downgrade too). */
+export const gaugePercent = (ratio: number) => Math.round(Math.min(1, Math.max(0, ratio)) * 100);
+
+/** What a gauge tile is read out as: "5 hours: 4.69 USD, 94%", or "Disk: 50%" without a value. */
+function gaugeLabel(tile: UITile): string {
+  const percent = `${gaugePercent(tile.gauge!.ratio)}%`;
+  if (!tile.value) return t("extensions-viewbody.gauge_label_percent", { title: tile.title, percent });
+  return t("extensions-viewbody.gauge_label", { title: tile.title, value: [tile.value, tile.gauge!.unit].filter(Boolean).join(" "), percent });
+}
+
 type TileHandlers = V6Handlers & {
   glyphs: Record<string, IconName>;
   busy: string;
@@ -415,7 +428,8 @@ export function Carousel({ item, compact, ...h }: TileHandlers & { item: UIItem;
 
 /**
  * A tile: its picture across the top (16:9) or its icon in its color, the title, a state line, a value, a spark;
- * pressing it does its action. One that is on lays its color under it and around it; the text stays in the ink.
+ * pressing it does its action. One that is on lays its color under it and around it; the text stays in the ink. One with
+ * a gauge (UI version 9) is its ring instead (ViewBody9.tsx), read out as a meter when it does not press.
  */
 function TileView({ tile, compact, glyphs, busy, onPress, canPress, ...h }: TileHandlers & { tile: UITile; compact?: boolean }) {
   const pic = useImage(tile.image, h.onImageFailed);
@@ -424,8 +438,20 @@ function TileView({ tile, compact, glyphs, busy, onPress, canPress, ...h }: Tile
   const on = !!tile.active || (tile.control ? shownValue(tile.control, h) === "true" : false);
   const color = colorOf(tile.color) ? tile.color : undefined;
   const pressable = !!tile.action && (canPress ? canPress(tile.action) : true);
-  const label = [tile.title, tile.subtitle, tile.value, on ? t("extensions-viewbody.tile_on") : ""].filter(Boolean).join(t("extensions-viewbody.read_sep"));
-  const body = (
+  const gauge = tile.gauge;
+  const label = (gauge ? [gaugeLabel(tile), tile.subtitle] : [tile.title, tile.subtitle, tile.value]).concat(on ? t("extensions-viewbody.tile_on") : "").filter(Boolean).join(t("extensions-viewbody.read_sep"));
+  const body = gauge ? (
+    <Suspense
+      fallback={
+        <span className="flex min-w-0 flex-col items-center gap-0.5 p-3">
+          <span className={cx("mb-1.5 shrink-0", compact ? "size-20" : "size-24")} />
+          <span className="max-w-full truncate text-meta font-medium text-ink">{tile.title}</span>
+        </span>
+      }
+    >
+      <GaugeFace tile={tile} compact={compact} />
+    </Suspense>
+  ) : (
     <>
       {tile.image && (
         <span className="block aspect-video w-full overflow-hidden bg-inset">
@@ -469,7 +495,12 @@ function TileView({ tile, compact, glyphs, busy, onPress, canPress, ...h }: Tile
           {body}
         </button>
       ) : (
-        <div aria-label={label} role="group" className="flex h-full w-full flex-col whitespace-nowrap">
+        <div
+          aria-label={label}
+          role={gauge ? "meter" : "group"}
+          {...(gauge ? { "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": gaugePercent(gauge.ratio) } : {})}
+          className="flex h-full w-full flex-col whitespace-nowrap"
+        >
           {body}
         </div>
       )}

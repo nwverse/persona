@@ -10,6 +10,8 @@
   "scroll_on": "向后滚动",
   "tile_on": "已开启",
   "read_sep": "，",
+  "gauge_label": "{title}：{value}，{percent}",
+  "gauge_label_percent": "{title}：{percent}",
   "list_sep": "、",
   "none_chosen": "未选择",
   "chosen_count_other": "已选 {count} 项",
