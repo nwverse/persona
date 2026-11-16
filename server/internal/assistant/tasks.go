@@ -785,7 +785,11 @@ func (s *Service) taskRoutes() {
 				return
 			}
 		}
-		p, err := s.startPlanGranting(ownerStart(r.Context()), r.PathValue("id"), in.Tasks, in.Remember, in.ScheduleGrant)
+		ctx := ownerStart(r.Context())
+		if in.ScheduleGrant {
+			ctx = scheduleGranting(ctx)
+		}
+		p, err := s.startPlan(ctx, r.PathValue("id"), in.Tasks, in.Remember)
 		if err != nil {
 			planErr(w, err)
 			return

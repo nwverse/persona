@@ -84,6 +84,19 @@ func dropStaleGrants(tasks []Task) {
 	}
 }
 
+type scheduleGrantKey struct{}
+
+// scheduleGranting marks the owner's Start (ownerStart) as also letting the plan's scheduled task start these kinds by
+// itself: the card's option (POST …/start schedule_grant). scheduleGrants reads the mark in startPlan.
+func scheduleGranting(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scheduleGrantKey{}, true)
+}
+
+func scheduleGrants(ctx context.Context) bool {
+	on, _ := ctx.Value(scheduleGrantKey{}).(bool)
+	return on
+}
+
 // grantScheduleKind adds t's kind (trustKey, now that admission fixed the folder that runs) to schedule id's grant.
 // Only startPlan's owner Start reaches here. A schedule that is gone or in the health space gets nothing.
 func (s *Service) grantScheduleKind(ctx context.Context, id string, t PlanTask) {

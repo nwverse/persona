@@ -26,13 +26,10 @@ type planInvalid struct{ error }
 
 // startPlan opens a todo for each task of the open plan id (edits, when given, replace the tasks' fields the user can
 // change) and starts their agents in the background; remember lets this kind start without asking next time.
+// On the owner's own Start (ownerStart) that also lets the scheduled task whose round planned it start these kinds by
+// itself from now on (scheduleGranting, #8045), each task's kind is added to that schedule's grant; never in the
+// health space.
 func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, remember bool) (*TaskPlan, error) {
-	return s.startPlanGranting(ctx, id, edits, remember, false)
-}
-
-// startPlanGranting is startPlan where the owner may also let the scheduled task whose round planned it start these
-// kinds by itself from now on (grant, #8045): only on the owner's own Start, never in the health space.
-func (s *Service) startPlanGranting(ctx context.Context, id string, edits []PlanTask, remember, grant bool) (*TaskPlan, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return nil, err
 	}
@@ -79,7 +76,7 @@ func (s *Service) startPlanGranting(ctx context.Context, id string, edits []Plan
 		// Remembered by startTaskAgent once admission fixed the folder that runs: its repository is the kind, never
 		// the one the plan was made from when the workspace is in another (#8259).
 		p.Tasks[i].rememberKind = remember
-		if grant && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !s.inHealth(ctx, p.Conversation) {
+		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !s.inHealth(ctx, p.Conversation) {
 			p.Tasks[i].grantSchedule = p.Tasks[i].Schedule // added once admission fixed the folder (startTaskAgent)
 		}
 	}

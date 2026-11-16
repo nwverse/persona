@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -112,8 +113,10 @@ func TestScheduledRoundStartsTheKindItsOwnerGranted(t *testing.T) {
 	if p.Tasks[0].Schedule != "deps" || p.Tasks[0].ScheduleTitle != "Dependency update" {
 		t.Fatalf("the card does not name the round's schedule (or kept the tool call's): %+v", p.Tasks[0])
 	}
-	if _, err := g.s.startPlanGranting(ownerStart(context.Background()), id, nil, false, true); err != nil {
-		t.Fatal(err)
+	w := httptest.NewRecorder()
+	g.s.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/task-plans/"+id+"/start", strings.NewReader(`{"schedule_grant":true}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("the owner's Start: %d %s", w.Code, w.Body)
 	}
 	waitFor(t, "the first task's agent", func() bool { return fakeStarts(g.f) == 1 })
 	waitFor(t, "the schedule's grant", func() bool {
@@ -190,7 +193,7 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 		g := newGrantFixture(t)
 		machine, session := g.round("deps", nil)
 		id, _ := g.plan(machine, session, "/wt/app/x")
-		if _, err := g.s.startPlanGranting(context.Background(), id, nil, false, true); err != nil {
+		if _, err := g.s.startPlan(scheduleGranting(context.Background()), id, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, "the task's agent", func() bool { return fakeStarts(g.f) == 1 })
