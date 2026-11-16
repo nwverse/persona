@@ -657,3 +657,6 @@ answer is being sent; only complete the undo after it is taken. A retryable send
 unchanged. A recorded choice handed to the supervisor when no Agent can receive it is already taken, not a failed
 answer to retry. If the final dismissal write fails after delivery, retain its receipt and do not make the already-sent
 answer retryable. Tests must check both the in-memory receipt and stored one, plus stale rounds and failed sends.
+
+Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
+that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.

@@ -277,6 +277,99 @@ func TestTaskReviewDismissalAcceptanceSaveFailureKeepsIt(t *testing.T) {
 	}
 }
 
+func TestTaskReviewDismissalAgentReplyAndLaterAnswer(t *testing.T) {
+	for _, answer := range []string{"accept", "already told", "chat answer", "delivery failure", "acceptance save failure"} {
+		t.Run(answer, func(t *testing.T) {
+			ctx := context.Background()
+			database := todoTestDB(t)
+			s, f, todo := newDecisionAnswerServiceOn(t, database)
+			waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
+			if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+				t.Fatal(err)
+			}
+			review := currentDecisionReview(todoNow(s, todo.ID))
+			if _, err := s.changeDecisionDismissal(ctx, todo.ID, review.ReviewAt, "", false); err != nil {
+				t.Fatal(err)
+			}
+			before := s.reviewDismissals.byTodo[todo.ID]
+			a := askOf(s, todo.ID)
+			s.UserSpoke(ctx, SessionRef{MachineID: a.MachineID, SessionID: a.SessionID})
+			paused := askOf(s, todo.ID)
+			if paused.AgentReply == nil || paused.DueAt.IsZero() || !paused.AcceptedAt.IsZero() {
+				t.Fatalf("Agent chat did not pause the pending default: %+v", paused)
+			}
+			assertAnswerDismissal(t, s, database, todo.ID, before)
+			pastDeadline(t, s, todo.ID)
+			sent := len(sentToAgent(f))
+			s.sweepTaskDeadlines(time.Now())
+			if result, err := s.acceptTryAs(ctx, todo.ID, "", true); result.taken || err != nil {
+				t.Fatalf("paused, dismissed default was taken: %+v %v", result, err)
+			}
+			assertAnswerDismissal(t, s, database, todo.ID, before)
+			if len(sentToAgent(f)) != sent {
+				t.Fatal("paused default reached the Agent")
+			}
+
+			store := s.store
+			switch answer {
+			case "acceptance save failure":
+				base := s.store()
+				s.store = func() Store { return &dismissalAnswerWriteFails{Store: base, key: acceptanceKey} }
+			case "delivery failure":
+				f.failSend = errors.New("retryable send failure")
+			}
+			var err error
+			switch answer {
+			case "already told":
+				_, err = s.decisionTold(ctx, todo.ID, a.Recommend, "box", "conv1", "Use the recommended option.")
+			case "chat answer":
+				_, err = s.routeDecisionAnswer(ctx, "conv1", todo.ID, a.AskedAt.Format(timeKeyLayout), "Use the recommended option.")
+			default:
+				_, err = s.acceptTry(ctx, todo.ID, "")
+			}
+			if answer == "delivery failure" || answer == "acceptance save failure" {
+				if err == nil || answer == "acceptance save failure" && !errors.Is(err, errAcceptStore) {
+					t.Fatalf("answer failure was hidden: %v", err)
+				}
+				assertAnswerDismissal(t, s, database, todo.ID, before)
+				failed := askOf(s, todo.ID)
+				if failed.AgentReply == nil || !failed.DueAt.Equal(paused.DueAt) || !failed.AcceptedAt.IsZero() || taskDeadlineDue(failed, time.Now()) {
+					t.Fatalf("failed answer lost the Agent-chat pause: %+v", failed)
+				}
+				var saved map[string]*acceptAsk
+				if _, err := database.Setting(ctx, acceptanceKey, &saved); err != nil {
+					t.Fatal(err)
+				}
+				if saved[todo.ID] == nil || saved[todo.ID].AgentReply == nil || !saved[todo.ID].DueAt.Equal(paused.DueAt) || !saved[todo.ID].AcceptedAt.IsZero() {
+					t.Fatalf("failed answer lost the persisted pause: %+v", saved[todo.ID])
+				}
+				if len(sentToAgent(f)) != sent {
+					t.Fatal("failed answer reached the Agent")
+				}
+				s.store, f.failSend = store, nil
+				if result, err := s.acceptTry(ctx, todo.ID, ""); err != nil || !result.taken {
+					t.Fatalf("valid retry after the pause was rejected: %+v %v", result, err)
+				}
+			} else if err != nil {
+				t.Fatalf("later explicit answer was rejected: %v", err)
+			}
+			before.Undone = true
+			assertAnswerDismissal(t, s, database, todo.ID, before)
+			answered := askOf(s, todo.ID)
+			if answered.AgentReply == nil || answered.AcceptedAt.IsZero() || answered.ByDefault {
+				t.Fatalf("explicit answer did not end the paused round: %+v", answered)
+			}
+			wantSent := sent + 1
+			if answer == "already told" {
+				wantSent = sent
+			}
+			if len(sentToAgent(f)) != wantSent {
+				t.Fatalf("answer sent %d messages; want %d", len(sentToAgent(f))-sent, wantSent-sent)
+			}
+		})
+	}
+}
+
 func TestTaskReviewDismissalCompletionWriteFailureDoesNotResend(t *testing.T) {
 	for _, entry := range []string{"accept", "recommended option", "alternative option", "owner response", "already told"} {
 		t.Run(entry, func(t *testing.T) {

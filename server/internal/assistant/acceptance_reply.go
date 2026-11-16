@@ -221,13 +221,14 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			return acceptResult{}, err
 		}
 	}
+	previousDueAt := a.DueAt
 	a.AcceptedAt = time.Now().UTC()
 	if byDefault {
 		a.ByDefault, a.DueAt = true, a.AcceptedAt
 	}
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
 		// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
-		a.AcceptedAt, a.ByDefault, a.DueAt = time.Time{}, false, time.Time{}
+		a.AcceptedAt, a.ByDefault, a.DueAt = time.Time{}, false, previousDueAt
 		b.mu.Unlock()
 		s.logf("task %s: acceptance: save: %v", id, err)
 		return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)

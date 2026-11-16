@@ -1057,12 +1057,19 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
-  300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
+  300–460 px wide, a 428 px body (a 68 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
   runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
+  icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
+  growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in
+  brackets drops while the names stay distinct, and a first word shared with another provider drops ("claude-aster",
+  "claude-max", "codex" read "aster", "max", "codex") unless that would make two captions the same or leave only a note.
+  The full name stays the cell's accessible name and tooltip, and the list's group header. Why: providers often share a
+  letter tile, and a phone has no hover, so marks alone could not be told apart before opening one (2026-11-16).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
@@ -2133,6 +2140,19 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - Presentation changes keep the one `settingsSheetStack`, one `JSheet`, one presentation frame and one content invocation. Only the container and card geometry change, preserving non-saveable state and running effects as well as the fixed-key `SaveableStateHolder`; they never open Settings again, move content between dialog compositions or key a stack by window size. `focusRestorer` returns to the previously focused field only after a presentation transfer and only when no field already has focus. The outer blank-tap callback is an explicit user clear and disables restoration rather than reopening the IME on the next resize. Root Close dismisses the whole card and child Back pops one Settings destination. Book and tabletop use the same safe area and existing internal pane policy.
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
+
+## A chosen page that is not there now (#9071)
+
+A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
+the sidebar, an extension's included) keeps the user's choice when its target goes away, and the product uses the default
+meanwhile, without a toast or a dialog at the moment it happens. The setting itself says so: its menu keeps the choice
+selected under a plain name (**A page that isn't available now**, not its id), and the row's line under the label, the
+`Row` hint in `--ink-3`, changes from what the setting does to why it falls back and until when (**…opens on the main chat
+until it's back**). Choosing anything else in the same menu replaces it. Reason: the target is usually away for a while
+(an extension turned off, another default assistant), so clearing the choice would undo the user's decision behind their
+back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
+The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
+`server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
 
 ## Values a form fills in by itself (#4975)
 
