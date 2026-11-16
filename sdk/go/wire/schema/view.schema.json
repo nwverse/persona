@@ -569,9 +569,20 @@
         "spark": {"$ref": "#/$defs/Spark"},
         "control": {"$ref": "#/$defs/RowControl", "description": "A switch only; the tile then has a key."},
         "actions": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"$ref": "#/$defs/RowAction"}},
-        "action": {"$ref": "#/$defs/Action"}
+        "action": {"$ref": "#/$defs/Action"},
+        "gauge": {"$ref": "#/$defs/Gauge", "x-since": 9, "description": "Draws the tile as a ring (UI version 9): never with an image or a spark."}
       },
       "required": ["title"]
+    },
+    "Gauge": {
+      "description": "A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the color as the tile's.",
+      "type": "object",
+      "properties": {
+        "ratio": {"type": "number", "minimum": 0, "maximum": 1, "x-go-pointer": true, "description": "How full the ring is, 0 to 1."},
+        "unit": {"type": "string", "maxLength": 8, "description": "A short word under the value (USD, GB, h), as a control's unit."},
+        "color": {"$ref": "#/$defs/Color"}
+      },
+      "required": ["ratio"]
     },
     "Layout": {
       "description": "stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a single column, as stack. An older app gets stack.",
