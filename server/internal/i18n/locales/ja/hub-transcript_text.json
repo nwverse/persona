@@ -133,5 +133,6 @@
   "paseo_ui_state_todo": "未着手",
   "paseo_ui_state_blocked": "ブロック中",
   "paseo_ui_state_skipped": "スキップ",
-  "paseo_ui_reply_with": "次のいずれかで返信できます："
+  "paseo_ui_reply_with": "次のいずれかで返信できます：",
+  "omp_stopped": "この omp セッションは停止しています。今はコンピューターでのみ続けられます（omp --resume）。ここからはまだメッセージを送れません。"
 }

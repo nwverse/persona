@@ -2551,6 +2551,11 @@ agent for Codex-only levels, and test both an explicit effort and a configured e
   says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
   small pure type (`GitReadFailure`) so a test pins which case is quiet.
 
+- Connector sign-in is also user-initiated: the first device-code request has no poll to retry it if it fails.
+  `AppModel.show` suppresses timeout-shaped errors, including HTTP 502 diagnostics containing `deadline exceeded`.
+  Keep sign-in errors in the login model and show them beside the retry action; suppress cancellation only. Use the
+  connector's scrubbed API message so generic 5xx formatting does not hide the configuration advice.
+
 ## Configuration refusals are not retryable connection failures (#1915)
 
 HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.
