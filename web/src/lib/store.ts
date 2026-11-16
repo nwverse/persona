@@ -895,7 +895,8 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        if (agentsMode && usedAgentsList) runtimeAgents.invalidate();
+        // at once, not in a hint's window: a reconnect may have missed any number of changes (docs/lessons/web.md, #6362)
+        if (agentsMode && usedAgentsList) void runtimeAgents.load().catch(() => {});
         void refreshAgentSessions();
         void refreshAgentPrefs();
       }
