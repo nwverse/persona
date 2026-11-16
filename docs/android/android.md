@@ -2237,6 +2237,18 @@ Specification [extensions.md](../extensions/extensions.md) ("UI version 5: code 
 word-level highlight, context expansion, viewed (`mark_viewed` or local SharedPreferences `path@revision`), generated/large/viewed files collapsed, two line-number taps select comment range, drafts/bottom review strip (summary sheet), suggestion, ignore whitespace.
 Context/mark_viewed/auto-load use nonbusy `ExtensionUiState.fetch`, response items replace by key in place. Unified only. `ExtensionCodeReviewTest`, `ExtensionReviewShotsTest`.
 
+### UI version 8: dashboard columns (#9158)
+
+Specification [extensions.md](../extensions/extensions.md) ("UI version 8"). `HttpExtensionManagement.UI_VERSION` is `8`, and the native
+stream (`ExtensionUIStreamController`) sends the same. `ExtensionColumns.kt`: the pure decisions (`count` by the pane's content width with
+`cardColumn` and `Space.m`, at most 3; `rows` in reading order, `span: "full"` a row of its own; `perLine` and `lines` for a section's rows
+side by side), `ExtensionPageWidth` (the page measures its pane; a columns view is `JListPage(fullWidth = true)`), `ExtensionCardRow` (a
+row of cards in the page's lazy list, each card's group-panel surface as tall as the row's tallest, measured without intrinsics) and the
+section heads (`SectionHead` on a page, `SectionCardHead` in a card; the link is a quiet `JButton` with its words as content description).
+A phone, and anywhere a page is not measured (cards, machine and launcher sections, an inbox item's body), draws the stack.
+`nativeDiffIndex` mirrors the grid and the rows side by side; `NativeExtensionProfile` takes a section's `icon_color`.
+`ExtensionColumnsTest`, `NativeStreamColumnsTest`, `ExtensionColumnsShotsTest`.
+
 ### Host-owned extension settings (#2397)
 
 Android follows [the shared settings contract](../extensions/extension-settings.md). Every `ExtensionPage`, including direct navigation,
