@@ -1,106 +1,109 @@
-// Replays the Apple StreamRepair assertions through the real Rust core's ArkTS host projection command, the same
-// cases the Kotlin JNI replay already states. Expectations come from the Apple Swift test source, never from the
-// Rust output. This is host evidence only: no NAPI addon, production ArkTS adapter, HAP or device run.
+// Replays the Apple StreamRepair assertions and existing JNI-derived boundaries through the real Rust core's ArkTS
+// host projection command. Expectations are independently transcribed from the Apple tests/source and the existing
+// JNI replay, never from Rust output. Host evidence only: no NAPI addon, production adapter, HAP or device run.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startCore } from './host.mjs';
 
-// 21 fence-repair expectations: StreamRepairTests.closesAnOpenCodeFenceWithItsOwnMarker and
-// holdsAFencesOpeningLineBack. Same inputs and expected strings as StreamRepairBindingFixtureTest.
+// 22 fence expectations (21 repair inputs plus the additional `let a` end input): StreamRepairTests.closesAnOpenCodeFenceWithItsOwnMarker,
+// holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole, holdsAHalfWrittenClosingRunBack,
+// changesNothingInsideAFenceButItsEnd and closesAFenceInTheListItemItOpenedIn. The `prefix` input is the existing
+// JNI-derived partial-closing-run boundary, not an Apple test assertion. Every entry is a complete {repaired, end}
+// object; the end values come from StreamRepair.end's code/fence rules, never from the repaired text or Rust output.
 const fence = [
-  ['text\n```ts\nconst a', 'text\n```ts\nconst a\n```'],
-  ['~~~~\nx\n', '~~~~\nx\n~~~~'],
-  ['```\na\n```\ndone', '```\na\n```\ndone'],
-  ['看这段：\n```swi', '看这段：\n'],
-  ['```mermaid', ''],
-  ['看这段：\n```swift\n', '看这段：\n```swift\n```'],
-  ['```\nlet a = 1\n``', '```\nlet a = 1\n```'],
-  ['````\nx\n```', '````\nx\n````'],
-  ['````\nx\n```\n', '````\nx\n```\n````'],
-  ['prefix\n````\nx\n```\n', 'prefix\n````\nx\n```\n````'],
-  ['```\n**x [a](b', '```\n**x [a](b\n```'],
-  ['```\n-', '```\n-\n```'],
-  ['1. 安装依赖：\n\n   ```bash\n   npm install', '1. 安装依赖：\n\n   ```bash\n   npm install\n   ```'],
-  ['1. 安装依赖：\n   ```bash\n   npm install\n', '1. 安装依赖：\n   ```bash\n   npm install\n   ```'],
-  ['- 运行：\n  ~~~\n  make', '- 运行：\n  ~~~\n  make\n  ~~~'],
-  ['- 运行：\n  ```\n  make\n  ``', '- 运行：\n  ```\n  make\n  ```'],
-  ['```\na\n  ', '```\na\n```'],
-  ['这是 **重要', '这是 **重要'],
-  ['```swift\nlet a\n```', '```swift\nlet a\n```'],
-  ['```swift\nlet a\n```\n', '```swift\nlet a\n```\n'],
-  ['', ''],
+  [{text: 'text\n```ts\nconst a', repaired: 'text\n```ts\nconst a\n```', end: 'code'}, 'closesAnOpenCodeFenceWithItsOwnMarker'],
+  [{text: '~~~~\nx\n', repaired: '~~~~\nx\n~~~~', end: 'code'}, 'closesAnOpenCodeFenceWithItsOwnMarker'],
+  [{text: '```\na\n```\ndone', repaired: '```\na\n```\ndone', end: 'text'}, 'closesAnOpenCodeFenceWithItsOwnMarker'],
+  [{text: '看这段：\n```swi', repaired: '看这段：\n', end: 'code'}, 'holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole'],
+  [{text: '```mermaid', repaired: '', end: 'code'}, 'holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole'],
+  [{text: '看这段：\n```swift\n', repaired: '看这段：\n```swift\n```', end: 'code'}, 'holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole'],
+  [{text: '```\nlet a = 1\n``', repaired: '```\nlet a = 1\n```', end: 'code'}, 'holdsAHalfWrittenClosingRunBack'],
+  [{text: '````\nx\n```', repaired: '````\nx\n````', end: 'code'}, 'holdsAHalfWrittenClosingRunBack'],
+  [{text: '````\nx\n```\n', repaired: '````\nx\n```\n````', end: 'code'}, 'holdsAHalfWrittenClosingRunBack'],
+  [{text: 'prefix\n````\nx\n```\n', repaired: 'prefix\n````\nx\n```\n````', end: 'code'}, 'JNI-derived prefix + partial closer'],
+  [{text: '```\n**x [a](b', repaired: '```\n**x [a](b\n```', end: 'code'}, 'changesNothingInsideAFenceButItsEnd'],
+  [{text: '```\n-', repaired: '```\n-\n```', end: 'code'}, 'changesNothingInsideAFenceButItsEnd'],
+  [{text: '1. 安装依赖：\n\n   ```bash\n   npm install', repaired: '1. 安装依赖：\n\n   ```bash\n   npm install\n   ```', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
+  [{text: '1. 安装依赖：\n   ```bash\n   npm install\n', repaired: '1. 安装依赖：\n   ```bash\n   npm install\n   ```', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
+  [{text: '- 运行：\n  ~~~\n  make', repaired: '- 运行：\n  ~~~\n  make\n  ~~~', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
+  [{text: '- 运行：\n  ```\n  make\n  ``', repaired: '- 运行：\n  ```\n  make\n  ```', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
+  [{text: '```\na\n  ', repaired: '```\na\n```', end: 'code'}, 'leavesOutALineOfOnlyIndentationSoFar'],
+  [{text: '这是 **重要', repaired: '这是 **重要', end: 'text'}, 'bounded marker behavior'],
+  [{text: '```swift\nlet a\n```', repaired: '```swift\nlet a\n```', end: 'code'}, 'tellsWhereTheTextEnds'],
+  [{text: '```swift\nlet a\n```\n', repaired: '```swift\nlet a\n```\n', end: 'text'}, 'tellsWhereTheTextEnds'],
+  [{text: '```swift\nlet a', repaired: '```swift\nlet a\n```', end: 'code'}, 'tellsWhereTheTextEnds'],
+  [{text: '', repaired: '', end: 'text'}, 'tellsWhereTheTextEnds'],
 ];
-// 6 fence/text end expectations: tellsWhereTheTextEnds.
-const fenceEnd = [
-  ['', 'text'],
-  ['这是 **重要', 'text'],
-  ['看这段：\n```swi', 'code'],
-  ['```swift\nlet a', 'code'],
-  ['```swift\nlet a\n```', 'code'],
-  ['```swift\nlet a\n```\n', 'text'],
-];
-// 14 unfinished-marker expectations: holdsALastLineOfOnlyMarkersBack.
+
+// 14 unfinished-marker expectations: holdsALastLineOfOnlyMarkersBack, leavesALineThatHasEnded and existing JNI
+// controls. All are complete objects. The ten-digit/full-width and marker-prefixed digit boundaries follow
+// Scan.markersOnly's ASCII/length/position rules; Scan.string retains the newline before a held-back marker.
 const marker = [
-  ['- 第一项\n-', '- 第一项\n'],
-  ['- 第一项\n- ', '- 第一项\n'],
-  ['1. 第一步\n2.', '1. 第一步\n'],
-  ['1. 第一步\n12', '1. 第一步\n'],
-  ['正文\n##', '正文\n'],
-  ['正文\n>', '正文\n'],
-  ['标题\n---', '标题\n'],
-  ['- [ ]', ''],
-  ['**', ''],
-  ['- 第', '- 第'],
-  ['2026年', '2026年'],
-  ['1.5 倍', '1.5 倍'],
-  ['-\n', '-\n'],
-  ['正文\n---\n', '正文\n---\n'],
+  [{text: '- 第一项\n-', repaired: '- 第一项\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '- 第一项\n- ', repaired: '- 第一项\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '1. 第一步\n2.', repaired: '1. 第一步\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '1. 第一步\n12', repaired: '1. 第一步\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '正文\n##', repaired: '正文\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '正文\n>', repaired: '正文\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '标题\n---', repaired: '标题\n', end: 'text'}, 'Apple markersOnly'],
+  [{text: '- [ ]', repaired: '', end: 'text'}, 'Apple markersOnly'],
+  [{text: '**', repaired: '', end: 'text'}, 'Apple markersOnly'],
+  [{text: '- 第', repaired: '- 第', end: 'text'}, 'Apple markersOnly control'],
+  [{text: '2026年', repaired: '2026年', end: 'text'}, 'Apple markersOnly control'],
+  [{text: '1.5 倍', repaired: '1.5 倍', end: 'text'}, 'Apple markersOnly control'],
+  [{text: '-\n', repaired: '-\n', end: 'text'}, 'leavesALineThatHasEnded'],
+  [{text: '正文\n---\n', repaired: '正文\n---\n', end: 'text'}, 'existing JNI ended-line control'],
+  [{text: '1234567890', repaired: '1234567890', end: 'text'}, 'existing JNI ten-digit boundary'],
+  [{text: '- 12', repaired: '- 12', end: 'text'}, 'existing JNI marker-prefixed digits'],
+  [{text: '１２', repaired: '１２', end: 'text'}, 'existing JNI full-width digits'],
+  [{text: '\n-', repaired: '\n', end: 'text'}, 'existing JNI leading blank line'],
+  [{text: '\n##', repaired: '\n', end: 'text'}, 'existing JNI leading blank line'],
 ];
-// 22 Apple table-repair expectations from holdsATablesHalfWrittenLastRowBack,
+
+// 36 table expectations (22 repair inputs, the seven end-only inputs plus their already-covered duplicates, and seven
+// JNI/Foundation delimiter boundaries): from holdsATablesHalfWrittenLastRowBack,
 // givesATableHeaderItsDelimiterRowEarly, findsATableRightUnderAParagraphLine, keepsATableInTheListItemItIsIn
-// and findsNoTableInALazyLine.
+// and findsNoTableInALazyLine. Complete end values follow the explicitly asserted table boundaries and
+// StreamRepair.end's no-table/no-fence fallback. JNI-derived delimiter boundaries use Foundation .whitespaces:
+// tab and Unicode Zs are trimmed; CR, vertical tab, NEL, line separator and paragraph separator are not.
 const head = '| 文件 | 改动 |\n| --- | --- |\n| a.swift | 刷新 |\n';
 const table = [
-  [head + '| b.swi', head],
-  [head + '| b.swift | 超时 |\n', head + '| b.swift | 超时 |\n'],
-  ['| 文件 | 改', '| 文件 | 改'],
-  ['Use a | b\n| not a table', 'Use a | b\n| not a table'],
-  ['| 文件 | 改动 |\n', '| 文件 | 改动 |\n| --- | --- |'],
-  ['| a | b |\n| --', '| a | b |\n| --- | --- |'],
-  ['| a | b |\n|', '| a | b |\n| --- | --- |'],
-  ['## 结果\n| a | b | c |\n', '## 结果\n| a | b | c |\n| --- | --- | --- |'],
-  ['| a | b |\n| :-- | --: |', '| a | b |\n| :-- | --: |'],
-  ['| 不是表格\n', '| 不是表格\n'],
-  ['| x |\n| a | b |\n', '| x |\n| a | b |\n'],
-  ['**结果：**\n| a | b |\n', '**结果：**\n| a | b |\n| --- | --- |'],
-  ['**结果：**\n| a | b |\n| --', '**结果：**\n| a | b |\n| --- | --- |'],
-  ['**结果：**\n| a | b |\n| --- | --- |\n| 1', '**结果：**\n| a | b |\n| --- | --- |\n'],
-  ['- 项\n\n  | a | b |\n', '- 项\n\n  | a | b |\n  | --- | --- |'],
-  ['1. 项\n   | a | b |\n   | -', '1. 项\n   | a | b |\n   | --- | --- |'],
-  ['- 项\n  | a | b |\n  | --- | --- |\n  | 1', '- 项\n  | a | b |\n  | --- | --- |\n'],
-  ['- 项\n\n  | a | b |\n  | --- | --- |\n  ', '- 项\n\n  | a | b |\n  | --- | --- |\n'],
-  ['- 项\n| a | b |\n', '- 项\n| a | b |\n'],
-  ['- a\n  - b\n  | x |\n', '- a\n  - b\n  | x |\n'],
-  ['> 引用\n| a | b |\n', '> 引用\n| a | b |\n'],
-  ['- 项\n| a | b |\n| --- | --- |\n| 1', '- 项\n| a | b |\n| --- | --- |\n| 1'],
-];
-// 15 table/text end expectations: same five Apple table tests plus the table cases in tellsWhereTheTextEnds.
-const tableEnd = [
-  ['**结果：**\n| a | b |\n| --- | --- |\n| 1', 'table'],
-  ['**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n', 'table'],
-  ['| a | b |\n| --- | --- |\nfoo', 'table'],
-  ['| a | b |\n| --- | --- |\n- 项', 'text'],
-  ['- 项\n  | a | b |\n  | --- | --- |\n  | 1', 'table'],
-  ['- 项\n\n  | a | b |\n  | --- | --- |\n  ', 'table'],
-  ['- 项\n\n  | a | b |\n', 'table'],
-  ['- 项\n\n  | a | b |\n  ', 'table'],
-  ['- 项\n| a | b |\n| --- | --- |\n| 1', 'text'],
-  ['| a | b |\n| --- | --- |\n| 1', 'table'],
-  ['| a | b |\n| --- | --- |\n| 1 | 2 |\n', 'table'],
-  ['| a | b |\n', 'table'],
-  ['| a | b |\n| -', 'table'],
-  ['| a | b', 'text'],
-  ['| a | b |\n| --- | --- |\n\n后文', 'text'],
+  [{text: head + '| b.swi', repaired: head, end: 'table'}, 'half-written last row'],
+  [{text: head + '| b.swift | 超时 |\n', repaired: head + '| b.swift | 超时 |\n', end: 'table'}, 'finished last row'],
+  [{text: '| 文件 | 改', repaired: '| 文件 | 改', end: 'text'}, 'unfinished header'],
+  [{text: 'Use a | b\n| not a table', repaired: 'Use a | b\n| not a table', end: 'text'}, 'pipe in prose'],
+  [{text: '| 文件 | 改动 |\n', repaired: '| 文件 | 改动 |\n| --- | --- |', end: 'table'}, 'early delimiter'],
+  [{text: '| a | b |\n| --', repaired: '| a | b |\n| --- | --- |', end: 'table'}, 'partial delimiter'],
+  [{text: '| a | b |\n|', repaired: '| a | b |\n| --- | --- |', end: 'table'}, 'partial delimiter'],
+  [{text: '## 结果\n| a | b | c |\n', repaired: '## 结果\n| a | b | c |\n| --- | --- | --- |', end: 'table'}, 'heading + header'],
+  [{text: '| a | b |\n| :-- | --: |', repaired: '| a | b |\n| :-- | --: |', end: 'table'}, 'aligned delimiter'],
+  [{text: '| 不是表格\n', repaired: '| 不是表格\n', end: 'text'}, 'prose pipe row'],
+  [{text: '| x |\n| a | b |\n', repaired: '| x |\n| a | b |\n', end: 'text'}, 'pipe row under pipe row'],
+  [{text: '**结果：**\n| a | b |\n', repaired: '**结果：**\n| a | b |\n| --- | --- |', end: 'table'}, 'paragraph + header'],
+  [{text: '**结果：**\n| a | b |\n| --', repaired: '**结果：**\n| a | b |\n| --- | --- |', end: 'table'}, 'paragraph + delimiter'],
+  [{text: '**结果：**\n| a | b |\n| --- | --- |\n| 1', repaired: '**结果：**\n| a | b |\n| --- | --- |\n', end: 'table'}, 'Apple repair/end'],
+  [{text: '- 项\n\n  | a | b |\n', repaired: '- 项\n\n  | a | b |\n  | --- | --- |', end: 'table'}, 'Apple list table/end'],
+  [{text: '1. 项\n   | a | b |\n   | -', repaired: '1. 项\n   | a | b |\n   | --- | --- |', end: 'table'}, 'ordered list table'],
+  [{text: '- 项\n  | a | b |\n  | --- | --- |\n  | 1', repaired: '- 项\n  | a | b |\n  | --- | --- |\n', end: 'table'}, 'Apple list repair/end'],
+  [{text: '- 项\n\n  | a | b |\n  | --- | --- |\n  ', repaired: '- 项\n\n  | a | b |\n  | --- | --- |\n', end: 'table'}, 'Apple list repair/end'],
+  [{text: '- 项\n| a | b |\n', repaired: '- 项\n| a | b |\n', end: 'text'}, 'lazy list continuation'],
+  [{text: '- a\n  - b\n  | x |\n', repaired: '- a\n  - b\n  | x |\n', end: 'text'}, 'lazy list continuation'],
+  [{text: '> 引用\n| a | b |\n', repaired: '> 引用\n| a | b |\n', end: 'text'}, 'quote continuation'],
+  [{text: '- 项\n| a | b |\n| --- | --- |\n| 1', repaired: '- 项\n| a | b |\n| --- | --- |\n| 1', end: 'text'}, 'Apple lazy repair/end'],
+  [{text: '**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n', repaired: '**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n', end: 'table'}, 'Apple finished table end'],
+  [{text: '| a | b |\n| --- | --- |\nfoo', repaired: '| a | b |\n| --- | --- |\nfoo', end: 'table'}, 'Apple row without pipes'],
+  [{text: '| a | b |\n| --- | --- |\n- 项', repaired: '| a | b |\n| --- | --- |\n- 项', end: 'text'}, 'Apple block after table'],
+  [{text: '- 项\n\n  | a | b |\n  ', repaired: '- 项\n\n  | a | b |\n  | --- | --- |', end: 'table'}, 'Apple indented table end'],
+  [{text: '| a | b |\n| --- | --- |\n| 1', repaired: '| a | b |\n| --- | --- |\n', end: 'table'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a | b |\n| --- | --- |\n| 1 | 2 |\n', repaired: '| a | b |\n| --- | --- |\n| 1 | 2 |\n', end: 'table'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a | b |\n| --- | --- |\n\n后文', repaired: '| a | b |\n| --- | --- |\n\n后文', end: 'text'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a |\n| -\r |\n| x', repaired: '| a |\n| -\r |\n| x', end: 'text'}, 'existing JNI CR delimiter'],
+  [{text: '| a |\n| -\u000b |\n| x', repaired: '| a |\n| -\u000b |\n| x', end: 'text'}, 'existing JNI vertical-tab delimiter'],
+  [{text: '| a |\n| -\t |\n| x\n', repaired: '| a |\n| -\t |\n| x\n', end: 'table'}, 'existing JNI tab delimiter'],
+  [{text: '| a |\n| -\u00a0 |\n| x\n', repaired: '| a |\n| -\u00a0 |\n| x\n', end: 'table'}, 'existing JNI NBSP delimiter'],
+  [{text: '| a |\n| -\u0085 |\n| x', repaired: '| a |\n| -\u0085 |\n| x', end: 'text'}, 'existing JNI NEL delimiter'],
+  [{text: '| a |\n| -\u2028 |\n| x', repaired: '| a |\n| -\u2028 |\n| x', end: 'text'}, 'existing JNI line-separator delimiter'],
+  [{text: '| a |\n| -\u2029 |\n| x', repaired: '| a |\n| -\u2029 |\n| x', end: 'text'}, 'Apple-source paragraph-separator boundary'],
 ];
 
 async function withHost(context, run) {
@@ -118,62 +121,54 @@ async function withHost(context, run) {
 }
 const options = {timeout: 10_000};
 
-test('ArkTS host replays every fence-repair and end expectation', options, async (context) => {
+async function replay(host, cases, label) {
+  for (const [{text, ...expected}, source] of cases) {
+    assert.deepEqual(Object.keys(expected).sort(), ['end', 'repaired'], `${label}: complete expectation shape`);
+    const actual = await host.projection('stream_repair', {text});
+    assert.deepEqual(actual, expected, `${label}: ${JSON.stringify(text)} (${source})`);
+  }
+}
+
+function wrongObject(actual, mutation) {
+  const wrong = structuredClone(actual);
+  mutation(wrong);
+  assert.notDeepEqual(wrong, actual, 'the negative control must differ before the comparison');
+  assert.throws(() => assert.deepEqual(actual, wrong), assert.AssertionError);
+}
+
+test('ArkTS host replays every fence expectation as a complete object', options, async (context) => {
   await withHost(context, async (host) => {
-    let count = 0;
-    for (const [text, expected] of fence) {
-      const actual = await host.projection('stream_repair', {text});
-      assert.equal(actual.repaired, expected, `fence: ${JSON.stringify(text)}`);
-      count++;
-    }
-    for (const [text, expected] of fenceEnd) {
-      const actual = await host.projection('stream_repair', {text});
-      assert.equal(actual.end, expected, `fence end: ${JSON.stringify(text)}`);
-    }
-    console.log(`  stream_repair fence host replay: ${count} repaired + ${fenceEnd.length} end expectations`);
+    assert.equal(fence.length, 22);
+    await replay(host, fence, 'fence');
+    console.log(`  stream_repair fence host replay: ${fence.length} complete objects`);
   });
 });
 
-test('ArkTS host replays every unfinished-marker expectation', options, async (context) => {
+test('ArkTS host replays every marker and boundary expectation as a complete object', options, async (context) => {
   await withHost(context, async (host) => {
-    let count = 0;
-    for (const [text, expected] of marker) {
-      const actual = await host.projection('stream_repair', {text});
-      assert.equal(actual.repaired, expected, `marker: ${JSON.stringify(text)}`);
-      count++;
-    }
-    console.log(`  stream_repair marker host replay: ${count} expectations`);
+    assert.equal(marker.length, 19);
+    await replay(host, marker, 'marker');
+    console.log(`  stream_repair marker host replay: ${marker.length} complete objects`);
   });
 });
 
-test('ArkTS host replays every table repair and table/text end expectation', options, async (context) => {
+test('ArkTS host replays every table and delimiter expectation as a complete object', options, async (context) => {
   await withHost(context, async (host) => {
-    let count = 0;
-    for (const [text, expected] of table) {
-      const actual = await host.projection('stream_repair', {text});
-      assert.equal(actual.repaired, expected, `table: ${JSON.stringify(text)}`);
-      count++;
-    }
-    for (const [text, expected] of tableEnd) {
-      const actual = await host.projection('stream_repair', {text});
-      assert.equal(actual.end, expected, `table end: ${JSON.stringify(text)}`);
-    }
-    console.log(`  stream_repair table host replay: ${count} repaired + ${tableEnd.length} end expectations`);
+    assert.equal(table.length, 36);
+    await replay(host, table, 'table');
+    console.log(`  stream_repair table host replay: ${table.length} complete objects`);
   });
 });
 
-test('ArkTS host rejects malformed stream_repair inputs and wrong expectations', options, async (context) => {
+test('ArkTS host rejects malformed inputs and wrong end, repaired and extra-field expectations', options, async (context) => {
   await withHost(context, async (host) => {
     await assert.rejects(() => host.projection('stream_repair', {}), /stream_repair: input does not decode/);
     await assert.rejects(() => host.projection('stream_repair', {text: 1}), /stream_repair: input does not decode/);
-    // A deliberately wrong complete expectation must not compare equal to the real projection.
-    const actual = await host.projection('stream_repair', {text: 'text\n```ts\nconst a'});
-    const wrong = {repaired: 'text\n```ts\nconst a\n~~~', end: 'text'};
-    assert.notDeepEqual(actual, wrong, 'the wrong complete expectation must differ');
-    assert.throws(() => assert.deepEqual(actual, wrong, 'stream_repair fence negative'),
-      (error) => error instanceof assert.AssertionError && error.message.includes('stream_repair fence negative'));
-    const actualTable = await host.projection('stream_repair', {text: '| a | b |\n| -'});
-    const wrongTable = {repaired: '| a | b |\n| --- | --- |', end: 'text'};
-    assert.notDeepEqual(actualTable, wrongTable, 'the wrong table expectation must differ');
+    for (const text of ['text\n```ts\nconst a', '| a | b |\n| -', '正文\n##']) {
+      const actual = await host.projection('stream_repair', {text});
+      wrongObject(actual, (wrong) => { wrong.end = 'not-an-end'; });
+      wrongObject(actual, (wrong) => { wrong.repaired += '\nwrong'; });
+      wrongObject(actual, (wrong) => { wrong.extra = true; });
+    }
   });
 });
