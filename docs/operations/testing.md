@@ -553,6 +553,7 @@ Add/confirm computer (`MOCK_ADD_COMPUTER`) is enabled too; readiness follows mac
 | `pending` | `mbp` online, pending (`trust: pending`) | Same as `zero`: hub doesn't give pending computers to assistant | 409 `no_machine`; Agent start there (`POST /api/v1/sessions`) 409 `machine_pending` |
 | `no_claude` | `mbp`, no `claude_version` | `claude` problem `claude_missing` | 409 `claude_missing` |
 | `not_logged_in` | `mbp` | `model`, `first_message` problem `not_logged_in`; sole main-chat turn "Not logged in · Please run /login" (`turn_error_code`) | Normal |
+| `not_logged_in_desktop` | `mbp` | As `not_logged_in`, with the model step's words for a Mac that offers the Claude desktop app's launcher: an Agent started with `claude-desktop` runs in the app on the app's own sign-in (#9366) | Normal |
 | `bad_key` | `mbp` | As above, `auth_failed` ("Invalid API key"), button `edit_provider` | Normal |
 | `full` | `mbp` | All `ok`, one main-chat reply | Normal |
 | `demo` | Usual three mock machines | All `ok` (assistant on `server`), other data unchanged, for "after getting started" screenshots | Normal |
