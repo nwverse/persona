@@ -151,6 +151,8 @@ internal fun ManagerPage(
         onMove = { if (manager?.isInstalling == true) scope.launch { model.newCode(managerId) } else asking = ManagerAsk.Move },
         onDelete = { asking = ManagerAsk.Delete },
         push = push, onPush = pushModel?.let { m -> { on: Boolean -> scope.launch { m.set(managerId, on) }; Unit } },
+        // Its computers on this hub (another group's carry the same manager ids): the switcher shows it while it has one.
+        computers = LocalManagerGroup.current.let { group -> machines.count { it.manager == managerId && persona.core.contracts.GroupKeys.namespaceOf(it.id) == group } },
         onShowInSwitcher = { show -> scope.launch { model.showInSwitcher(managerId, show) } })
     val name = manager?.name?.ifBlank { manager.id }.orEmpty()
     when (asking) {
@@ -179,6 +181,8 @@ internal fun ManagerContent(
     onRename: () -> Unit, onDefault: () -> Unit, onMove: () -> Unit, onDelete: () -> Unit,
     /** 推送通知 for this device; null (or a hub without `muted_managers`): no switch. */
     push: ManagerPushState? = null, onPush: ((Boolean) -> Unit)? = null,
+    /** How many computers it has: while it has one (or is the default) the switcher shows it, and the switch cannot turn off. */
+    computers: Int = 0,
     /** Show in the switcher, on the hub's own assistant's page: true shows it there, false keeps it out while it is not used. */
     onShowInSwitcher: (Boolean) -> Unit = {},
 ) {
@@ -232,16 +236,19 @@ internal fun ManagerContent(
                 push.failure?.let { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.xs), tone = InlineTone.Failed) }
             }
         }
-        // Show in the switcher (the hub's own assistant, #9055): on is the hub's `hide` turned around. Hiding it is off
-        // while it is the default (the hub would refuse); showing it again always goes. The hub's other refusal (it owns
-        // a computer) is said under the actions, as every change's is.
+        // Show in the switcher (the hub's own assistant, #9055; as the web's): on is the hub's `hide` turned around.
+        // While it is in use (the default, or it has a computer) the hub would refuse to hide it, so the switch cannot
+        // turn off and the note says why; turning it on always goes. A refusal all the same (a computer the page has
+        // not heard of yet) is said under the actions, as every change's is.
         if (manager.builtin && !installing) item("switcher") {
-            val enabled = !state.busy && (manager.hide || !manager.isDefault)
+            val on = !manager.hide
+            val inUse = manager.isDefault || computers > 0
             Column(Modifier.padding(top = Tokens.Space.l)) {
                 JGroupItem(GroupPosition.Single) {
-                    JSwitchRow(stringResource(R.string.settings_managers_show_in_switcher), !manager.hide, onShowInSwitcher, enabled = enabled)
+                    JSwitchRow(stringResource(R.string.settings_managers_show_in_switcher), on, onShowInSwitcher,
+                        enabled = !state.busy && !(on && inUse))
                 }
-                ManagerNote(stringResource(if (manager.isDefault && !manager.hide) R.string.settings_managers_switcher_default else R.string.settings_managers_switcher_note))
+                ManagerNote(stringResource(if (inUse) R.string.settings_managers_switcher_in_use else R.string.settings_managers_switcher_note))
             }
         }
         val actions = buildList<@Composable () -> Unit> {

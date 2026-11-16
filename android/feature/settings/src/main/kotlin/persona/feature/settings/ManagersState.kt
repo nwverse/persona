@@ -110,7 +110,7 @@ internal object ManagerText {
         return when {
             coded?.code == "default_manager" -> ResText.of(R.string.settings_managers_err_default)
             coded?.code == "builtin_manager" -> ResText.of(R.string.settings_managers_err_builtin)
-            coded?.code == "builtin_in_use" -> ResText.of(R.string.settings_managers_err_builtin_in_use)
+            coded?.code == "builtin_in_use" -> ResText.of(R.string.settings_managers_switcher_in_use)
             error is HideUnsupported -> ResText.of(R.string.settings_managers_switcher_unsupported)
             coded?.code == "no_manager" -> ResText.of(R.string.settings_managers_err_gone)
             coded?.code == "installing" -> ResText.of(R.string.settings_managers_err_installing)
@@ -215,7 +215,7 @@ internal class ManagersModel(private val api: HubManagers) {
 
     /**
      * Show in the switcher (the hub's own assistant): off sends `{"hide": true}`, on `{"hide": false}`. The switch moves
-     * at once and goes back if the hub refuses (409 `builtin_in_use` while it is the default or owns a computer); then
+     * at once and goes back if the hub refuses (409 `builtin_in_use` while it is the default or has a computer); then
      * the list is read again for what is in effect (`hidden`), and a hub that kept no choice says it cannot.
      */
     suspend fun showInSwitcher(id: String, show: Boolean): Boolean {

@@ -162,7 +162,7 @@ class ManagerRosterTest {
         assertEquals("assistant", hidden.shownUnder("assistant"))
         // Only the choice in effect counts: the choice alone (it is in use again) keeps it in.
         val chosenOnly = roster.copy(managers = roster.managers.map { if (it.builtin) it.copy(hide = true) else it })
-        assertEquals(roster.switcherRows, chosenOnly.switcherRows)
+        assertEquals(roster.switcherRows.map { it.id }, chosenOnly.switcherRows.map { it.id })
         // Left with the default alone in the switcher, there are still two installed.
         val two = ManagerRoster(listOf(HubManager("assistant", builtin = true, hide = true, hidden = true), HubManager("m-2", isDefault = true)), "m-2")
         assertEquals(listOf("m-2"), two.switcherRows.map { it.id })

@@ -111,7 +111,7 @@ class ManagersShotsTest {
                         Shot.BuiltinHidden -> ManagerContent(hidden, "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
                         // Turning it off refused (a computer went back to it): on again, and the hub's reason.
                         Shot.BuiltinRefused -> ManagerContent(hidden.copy(roster = hidden.roster!!.copy(managers = hidden.managers.map { it.copy(hide = false, hidden = false) }),
-                            failure = ResText.of(R.string.settings_managers_err_builtin_in_use)), "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
+                            failure = ResText.of(R.string.settings_managers_switcher_in_use)), "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
                         Shot.Installing -> ManagerContent(loaded, "m-c1e9f0", ManagersNow, {}, {}, {}, {}, {}, {})
                         // The sheet's body on the sheet's own surface (JSheet draws it over a scrim in the app).
                         Shot.Code, Shot.Expired -> Column(Modifier.fillMaxWidth().background(if (style == AppStyle.Brief) palette.background else palette.surfaceOpaque)
@@ -257,9 +257,9 @@ class ManagersShotsTest {
             }
         }
         rule.waitForIdle()
-        val row = rule.onNode(hasText("在切换列表里显示") and hasClickAction())
+        val row = rule.onNode(hasText("在切换器里显示") and hasClickAction())
         row.assertIsOn().assertIsEnabled()
-        rule.onNodeWithText("关掉后，它不是默认助手", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("关掉后，这个助手不是默认、名下也没有电脑时，切换器里不显示它").assertIsDisplayed()
         row.performClick()
         rule.waitForIdle()
         assertEquals(listOf("hide assistant true"), fake.calls)
@@ -273,24 +273,50 @@ class ManagersShotsTest {
         row.performClick()
         rule.waitForIdle()
         row.assertIsOn()
-        rule.onNodeWithText("它正在使用（是默认助手，或有自己的电脑），会留在切换列表里").assertIsDisplayed()
+        rule.onNodeWithText("它是默认助手或名下有电脑，所以切换器里仍显示它").assertIsDisplayed()
         id = "m-8b04d2"
         rule.waitForIdle()
-        assertTrue(rule.onAllNodes(hasText("在切换列表里显示")).fetchSemanticsNodes().isEmpty())
+        assertTrue(rule.onAllNodes(hasText("在切换器里显示")).fetchSemanticsNodes().isEmpty())
     }
 
-    /** The default can't be kept out: its switch is on, off-limits and says why; nothing is sent. */
-    @Test fun theDefaultHubsOwnAssistantStaysInTheSwitcher() {
-        val fake = FakeManagers()
+    /**
+     * In use, it can't be kept out (the hub would refuse): as the default, or with a computer of this hub's, its switch
+     * is on and off-limits and the note says why; another group's computer with the same manager id does not count.
+     * Kept out before a computer came back to it, the switch is off and can still turn on.
+     */
+    @Test fun theHubsOwnAssistantInUseStaysInTheSwitcher() {
+        var fake by mutableStateOf(FakeManagers())
+        var machines by mutableStateOf(emptyList<Machine>())
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
-                Box(Modifier.width(400.dp).height(1500.dp)) { ManagerPage(fake, "assistant", onBack = {}, ticking = false) }
+                Box(Modifier.width(400.dp).height(1500.dp)) { ManagerPage(fake, "assistant", onBack = {}, ticking = false, machines = machines) }
             }
         }
         rule.waitForIdle()
-        rule.onNode(hasText("在切换列表里显示") and hasClickAction()).assertIsOn().assertIsNotEnabled()
-        rule.onNodeWithText("默认助手总会显示在切换列表里").assertIsDisplayed()
-        assertTrue(fake.calls.isEmpty())
+        val row = rule.onNode(hasText("在切换器里显示") and hasClickAction())
+        row.assertIsOn().assertIsNotEnabled()
+        rule.onNodeWithText("它是默认助手或名下有电脑，所以切换器里仍显示它").assertIsDisplayed()
+        // Not the default, and only another group's computer: it can be kept out.
+        val notDefault = FakeManagers(ManagersSample.map { it.copy(isDefault = it.id == "m-3fa21c") })
+        fake = notDefault
+        machines = listOf(Machine("mac~g0123abcd", manager = "assistant"))
+        rule.waitForIdle()
+        row.assertIsOn().assertIsEnabled()
+        // A computer of this hub's: in use.
+        machines = listOf(Machine("mac", manager = "assistant"))
+        rule.waitForIdle()
+        row.assertIsOn().assertIsNotEnabled()
+        rule.onNodeWithText("它是默认助手或名下有电脑，所以切换器里仍显示它").assertIsDisplayed()
+        assertTrue(notDefault.calls.isEmpty())
+        // Kept out before that computer came: off, and it can turn on again.
+        val kept = FakeManagers(notDefault.list.map { if (it.builtin) it.copy(hide = true) else it })
+        fake = kept
+        rule.waitForIdle()
+        row.assertIsOff().assertIsEnabled()
+        row.performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("hide assistant false"), kept.calls)
+        row.assertIsOn().assertIsNotEnabled()
     }
 
     /** Managers stays in the Hub group after Connection, opens its page, and is absent in demo mode. */

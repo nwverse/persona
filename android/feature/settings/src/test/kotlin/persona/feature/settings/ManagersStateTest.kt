@@ -171,8 +171,8 @@ class ManagersStateTest {
         assertEquals("它还没装好，装好后才能改名或设为默认", words(refused(409, "installing")))
         assertEquals("名字要 1 到 40 个字", words(refused(400)))
         assertEquals("这台设备没有修改权限", words(refused(403, "read_only")))
-        assertEquals("它正在使用（是默认助手，或有自己的电脑），会留在切换列表里", words(refused(409, "builtin_in_use")))
-        assertEquals("这台 hub 的版本还不能隐藏它，升级 hub 后再来", words(HideUnsupported()))
+        assertEquals("它是默认助手或名下有电脑，所以切换器里仍显示它", words(refused(409, "builtin_in_use")))
+        assertEquals("这台 hub 的版本还不能让切换器不显示它，升级 hub 后再来", words(HideUnsupported()))
         // Anything else: what did not happen, and the app's usual reason.
         assertEquals("没有改成：连不上 hub", words(HubFailure(HubError.Timeout)))
     }
@@ -246,7 +246,7 @@ class ManagersStateTest {
         assertFalse(model.showInSwitcher(own.id, false))
         assertEquals("hide assistant true", api.calls.last())
         assertFalse(model.state.value.manager(own.id)!!.hide)
-        assertEquals("它正在使用（是默认助手，或有自己的电脑），会留在切换列表里", model.state.value.failure?.resolve(res))
+        assertEquals("它是默认助手或名下有电脑，所以切换器里仍显示它", model.state.value.failure?.resolve(res))
         assertFalse(model.state.value.busy)
     }
 
@@ -257,7 +257,7 @@ class ManagersStateTest {
         model.load()
         assertFalse(model.showInSwitcher(own.id, false))
         assertFalse(model.state.value.manager(own.id)!!.hide)
-        assertEquals("这台 hub 的版本还不能隐藏它，升级 hub 后再来", model.state.value.failure?.resolve(res))
+        assertEquals("这台 hub 的版本还不能让切换器不显示它，升级 hub 后再来", model.state.value.failure?.resolve(res))
         // Showing it (what an older hub does anyway) is not asked of it again: the switch is already on.
         assertFalse(model.showInSwitcher(own.id, true))
         assertEquals(1, api.calls.count { it.startsWith("hide") })
