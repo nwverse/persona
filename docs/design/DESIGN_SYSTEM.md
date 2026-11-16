@@ -1582,6 +1582,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   Wherever an Allow is in view, what it allows is in view too.
 - **Room** (web, #4656): an open tray of requests takes the room its cards need, up to most of the visible height (the assistant's Needs you / In progress tray lets the dock grow to 82% of it while open), never a fixed short box. Its header (title, All, Expand, Close) stays and only its list scrolls; a card's answer row stays at the list's bottom edge with a hairline over what scrolls under it. **Expand** in the header fills the chat column for going through many requests, the composer still on screen; the same button, **Restore size**, or closing the tray gives the room back.
 - **Card text**: the title names the request and what happens next, in the same words on every client: the request titles in section 5.6. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **Editing before Allow** (web Lark send/reply): the default card remains read-only with Allow primary. **Edit text** and **Deny with note…** progressively disclose their fields only when the server declares the capability. An actual edit hides Always and makes Allow apply to the reviewed replacement, never the original command; blank text disables Allow. Deny remains an explicit action, with its optional reason secondary to the decision. Other clients and other permission kinds keep the unchanged Allow/Deny layout.
 - **One scroll, the answers in view** (iOS and iPadOS, #6605): a card scrolls in one place at most. A lone card fits the
   cards' area (half the page), so the area never scrolls under it; several scroll in the area, as above. Inside a card
   what it asks (the tool, the question, the agent's words, the command, the plan) is in one scroll area and its answers
@@ -2396,6 +2397,13 @@ is one, or opens the recording running. That is the Recordings page's button, th
 screen's menu, the Control and Siri / Shortcuts, and on the watch its recording page's button and its complication.
 Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell which
 to press; impromptu talks are meetings too (principles 1 and 4).
+
+- **Meetings, not Recordings, on the iPhone** (#8731, D5): the place is **Meetings** (会议 / 会議, the meeting icon) and
+  every start says **Start Meeting** (开始会议 / 会議を始める): the page's button (**Start Note** once Note is picked), the +
+  list, the home screen's menu, the Control and Siri / Shortcuts, whose Record phrases keep working beside the new ones.
+  While something records, the drawer's row and the + list say **In a Meeting… Open** for a meeting and **Recording…
+  Open** for a note (`MeetingWords`). An unnamed note is **Note · date**. The watch keeps Record for now. Reason: a page of
+  meetings named Recordings read as a tape recorder with settings, not a meeting (the owner, #8731).
 
 - **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
   opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
