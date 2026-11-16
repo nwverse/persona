@@ -1,5 +1,9 @@
 package persona.android.navigation
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
+import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import persona.core.designsystem.SplitDetailContext
 import persona.core.navigation.*
@@ -37,28 +41,87 @@ internal fun isInboxDestination(key: NavKey): Boolean = when (key) {
 internal fun canCollapseList(stack: List<NavKey>): Boolean =
     stack.lastOrNull { it == AgentsRoute || it == InboxRoute || it == SettingsRoute } == AgentsRoute
 
+internal data class AgentsTabSplit(
+    val stack: List<NavKey>,
+    val contentKeys: List<Any>,
+    val listHidden: Boolean,
+    val onShowList: () -> Unit,
+)
+
+internal val LocalAgentsTabSplit = compositionLocalOf<AgentsTabSplit?> { null }
+
 /**
- * Split-pane context for the Agents tab's two-pane list-detail layout (matching iOS `SplitDetail`):
- * - First detail page directly opened from the Agents list (`[AgentsRoute, detail]`): hides Back while the list is
- *   beside it, or shows the sidebar button to call [onShowList] while the list is collapsed.
- * - Any deeper pushed page, compact/overlaid layout, secondary list on the Agents stack, or other tab: returns null
- *   (or `isFirstPage = false`) so Back stays as usual.
+ * Split-pane context for one entry at [entryIndex] in the Agents tab's two-pane list-detail layout (matching iOS
+ * `SplitDetail`):
+ * - The list entry itself (`entryIndex <= 0`) gets null so a Back button inside it is never hidden by accident.
+ * - First detail page directly above `AgentsRoute` (`entryIndex == 1`): `isFirstPage = true` (stays true while deeper
+ *   pages push above it, so its leading button does not jump during transitions).
+ * - Deeper pushed pages (`entryIndex > 1`): `isFirstPage = false` so Back stays as usual.
+ * - Compact/overlaid layouts, secondary lists on the Agents stack, or other tabs: null.
  */
-internal fun agentsSplitDetail(
+internal fun agentsSplitDetailForEntry(
+    tab: AppTab,
+    stack: List<NavKey>,
+    entryIndex: Int,
+    twoPanes: Boolean,
+    listHidden: Boolean,
+    onShowList: () -> Unit,
+): SplitDetailContext? {
+    if (!twoPanes || tab != AppTab.Agents || entryIndex <= 0 || entryIndex >= stack.size) return null
+    val prefix = stack.subList(0, entryIndex + 1)
+    if (!canCollapseList(prefix) || !prefix.drop(1).all(::isDetailDestination)) return null
+    return SplitDetailContext(
+        isFirstPage = entryIndex == 1,
+        listHidden = listHidden,
+        onShowList = if (listHidden) onShowList else null,
+    )
+}
+
+@Composable
+internal fun rememberAgentsTabSplit(
     tab: AppTab,
     stack: List<NavKey>,
     twoPanes: Boolean,
     listHidden: Boolean,
     onShowList: () -> Unit,
+): AgentsTabSplit? {
+    if (!twoPanes || tab != AppTab.Agents) return null
+    val snapshot = stack.toList()
+    val contentKeys = remember(snapshot) { snapshot.map { NavEntry(it) {}.contentKey } }
+    return AgentsTabSplit(snapshot, contentKeys, listHidden, onShowList)
+}
+
+/**
+ * Resolves per-entry [SplitDetailContext] inside the chrome decorator, retaining the entry's last resolved state
+ * while it slides away during a pop transition after leaving [AgentsTabSplit.stack].
+ */
+@Composable
+internal fun rememberEntrySplitDetail(
+    tabSplit: AgentsTabSplit?,
+    entryContentKey: Any,
 ): SplitDetailContext? {
-    if (!twoPanes || tab != AppTab.Agents || !canCollapseList(stack)) return null
-    val detailCount = stack.size - 1
-    if (detailCount <= 0 || !stack.drop(1).all(::isDetailDestination)) return null
-    return SplitDetailContext(
-        isFirstPage = detailCount == 1,
-        listHidden = listHidden,
-        onShowList = if (listHidden) onShowList else null,
-    )
+    val kept = remember(entryContentKey) { arrayOfNulls<SplitDetailContext?>(1) }
+    if (tabSplit == null) {
+        kept[0] = null
+        return null
+    }
+    val entryIndex = tabSplit.contentKeys.indexOf(entryContentKey)
+    if (entryIndex >= 0) {
+        return agentsSplitDetailForEntry(
+            tab = AppTab.Agents,
+            stack = tabSplit.stack,
+            entryIndex = entryIndex,
+            twoPanes = true,
+            listHidden = tabSplit.listHidden,
+            onShowList = tabSplit.onShowList,
+        ).also { kept[0] = it }
+    }
+    return kept[0]?.let { previous ->
+        previous.copy(
+            listHidden = tabSplit.listHidden,
+            onShowList = if (tabSplit.listHidden) tabSplit.onShowList else null,
+        )
+    }
 }
 
 /**
