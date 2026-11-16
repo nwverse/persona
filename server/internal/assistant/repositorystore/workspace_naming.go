@@ -1,4 +1,4 @@
-package db
+package repositorystore
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
@@ -23,15 +24,15 @@ func readWorkspaceRules(ctx context.Context, q interface {
 	var raw []byte
 	err := q.QueryRow(ctx, `SELECT COALESCE(r.revision,0),r.rules FROM todos t LEFT JOIN todo_workspace_rules r ON r.todo_id=t.id WHERE t.id=$1`, id).Scan(&out.Revision, &raw)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return out, ErrTodoNotFound
+		return out, db.ErrTodoNotFound
 	}
 	if err == nil && len(raw) > 0 {
 		err = json.Unmarshal(raw, &out.Rules)
 	}
 	return out, err
 }
-func (d *DB) TodoWorkspaceRules(ctx context.Context, id string) (WorkspaceRulesRecord, error) {
-	return readWorkspaceRules(ctx, d.pool, id)
+func (d *Store) TodoWorkspaceRules(ctx context.Context, id string) (WorkspaceRulesRecord, error) {
+	return readWorkspaceRules(ctx, d, id)
 }
 
 // ReadWorkspaceRulesTx shares the Todo lock with T1 and preparation consumers.
@@ -42,12 +43,12 @@ func ReadWorkspaceRulesTx(ctx context.Context, tx pgx.Tx, id string) (WorkspaceR
 	}
 	return readWorkspaceRules(ctx, tx, id)
 }
-func (d *DB) SetTodoWorkspaceRules(ctx context.Context, id string, expected int64, patch json.RawMessage) (WorkspaceRulesRecord, error) {
+func (d *Store) SetTodoWorkspaceRules(ctx context.Context, id string, expected int64, patch json.RawMessage) (WorkspaceRulesRecord, error) {
 	var out WorkspaceRulesRecord
 	if expected < 0 || expected >= repository.MaxRevision {
 		return out, repository.Problem("invalid")
 	}
-	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
 		cur, err := ReadWorkspaceRulesTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -71,9 +72,9 @@ func (d *DB) SetTodoWorkspaceRules(ctx context.Context, id string, expected int6
 	})
 	return out, err
 }
-func (d *DB) WorkspaceNamingPlan(ctx context.Context, id, operation string) (*workspacenaming.Plan, error) {
+func (d *Store) WorkspaceNamingPlan(ctx context.Context, id, operation string) (*workspacenaming.Plan, error) {
 	var raw []byte
-	err := d.pool.QueryRow(ctx, `SELECT plan FROM workspace_naming_plans WHERE todo_id=$1 AND operation_id=$2`, id, operation).Scan(&raw)
+	err := d.QueryRow(ctx, `SELECT plan FROM workspace_naming_plans WHERE todo_id=$1 AND operation_id=$2`, id, operation).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -86,6 +87,44 @@ func (d *DB) WorkspaceNamingPlan(ctx context.Context, id, operation string) (*wo
 		err = workspacenaming.CheckPlan(plan)
 	}
 	return &plan, err
+}
+
+// WorkspaceNamingPlanForSave checks the global operation identity before Node
+// resolution. A collision reveals no plan or identity from another Todo.
+func (d *Store) WorkspaceNamingPlanForSave(ctx context.Context, id, operation string) (*workspacenaming.Plan, error) {
+	plan, err := readNamingOperation(ctx, d, operation)
+	if err != nil || plan == nil {
+		return plan, err
+	}
+	if plan.Source.TodoID != id {
+		return nil, repository.Problem("revision_conflict")
+	}
+	return plan, nil
+}
+
+func readNamingOperation(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, operation string) (*workspacenaming.Plan, error) {
+	var raw []byte
+	err := q.QueryRow(ctx, `SELECT plan FROM workspace_naming_plans WHERE operation_id=$1`, operation).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var plan workspacenaming.Plan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return nil, err
+	}
+	return &plan, workspacenaming.CheckPlan(plan)
+}
+
+func compatibleNamingOperation(prior, plan *workspacenaming.Plan) error {
+	if prior.Source.TodoID != plan.Source.TodoID || prior.Source.MachineID != plan.Source.MachineID || prior.Source.Layout != plan.Source.Layout || prior.Source.Rules != plan.Source.Rules || prior.Source.Repositories.Digest != plan.Source.Repositories.Digest {
+		return repository.Problem("revision_conflict")
+	}
+	return nil
 }
 
 // ReadWorkspaceNamingPlanTx lets preparation adopt this immutable snapshot in its
@@ -105,7 +144,7 @@ func ReadWorkspaceNamingPlanTx(ctx context.Context, tx pgx.Tx, id, operation str
 	return plan, workspacenaming.CheckPlan(plan)
 }
 
-func (d *DB) SaveWorkspaceNamingPlan(ctx context.Context, id, operation string, revision int64, plan workspacenaming.Plan) (*workspacenaming.Plan, error) {
+func (d *Store) SaveWorkspaceNamingPlan(ctx context.Context, id, operation string, revision int64, plan workspacenaming.Plan) (*workspacenaming.Plan, error) {
 	if !workspacenaming.ValidOperationID(operation) || plan.Source.TodoID != id {
 		return nil, repository.Problem("invalid")
 	}
@@ -113,26 +152,21 @@ func (d *DB) SaveWorkspaceNamingPlan(ctx context.Context, id, operation string, 
 		return nil, err
 	}
 	var out *workspacenaming.Plan
-	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+	err := d.Transaction(ctx, func(tx pgx.Tx) error {
 		cur, err := ReadWorkspaceRulesTx(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		var prior []byte
-		err = tx.QueryRow(ctx, `SELECT plan FROM workspace_naming_plans WHERE operation_id=$1`, operation).Scan(&prior)
-		if err == nil {
-			var p workspacenaming.Plan
-			if err = json.Unmarshal(prior, &p); err != nil {
+		prior, err := readNamingOperation(ctx, tx, operation)
+		if err != nil {
+			return err
+		}
+		if prior != nil {
+			if err := compatibleNamingOperation(prior, &plan); err != nil {
 				return err
 			}
-			if p.Source.TodoID != id || p.Source.MachineID != plan.Source.MachineID || p.Source.Layout != plan.Source.Layout || p.Source.Rules != plan.Source.Rules || p.Source.Repositories.Digest != plan.Source.Repositories.Digest {
-				return repository.Problem("revision_conflict")
-			}
-			out = &p
+			out = prior
 			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return err
 		}
 		if cur.Revision != revision {
 			return repository.Problem("revision_conflict")
@@ -156,9 +190,29 @@ func (d *DB) SaveWorkspaceNamingPlan(ctx context.Context, id, operation string, 
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO workspace_naming_plans(operation_id,todo_id,plan) VALUES($1,$2,$3)`, operation, id, raw)
+		var inserted string
+		err = tx.QueryRow(ctx, `INSERT INTO workspace_naming_plans(operation_id,todo_id,plan) VALUES($1,$2,$3) ON CONFLICT(operation_id) DO NOTHING RETURNING operation_id`, operation, id, raw).Scan(&inserted)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Different Todos hold different row locks. A competing insert may
+			// have committed since the first read; READ COMMITTED sees it here.
+			prior, err := readNamingOperation(ctx, tx, operation)
+			if err != nil {
+				return err
+			}
+			if prior == nil {
+				return repository.Problem("revision_conflict")
+			}
+			if err := compatibleNamingOperation(prior, &plan); err != nil {
+				return err
+			}
+			out = prior
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 		out = &plan
-		return err
+		return nil
 	})
 	return out, err
 }

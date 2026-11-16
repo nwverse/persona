@@ -1030,7 +1030,7 @@ its previous value when identity is unchanged; a changed identity gets its own
 canonical fallback. Adopting a new source requires removing and reselecting the
 association in separate saves.
 
-Preparation consumers use `db.ReadTodoRepositoriesTx` with the expected revision,
+Preparation consumers use `repositorystore.ReadTodoRepositoriesTx` with the expected revision,
 select repository IDs through `repository.Snapshot`, and persist that value with
 their operation in the same transaction. The reader locks the Todo, including an
 empty set. Digests exclude links and association revision. Consumers retain the
@@ -1105,7 +1105,11 @@ digest in the same Todo transaction. Link-only edits do not alter that source
 digest. Retrying an existing operation returns its original snapshot without
 rereading settings, title, clock or computer context. Changing input requires a
 new operation; associations and overrides remain editable, including after a
-snapshot. Preparation can call `db.ReadWorkspaceNamingPlanTx` in its own
+snapshot. Operation IDs are global: reusing another Todo's ID returns a generic
+conflict before calling the computer, while a read under the wrong Todo remains
+not found. Concurrent saves preserve one immutable snapshot; incompatible input
+returns a conflict rather than a database uniqueness error.
+Preparation can call `repositorystore.ReadWorkspaceNamingPlanTx` in its own
 transaction. This read does not permanently bind the Todo or attest readiness;
 preparation owns cancellation, intent checks, physical ownership, Git source
 resolution, recovery and existing cleanup semantics.

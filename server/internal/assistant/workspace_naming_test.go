@@ -4,12 +4,103 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
+
+func namingHTTPFixture(t *testing.T) (*Service, *repositorystore.Store, *atomic.Int32) {
+	t.Helper()
+	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	f := newFakeHub()
+	f.sessions["box"] = nil
+	calls := new(atomic.Int32)
+	f.nodes = map[string]nodeAnswer{"workspace.naming.resolve": func(_ string, raw json.RawMessage) (any, error) {
+		calls.Add(1)
+		var source workspacenaming.Source
+		if err := json.Unmarshal(raw, &source); err != nil {
+			return nil, err
+		}
+		return workspacenaming.Resolve(source, workspacenaming.NodeContext{Home: "/home/example"}), nil
+	}}
+	return newServiceOn(t, f, database), repositorystore.New(database), calls
+}
+
+func TestWorkspaceNamingBodiesRejectTrailingValuesWithoutEffects(t *testing.T) {
+	s, store, calls := namingHTTPFixture(t)
+	todo, err := s.createPlainTodo(t.Context(), "Example task", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/todos/" + todo.ID
+	routes := []struct{ method, path, body string }{
+		{"PUT", path + "/workspace-rules", `{"expected_revision":0,"workspace_rules":{"branch_template":"custom/{task-id}"}}`},
+		{"POST", "/api/v1/assistant/workspace-naming/preview", `{"machine_id":"box","layout":"container","selected_repo_ids":[]}`},
+		{"POST", path + "/workspace-naming/preview", `{"machine_id":"box","layout":"container","selected_repo_ids":[]}`},
+		{"POST", path + "/workspace-naming/plans", `{"machine_id":"box","layout":"container","selected_repo_ids":[],"operation_id":"body-boundary-operation"}`},
+	}
+	for _, route := range routes {
+		for _, tail := range []string{` {}`, ` null`, ` 1`, ` "extra"`, ` []`, ` garbage`} {
+			w := placeDo(s, "", route.method, route.path, route.body+tail)
+			if w.Code != 400 {
+				t.Fatalf("%s with suffix %q: %d %s", route.path, tail, w.Code, w.Body)
+			}
+		}
+	}
+	record, err := store.TodoWorkspaceRules(t.Context(), todo.ID)
+	if err != nil || record.Revision != 0 || record.Rules != (workspacenaming.Rules{}) || calls.Load() != 0 {
+		t.Fatalf("rejected bodies had effects: %+v, node calls %d, error %v", record, calls.Load(), err)
+	}
+	if plan, err := store.WorkspaceNamingPlan(t.Context(), todo.ID, "body-boundary-operation"); err != nil || plan != nil {
+		t.Fatal("rejected body saved a plan", plan, err)
+	}
+	// Every prefix is a valid request; ordinary trailing whitespace stays accepted.
+	for _, route := range routes {
+		if w := placeDo(s, "", route.method, route.path, route.body+" \n\t"); w.Code != 200 {
+			t.Fatalf("valid %s: %d %s", route.path, w.Code, w.Body)
+		}
+	}
+}
+
+func TestWorkspaceNamingCrossTodoOperationConflictsBeforeNode(t *testing.T) {
+	s, _, calls := namingHTTPFixture(t)
+	first, err := s.createPlainTodo(t.Context(), "First example task", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.createPlainTodo(t.Context(), "Second example task", "", db.TodoEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"machine_id":"box","layout":"container","selected_repo_ids":[],"operation_id":"shared-example-operation"}`
+	path := "/api/v1/todos/"
+	if w := placeDo(s, "", "POST", path+second.ID+"/workspace-naming/plans", body); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	calls.Store(0)
+	w := placeDo(s, "", "POST", path+first.ID+"/workspace-naming/plans", body)
+	if w.Code != 409 || calls.Load() != 0 {
+		t.Fatalf("cross-task operation: status %d, node calls %d, body %s", w.Code, calls.Load(), w.Body)
+	}
+	if strings.Contains(w.Body.String(), second.ID) || strings.Contains(w.Body.String(), "Second example task") {
+		t.Fatal("conflict exposed another task's data", w.Body)
+	}
+	w = placeDo(s, "", "GET", path+first.ID+"/workspace-naming/plans/shared-example-operation", "")
+	if w.Code != 404 || strings.Contains(w.Body.String(), second.ID) {
+		t.Fatal("scoped read exposed another task's plan", w.Code, w.Body)
+	}
+	if w := placeDo(s, "", "POST", path+second.ID+"/workspace-naming/plans", body); w.Code != 200 || calls.Load() != 0 {
+		t.Fatal("same-task retry called Node", w.Code, calls.Load(), w.Body)
+	}
+}
 
 func TestWorkspaceNamingSettingsPersistAndOldClientsKeepWorking(t *testing.T) {
 	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
