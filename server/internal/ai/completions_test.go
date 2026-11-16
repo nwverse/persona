@@ -141,6 +141,11 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 	}{
 		{"unsupported parameter", `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`, true},
 		{"numeric code preserves field rejection", `{"error":{"code":40010,"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
+		{"malformed code preserves field rejection", `{"error":{"code":{"bad":true},"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
+		{"top-level unknown field code allows fallback", `{"code":"unknown_parameter","error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
+		{"top-level ceiling code vetoes fallback", `{"code":"reasoning_effort_above_ceiling","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"top-level unsupported value code vetoes fallback", `{"code":"unsupported_value","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"top-level invalid value code vetoes fallback", `{"code":"invalid_value","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"parameter named by param", `{"error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"unknown argument", `{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}`, true},
 		{"extra field", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Extra inputs are not permitted"}]}`, true},
@@ -172,6 +177,10 @@ func TestChatRejectsNoEffortValue(t *testing.T) {
 		{"none named as unsupported", `{"error":{"message":"unsupported reasoning_effort \"none\""}}`, true},
 		{"pydantic enum rejection", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Input should be 'minimal', 'low', 'medium' or 'high'","type":"enum"}]}`, true},
 		{"generic invalid value code for the field", `{"error":{"code":"invalid_value","message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
+		{"numeric code preserves off fallback", `{"error":{"code":40011,"message":"unsupported reasoning_effort \"none\""}}`, true},
+		{"malformed code preserves off fallback", `{"error":{"code":{"bad":true},"message":"unsupported reasoning_effort \"none\""}}`, true},
+		{"policy code vetoes off fallback", `{"error":{"code":"reasoning_effort_above_ceiling","message":"unsupported reasoning_effort \"none\""}}`, false},
+		{"top-level policy code vetoes off fallback", `{"code":"reasoning_effort_above_ceiling","error":{"message":"unsupported reasoning_effort \"none\""}}`, false},
 		{"different named level without field association", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, false},
 		{"ceiling still wins", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"ceiling message wins over a value code", `{"error":{"code":"unsupported_value","message":"reasoning_effort_above_ceiling","param":"reasoning_effort"}}`, false},
@@ -233,6 +242,7 @@ func TestChatCompletionsReasoningEffortRetry(t *testing.T) {
 		{"value rejected", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, 1, 1, false, 0},
 		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
 		{"ceiling code with generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
+		{"top-level ceiling code with generic message", `{"code":"reasoning_effort_above_ceiling","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
 		{"another parameter rejected", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, 1, 1, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,6 +327,34 @@ func TestChatCompletionsEffortRejectionCache(t *testing.T) {
 	}
 	if _, present := requests[4]["reasoning_effort"]; present {
 		t.Fatalf("post-expiry retry kept the field: %v", requests[4])
+	}
+}
+
+func TestChatPolicyCodeDoesNotCacheEffortRejection(t *testing.T) {
+	var requests []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"code":"reasoning_effort_above_ceiling","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`)
+	}))
+	defer s.Close()
+	client := New(Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "model", ReasoningEffort: "high"})
+	for range 2 {
+		if _, err := client.Chat(context.Background(), Request{}); err == nil {
+			t.Fatal("policy rejection unexpectedly succeeded")
+		}
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %v, want one unchanged request per call and no learned downgrade", requests)
+	}
+	for _, body := range requests {
+		if body["reasoning_effort"] != "high" {
+			t.Fatalf("policy code changed or cached the requested effort: %v", body)
+		}
 	}
 }
 
