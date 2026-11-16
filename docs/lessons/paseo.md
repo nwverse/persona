@@ -104,3 +104,8 @@ Settings Test. Test both cold and Agent-primed caches and the actual readiness c
 Custom model IDs are shared between these catalogs. Forget removes the row in both, and marks reads that overlap the
 operation so a late response cannot restore a successfully deleted row. Failure restores only that ID while preserving
 newer catalog data; a fresh read after success may show an ID the user has typed again.
+
+The assistant-purpose query does not select a manager: the `/machines` routes are not automatically scoped by the
+assistant switcher. Capture the manager when reading its catalog, send its header explicitly, and include it in cache
+and in-flight request keys. Keep generic Agent reads on their existing default-manager route. Changing the selected
+manager must refresh the pill even when the machine and launcher names stay the same.

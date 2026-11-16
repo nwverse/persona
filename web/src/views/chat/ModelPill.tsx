@@ -18,7 +18,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -254,6 +254,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session }: 
 
 function AssistantModelPillInner({ session }: { session?: Session }) {
   const version = useModelLists();
+  const scope = assistantCatalogScope();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
@@ -270,7 +271,7 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
     if (mid) void readAssistantLaunchers(mid);
-  }, [mid]);
+  }, [mid, scope]);
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
   const lastRev = useRef<number | undefined>(session?.rev);
@@ -278,7 +279,7 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
     if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
     lastRev.current = session.rev;
     void readAssistantLaunchers(mid, { again: true });
-  }, [mid, session?.rev]);
+  }, [mid, scope, session?.rev]);
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -301,20 +302,22 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
     if (mid) void readModels(mid, setup.provider, { purpose: "assistant", first: true });
-  }, [mid, setup.provider]);
+  }, [mid, scope, setup.provider]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAnchor(null), []);
+  useEffect(close, [close, scope]);
   const shown = Boolean(anchor) && Boolean(mid);
   // every list again behind the one shown, once per opening
   useEffect(() => {
     if (!shown) return;
     void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
+      if (scope !== assistantCatalogScope()) return;
       for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
-  }, [shown, mid]);
+  }, [shown, mid, scope]);
   if (!mid) return null;
   const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider, "assistant"));
   const workflow = view.engine === "codex" && view.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;

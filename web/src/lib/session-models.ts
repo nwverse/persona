@@ -8,7 +8,7 @@
 // (the session's own first, at most three at a time).
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { ApiError, errorText } from "./api";
+import { ApiError, credentialOwner, errorText, onCredentialChange } from "./api";
 import { agentId, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
 import { sessionCan, stateOf } from "./format";
@@ -19,6 +19,7 @@ import {
 import { canSwitchModel, isCurrentModel, sessionLauncher } from "./model-switch";
 import { hasEffortOnly, hasModes } from "./session-actions";
 import type { Launcher, Session } from "./types";
+import { chosenManager, defaultKnown, defaultManager, onDefaultManager, onManagerChoice } from "./manager-choice";
 
 /** One launcher's list as read: `list` undefined until a read answered, null from an older hub (it has no list). */
 export interface ModelList {
@@ -48,7 +49,18 @@ const subscribe = (f: () => void) => {
   subscribers.add(f);
   return () => void subscribers.delete(f);
 };
-const listKey = (mid: string, launcher: string, purpose?: "assistant") => `${mid}/${launcher}${purpose ? `\u0000${purpose}` : ""}`;
+type CatalogScope = { owner: string; manager?: string };
+const catalogScope = (purpose?: "assistant"): CatalogScope => ({ owner: credentialOwner(),
+  manager: (purpose === "assistant" ? chosenManager() : null) ?? (defaultKnown() ? defaultManager() : undefined) });
+const listKey = (mid: string, launcher: string, purpose?: "assistant", scope = catalogScope(purpose)) =>
+  JSON.stringify([scope.owner, scope.manager ?? "", mid, launcher, purpose ?? ""]);
+const machineKey = (mid: string, scope = catalogScope()) => JSON.stringify([scope.owner, scope.manager ?? "", mid]);
+
+/** Changes when the assistant's catalog must be loaded again, including when the default manager becomes known. */
+export const assistantCatalogScope = (): string => JSON.stringify(catalogScope("assistant"));
+onManagerChoice(changed);
+onDefaultManager(changed);
+onCredentialChange(changed);
 
 /** Draws again whenever a list or a computer's launchers change. */
 export function useModelLists(): number {
@@ -58,7 +70,7 @@ export function useModelLists(): number {
 export const modelList = (mid: string, launcher: string, purpose?: "assistant"): ModelList => lists.get(listKey(mid, launcher, purpose)) ?? {};
 
 /** The launchers of `mid` as last read; undefined before the first answer. */
-export const machineLauncherList = (mid: string): Launcher[] | undefined => machines.get(mid)?.launchers;
+export const machineLauncherList = (mid: string): Launcher[] | undefined => machines.get(machineKey(mid))?.launchers;
 
 /** What a Persona chat's pill and panel read of its computer (`?purpose=assistant`, #5033): the launchers that can run
  *  assistant chats, the main chat's default (Model configuration › Main chat), and what can't run them, with why. */
@@ -74,27 +86,29 @@ const assistantReads = new Map<string, Promise<void>>();
 /** The Persona chats' launchers of `mid` as last read (`info` undefined before the first answer), plus the in-flight
  *  read's identity for a caller that must know whether its refresh joined that exact request. */
 export const assistantLaunchers = (mid: string): { info?: AssistantLaunchers; loading?: boolean; error?: string; read?: Promise<void> } => ({
-  ...(assistantMachines.get(mid) ?? {}),
-  read: assistantReads.get(mid),
+  ...(assistantMachines.get(machineKey(mid, catalogScope("assistant"))) ?? {}),
+  read: assistantReads.get(machineKey(mid, catalogScope("assistant"))),
 });
 
 /** Reads them: once (a pill that needs the default), or `again` behind the ones shown (an opening of the panel). */
 export function readAssistantLaunchers(mid: string, o: { again?: boolean } = {}): Promise<void> {
-  const reading = assistantReads.get(mid);
+  const scope = catalogScope("assistant");
+  const key = machineKey(mid, scope);
+  const reading = assistantReads.get(key);
   if (reading) return reading;
-  const had = assistantMachines.get(mid);
+  const had = assistantMachines.get(key);
   if (had?.info && !o.again) return Promise.resolve();
-  assistantMachines.set(mid, { info: had?.info, loading: true });
+  assistantMachines.set(key, { info: had?.info, loading: true });
   changed();
-  const read = machineLaunchers(mid, { purpose: "assistant" }).then(
-    (r) => void assistantMachines.set(mid, { info: { launchers: (r.launchers ?? []).filter(runsAssistant), def: r.default, unavailable: r.unavailable ?? [] } }),
+  const read = machineLaunchers(mid, { purpose: "assistant", manager: scope.manager }).then(
+    (r) => void assistantMachines.set(key, { info: { launchers: (r.launchers ?? []).filter(runsAssistant), def: r.default, unavailable: r.unavailable ?? [] } }),
     // the ones shown stay; with none, say why
-    (e) => void assistantMachines.set(mid, had?.info ? { info: had.info } : { error: errorText(e) }),
+    (e) => void assistantMachines.set(key, had?.info ? { info: had.info } : { error: errorText(e) }),
   ).finally(() => {
-    assistantReads.delete(mid);
+    assistantReads.delete(key);
     changed();
   });
-  assistantReads.set(mid, read);
+  assistantReads.set(key, read);
   return read;
 }
 
@@ -119,18 +133,20 @@ function slot(first: boolean): Promise<() => void> {
 
 /** Reads a launcher's list: once (the pill), or `again` behind the one shown (an opening, Retry). */
 export function readModels(mid: string, launcher: string, o: { again?: boolean; first?: boolean; purpose?: "assistant" } = {}): Promise<void> {
-  const key = listKey(mid, launcher, o.purpose);
+  const scope = catalogScope(o.purpose);
+  const key = listKey(mid, launcher, o.purpose, scope);
   const reading = reads.get(key);
   if (reading) return reading.promise;
   const had = lists.get(key);
   if (had?.list !== undefined && !o.again) return Promise.resolve();
   lists.set(key, { list: had?.list, loading: true });
   changed();
-  const sharedKey = listKey(mid, launcher);
+  const sharedKey = listKey(mid, launcher, undefined, scope);
   const hidden = new Set(forgetting.get(sharedKey)?.keys());
   const read = slot(Boolean(o.first)).then(async (done) => {
     try {
-      const r = await launcherModels(mid, launcher, { purpose: o.purpose });
+      if (scope.owner !== credentialOwner()) return;
+      const r = await launcherModels(mid, launcher, { purpose: o.purpose, manager: scope.manager });
       for (const id of hidden) {
         if (r?.models.some((m) => m.id === id && m.custom)) {
           forgetting.get(sharedKey)?.get(id)?.restore.set(key, withoutCustom(r, id).restore);
@@ -153,19 +169,21 @@ export function readModels(mid: string, launcher: string, o: { again?: boolean; 
 
 /** Reads the computer's launchers (the providers), the last ones shown meanwhile. */
 function readLaunchers(mid: string): Promise<void> {
-  const reading = machineReads.get(mid);
+  const scope = catalogScope();
+  const key = machineKey(mid, scope);
+  const reading = machineReads.get(key);
   if (reading) return reading;
-  const had = machines.get(mid);
-  machines.set(mid, { launchers: had?.launchers, loading: true });
+  const had = machines.get(key);
+  machines.set(key, { launchers: had?.launchers, loading: true });
   changed();
-  const read = machineLaunchers(mid, { purpose: "agent.new" }).then(
-    (r) => void machines.set(mid, { launchers: r.launchers ?? [] }),
-    () => void machines.set(mid, { launchers: had?.launchers }),
+  const read = machineLaunchers(mid, { purpose: "agent.new", manager: scope.manager }).then(
+    (r) => void machines.set(key, { launchers: r.launchers ?? [] }),
+    () => void machines.set(key, { launchers: had?.launchers }),
   ).finally(() => {
-    machineReads.delete(mid);
+    machineReads.delete(key);
     changed();
   });
-  machineReads.set(mid, read);
+  machineReads.set(key, read);
   return read;
 }
 
@@ -174,23 +192,25 @@ function readLaunchers(mid: string): Promise<void> {
 export function readForPanel(mid: string, own: string): void {
   void readModels(mid, own, { again: true, first: true });
   void readLaunchers(mid).then(() => {
-    for (const l of machines.get(mid)?.launchers ?? []) if (l.name !== own) void readModels(mid, l.name, { again: true });
+    for (const l of machineLauncherList(mid) ?? []) if (l.name !== own) void readModels(mid, l.name, { again: true });
   });
 }
 
 /** Forgets an ID typed before (#1644): off the list at once, back where it was when the hub says no. "": done; else why not. */
 export async function forgetModel(mid: string, launcher: string, id: string, purpose?: "assistant"): Promise<string> {
-  const sharedKey = listKey(mid, launcher);
+  const scope = catalogScope(purpose);
+  const sharedKey = listKey(mid, launcher, undefined, scope);
   const pending = forgetting.get(sharedKey) ?? new Map<string, ModelForget>();
   const existing = pending.get(id);
   if (existing) return existing.promise;
-  if (!lists.get(listKey(mid, launcher, purpose))?.list) return "";
-  const keys = [sharedKey, listKey(mid, launcher, "assistant")];
+  if (!lists.get(listKey(mid, launcher, purpose, scope))?.list) return "";
+  const keys = [sharedKey, listKey(mid, launcher, "assistant", scope)];
   const mutation: ModelForget = {
     restore: new Map(),
     promise: Promise.resolve().then(async () => {
       try {
-        await forgetCustomModel(mid, launcher, id);
+        if (scope.owner !== credentialOwner()) return "";
+        await forgetCustomModel(mid, launcher, id, { manager: scope.manager });
         return "";
       } catch (e) {
         for (const key of keys) {
