@@ -44,6 +44,11 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   Log paired request begin/end records without private selectors; zero retained rows and a client timeout are not
   a request-level terminal receipt. Keep an uncertain attempt locked until execution and deduplication evidence
   justify a separately reviewed retry.
+- Recovery shares the normal collection lock: detach its admitted handoff from client cancellation with the same
+  five-minute bound, cancel it on return, and release the lock on failure. A selected replay cannot discharge an
+  owed full round or be retained for automatic retry with unrelated polling.
+- A failed persisted-state read must remain retryable in the shared loader. Test both replay and polling as the
+  next caller, including restored topics and seen IDs; changing how a caller unlocks is not a state-load fix.
 - A historical bot mention may have a later completion reply from the bot even when the owner never replied.
   Inspect the full topic and the processing conclusion before calling its automatic completion a bug or treating
   initial Needs You admission as proof that an unresolved request remains there.

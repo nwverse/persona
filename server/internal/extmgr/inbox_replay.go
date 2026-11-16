@@ -59,7 +59,13 @@ func (h *Manager) replayLarkInbox(ctx context.Context, in assistantwire.InboxLar
 	round := assistantwire.InboxRound{Epoch: h.inbox.epoch, Seq: h.inbox.seq.Add(1), Round: assistantwire.RoundPoll,
 		Replay: true, Sources: []assistantwire.InboxSource{src}}
 	stage = "apply"
-	err = h.callAssistant(ctx, assistantwire.MethodInboxCollected, round, nil)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxRoundWait)
+	defer cancel()
+	err = h.callAssistant(cctx, assistantwire.MethodInboxCollected, round, nil)
 	completed = err == nil
+	if completed {
+		h.inbox.told.Store(false)
+	}
+	// Exact recovery neither discharges a full round nor enters its automatic held-round retry.
 	return err
 }
