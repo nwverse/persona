@@ -547,6 +547,11 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
+		// Recognized machine codes win over compatibility wording and keep their original response for failure().
+		if ai.HasRecognizedErrorCode(raw) {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
 		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
 		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
 		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
