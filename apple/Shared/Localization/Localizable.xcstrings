@@ -176445,6 +176445,50 @@
         }
       }
     },
+    "Topic: %@ [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議題：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "议题：%@"
+          }
+        }
+      }
+    },
+    "Topic: %@ · %lld / %lld [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic: %@ · %lld / %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議題：%@ · %lld / %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "议题：%@ · %lld / %lld"
+          }
+        }
+      }
+    },
     "Topics [Knowledge Map Count]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -178178,29 +178222,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Turn Off Persona" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn Off Persona"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Persona をオフ"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "关闭 Persona"
-          }
-        }
-      }
     },
     "Turn Off Persona in the Meeting" : {
       "extractionState" : "manual",
@@ -202183,6 +202204,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "“%@” [Recording Line]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”"
+          }
+        }
+      }
     },
     "“%@” already exists" : {
       "localizations" : {

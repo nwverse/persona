@@ -326,8 +326,13 @@ import UserNotifications
     /// The Recordings page in front: the iPhone's shell or the iPad's sidebar pushes it on the Persona page (the old tabs
     /// have no route there; the recording runs anyway). Launched by the home screen's menu or a Control, the app has no
     /// shell yet: it tries again for a few seconds.
-    static func openRecordings() {
-        RecordingLivePresenter.shared.open() // a sheet swiped away on the page already in front comes back (`recordingLiveSheet`)
+    /// `askingEnd`: a meeting's End on the Lock Screen or in the Dynamic Island (#8731 V4, `RecordingLink.end`): its page
+    /// asks "End the Meeting?" once it shows.
+    static func openRecordings(askingEnd: String? = nil) {
+        // A sheet swiped away on the page already in front comes back (`recordingLiveSheet`). The End asks only for the
+        // recording running now: an older activity's tap never asks later, on another page.
+        let running = RecordingCapture.shared.recordingID?.uuidString.lowercased()
+        RecordingLivePresenter.shared.open(askingEnd: askingEnd == running ? askingEnd : nil)
         showRecordings()
     }
 

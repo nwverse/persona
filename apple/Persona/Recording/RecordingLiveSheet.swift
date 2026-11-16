@@ -16,12 +16,19 @@ import SwiftUI
 @MainActor @Observable final class RecordingLivePresenter {
     static let shared = RecordingLivePresenter()
     private(set) var serial = 0
+    /// The recording whose End was tapped on the Lock Screen or in the Dynamic Island (#8731 V4), lowercase: its page asks
+    /// "End the Meeting?" (or "Stop Recording?") once it shows, then `endAsked()` clears it.
+    private(set) var endAsking: String?
     @ObservationIgnored private var heldAt: Date?
 
-    func open() {
+    func open(askingEnd: String? = nil) {
         heldAt = nil
+        endAsking = askingEnd
         serial += 1
     }
+
+    /// The page asked (or the recording it named isn't the one running).
+    func endAsked() { endAsking = nil }
 
     func holdOnAppear(now: Date = .now) { heldAt = now }
 
