@@ -59,6 +59,10 @@ void persona_core_free(PersonaCore *core);
 // Pure function: no core handle, no dispatch, no drain. Free the result with persona_core_bytes_free.
 PersonaCoreBytes persona_core_project_sort(const uint8_t *input, size_t length);
 
+// Classifies one WebSocket frame through the production transport decoder (#8995). Returns a JSON classification;
+// a refusal carries only a reason code and protocol key names. Pure function, no core handle or payload projection.
+PersonaCoreBytes persona_core_transport_frame(const uint8_t *input, size_t length);
+
 // The pure projections below share the sort contract: one UTF-8 JSON document in, one UTF-8 JSON document out, no
 // core handle, and an empty buffer on any decode, projection or encode failure. The caller frees every returned
 // buffer with persona_core_bytes_free, including an empty one.

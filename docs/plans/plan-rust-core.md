@@ -422,6 +422,18 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Production shared-envelope scalar checks (#8995).**
+  - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
+    raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
+    event types remain `Frame::Other`, and accepted items keep their original JSON and exact `bad_item` locations.
+  - The unchanged #8955 source-derived fixture drives the production replay. Full Item, Machine, Session, interaction
+    and Fleet nested models, number-spelling / encoding migration and non-items event routing are outside this slice.
+  - The 17 accepted wire cases and the continuity corpus's 38 cases / 94 steps pass unchanged. Real host Kotlin/JNI,
+    ArkTS and an independently compiled C11 client replay shared-scalar refusals and Other routing through the real
+    production decoder / runtime. This is host evidence only, not Swift, device or production-client migration proof.
+  - Android's current #7448 adapter maps its existing inputs to `Action.Chat`; it does not dispatch raw `WirePayload`
+    frames in production, so this decoder change does not alter its default inputs or the debug shadow's comparison.
+
 - **Source-derived WebSocket envelope tolerance (#8955).**
   - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
     wrong-typed known keys, extra and duplicate keys, raw JSON fields, `mesh` / `fleet` leniency and the routing
