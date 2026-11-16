@@ -208,8 +208,9 @@ and counts/flags/enum values: never titles, paths, queries, identifiers or excep
 The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
 use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
 headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
-identity and includes the core's `held` field from the shell's visible Agent chat while its held row remains open. The
-production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
+identity and includes the core's `held` field from the shell's visible Agent chat and its entry-time Unread capture
+while its held row remains open. The production Kotlin path still owns range preprocessing, `retainOpenedRows`, history
+and children. A caller-supplied
 instant makes `since:` searches deterministic. The 33 checked-in `agents_list` fixtures pass through both production
 Kotlin and the real host JNI projection, including three State, Space and quiet-fold cases for the production
 `heldInList` behavior aligned with iOS (#9033). The separate multi-hub pin identity issue is #9027.

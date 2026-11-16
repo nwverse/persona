@@ -3,6 +3,7 @@
 package persona.android.ui
 
 import persona.android.R
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.res.stringResource
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
@@ -319,6 +320,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         return true
     }
     val visibleAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
+    val heldAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
+    val agentPreferences = remember(session) { session.preferences.snapshots }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
@@ -366,6 +369,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         object : AgentsDependencies by session.agents {
             override fun wiring() = object : AgentsWiring { override val state = navigationWiring }
             override fun visibleChat() = visibleAgentChat
+            override fun heldChat() = heldAgentChat
         }
     }
     val assistantNavigator = remember {
@@ -404,8 +408,14 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
     LaunchedEffect(visibleChat) {
-        visibleAgentChat.value = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }
-            ?.let { SessionKey(it.machineId, it.sessionId) }
+        val agent = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }?.let { SessionKey(it.machineId, it.sessionId) }
+        // Capture on entry, before ChatScreen's receipt or a conflated hub snapshot turns the row idle (iOS markSeen).
+        heldAgentChat.value = agent?.takeIf { key ->
+            sessions.firstOrNull { it.key == key }?.let {
+                it.agentState == AgentState.Unread && agentPreferences.first().seen[key.path] != "${it.updatedAt.orEmpty()}|${it.rev ?: ""}"
+            } == true
+        }
+        visibleAgentChat.value = agent
     }
     DisposableEffect(visibleChat, session.demo) {
         if (session.demo == null) Notify.viewing(visibleChat?.let { SessionKey(it.machineId, it.sessionId) })

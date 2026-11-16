@@ -51,7 +51,8 @@ class AgentsHeldInListShotsTest {
         }
         val dependencies = agentsDependencies(emptyList(), emptyList())
         val model = AgentsViewModel(repository, dependencies.interactions(), dependencies.connection(),
-            dependencies.sender(), dependencies.preferences(), visibleChat = visible)
+            dependencies.sender(), dependencies.preferences(), visibleChat = visible,
+            heldChat = MutableStateFlow(SessionKey("machine", "summary")))
         val modelReference = model
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
