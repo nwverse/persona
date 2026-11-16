@@ -498,11 +498,14 @@ struct Index {
   }
   @Builder destinationMenus(name: string, param: Object) {
     if (!this.mainDestination(name, param)) Row({ space: Tokens.gap }) {
-      ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem) => {
+      ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) {
           if (item.symbolIcon) SymbolGlyph().attributeModifier(item.symbolIcon).fontSize(Tokens.symbolFont)
           else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
         }.attributeModifier(ButtonStyles.chrome).accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
+          .id(name === 'session' || name === 'conversation' ? 'chat.title.more' : 'destination.action.' + String(index))
+          .bindMenu((name === 'session' || name === 'conversation') && this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param),
+            this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       })
     }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: Tokens.page })
   }
@@ -924,7 +927,6 @@ struct Index {
       .hideTitleBar(this.hideChatTitle(name, param)).hideBackButton(this.destinationBackHidden(name, param))
       .backgroundColor(name === 'resources' && param === 'inbox' ? Colors.grouped : Colors.canvas)
       .menus(this.destinationMenus(name, param))
-      .bindMenu(this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param), this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       .onShown(() => this.routeShown(name, param))
       .onHidden(() => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; if (this.activeChild === this.childKey(name, param)) { this.activeChild = ''; this.dismissChatActions(); } if ((name === 'session' || name === 'conversation') && this.routeRow(param).key() === this.detailModel.selected.key()) this.detailModel.hideConversation(false); if (name === 'assistant') this.detailModel.watchDecisions(false); if (name === 'tools') this.detailModel.releaseTerminal(); })
       .onBackPressed((): boolean => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; this.detailModel.releaseTerminal(); this.stack.pop(); this.savePath(); return true; })
