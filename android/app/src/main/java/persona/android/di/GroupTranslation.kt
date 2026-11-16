@@ -395,6 +395,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         // Rows name the hub's own machine id: back in the merged one, so the form's filter by machine keeps them.
         override suspend fun workspaces(machineId: String) =
             source.workspaces(names.rawMachine(machineId)).map { it.copy(machineId = names.machineId(it.machineId)) }
+        override suspend fun workspaceCatalog(machineId: String) =
+            source.workspaceCatalog(names.rawMachine(machineId)).map { it.copy(machineId = names.machineId(it.machineId)) }
     }
 }
 

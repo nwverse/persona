@@ -83,7 +83,8 @@ export function machineTreeByUpdate(tree: readonly HerdrMachine[]): HerdrMachine
 }
 
 function repoWorktreeByUpdate(w: RepoWorktree): RepoWorktree {
-  const children = latestFirst(w.children.map(repoWorktreeByUpdate), (c) => latestOf(c.tree), (c) => c.key);
+  const children = latestFirst(w.children.map(repoWorktreeByUpdate), (c) => latestOf(c.tree), (c) => c.key)
+    .sort((a, b) => (b.latestPinTime ?? -Infinity) - (a.latestPinTime ?? -Infinity));
   return { ...w, sessions: [...w.sessions].sort(byUpdated), children };
 }
 
@@ -97,7 +98,7 @@ export function repoMachinesByUpdate(list: readonly RepoMachine[]): RepoMachine[
       m.repos.map((r) => ({ ...r, worktrees: r.worktrees.map(repoWorktreeByUpdate) })),
       (r) => latestOf(r.worktrees.flatMap((w) => w.tree)),
       (r) => r.key,
-    ),
+    ).sort((a, b) => (b.latestPinTime ?? -Infinity) - (a.latestPinTime ?? -Infinity)),
   }));
 }
 
