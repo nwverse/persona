@@ -622,13 +622,14 @@ and D1 stays. Filling in this table does not itself close #6871 or approve produ
    Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
    All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
    Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
-2. **[Retained iOS evidence readme, PR #7639 head](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/README.md)** —
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in that head's docs/archive/apple/reference-measurements-6871/ at commit
+   [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
    exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
    uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
-   [Dispatch raw report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-boundary.json)
+   Dispatch raw report (`raw/core-boundary.json`)
    includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
-   [100-item drain report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-large-page.json)
-   covers drain/bincode decode/string-list apply, not a presented frame. [Lifecycle report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-lifecycle.json)
+   100-item drain report (`raw/core-large-page.json`)
+   covers drain/bincode decode/string-list apply, not a presented frame. Lifecycle report (`raw/core-lifecycle.json`)
    has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
    `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
    are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`
