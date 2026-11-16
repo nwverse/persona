@@ -1183,8 +1183,7 @@ A third mode next to Mouse Mode and Trackpad Mode: the Mac gets a portrait virtu
 picture, the window the phone picks fills it, and the phone switches windows from a list. Text reads at phone size
 without zooming. For people who already work on their Mac from the live screen; Mouse Mode stays the default.
 The approach and its measurements of macOS follow [Snug](https://github.com/zephyr4123/snug) (MIT; code adapted from it
-keeps its notice, `THIRD_PARTY_NOTICES.md`). Phase 1 (this section) is the Mac, the node and the manager; the iPhone's
-mode, window sheet and gestures come next on the same issue.
+keeps its notice, `THIRD_PARTY_NOTICES.md`).
 
 - **Who does what**: Persona Input (Persona Link's helper that already holds Accessibility for pixel scrolling) runs a
   session, `--socket <path> --token <t> --phone-screen`, started by the node like its scroll session. Moving other apps'
@@ -1231,9 +1230,24 @@ mode, window sheet and gestures come next on the same issue.
   ends the session. The statuses carry `phone_screen {version, permission}` from the cached `--preflight`.
 - **Manager**: `POST /api/v1/machines/{mid}/computer/phone-screen` (protocol.md), with the clipboard's gate. Window titles
   are never logged.
+- **iPhone** (`VNCPage`, `PhoneScreenLink`, `PhoneScreenWindows`): ⋯ › Mode lists Phone Screen when the Mac's status has
+  `phone_screen` (a kept choice on a Mac that no longer offers it acts as Mouse Mode). While the mode is on and the screen
+  is live, the page starts the session for its RFB connection's `pair` with the picture's size in points (read while the
+  keyboard is down), and a new connection starts it again. A line over the top of the picture (not above it, so the
+  picture keeps its shape) says "Setting up the phone screen…" meanwhile, or why it couldn't (Accessibility not allowed,
+  another device has it, Persona Link too old). The page then
+  shows only the new display: RFB crops to it with the mixed-scale rule (`VNCDisplays.anchored`; Screen Sharing sends
+  DesktopSize when the display comes and goes, measured), and the video channel captures it by its id. The first time it is
+  up with nothing on it, and from the bottom bar's Windows button, a sheet lists the Mac's windows by app (the one on the
+  display checked, minimized ones marked); a tap puts one there and closes it. Leaving the mode or closing the page sends
+  `stop`. Touches: a tap clicks there; one finger scrolls (by the point through Persona Input where it may, with a coast);
+  held half a second then dragged, it drags (selects text); held and lifted, the right button; two fingers and pinching as
+  in Mouse Mode. The mock hub's `MOCK_PHONE_SCREEN=1` (with `MOCK_SCREEN=fake`) plays a Mac that has it, for screenshots.
 - **Measured on a Mac** (macOS 26.6, 2026-11-16, a node stand-in driving the signed helper): start 1.7–2.1 s to a 540 ×
   1021 pt display at 2×; place 0.6–0.9 s; switching windows put the previous one back; stop 0.9 s, after which the display
   was gone, the main display's mode unchanged and none of 180 windows had moved.
+- **Measured over Screen Sharing**: a client connected when the display comes gets DesktopSize 3000 × 2042 about 1.7 s
+  after `start` and 1920 × 1080 again after `stop`.
 - **Known limits**: `CGVirtualDisplay` is private and may change with macOS. On a Mac with no display attached any added
   display replaces the default one (Snug). Windows in another Space or in full screen in their own Space are not listed
   yet. With displays of mixed scales chained away from the main display, RFB may still not find the virtual display
