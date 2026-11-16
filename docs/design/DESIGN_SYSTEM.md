@@ -1757,6 +1757,10 @@ Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
   row is wider than the card (the largest text sizes) it scrolls, opening with the current one in sight; the card's title
   then wraps to up to three lines.
 - **Previous / Next** move one question at a time. A question gone back to shows the answer it had.
+- **A single-select pick** moves on to the next question by itself after a short pause (250 ms), once, and never past
+  the last one. A second pick within the pause starts the pause again, so the card moves a whole pause after the last
+  pick and its tick is seen; Previous / Next meanwhile cancel the move (`QuestionSteps.step`, #6549; two taps within the
+  pause used to skip a question).
 - **The review** (`ScreenReview`, `apple/Persona/Views/Interactions/ScreenReview.swift`): a row per question, Previous and
   **Submit N Answers**. A question left reads **Not answered** in the caution color; the main button then goes to it,
   and **Submit Without Them** sends the rest. At the largest text sizes the buttons stack, the main one first, and so
@@ -2253,7 +2257,9 @@ page the user watches during the meeting is the page they keep writing in after 
   subtitle and Topics hide and the top card keeps only its newest part (the Live box its newest line; the Highlights
   card its newest highlight, the latest `at`, or its waiting line; neither with Full Transcript), so the thread keeps its
   height (the structure stays the same, so the thread's scroll position holds); it changes on `Theme.Motion.state`, and
-  when the keyboard goes down the card is whole again. At accessibility sizes a one-line header (dot, time, menu, Hide)
+  when the keyboard goes down the card is whole again. In the meeting room (#8731 B1) the people row and the tabs step
+  aside instead, and only the Live page folds (its Live box to its newest line). The Highlights page keeps its card
+  whole, Full Transcript included, since the card is that page. At accessibility sizes a one-line header (dot, time, menu, Hide)
   stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
   **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
