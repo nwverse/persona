@@ -1254,6 +1254,24 @@ static void check_transport_envelope(const char *fixtures) {
     }
     if (replayed != sizeof(expected) / sizeof(expected[0]))
         fail("transport", "manifest", "every named shared-scalar case must replay");
+    const char *mixed = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\",\"history\":\"\\ud83d\"}";
+    PersonaCoreBytes mixed_result = persona_core_transport_frame((const uint8_t *)mixed, strlen(mixed));
+    JValue *mixed_decoded = mixed_result.data && mixed_result.length ? json_parse(mixed_result.data, mixed_result.length) : NULL;
+    // Source-undetermined: the mixed rows/history input must be refused, never silently Other. Exact Foundation
+    // error priority is not asserted here; rows in isolation below has an unambiguous wrong_type expectation.
+    const char *mixed_code = jstr(jget(jget(mixed_decoded, "error"), "code"));
+    if (!mixed_code) fail("transport", "nested_malformed_scalar", "valid items must not hide another bad scalar");
+    jfree(mixed_decoded);
+    persona_core_bytes_free(mixed_result);
+    const char *rows = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\"}";
+    PersonaCoreBytes rows_result = persona_core_transport_frame((const uint8_t *)rows, strlen(rows));
+    JValue *rows_decoded = rows_result.data && rows_result.length ? json_parse(rows_result.data, rows_result.length) : NULL;
+    const char *rows_code = jstr(jget(jget(rows_decoded, "error"), "code"));
+    const char *rows_detail = jstr(jget(jget(rows_decoded, "error"), "detail"));
+    if (!rows_code || strcmp(rows_code, "wrong_type") != 0 || !rows_detail || strcmp(rows_detail, "rows") != 0)
+        fail("transport", "rows_type", "rows is Int? in LiveConnection.swift's Envelope");
+    jfree(rows_decoded);
+    persona_core_bytes_free(rows_result);
     const char *other = "{\"type\":\"future_event\",\"unknown\":1.5}";
     PersonaCoreBytes result = persona_core_transport_frame((const uint8_t *)other, strlen(other));
     JValue *decoded = result.data && result.length ? json_parse(result.data, result.length) : NULL;

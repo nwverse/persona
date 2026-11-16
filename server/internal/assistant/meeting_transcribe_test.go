@@ -554,6 +554,58 @@ func TestHubJobReopenedAndIdle(t *testing.T) {
 	}
 }
 
+// The phone's socket gone without end (the app ended by the system, a pause, a drop): the live job, whose upstream
+// sessions bill silence, is ended once it has had no audio for jobAwayIdle, not the minute a socket that is up gets
+// (#9198). A socket that stays up keeps its job past jobAwayIdle; the phone back on a new socket opens a new job with
+// its next audio.
+func TestHubJobEndedSoonOnceThePhoneIsGone(t *testing.T) {
+	h := newHubFixture(t)
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: mixedLines[:1]} })
+	h.hubUpload(meetingRec, 1, nil)
+	jobAwayIdle = 300 * time.Millisecond // jobIdle stays a minute
+	p, _ := h.open(meetingRec, 0, nil)
+	p.audio(2)
+	p.wait("line", 1)
+	jobs := h.tr.jobsOf(extwire.TranscriptionLive)
+	if len(jobs) != 1 {
+		t.Fatalf("live jobs: %d", len(jobs))
+	}
+	// Up and quiet, past jobAwayIdle (the run's clock moved on by hand): the job stays.
+	r := h.s.hubRunOf(meetingRec)
+	r.mu.Lock()
+	quiet := r.audioAt.Add(4 * jobAwayIdle)
+	r.mu.Unlock()
+	r.tick(quiet)
+	r.mu.Lock()
+	kept := r.job != nil && !r.job.ending
+	r.mu.Unlock()
+	if !kept {
+		t.Fatal("the job ended while the phone's socket was up")
+	}
+	// Gone without end: ended within jobAwayIdle (and its tick), long before jobIdle.
+	_ = p.c.CloseNow()
+	gone := time.Now()
+	waitFor(t, "the job ended", func() bool {
+		_, _, _, ended := jobs[0].snapshot()
+		return ended
+	})
+	if took := time.Since(gone); took >= 3*time.Second {
+		t.Fatalf("the job ended %v after the phone's socket went", took)
+	}
+	// Back: the new socket's audio opens a new job, from the live edge.
+	h.tr.set(func(f *fakeTranscriber) { f.live = jobScript{lines: []fakeLine{{2.5, 3.0, "Back again."}}} })
+	p2, ready := h.open(meetingRec, 2, nil)
+	if from, _ := ready["from"].(float64); from != 2 {
+		t.Fatalf("ready from %v, want 2", ready["from"])
+	}
+	p2.audio(1.5)
+	p2.wait("line", 1)
+	jobs = h.tr.jobsOf(extwire.TranscriptionLive)
+	if len(jobs) != 2 || *jobs[1].start.At < 2 {
+		t.Fatalf("jobs: %d, the second from %v", len(jobs), jobs[len(jobs)-1].start.At)
+	}
+}
+
 // The job's usage is logged with the recording id and kept with the transcription.
 func TestHubUsage(t *testing.T) {
 	h := newHubFixture(t)

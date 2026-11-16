@@ -104,6 +104,7 @@
   "err_not_callable": "这个供应商不能在 hub 上直接调用 API",
   "err_not_api": "不是 API 供应商",
   "err_api_protocol": "不支持这个 API 协议",
+  "err_tier_alias_unresolved": "“{model}”是 Claude Code 的档位名，{provider} 没有给这个档位指定模型。请改选一个具体模型，或在 {provider} 里填上这个档位的模型。",
   "err_provider_type": "供应商要是字符串或 null",
   "err_field_type": "模型字段要是字符串或 null",
   "err_field_invalid": "模型字段不能为空或包含换行",
