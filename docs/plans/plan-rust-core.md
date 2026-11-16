@@ -503,13 +503,15 @@ Phase 3 lands in several PRs.
   - `persona_core::state` decodes client and hub session states: client-state precedence, hub `done` with a
     2-second seen tolerance, waiting detection from loop info / background tasks / subagents / workflows.
   - `persona_core::recents` implements the conversation and setup LRU with dedup, skip-current and limits.
-  - 43 sort cases (30 projection + 2 session_state + 11 hub_state) + 21 recents cases (11 conversations +
-    10 setups) = 64 exact fixture cases, all passing in `cargo test`. The exact manifest assertion catches
-    added, dropped or renamed cases; a mutation test catches a reversed date comparison.
+  - 46 sort cases (33 projection + 2 session_state + 11 hub_state) + 21 recents cases (11 conversations +
+    10 setups) = 67 exact fixture cases. #9033 adds three iOS-derived held-row projections: quiet held rows retain
+    Unread rank in State, stay out of idle folds, and keep their space out of quiet spaces. Expectations cite
+    `AgentListOrder.swift` and `AppModel.swift` and are not generated from Kotlin or Rust. The exact manifest assertion
+    catches added, dropped or renamed cases; a mutation test catches a reversed date comparison.
   - Multi-hub grouping uses `group|machine_id` (`MachineRef.path`); BackgroundWaiting quick filter shows only
     rank-4; `since:` uses the caller's `now`, never a system clock.
   - Host boundaries: C FFI `persona_core_project_sort`, JNI `Java_..._projectSort`, NAPI `core_project_sort`
-    (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
+    (all pure JSON functions, no runtime handle). ArkTS host replay covers all 33 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
   - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966, final integration PR
@@ -672,7 +674,7 @@ Phase 3 lands in several PRs.
     `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
     every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
     production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
-  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 33 `agents_list` sort cases,
     answer 15 question + 9 recommendation cases (conditional expected objects, invalid page/option and U+200B; the
     ninth recommendation is #9233), all 21
     complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
@@ -684,6 +686,19 @@ Phase 3 lands in several PRs.
     rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
     projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
     **26.0 not verified**.
+
+- **Android heldInList production alignment (#9033).**
+  - Android's production `AgentSession` carries the visible-chat held flag through `AgentListOrder` / `AgentList`.
+    A quiet held row retains Unread rank and stays visible, and its space is excluded from quiet-space grouping.
+    The shell's existing visible Agent chat is latched only if the row was Unread on opening, and released on leaving.
+  - `spec/fixtures/sort/held.json` supplies three State, Space and quiet-fold cases derived from current iOS
+    `AgentListOrder.stays`, `rank`, `isQuiet` and `AppModel.visibleSession` / `markSeen`. Rust, real Kotlin/JNI,
+    the independent C client, ArkTS host and Swift/C host replay compare the complete expected objects. A separate
+    core fix matches `SessionKey.path` for held identity: the hub group must not be lost from a held row's id.
+    No iOS production behavior changes.
+  - Native JVM Compose captures cover Glass, Brief and Board in light and dark, both held and released. They are
+    synthetic host-render evidence, not an emulator, device or performance measurement; Apple compilation is host
+    SwiftPM evidence, not simulator or physical-device evidence.
 
 ### Migration rules (each domain)
 

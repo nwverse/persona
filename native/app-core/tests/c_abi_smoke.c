@@ -1,7 +1,7 @@
 // An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017, #9241).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
-// answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
+// sort's three iOS-derived held cases (#9033), answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
 // The stream_repair replay (22 fence + 19 marker/boundary + 39 table/boundary complete objects) mirrors the Apple
@@ -686,7 +686,7 @@ static void expect_empty(Projection projection, const char *domain, const char *
     persona_core_bytes_free(result);
 }
 
-/* ---------- sort (the original #8560 smoke, now semantic) ---------- */
+/* ---------- sort (empty-list smoke plus the iOS-derived held-row projections) ---------- */
 
 static int check_sort(const char *fixtures) {
     char path[4096];
@@ -702,6 +702,27 @@ static int check_sort(const char *fixtures) {
     JValue *actual = project_case(persona_core_project_sort, jget(found, "input"));
     if (!actual || !jequal(actual, jget(found, "expected"))) fail("sort", "empty_list", "projection differs from the fixture");
     jfree(actual);
+    jfree(doc);
+
+    static const char *const manifest[] = {
+        "held_quiet_row_keeps_unread_state_section", "held_quiet_space_stays_active", "held_row_stays_out_of_quiet_idle_fold",
+    };
+    snprintf(path, sizeof(path), "%s/sort/held.json", fixtures);
+    doc = load_json(path);
+    cases = jget(doc, "cases");
+    if (jcount(cases) != sizeof(manifest) / sizeof(manifest[0])) {
+        fail("sort", "held manifest", "exact held case count differs"); jfree(doc); return 1;
+    }
+    for (size_t i = 0; i < sizeof(manifest) / sizeof(manifest[0]); i++) {
+        const JValue *c = jat(cases, i);
+        const char *name = jstr(jget(c, "name"));
+        if (!name || !manifest_has(manifest, sizeof(manifest) / sizeof(manifest[0]), name)) {
+            fail("sort", "held manifest", "added, dropped or renamed held case"); continue;
+        }
+        actual = project_case(persona_core_project_sort, jget(c, "input"));
+        if (!actual || !jequal(actual, jget(c, "expected"))) fail("sort", name, "projection differs from the iOS-derived fixture");
+        jfree(actual);
+    }
     jfree(doc);
     expect_empty(persona_core_project_sort, "sort", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_sort, "sort", "invalid_json", "{\"sessions\":[}");
@@ -1592,7 +1613,7 @@ int main(int argc, char **argv) {
     }
     /* Fail closed: every fixture this client replays must exist and parse before any comparison runs. */
     static const char *const required[] = {
-        "sort/filters.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
+        "sort/filters.json", "sort/held.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
         "lines/ios/differences.json", "lines/folds.json", "lines/frozen.json", "lines/layout.json",
         "lines/queued.json", "lines/rebuild.json", "lines/structure.json", "lines/tasks.json",
         "lines/wakes.json", "lines/work.json", "wire-envelope/frames.json",
@@ -1621,6 +1642,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, stream_repair 80 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort empty+3 held, answer 15+9, stream 21, stream_repair 80 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }
