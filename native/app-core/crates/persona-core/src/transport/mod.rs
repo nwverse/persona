@@ -385,43 +385,11 @@ keyed! {
     }
 }
 
-keyed! {
-    struct TypeOnly<'a> {
-        kind = "type": Seen<Cow<'a, str>>,
-    }
-}
-
-/// Whether the object, which did not parse as an envelope, is still JSON that names another type.
-fn names_another_type(json: &str) -> bool {
-    serde_json::from_str::<TypeOnly<'_>>(json)
-        .is_ok_and(|only| matches!(only.kind, Seen::Value(kind) if kind != "items"))
-}
-
-keyed! {
-    struct NestedItems<'a> {
-        items = "items": Seen<Items>,
-    }
-}
-
-fn has_nested_items(json: &str) -> bool {
-    serde_json::from_str::<NestedItems<'_>>(json).is_ok_and(|nested| matches!(nested.items, Seen::Value(_)))
-}
-
 /// Decodes a WebSocket frame. The shared scalar / raw-JSON envelope is validated before routing, as on iOS.
 /// A frame of another type is [`Frame::Other`] once that gate succeeds; it is not decoded as a continuity event.
 pub fn decode_frame(bytes: &[u8]) -> Result<Frame, DecodeError> {
     let json = utf8(bytes)?;
-    let fields: self::envelope::EnvelopeFields<'_> = match root(json) {
-        Ok(fields) => fields,
-        // Preserve the old fallback only when the payload that the shared scalar gate cannot parse is a known items
-        // array. Its nested model is outside this slice; the other frame is not decoded as a continuity event.
-        Err(DecodeError::Malformed { .. })
-            if opens_object(json) && names_another_type(json) && has_nested_items(json) =>
-        {
-            return Ok(Frame::Other);
-        }
-        Err(error) => return Err(error),
-    };
+    let fields: self::envelope::EnvelopeFields<'_> = root(json)?;
     fields.validate()?;
     let e: Envelope<'_> = root(json)?;
     if e.kind.required("type")? != "items" {

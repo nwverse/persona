@@ -738,6 +738,8 @@ extension Theme {
         /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording, the drawer's
         /// Meetings, #8731).
         static let meeting = "person.2.wave.2"
+        /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
+        static let invite = "person.badge.plus"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.
