@@ -311,6 +311,9 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun memory() = source.memory()
         override suspend fun saveMemory(name: String, content: String) = source.saveMemory(name, content)
         override suspend fun deleteMemory(name: String) = source.deleteMemory(name)
+        override suspend fun places() = source.places()
+        override suspend fun savePlace(place: SavedPlace) = source.savePlace(place)
+        override suspend fun deletePlace(id: String) = source.deletePlace(id)
         override suspend fun skills() = source.skills().let { it.copy(machineId = names.machineId(it.machineId)) }
         override suspend fun alwaysGrants(session: SessionKey) = source.alwaysGrants(names.raw(session))
         override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = source.revokeAlwaysGrant(names.raw(session), keyHash)
@@ -401,6 +404,10 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
         // Rows name the hub's own machine id: back in the merged one, so the form's filter by machine keeps them.
         override suspend fun workspaces(machineId: String) =
             source.workspaces(names.rawMachine(machineId)).map { it.copy(machineId = names.machineId(it.machineId)) }
+        override suspend fun workspaceCatalog(machineId: String) =
+            source.workspaceCatalog(names.rawMachine(machineId)).let { catalog ->
+                catalog.copy(workspaces = catalog.workspaces.map { it.copy(machineId = names.machineId(it.machineId)) })
+            }
     }
 }
 
