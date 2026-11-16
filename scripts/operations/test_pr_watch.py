@@ -1313,6 +1313,37 @@ class WatcherTests(unittest.TestCase):
                 verify.assert_not_called()
                 merge.assert_not_called()
 
+    def test_findings_publication_failure_preserves_review_and_retries_repair(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[finding]) as review, \
+                patch.object(self.watcher, "comment_findings", side_effect=pr_watch_common.WatchError("offline")), \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+            state = self.watcher.state.get("example/one", 7)
+            self.assertEqual(state["semantic"], "findings")
+            self.assertEqual(state["outcome"], "reviewed")
+            self.assertFalse(state["review_posted"])
+            self.assertEqual(state["review_attempts"], 0)
+            self.assertEqual(state["publication_attempts"], 1)
+            repair.assert_not_called()
+            self.watcher.state.put("example/one", 7, pr()["headRefOid"],
+                                   evidence_key=state["evidence_key"], retry_after=0)
+            with patch.object(self.watcher, "comment_findings", return_value=None):
+                self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        repair.assert_called_once()
+
+    def test_review_only_p2_comment_does_not_promise_a_merge(self):
+        self.watcher.config["repositories"][0]["merge"] = False
+        self.watcher.repositories["example/one"]["merge"] = False
+        with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            self.watcher.comment_findings("example/one", 7, pr(), [
+                {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}])
+        payload = execute.call_args.kwargs["input_text"]
+        self.assertIn("no automatic repair or merge", payload)
+        self.assertNotIn("merging continue", payload)
+
     def test_verification_failure_uses_bounded_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \

@@ -466,6 +466,8 @@ class Watcher:
             action = "Review-only mode: no automatic repair or merge will be attempted. Please correct the findings in a new head."
         elif blocking:
             action = "P0/P1 findings block this head; the watcher will use its bounded repair flow."
+        elif self.dry_run:
+            action = "Dry run: findings are recorded locally; no automatic verification publication or merge will be attempted."
         else:
             action = "These P2 findings are non-blocking under the maintainer-approved policy. Verification and exact-head merging continue."
         body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
@@ -1057,14 +1059,17 @@ class Watcher:
                                          review_fingerprint=review_fingerprint,
                                          outcome="reviewed",
                                          review_attempts=0,
+                                         publication_attempts=0,
                                          retry_reason=None,
                                          review_posted=bool(current.get("review_posted") and
                                                             published_fingerprint == review_fingerprint))
             findings = current.get("findings", [])
             if not current.get("review_posted") and findings:
+                phase = "publication"
                 self.phase(key, "posting actionable findings")
                 if not self.dry_run:
                     self.comment_findings(repo, number, pr, findings)
+                phase = "semantic"
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          review_posted=not self.dry_run,
                                          published_findings=findings if not self.dry_run else current.get("published_findings", []),
@@ -1173,6 +1178,20 @@ class Watcher:
             retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
             exhausted_review = (phase == "semantic" and
                                 int(self.state.get(repo, number).get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
+            if phase == "publication":
+                # A completed semantic verdict stays valid. Only its GitHub
+                # publication failed; never consume the reviewer retry budget
+                # or postpone the already-required P0/P1 repair.
+                latest = self.state.get(repo, number)
+                attempts = int(latest.get("publication_attempts", 0)) + 1
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               outcome="reviewed", review_posted=False,
+                               publication_attempts=attempts,
+                               retry_after=time.time() + min(1800, 60 * (2 ** min(attempts - 1, 5))),
+                               failure=str(error))
+                self.log("%s#%s findings publication failed; preserving the completed review: %s" % (
+                    repo, number, bounded(error, 500)))
+                return False
             if phase == "semantic" and exhausted_review:
                 self.state.put(repo, number, head, evidence_key=evidence_key,
                                outcome="retry", retry_after=time.time() + 3600,

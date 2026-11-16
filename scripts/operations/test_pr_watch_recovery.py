@@ -238,6 +238,39 @@ class RecoveryIntegrationTests(unittest.TestCase):
                 pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
         self.assertEqual(execute.call_count, 1)
 
+    def test_fetch_recovery_writes_a_real_linked_worktree_fetch_head(self):
+        env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                   GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+        (self.checkout / "fixture").write_text("base\n")
+        subprocess.run(["git", "add", "fixture"], cwd=self.checkout, env=env, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=self.checkout, env=env, check=True, capture_output=True)
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.checkout, env=env, text=True).strip()
+        linked = self.root / "linked"
+        subprocess.run(["git", "worktree", "add", "--detach", str(linked), sha], cwd=self.checkout,
+                       env=env, check=True, capture_output=True)
+        self.addCleanup(lambda: subprocess.run(["git", "worktree", "remove", "--force", str(linked)],
+                                              cwd=self.checkout, env=env, capture_output=True))
+        subprocess.run(["git", "remote", "add", "origin", str(self.checkout)], cwd=linked,
+                       env=env, check=True, capture_output=True)
+        git_path = subprocess.check_output(["git", "rev-parse", "--git-path", "FETCH_HEAD"],
+                                           cwd=linked, env=env, text=True).strip()
+        destination = (linked / git_path).resolve()
+        self.assertEqual(destination.parent, (self.checkout / ".git/worktrees/linked").resolve())
+        original_run = pr_watch_common.run
+        def controlled(argv, **kwargs):
+            if argv[:2] == ["git", "fetch"] and "diff.renames=false" not in argv:
+                return subprocess.CompletedProcess(argv, 2, "", "exhaustive rename detection was skipped")
+            if argv[:2] == ["git", "ls-remote"]:
+                return subprocess.CompletedProcess(argv, 0, sha + "\trefs/heads/main\n", "")
+            return original_run(argv, **kwargs)
+        with patch.object(pr_watch_common, "run", side_effect=controlled):
+            self.assertEqual(pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"],
+                                                    cwd=linked), sha + "\n")
+        self.assertEqual(subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"],
+                                                cwd=linked, env=env, text=True).strip(), sha)
+        self.assertTrue(destination.is_file())
+
     def test_repair_commit_message_has_no_tool_attribution(self):
         source = (HERE / "pr_watch_repair.py").read_text()
         self.assertNotIn("Co-Authored-By:", source)
