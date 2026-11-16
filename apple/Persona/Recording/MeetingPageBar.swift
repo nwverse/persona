@@ -141,8 +141,9 @@ struct MeetingPageBar: View {
         .onChange(of: justMe) { _, on in
             if on { call.endHold(entry.id) }
         }
-        .confirmationDialog("Stop Recording?", isPresented: $confirmingStop, titleVisibility: .visible) {
-            Button("Stop Recording", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
+        .confirmationDialog("End the Meeting?", isPresented: $confirmingStop, titleVisibility: .visible) {
+            Button("End and Write the Minutes", role: .destructive) { MeetingRecorder.shared.stop(recordingID: entry.id.uuidString) }
+            Button("Keep Going [Meeting Room]", role: .cancel) {}
         } message: {
             Text("The audio is saved on this device and its text goes to Knowledge. A stopped recording can't be continued.")
         }
@@ -348,33 +349,47 @@ struct MeetingPageBar: View {
             .contentShape(.circle)
     }
 
-    // MARK: Pause, Bookmark, Stop
+    // MARK: The meeting room's controls
 
+    /// A meeting app's row (#8731 v2): Pause, Bookmark, Photo (a room meeting's), Speaker (Persona answers out loud, while
+    /// it is in the meeting), Invite (Persona in or out) and End, red, which asks first.
     private var controls: some View {
-        HStack(spacing: Theme.Space.m) {
-            barButton(pauseTitle, paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
+        let role = entry.attendance?.sentRole ?? .off
+        return HStack(alignment: .top, spacing: Theme.Space.xs) {
+            MeetingRoomButton(title: pauseTitle, symbol: paused ? Theme.Icon.run : Theme.Icon.pause) { togglePause() }
                 .accessibilityIdentifier("recording-pause")
-            barButton(String(localized: "Bookmark"), Theme.Icon.pin) { addBookmark() }
+            MeetingRoomButton(title: String(localized: "Bookmark"), symbol: Theme.Icon.pin) { addBookmark() }
                 .accessibilityIdentifier("recording-bookmark")
-            barButton(String(localized: "Stop [Car Play Voice Screen c7b24e]"), Theme.Icon.interrupt) { confirmingStop = true }
+            if canAddPhotos {
+                Menu { photoButtons } label: {
+                    MeetingRoomButton(title: String(localized: "Photo [Meeting Room]"), symbol: Theme.Icon.camera) {}
+                        .allowsHitTesting(false)
+                }
+                .accessibilityIdentifier("meeting-room-photo")
+            }
+            if entry.roomMeeting {
+                MeetingRoomButton(title: String(localized: "Speaker [Meeting Room]"),
+                                  symbol: role.speaks ? Theme.Icon.answersAloud : Theme.Icon.answersOnScreen, on: role.speaks) {
+                    // Out loud or on screen; the system's echo cancellation stays as the meeting started (B2 decides).
+                    Haptics.tap()
+                    _ = MeetingRecorder.shared.setRole(role.speaks ? .listener : .participant, recordingID: entry.id.uuidString)
+                }
+                .disabled(!role.answers)
+                .opacity(role.answers ? 1 : 0.4)
+                .accessibilityIdentifier("meeting-room-speaker")
+                MeetingRoomButton(title: role.answers ? String(localized: "Remove [Meeting Room]") : String(localized: "Invite [Meeting Room]"),
+                                  symbol: Theme.Icon.invite, on: false) {
+                    Haptics.tap()
+                    _ = MeetingRecorder.shared.setRole(role.answers ? .off : .listener, recordingID: entry.id.uuidString)
+                }
+                .accessibilityIdentifier("meeting-room-invite-button")
+            }
+            MeetingRoomButton(title: String(localized: "End [Meeting Room]"), symbol: Theme.Icon.interrupt, ends: true) { confirmingStop = true }
                 .accessibilityIdentifier("recording-stop")
         }
     }
 
     private var pauseTitle: String { paused ? String(localized: "Continue") : String(localized: "Pause") }
-
-    /// A standard button, its icon over its label, at least a finger tall.
-    private func barButton(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: Theme.Space.xxs) {
-                ThemedIcon(symbol).font(Theme.Font.heading).scaledFrame(height: Theme.Size.icon)
-                Text(title).font(Theme.Font.captionStrong).lineLimit(1).minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity)
-            .scaledFrame(minHeight: Theme.Size.tapTarget)
-        }
-        .themedButton()
-    }
 
     // MARK: Actions
 

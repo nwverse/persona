@@ -294,7 +294,7 @@ final class MeetingRecordingUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["recording-timeline-bookmark"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
         // Stop asks first; Cancel keeps recording.
         stop.tap()
-        let confirm = app.buttons["停止录音"].firstMatch
+        let confirm = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         try shot(app, "stop-dialog")
         confirm.tap()

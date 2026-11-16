@@ -828,7 +828,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 ### 3.6 Sheets
 
-- **Live recording sheet** (#4240, `RecordingLiveSheet`): a large-detent sheet with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row. A room meeting's sheet (#3862, a phone meeting recording started while the hub listed `meeting_conversation`) shows the meeting page in place of the live view, and after Stop the same page goes on as the meeting's thread in place of the wrap-up ("Meeting page (#3862)" below); ordinary recordings and #3746 meetings keep this sheet's look.
+- **Live recording sheet** (#4240, `RecordingLiveSheet`; full screen and dark while it records since #8731, "The meeting room" below): a screen with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row. A room meeting's sheet (#3862, a phone meeting recording started while the hub listed `meeting_conversation`) shows the meeting page in place of the live view, and after Stop the same page goes on as the meeting's thread in place of the wrap-up ("Meeting page (#3862)" below); ordinary recordings and #3746 meetings keep this sheet's look.
 - **Consent sheet** (#4741, `RecordingDayConsentView`): before something that records other people or sends their words to a model starts for the first time. A large-detent sheet with an inline title: the mode's mark, a heading that says what is about to happen, then one row per point (a `ThemedIcon` in the accent beside the words, read as one element), what the user can do later in a caption, and **Agree** (prominent, the one solid button) over **Not Now** (borderless) pinned at the bottom in a safe-area inset, so both stay in reach at every text size while the points scroll. Agree is the only way to agree; Not Now and a swipe down change nothing. The agreement is stored with the sheet's version, and a new version asks again. The points come from one list (`RecordingDayConsentPoint`) the tests count, not from the view.
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - The composer's + panel on the iPhone (`AttachSheet`) is a system sheet with detents medium and large and the drag indicator, like the system's photo picker; its bar sits in `safeAreaInset(edge: .bottom)` so the keyboard pushes it up (#4312).
@@ -2167,6 +2167,22 @@ speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTex
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
+
+### The meeting room (#8731 v2)
+
+A room meeting records in a meeting app's room: full screen and dark in both appearances (E1, as meeting apps are; the
+wrap-up after Stop takes the app's own look again). From the top: collapse (`Theme.Icon.minimizeRoom`; the meeting goes
+on, the Live Activity and the page's card lead back), the title over its time and state, the page menu; who is in it
+(`MeetingRoomPeople`: you with the microphone's level, Persona while it answers with how it answers and a green ring while
+it speaks, its menu removing it; Invite while it isn't in); then, for a meeting started with the live view, three pages that
+swipe and are named in a row of chips (`MeetingRoomTabs`): **Live** (the newest lines and the thread, as before),
+**Highlights** (the topics and the highlights card) and **Map** (`MeetingTopicMap`: the topics in order, the one on now
+in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
+row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
+answers out loud or on screen; only while it is in), **Invite / Remove**, and **End** in the danger color, which asks
+first (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
+with the speaker mid-meeting is an experiment behind a switch (B2). Ordinary recordings and #3746 meetings keep the live
+view, in the same dark full screen.
 
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
