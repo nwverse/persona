@@ -64,8 +64,6 @@ import { CloseoutCard } from "./CloseoutCard";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
-import { contextUsage } from "../../lib/context-usage";
-import { ContextMeter } from "./ContextMeter";
 import { AgentModelPill, AssistantModelPill } from "./ModelPill";
 import { switchRefused } from "../../lib/session-models";
 import { mediaMatches, NARROW, NO_HOVER, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
@@ -153,6 +151,7 @@ const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => 
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 // Full pages opened from a conversation's hand-off card or belonging to an Inbox item load their way-back strip on demand.
+const AgentStatusLine = lazy(() => import("./AgentStatusLine").then((m) => ({ default: m.AgentStatusLine })));
 const HandoffBack = lazy(() => import("./HandoffBack").then((m) => ({ default: m.HandoffBack })));
 const InboxBack = lazy(() => import("./InboxBack").then((m) => ({ default: m.InboxBack })));
 // the plan's pill and its flyout load once a plan wants it shown, off the first screen
@@ -2193,12 +2192,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           top={short ? undefined : queue}
         />
         )}
-        {!stoppedLine && session && (composerSource(session, assistant).length > 0 || (!assistant && contextUsage(session) !== null)) && (
-          // where the chat comes from and its folder at the left (cindy's working-folder line, #5324), the context meter at the right
-          <div data-composer-usage className="flex min-w-0 items-center justify-between gap-3 px-2 pt-0.5">
-            <ComposerSource session={session} assistant={assistant} />
-            {!assistant && contextUsage(session) !== null && <ContextMeter session={session} />}
-          </div>
+        {!stoppedLine && session && (
+          assistant
+            ? sourceSubtitle(session) && <div data-composer-usage className="px-2 pt-0.5"><ComposerSource session={session} assistant /></div>
+            : (
+              <Suspense fallback={null}>
+                <AgentStatusLine key={draftKey} session={session} source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined} />
+              </Suspense>
+            )
         )}
         </div>
       </div>

@@ -89,7 +89,7 @@
     <string name="agents_menu_note">置顶和屏蔽同步到 hub；已读仅影响本机列表</string>
     <string name="agents_filter_all">全部</string>
     <string name="agents_filter_needs_you">需要你</string>
-    <string name="agents_filter_unread">未读</string>
+    <string name="agents_filter_unread">完成未看</string>
     <string name="agents_filter_working">工作中</string>
     <string name="agents_filter_background_waiting">后台等待中</string>
     <string name="agents_history_check_resume">核对继续结果</string>

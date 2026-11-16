@@ -16,6 +16,7 @@ type TodoPRStatus struct {
 	HeadOID   string    `json:"head_oid,omitempty"`
 	State     string    `json:"state"`
 	Draft     bool      `json:"draft"`
+	Own       bool      `json:"own,omitempty"`
 	Review    string    `json:"review"`
 	Checks    string    `json:"checks"`
 	Conflicts bool      `json:"conflicts"`
@@ -37,6 +38,9 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 		Head           struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
 		Reviewers []any `json:"requested_reviewers"`
 		Teams     []any `json:"requested_teams"`
 	}
@@ -50,6 +54,15 @@ func (g githubForge) PRStatus(ctx context.Context, repo string, number int) (Tod
 	}
 	if out.State != "open" {
 		return out, nil
+	}
+	if out.Draft && pr.User.Login != "" {
+		var viewer struct {
+			Login string `json:"login"`
+		}
+		// Unknown ownership must not turn someone else's draft into work for our supervisor.
+		if err := g.get(ctx, "/user", &viewer); err == nil {
+			out.Own = viewer.Login != "" && strings.EqualFold(viewer.Login, pr.User.Login)
+		}
 	}
 	if pr.Head.SHA == "" {
 		return TodoPRStatus{}, fmt.Errorf("PR has no head commit")
@@ -313,6 +326,9 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	s.todos.mu.Unlock()
 	b.stageWriting.Unlock()
 	s.todosChanged(ctx)
+	if status.State == "open" && status.Draft && status.Own && status.HeadOID != "" && t.Supervision != nil {
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigDraftPR, PRURL: status.URL, Key: status.URL + "@" + status.HeadOID})
+	}
 	if status.URL == cur.PR && status.State == "open" && status.Conflicts && status.HeadOID != "" && t.Supervision != nil {
 		// Only the current PR raises a conflict signal: the digest revalidates against the task/stage PR, so an
 		// earlier PR's conflict would be dropped there anyway.
