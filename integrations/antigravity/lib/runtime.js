@@ -326,7 +326,7 @@ export function createAgyRuntime(options = {}) {
 
   function historyOf(rawId) {
     // Refresh cached items emitted before native failures used the shared API-error format.
-    return `agy:${rawId}:full:api-errors:content-v2`
+    return `agy:${rawId}:full:api-errors:content-v2:step-ids-v2`
   }
 
   function cutMatches(cut, transcript) {
