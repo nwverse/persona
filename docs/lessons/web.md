@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Transcript cut sizes are bytes, not characters (#9442)
+
+A page's `full_size` signals a truncated item and measures the original UTF-8 bytes; the displayed text may also
+include a truncation note. Request full text by the marker, not by subtracting character counts. If it remains cut,
+the missing character count is unknown; reserve numeric counts for clipping locally held complete text.
+
 ## A stalled export page is incomplete history (#9430)
 
 When a page promised older history, an empty page or one without an older new item must stop paging and mark the export
