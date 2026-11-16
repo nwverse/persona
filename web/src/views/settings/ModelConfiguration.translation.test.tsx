@@ -8,7 +8,7 @@ vi.hoisted(() => {
 });
 vi.mock("./ConfigurationManager", () => ({ ConfigurationManager: ({ children }: { children: (id: string) => unknown }) => children("assistant") }));
 vi.mock("./ModelProfiles", () => ({ ModelProfiles: () => null }));
-vi.mock("../../lib/store", () => ({ useStore: (select: (s: { machines: [] }) => unknown) => select({ machines: [] }) }));
+vi.mock("../../lib/store", () => ({ useStore: (select: (s: { machines: []; features: [] }) => unknown) => select({ machines: [], features: [] }) }));
 import { initI18n, t } from "../../i18n";
 import type { ModelBinding, ModelPurpose } from "../../lib/model-config";
 import { ModelConfiguration } from "./ModelConfiguration";

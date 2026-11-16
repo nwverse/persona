@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## Translate the full item, not the page's preview (#8650)
+
+A hub-paged answer's `text` is only a prefix until `useFullText` loads its full item. Passing that prefix to a
+translation action produced a partial translation and replaced the very control that could load the rest.
+Load through the existing full-text hook before the model request; share manual/in-flight loads and keep its
+loading/failure control readable. Use the item's stable source identity while the visible text expands, so the
+translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
+not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
+
 ## Compact buttons need their touch targets when moved into a dialog (#7446)
 
 The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing

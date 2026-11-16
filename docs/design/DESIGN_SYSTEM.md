@@ -553,6 +553,9 @@ on-demand model panel, not the everyday Assistant home (#6887).
   13 px, at most 420 px, 500 ms into a hover, never pinned by a pointer). A Persona conversation shows only "≈ $0.12"
   and one plain line, and nothing without a cost (super rules 0 and 4). On touch screens the text ends the copy + ⋯
   row: a tap holds the card or the tooltip, and a second tap on the text or a press elsewhere closes it.
+  Translate (#8650) loads a hub-paged reply's full text before requesting its translation: the original and its
+  full-text loading/retry control stay visible until the complete translation succeeds. Show original restores
+  the cached complete reply, not an unmarked prefix; failure to load the full text never sends a partial translation.
   Details: `docs/web/web.md` ("Reply bar").
 - Web hover bar beside your own bubble (pointer only: the time, Copy message, Quote, Edit, ⋯): left of the bubble, 6 px
   away, where it fits inside what shows the chat. Where a narrow window leaves a wide bubble no room there, the same

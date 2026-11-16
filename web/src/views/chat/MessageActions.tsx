@@ -26,7 +26,7 @@ import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
 import { pickParts } from "./picking-parts";
 import { useIsLatestMessage } from "./latest-message-time";
-import { useReplyTranslation } from "../../lib/reply-translation";
+import { useReplyTranslation, type ReplyTranslationSource } from "../../lib/reply-translation";
 import { Markdown } from "../../ui/Markdown";
 import { ReplyTranslationButton } from "./ReplyTranslationButton";
 
@@ -178,6 +178,7 @@ export function MessageActions({
   onDelete,
   usage,
   usageMs,
+  translationSource,
   children,
   className,
 }: {
@@ -202,11 +203,13 @@ export function MessageActions({
   /** With `bar`: what the exchange used (lib/turn-usage.ts usageKey) and its work time, after the time (#5426). */
   usage?: string;
   usageMs?: number;
+  /** A hub-paged reply must load all its words before translation, without changing its in-flight identity. */
+  translationSource?: ReplyTranslationSource;
   children: React.ReactNode;
   className?: string;
 }) {
   const [selecting, setSelecting] = useState(false);
-  const translation = useReplyTranslation(text);
+  const translation = useReplyTranslation(text, translationSource);
   const canTranslate = bar && !isUser && Boolean(text.trim());
   const touch = useMedia(NO_HOVER);
   const latest = useIsLatestMessage(ts);

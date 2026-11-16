@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { currentLanguage, t } from "../i18n";
 import { api, credentialOwner, errorText, onCredentialChange } from "./api";
 import { BUILTIN_MANAGER, shownManager, stampedHeaders, useLinkManager } from "./manager-choice";
@@ -42,12 +42,24 @@ export interface ReplyTranslation {
   toggle: () => void;
 }
 
-export function useReplyTranslation(text: string): ReplyTranslation {
+/** A paged reply's stable identity and the loader that returns its complete, not merely visible, words. */
+export interface ReplyTranslationSource {
+  key: string;
+  load: () => Promise<string>;
+}
+
+export function useReplyTranslation(text: string, source?: ReplyTranslationSource): ReplyTranslation {
   const manager = useLinkManager() ?? (typeof window === "undefined" ? BUILTIN_MANAGER : shownManager());
   const target = currentLanguage();
-  const key = JSON.stringify([typeof window === "undefined" ? "" : credentialOwner(), manager, target, text]);
+  const owner = typeof window === "undefined" ? "" : credentialOwner();
+  const key = JSON.stringify([owner, manager, target, Boolean(source), source?.key ?? text]);
   const current = useRef(key);
   current.current = key;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [state, setState] = useState<{ key: string; text?: string; shown: boolean; pending: boolean; error?: string }>();
   const value = state?.key === key ? state : undefined;
   return {
@@ -62,14 +74,17 @@ export function useReplyTranslation(text: string): ReplyTranslation {
         return;
       }
       setState({ key, shown: false, pending: true });
-      void translateReply(text, target, manager).then(
-        (translated) => {
-          if (current.current === key) setState({ key, text: translated, shown: true, pending: false });
-        },
-        (error: unknown) => {
-          if (current.current === key) setState({ key, shown: false, pending: false, error: errorText(error) });
-        },
-      );
+      const active = () => mounted.current && current.current === key && credentialOwner() === owner;
+      const translate = async () => {
+        const complete = source ? await source.load() : text;
+        // Loading can replace the visible prefix, but must not charge for an answer or owner no longer selected.
+        if (!active()) return;
+        const translated = await translateReply(complete, target, manager);
+        if (active()) setState({ key, text: translated, shown: true, pending: false });
+      };
+      void translate().catch((error: unknown) => {
+        if (active()) setState({ key, shown: false, pending: false, error: errorText(error) });
+      });
     },
   };
 }
