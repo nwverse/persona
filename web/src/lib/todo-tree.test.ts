@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel } from "./todo-tree";
+import { agentGroupLabel, agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
 import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
@@ -53,30 +53,35 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     expect(byId.t2!.folded).toBe(false);
   });
 
-  it("手动开的（#2623）在未归属前面，各自一段，说明里不提引擎名", () => {
-    const all = [s("a", "working", "/code/p"), s("hand", "idle", "/code/p", { space_kind: "herdr" }), s("bot", "idle", "/code/q", { pane_id: "botmux:x" })];
+  it("在终端里开的和别处开的同在「没挂待办的」，终端的那行仍有来源标记 (#6591)", () => {
+    const hand = s("hand", "idle", "/code/p", { space_kind: "herdr", pane_id: "w1:p1" });
+    const all = [s("a", "working", "/code/p"), hand, s("bot", "idle", "/code/q", { pane_id: "botmux:x" })];
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW);
-    expect(tree.loose.map((g) => [g.key, g.sessions.map((x) => x.session_id)])).toEqual([["todo:manual", ["hand"]], ["todo:none", ["bot"]]]);
-    // what each group holds, for its ⓘ and its empty state (#3057, #6458); no engine name (DESIGN_SYSTEM 5.6)
-    expect(tree.loose[0].hint).toContain("在终端里开的");
+    expect(tree.loose.map((g) => [g.key, g.sessions.map((x) => x.session_id).sort()])).toEqual([["todo:none", ["bot", "hand"]]]);
+    // what the group holds, for its ⓘ and its empty state (#3057, #6458); no engine name (DESIGN_SYSTEM 5.6)
+    expect(tree.loose[0].hint).toContain("没挂在任何待办上");
+    expect(tree.loose[0].hint).toContain("终端");
     expect(tree.loose[0].hint).not.toMatch(/herdr/i);
-    expect(tree.loose[1].hint).toContain("没挂在任何待办上");
+    // where it came from stays on the row: the Terminal source mark
+    expect(sessionSource(hand)).toBe("terminal");
   });
 
-  it("groups start folded below the to-dos, open when one of their agents needs you or no to-do is above them", () => {
+  it("the group starts folded below the to-dos, open when one of its agents needs you or no to-do is above it", () => {
     const all = [s("a", "working", "/code/p"), s("hand", "working", "/code/p", { space_kind: "herdr" }), s("bot", "idle", "/code/q", { pane_id: "botmux:x" })];
     const below = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW);
-    expect(below.loose.map((g) => [g.key, g.state, g.folded])).toEqual([["todo:manual", "working", true], ["todo:none", "done", true]]);
+    expect(below.loose.map((g) => [g.key, g.state, g.folded])).toEqual([["todo:none", "working", true]]);
+    const asks = buildTodoTree([...all, s("ask", "needs_you", "/code/q")], machines, [todo("t1", [link("a")])], noMutes, NOW);
+    expect(asks.loose.map((g) => [g.state, g.folded])).toEqual([["needs_you", false]]);
     const alone = buildTodoTree(all, machines, [], noMutes, NOW);
-    expect(alone.loose.map((g) => g.folded)).toEqual([false, false]);
+    expect(alone.loose.map((g) => g.folded)).toEqual([false]);
   });
 
-  it("keepEmpty lists both groups while empty, each saying what would be there", () => {
+  it("keepEmpty lists the group while empty, saying what would be there", () => {
     const all = [s("a", "working", "/code/p")];
     expect(buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW).loose).toEqual([]);
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW, { keepEmpty: true });
-    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:manual", "在终端里开的", 0, true], ["todo:none", "没挂待办的", 0, true]]);
-    expect(tree.loose.every((g) => g.hint.length > 0)).toBe(true);
+    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:none", "没挂待办的", 0, true]]);
+    expect(tree.loose[0].hint.length).toBeGreaterThan(0);
   });
 
   it("a to-do says the To-dos page's word for its state, ranked as the tree ranks it (#6458)", () => {
@@ -112,6 +117,15 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     expect(groups.map((g) => [g.name, g.state, g.todos.map((t) => t.id)])).toEqual([["persona", "working", ["t1"]], ["未归类", "done", ["t2"]]]);
   });
 
+  it("a folder holding a to-do the page has in Needs you says so, a failed start the hub closed too (audit item 13)", () => {
+    const old = new Date(NOW - 3 * STALE_MS).toISOString();
+    const failedStart = todo("f1", [], { done_at: old, updated_at: old, start_error: "machine offline", origin: "conv" });
+    // by its agents alone it reads Done, and a quiet folder of it folds away
+    expect(groupTodosByProject([failedStart], makeSessionLookup([]), NOW).map((g) => [g.state, g.folded])).toEqual([["done", true]]);
+    const waiting = groupTodosByProject([failedStart, todo("t2", [])], makeSessionLookup([]), NOW, undefined, (td) => td.id === "f1");
+    expect(waiting.map((g) => [g.state, g.folded, g.todos.map((t) => t.id)])).toEqual([["needs_you", false, ["f1", "t2"]]]);
+  });
+
   it("待办页先按待办所属的知识库项目分段，再按仓库，都没有的最后 (#2581)", () => {
     const all = [s("a", "working", "/code/persona"), s("b", "needs_you", "/code/persona")];
     const inArea = (id: string, project: string, links: ReturnType<typeof link>[] = []) => ({ ...todo(id, links), project });
@@ -137,6 +151,26 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
       ["社群运营", "done", false, true],
       ["未归类", "done", true, false],
     ]);
+  });
+});
+
+describe("a group's word says what its rows say, never Done over agents that are not", () => {
+  const label = (all: Session[]) => agentGroupLabel(all, worstTreeState(all.map(agentTreeState)));
+  it("Not on a to-do holding a finished agent not looked at yet says 完成未看, as By status and the quick filter do", () => {
+    const tree = buildTodoTree([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")], machines, [], noMutes, NOW);
+    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "完成未看"]]);
+    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("完成未看");
+  });
+  it("Recent (not running) of stopped agents says 未运行", () => {
+    expect(label([s("gone", "offline", "/code/a"), s("gone2", "offline", "/code/b")])).toBe("未运行");
+  });
+  it("keeps the state's own word otherwise: Done for seen agents, Needs you / Working above it", () => {
+    expect(label([s("seen", "idle", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([s("asks", "needs_you", "/code/a"), s("new", "unread", "/code/b")])).toBeUndefined();
+    expect(label([s("runs", "working", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([])).toBeUndefined();
+    const seen = buildTodoTree([s("seen", "idle", "/code/a")], machines, [], noMutes, NOW);
+    expect(seen.loose[0]).not.toHaveProperty("label");
   });
 });
 

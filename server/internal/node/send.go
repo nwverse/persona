@@ -40,6 +40,10 @@ func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 }
 
 func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	if exitCommand(text) {
+		release := n.recovery.lock(id)
+		defer release()
+	}
 	// Two sends at once (quick taps, two phones) would both find the box empty and type into each other, or the second
 	// would see the first still in the box and be refused as a draft: one at a time, in the order they came.
 	unlock, err := n.inputTurn(ctx, id)
@@ -47,6 +51,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return err
 	}
 	defer unlock()
+	selectionText := text
 	if opts.SwitchNow {
 		// The assistant's agent_switch (#5973): the switch it picked goes with this message now, or nothing does
 		// (launcher_switch.go switchNowRefusal). Anything but a running Claude Code agent with that switch waiting is
@@ -61,6 +66,10 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			return n.stoppedRefusal(id)
 		}
 		return n.sendCodex(ctx, id, text, images)
+	}
+	selected, err := n.sessionSelectedSkills(ctx, id, text)
+	if err != nil {
+		return err
 	}
 	if r := n.agentsListRefusal(id); r != nil { // claudebg.go
 		return r
@@ -200,6 +209,13 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 			}
 		}
 	}
+	if len(selected) > 0 {
+		// Recheck after pane readiness work; do not carry a selection across a changed environment.
+		if _, err := n.sessionSelectedSkills(ctx, id, selectionText); err != nil {
+			return err
+		}
+		text = selectedSkillInstructions(selected) + "\n\n" + text
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return err
@@ -225,6 +241,11 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		return r
 	}
 	if err == nil {
+		if (kind == "codex" || kind == traexAgent) && host.ParsePane(pane).Kind != host.Botmux {
+			if err := n.codexSubmitted(ctx, pane); err != nil {
+				return err
+			}
+		}
 		n.typing.typed(pane, text)
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		if kind == "claude" {

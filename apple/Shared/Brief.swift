@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed", #2320):
 /// the fixed part of a run as the hub worked it out when the run started, the same rows as its Lark card. Hubs since the
@@ -128,6 +129,8 @@ nonisolated struct BriefBody: Decodable, Hashable, Sendable {
             case triage
             /// Model Settings › the background supervisor's use.
             case superviseModel
+            /// Assistant Profile › Standing Authorizations (#7002).
+            case standingAuthorizations
         }
 
         /// The mechanism (`delegate`, `task_trust`, `triage_wake`, … or a newer one).
@@ -151,19 +154,17 @@ nonisolated struct BriefBody: Decodable, Hashable, Sendable {
             count = c.whole(.count) ?? 0
         }
 
-        /// The page Open Settings goes to; nil for a mechanism that is not turned on at a page of this app (standing
-        /// authorizations, leader conversations, the assistant's configuration file; a remembered kind of task is turned
-        /// on with a plan card's own checkbox, as its line says) and for one this build doesn't know.
+        /// The page Open Settings goes to; nil for a mechanism that is not turned on at a page of this app (leader
+        /// conversations, the assistant's configuration file; a remembered kind of task is turned on with a plan card's
+        /// own checkbox, as its line says) and for one this build doesn't know.
         var page: Page? {
             switch id {
             case "triage_decide", "triage_auto_continue", "triage_wake": .triage
             case "supervisor_tier": .superviseModel
+            case "standing_authorizations": .standingAuthorizations
             default: nil
             }
         }
-
-        /// The hub's line names a page of Settings that only the web app has (standing authorizations): the row says so.
-        var isOnTheWebOnly: Bool { id == "standing_authorizations" }
     }
 
     /// The routine's name.

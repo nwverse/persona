@@ -8,6 +8,8 @@
     <string name="assistant_profile">Assistant profile</string>
     <string name="assistant_got_it">Got it</string>
     <string name="assistant_composer_placeholder">Ask %1$s…</string>
+    <string name="assistant_model_setup_title">Connect a model to use Assistant</string>
+    <string name="assistant_model_setup_detail">Assistant runs on %1$s. Its Claude Code setup has no usable connection. Choose a provider or add the gateway you already use.</string>
     <string name="assistant_info_settings">Assistant settings</string>
     <string name="assistant_info_knowledge">Knowledge</string>
     <string name="assistant_info_schedule">Scheduled tasks</string>
@@ -86,6 +88,7 @@
     <string name="assistant_phone_tools_unavailable">Phone tools unavailable</string>
     <string name="assistant_phone_permissions_pending">Phone permissions pending</string>
     <string name="assistant_search_chats">Search chats</string>
+    <string name="assistant_search_partial">Still going through older chats; some may not show yet.</string>
     <string name="assistant_start_main">Start the main chat</string>
     <string name="assistant_main_chat">Main chat</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->
@@ -114,7 +117,6 @@
     <string name="assistant_make_leader_text">The chat moves to Pinned and no longer appears in Recent.</string>
     <string name="assistant_end_leader_title">Unpin this chat?</string>
     <string name="assistant_end_leader_text">“%1$s” returns to Recent. Its open tasks go back to the main chat\'s supervision; nothing is closed or deleted.</string>
-    <string name="assistant_leader_working">%1$d working</string>
     <string name="assistant_leader_needs_you">%1$d need you</string>
     <string name="assistant_direction_todos_of">To-dos of %1$s</string>
     <string name="assistant_direction_agents_of">Agents of %1$s</string>

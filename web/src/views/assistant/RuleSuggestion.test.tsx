@@ -53,6 +53,13 @@ const render = async (el: React.ReactNode) => {
   await flush();
 };
 const line = () => host.querySelector<HTMLElement>("[data-rule-suggestion]");
+// The line is its own chunk (NeedsYouPart in Tasks.tsx): React.lazy suspends once on its first card even when the module
+// is in, and draws the line a little after render returns, as late as the machine is slow. Each poll runs in act so
+// React's retry can flush.
+const lineDrawn = () => vi.waitFor(async () => {
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(line()).not.toBeNull();
+}, { timeout: 5000, interval: 20 });
 const result = () => host.querySelector<HTMLElement>("[data-rule-result]");
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("[data-rule-suggestion] button")].find((b) => b.textContent?.trim() === label)!;
 const press = async (label: string) => {
@@ -202,7 +209,8 @@ describe("the line under a card", () => {
     await press("Always");
     expect(line()).not.toBeNull();
     expect(result()).toBeNull();
-    expect(toast.mock.calls[0][0]).toContain("The hub is busy.");
+    // the hub's sentence inside the note's parentheses, without a second full stop (#6822)
+    expect(toast.mock.calls[0][0]).toContain("(HTTP 503: The hub is busy)");
     expect(toast.mock.calls[0][1]).toBe("error");
     expect(button("Always").disabled).toBe(false);
   });
@@ -273,6 +281,7 @@ describe("on each kind of card", () => {
 
   it("an open plan card carries it under the card; one without the field is the card alone", async () => {
     await render(<PlanCard plan={plan(planStart)} />);
+    await lineDrawn();
     expect(line()!.dataset.ruleSuggestion).toBe("plan_start");
     expect(line()!.previousElementSibling!.querySelector("[data-plan-actions]")).not.toBeNull();
     answer = { status: 200, body: { ok: true, kind: "plan_start", creates: "tasks.trust", key: "k" } };

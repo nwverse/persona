@@ -292,9 +292,10 @@ fun AgentTreeHeader(
  * computer and drops its heading) and smaller than the computer. A [quiet] space (all finished and seen) is lighter
  * and says how many [sessions] it holds instead of [counts]. [counts] take a clock for the agents that only [waiting] in the
  * background, as iOS's `StateCounts` does. [menu] is the space's ⋯ (a [HeadingAction] and its sheet).
- * Under "By repository" the same heading is a repository or one of its working trees, told apart by [icon] (folder, ⌂ for the
- * main checkout, a branch for another tree) and one more [depth] step for a tree. [kind] names the level for TalkBack
- * (space, repository, main worktree, worktree): the caret says "Expand" / "Collapse" it, the icon says what it is, the heading whether it is open.
+ * Under "By repository" the same heading is a repository or one of its working trees, told apart by [icon] (folder for a
+ * repository, ⌂ for the main checkout, no icon for another tree) and one more [depth] step for a tree. [kind] names the
+ * level for TalkBack (space, repository, main worktree, worktree): the caret says "Expand" / "Collapse" it, the icon
+ * (when present) says what it is, the heading whether it is open.
  */
 @Composable
 fun AgentSpaceHeader(
@@ -483,6 +484,8 @@ fun AgentRow(
     waiting: Boolean = false,
     /** Glass's row style while not [compact] (iOS `AgentRowStyle`); Brief and Board keep their row. */
     style: AgentRowStyle = AgentRowStyle.Avatar,
+    /** A folded child's request must stay visible even when Board's metadata normally takes the preview's line. */
+    showPreviewWithMetadata: Boolean = false,
     end: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -509,7 +512,7 @@ fun AgentRow(
         // state is its dot's alone ([statusText] null, #4338 A9) is told it by name too.
         .then(if (compact || boardMetadata) Modifier.semantics {
             stateDescription = statusText ?: statusLabel
-            if (boardMetadata && !preview.isNullOrBlank()) text = AnnotatedString(preview.replace('\n', ' '))
+            if (boardMetadata && !showPreviewWithMetadata && !preview.isNullOrBlank()) text = AnnotatedString(preview.replace('\n', ' '))
         } else if (statusText == null) Modifier.semantics { stateDescription = statusLabel } else Modifier)
     val click = Modifier.selectedRow(selected).then(press)
     if (glass && parts.leading == AgentRowLeading.Dot) {
@@ -552,7 +555,7 @@ fun AgentRow(
             val lineText: @Composable () -> Unit = {
                 Text(line, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = wordLines, overflow = TextOverflow.Ellipsis)
             }
-            if (!boardMetadata) {
+            if (!boardMetadata || showPreviewWithMetadata) {
                 if (source != null && !placeLine) Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { if (line.isNotEmpty()) lineText() }
                     Spacer(Modifier.width(Tokens.Space.s))

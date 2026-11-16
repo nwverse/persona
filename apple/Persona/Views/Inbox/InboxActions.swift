@@ -33,7 +33,9 @@ struct InboxActionBar: View {
                         openURL(url)
                     }
                 }
-                action(String(localized: "Hand to AI"), symbol: Theme.Icon.handToAI, prominent: false, perform: handOff)
+                if !item.isAssistantRow { // the row already is the assistant's own chat
+                    action(String(localized: "Hand to AI"), symbol: Theme.Icon.handToAI, prominent: false, perform: handOff)
+                }
             }
         }
         .padding(.horizontal, Theme.Space.l)
@@ -370,7 +372,9 @@ struct InboxHandOffSheet: View {
             }
             .sheet(item: $newAgent, onDismiss: finishNewAgent) { p in
                 NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: [p.card], forwardedIcon: Theme.Icon.inbox,
-                            nameHint: p.nameHint, onlyGroup: p.group) { s in
+                            nameHint: p.nameHint, onlyGroup: p.group, onFirstMessage: { s, message in
+                    handOff.newAgentFirstMessage(message, for: s.key)
+                }) { s in
                     startedAgent = (s.key, p)
                     newAgent = nil
                 }

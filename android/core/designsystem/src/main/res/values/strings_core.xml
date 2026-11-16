@@ -63,6 +63,7 @@
         <item quantity="other">Expires in %1$d days</item>
     </plurals>
     <string name="designsystem_core_request_from_subagent">From subagent · %1$s</string>
+    <string name="designsystem_core_request_from_side">From side session · %1$s</string>
     <string name="designsystem_core_request_from_mcp">From MCP server %1$s</string>
     <string name="designsystem_core_request_from_mcp_configured">From MCP server %1$s (configured in %2$s)</string>
     <string name="designsystem_core_request_from_terminal">This request came from the terminal. Don’t handle it on the computer at the same time.</string>
@@ -140,7 +141,6 @@
     <string name="designsystem_core_direction_planned">Not started</string>
     <string name="designsystem_core_direction_secretary">Secretary</string>
     <string name="designsystem_core_direction_untitled">Chat</string>
-    <string name="designsystem_core_direction_count_working">%1$d working</string>
     <string name="designsystem_core_direction_count_needs_you">%1$d need you</string>
     <string name="designsystem_core_inbox_action">Needs you</string>
     <string name="designsystem_core_inbox_fyi">FYI</string>

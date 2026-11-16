@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// A long finished answer's parts (#4970, `AnswerParts`), worked out once per text: the chat's lines ask on every
 /// rebuild, and the rows' memos are prewarmed with them off the main thread (`RowMemo.prewarm`).
@@ -122,6 +123,7 @@ private struct AnswerPartWords: View {
     var body: some View {
         LinkedMarkdown(plain: text.markdown, paths: text.paths, key: key)
             .markdownTheme(.persona)
+            .readingContent()
             .environment(\.replyKey, message) // its quotes' folds, the lifted copy's too (as `AssistantText`)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

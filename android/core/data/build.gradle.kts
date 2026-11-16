@@ -12,6 +12,7 @@ android {
 dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":core:domain"))
+    implementation(project(":core:rustcore"))
     implementation(project(":feature:inbox"))
     implementation(libs.androidx.core)
     implementation(libs.room.runtime)
@@ -24,6 +25,8 @@ dependencies {
     ksp(libs.room.compiler)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    testImplementation(project(":core:hub"))
+    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
     // FixtureReader: the shared chat sync scenarios (spec/fixtures/sync, ChatSyncScenariosTest).
     testImplementation(testFixtures(project(":core:domain")))
     // The items cache against a real Room database on the JVM (SessionItemsCacheTest).
@@ -33,3 +36,20 @@ dependencies {
 }
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+val continuity = providers.gradleProperty("personaContinuity").orElse("kotlin")
+val coreWorkspace = rootProject.layout.projectDirectory.dir("../native/app-core")
+val hostLibrary = coreWorkspace.file("target/debug/" + when {
+    org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "libpersona_core.dylib"
+    org.gradle.internal.os.OperatingSystem.current().isWindows -> "persona_core.dll"
+    else -> "libpersona_core.so"
+})
+tasks.withType<Test>().configureEach {
+    // Adapter parity always exercises JNI; the switch selects the implementation for every repository test.
+    dependsOn(":core:rustcore:buildHostCore")
+    inputs.files(project(":core:rustcore").tasks.named("buildHostCore"))
+        .withPropertyName("hostCore").withPathSensitivity(PathSensitivity.NONE)
+    systemProperty("persona.core.library", hostLibrary.asFile.absolutePath)
+    systemProperty("persona.continuity", continuity.get())
+    systemProperty("persona.continuity.frameScheduler", "persona.core.data.FlushContinuityFrameScheduler")
+}

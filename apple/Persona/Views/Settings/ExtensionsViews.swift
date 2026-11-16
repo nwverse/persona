@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Settings › Extensions: every plugin of the hub's (built in, from hub.json, installed on the hub's machine), its state, and
 /// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
@@ -200,6 +201,21 @@ struct ExtensionDetailView: View {
         return authStore.auth(d.plugin.id, manager: page.manager, else: d.plugin.auth)
     }
 
+    private var disableDialogTitle: String {
+        switch page.disableDialog {
+        case .some(.dependents): return String(localized: "Also Turn Off Extensions That Depend on It?")
+        case .some(.pack(let confirmation)): return confirmation.title
+        case .none: return ""
+        }
+    }
+
+    private var disableDialogPresented: Binding<Bool> {
+        let generation = page.disableDialogGeneration
+        return Binding(get: { page.disableDialogPresented }, set: {
+            if !$0 { page.dismissDisableConfirmation(generation: generation) }
+        })
+    }
+
     private struct ConnectorSectionsKey: Equatable {
         var ids: [String]
         var depth: Int
@@ -230,14 +246,31 @@ struct ExtensionDetailView: View {
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Also Turn Off Extensions That Depend on It?", isPresented: Binding(
-            get: { page.disableConfirmation != nil },
-            set: { if !$0 { page.disableConfirmation = nil } }), titleVisibility: .visible) {
-            Button(role: .destructive) { Task { await page.confirmDisable() } } label: { Text("Turn Off All").lineLimit(1) }
-                .accessibilityIdentifier("extension-cascade-confirm")
-            Button("Cancel", role: .cancel) {}
+        .confirmationDialog(disableDialogTitle, isPresented: disableDialogPresented, titleVisibility: .visible) {
+            switch page.disableDialog {
+            case .some(.dependents):
+                Button(role: .destructive) { Task { await page.confirmDisable() } } label: { Text("Turn Off All").lineLimit(1) }
+                    .accessibilityIdentifier("extension-cascade-confirm")
+                Button("Cancel", role: .cancel) {}
+            case .some(.pack):
+                Button(role: .destructive) { Task { await page.confirmPackDisable() } } label: {
+                    Text("Turn Off All [Extension Pack]").lineLimit(1)
+                }
+                .accessibilityIdentifier("extension-pack-disable-confirm")
+                Button(role: .cancel) {} label: { Text("Cancel").lineLimit(1) }
+                    .accessibilityIdentifier("extension-pack-disable-cancel")
+            case .none:
+                EmptyView()
+            }
         } message: {
-            Text(page.disableConfirmation?.message ?? "")
+            switch page.disableDialog {
+            case .some(.dependents(let confirmation)):
+                Text(confirmation.message)
+            case .some(.pack(let confirmation)):
+                Text(confirmation.message)
+            case .none:
+                EmptyView()
+            }
         }
         .sheet(item: $editingSecret) { secret in
             // Closed by clearing the item it is shown for, so the page and the sheet cannot disagree about whether it is
@@ -306,7 +339,21 @@ struct ExtensionDetailView: View {
                 }
             }
             if let needs = page.detail?.plugin.needsSetup, !needs.isEmpty {
-                Text(String(localized: "Still needs: \(ExtensionText.list(needs))")).font(Theme.Font.label).foregroundStyle(Theme.caution)
+                let line = Text(String(localized: "Still needs: \(ExtensionText.list(needs))")).font(Theme.Font.label).foregroundStyle(Theme.caution)
+                if let d = page.detail, !d.readOnly, let target = ExtensionText.setupSecret(needs: needs, secrets: d.secrets) {
+                    // What is missing is a secret to set here: the line opens it (#8853).
+                    Button { editingSecret = target } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            line
+                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(Theme.caution)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("plugin-needs-setup")
+                } else {
+                    line
+                }
             }
             if let e = page.detail?.plugin.error ?? page.error, !e.isEmpty {
                 Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).textSelection(.enabled)

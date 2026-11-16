@@ -125,15 +125,14 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 // queued one the user moved to another launcher meanwhile is dropped with nothing done.
 func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	ft, _ := switchRig(t)
+	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
+	// Drain the initial list event so it cannot start a delayed queue run during the move below.
+	waitFleetOrder(t, ft.s)
 	ft.f.nodes = map[string]nodeAnswer{
 		DeviceSessionSwitch: func(string, json.RawMessage) (any, error) {
 			return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "a background command runs"}
 		},
 	}
-	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
-	// Finish the initial inventory event before creating the queued request. Otherwise
-	// that older event can start a retry before the test reports the user's move.
-	waitFleetOrder(t, ft.s)
 	res, err := batchSwitch(ft, map[string]any{"launcher": "work", "from_launcher": "claude"})
 	if err != nil {
 		t.Fatal(err)
@@ -281,5 +280,20 @@ func TestAgentsSwitchStoppedAndFailed(t *testing.T) {
 	ft.sessions("mac", stoppedRow("s4busy0001", "", true))
 	if got := waitCallsFor(t, ft.f, "s4busy0001", 1); strings.Join(got, ",") != "session.switch" {
 		t.Fatalf("stopped while queued: %v", got)
+	}
+}
+
+// The queue's loaded flag is read under its lock when a session list arrives while the queue is being loaded (#7303);
+// the reader and the loader run together, so only a -race run tells it from a read outside the lock.
+func TestSwitchQueueListedReadsLoadedUnderItsLock(t *testing.T) {
+	for range 500 {
+		s := &Service{} // no store: nothing to start, the flag is all there is
+		loaded := make(chan struct{})
+		go func() {
+			s.loadSwitchQueue(context.Background())
+			close(loaded)
+		}()
+		s.switchQueueListed("mac")
+		<-loaded
 	}
 }

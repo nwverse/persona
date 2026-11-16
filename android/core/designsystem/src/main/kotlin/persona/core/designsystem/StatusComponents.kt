@@ -44,7 +44,7 @@ fun JStatusDot(status: Status, modifier: Modifier = Modifier, size: Dp = 8.dp, w
     val tone = PersonaTheme.palette.status(status, waiting)
     if (spinning) {
         // the dense row's mark slot is small; the arc keeps the dot's footprint rather than the 20dp default spinner
-        JSpinner(modifier.size(size + Tokens.Space.Standard.xs), color = tone.dot, stroke = 1.8.dp)
+        JSpinner(modifier.size(size + Tokens.Space.Standard.xs), color = tone.dot, stroke = SpinnerTokens.compactStroke)
         return
     }
     when (PersonaTheme.style) {
@@ -200,7 +200,7 @@ fun PendingBadge(status: PendingStatus, modifier: Modifier = Modifier, reason: S
             .padding(horizontal = 8.dp.dense, vertical = 4.dp.dense),
         horizontalArrangement = Arrangement.spacedBy(6.dp.dense), verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (status == PendingStatus.Sending || status == PendingStatus.Verifying) JSpinner(Modifier.size(Tokens.Size.markS), color = color, stroke = 1.8.dp)
+        if (status == PendingStatus.Sending || status == PendingStatus.Verifying) JSpinner(Modifier.size(14.dp), color = color, stroke = 1.8.dp)
         else JIcon(
             when (status) { PendingStatus.Waiting -> PhIcons.Clock; PendingStatus.Unconfirmed -> PhIcons.HourglassMedium; else -> PhIcons.WarningCircle },
             null, size = 14.dp, tint = color,

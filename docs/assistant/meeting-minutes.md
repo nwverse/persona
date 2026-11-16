@@ -92,6 +92,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
   "open": [
     {"text": "Whether the cap should be per entry or per recording.", "at": 2408.0}
   ],
+  "overview": { … },                 // optional (#6563): the minutes as one summary card, "Summary card (#6563)" below
   "partial": false,                  // true when the transcript was too long and its end was not read; omitted when false
   "language": "en",                  // what they are written in, the Markdown's headings too: zh-Hans, en or ja (#5906)
   "markdown": "# Design review\n…"    // the same minutes as Markdown with clock times: what Copy / Share send, and minutes.md on disk
@@ -106,6 +107,7 @@ The minutes themselves are `detail.minutes`, present once minutes have been writ
 - Sections with nothing in them are omitted, not filled with "none".
 - `points`, `decisions`, `actions` and `open` keep the transcript's order.
 - `language` is an i18n code (`zh-Hans`, `en`, `ja`): the language every text field and the Markdown are in ("How the hub generates them" below). Minutes written by an older hub have none and are Chinese.
+- `overview` is written only when the hub could put every point and decision under a topic. Minutes from before it, and minutes from an older hub, have none. Its presence is the only thing that switches a client to the summary card; `version` is still only a count of rewrites ("Summary card (#6563)").
 
 Reading it back:
 
@@ -123,20 +125,326 @@ Confirming suggested to-dos: `POST /api/v1/recordings/{id}/minutes/todos` with `
 
 ## What the minutes must contain
 
-The theme (the title), when and where, attendees and speakers only when known, the points discussed, the decisions, the action items (who, what, by when), and the open questions. Each of those carries the transcript timestamp it came from. Nothing the transcript and the calendar don't support is added: a misrecognized word is read in context, but an unspoken decision is not invented.
+The theme (the title), when and where, attendees and speakers only when known, the points discussed, the decisions, the action items (who, what, by when), and the open questions. Each of those carries the transcript timestamp it came from. Nothing the transcript and the calendar don't support is added: a misrecognized word is read in context, but an unspoken decision is not invented. Since #6563 the minutes also have a one-line headline, the core conclusions, and the points and decisions grouped by topic, each with its key figure or status marked ("Summary card (#6563)").
 
 ## How the hub generates them
 
-- For a meeting: `kind: meeting`, a calendar item in the knowledge base overlapping a recording of at least 5 minutes, or `minutes_asked`. Only once `complete: true` and the current revision has no minutes yet. The knowledge base loop's minutes lane does it (its own lane since #4247, so a long meeting's minutes no longer hold back archiving, [knowledge.md](knowledge.md) "Pipeline"), at most two recordings a run, with the model configuration the assistant already uses (`kb.compress`). No new service. An upload that completes a recording wakes that round, so minutes start within seconds.
+- For a meeting: `kind: meeting`, a calendar item in the knowledge base overlapping a recording of at least 5 minutes, or `minutes_asked`. Only once `complete: true` and the current revision has no minutes yet. The knowledge base loop's minutes lane does it (its own lane since #4247, so a long meeting's minutes no longer hold back archiving, [knowledge.md](knowledge.md) "Pipeline"), at most two recordings a run, on the **Meeting minutes** model (`meeting.minutes`, which follows Information processing until it is set apart, [model-config.md](model-config.md) "Meeting minutes and the in-meeting conversation (#7980)"; `kb.compress` before #7980). No new service. An upload that completes a recording wakes that round, so minutes start within seconds.
 - A long transcript is handled in segments: consecutive chunks in time order, each chunk reduced to candidate points, decisions, actions and questions with their timestamps, then one merge pass that deduplicates and orders them. The middle of a meeting is no longer dropped on the floor. Chunks are sized to fit the model's context with room for the instructions.
 - When a `meetings` or `events` item overlaps the recording's time window (it starts at most 15 minutes before the recording and before its end; the closest start wins, events before meetings), it becomes `meeting` and its name names the recording unless the user typed a title or the phone sent `calendar.title`. Attendees and place come only from the phone's `calendar` hint or from the transcript.
 - Every item must cite a line the model actually read; items whose `at` matches no transcript line are dropped, and so is a `due_date` that is not a real date from the meeting day to a year after it.
+- The same answer also groups the points and decisions by topic and adds a headline and the core conclusions. How it does that, and when the hub leaves it out, is in "Summary card (#6563)".
 - **Language** (#5906). The minutes are written in the recording's `language` (`zh-CN`, `en-US`, `ja-JP`: the one the phone transcribed it in), else, for a recording that says none or one the hub has no catalog for (`ko-KR`), in the owner's language on the hub (the hello's `locale`), else in Chinese. Whatever languages the transcript mixes, everything the model writes (the title, every item, a deadline as said) is in that one language; names and terms stay as they were said, and so does the place (`where`), which the hub keeps only when it matches the transcript. The Markdown's headings and fixed words (`## Key points`, `- When:`, "(photo 3)") come from the hub's catalog `kb-minutes.json` in the same language, its section names the web's recording page's (`knowledge-kbdetail.json`, `TestMinutesHeadingsAreTheWebsSections`). Minutes nothing names (no title from the user, the calendar, the model or the recording's summary) are called when the meeting started in that language too (`Recording 2026-11-10 14:00`), not by the recording's Chinese name in lists. `minutes.json` keeps it as `language`, so the Markdown written again later (a photo deleted) says the same; minutes from before it was kept have none and stay Chinese. The prompts stay Chinese and name the language ([prompts.md](prompts.md) "Template rules"); `TestMinutesLanguageLive` runs a mixed-language meeting through a real model ([prompts.md](prompts.md) "Behaviour checks"). A recording's short summary (`prompts/kb/recording.md`, its section names included) and an all-day recording's recap ([day-recap.md](day-recap.md)) follow the same rule. Transcription is unchanged: one language per recording, on the phone.
 - The minutes are written next to the recording (`minutes.json`, and `minutes.md` for search, in its directory) and removed by the same delete that removes the recording. The retention sweep keeps them longer than the transcript: past `recording_days` it trims the recording to its minutes, and only past a finite `minutes_days` does it remove them with the rest (forever by default) ("Privacy").
 - On success the user gets a single push naming the meeting, with the number of decisions and suggested to-dos; it has a stable id per recording and `version`, so a restart does not repeat it. A tap opens Persona's main chat, as reminders do; the Lark bot and channels with pushes on get the same text with the recording's web link. Opening the recording straight from a push needs a new push field and is later work.
 - No model configured, or the model paused: the minutes stay `pending` and the next round tries again. An answer that cannot be used (not JSON, refused, nothing citable) counts as a failure; after three for one revision they are `failed` until a new revision or a regenerate. Failures do not notify.
 - A slow model is not a failure (#3170). A minutes answer is several times longer than a summary, so a call gets 6 minutes where a summary call gets 3. A try that runs out of its time (one call, or the 45 minutes of all the calls of one recording) is counted apart from unusable answers: the recording waits 2, then 4, then 8 minutes before its next try, the other recordings going first meanwhile, and each try gets 6 more minutes per call than the one before (6, 12, 18, 24). After four such tries for one revision the minutes are `failed`, so a recording no model ever finishes cannot hold the queue for ever.
 - Each action item is offered as a **suggested to-do** the user confirms (`POST …/minutes/todos` above). An unconfirmed suggestion stays only a suggestion. None are created automatically.
+
+## Summary card (#6563)
+
+After the meeting, the minutes read as one summary card, the way good minutes tools lay them out. A headline says what the meeting was and the **core conclusions** say where it landed. Then come the topic cards: one per topic or workstream, grouped under short headings, each with a few short lines whose key figure or status is bold. After them come the action items, the open questions, and a note that AI wrote it. The owner asked for the redesign in #6563 ("you are free to redesign the page"). The summary card replaces the iPhone's four cards (#5026) and the web's flat lists, but only for minutes that carry it. Minutes without it look exactly as before.
+
+### The `overview` field
+
+`detail.minutes.overview` (also in `minutes.json`) is optional. It holds the headline, the conclusions, and the points and decisions grouped by topic. `points`, `decisions`, `actions` and `open` are still always written and mean what they did, so an older client shows the same minutes as before.
+
+```jsonc
+"overview": {
+  "headline": "Export ships with the size cap; the release date waits on the cache fix", // optional, one line
+  "conclusions": [                       // optional: at most 4, the most important first
+    {"text": "Export ships with the 4 MB cap and a warning", "strong": ["4 MB"], "at": 1504.5},
+    {"text": "The release date hangs on the cache fix by Wednesday", "strong": ["Wednesday"], "at": 2290.0},
+    {"text": "Load target raised to 40K QPS", "strong": ["40K"], "at": 1830.0}
+  ],
+  "groups": [                            // at least one: a single group titled "", or 2–4 titled groups
+    {"title": "Project progress", "topics": [
+      {"title": "Export", "icon": "progress", "bullets": [
+        {"text": "Export drops entries over 4 MB", "strong": ["4 MB"], "at": 312.0, "who": "Ada"},
+        {"text": "The export size-limit message is done", "strong": ["done"], "at": 655.0},
+        {"text": "Export keeps the cap, with a warning when an entry is skipped", "strong": ["keeps the cap"], "at": 1504.5, "decision": true}
+      ]},
+      {"title": "Release date", "icon": "schedule", "bullets": [
+        {"text": "The release on the 20th is at risk", "strong": ["at risk"], "at": 1810.0},
+        {"text": "The release moves a week unless the cache bug is fixed by Wednesday", "strong": ["a week"], "at": 2290.0, "decision": true}
+      ]}
+    ]},
+    {"title": "Tooling and performance", "topics": [
+      {"title": "Load testing", "icon": "performance", "bullets": [
+        {"text": "Load-test QPS raised to 40K", "strong": ["40K"], "at": 1830.0, "who": "Bo"}
+      ]},
+      {"title": "Cache bug", "icon": "quality", "bullets": [
+        {"text": "The cache bug reproduced once on a weak network", "strong": ["once"], "at": 1950.0, "photo": 2}
+      ]}
+    ]}
+  ]
+}
+```
+
+In the same minutes, `points` holds the five point bullets and `decisions` the two decision bullets, word for word and in time order.
+
+What the hub guarantees, so clients check only what "Clients" below says:
+
+- **Present means usable.** There is at least one group, every group has at least one topic, and every topic has at least one bullet.
+- **The bullets are the points and the decisions.** Every point and every decision is exactly one bullet, and every bullet is exactly one of them, with the same `text`, `at` and `photo` (and `who` for a point). `decision: true` marks a decision and is left out for a point. `who` is on points only. Actions and open questions are never bullets.
+- **Groups.** There is either one group whose `title` is `""` (clients show no heading for it), or 2 to 4 groups with distinct titles.
+- **Order.** Bullets are in `at` order. Topics within a group are ordered by their first bullet, and groups by their first topic. Conclusions keep the model's order, most important first, not time order.
+- **Citations.** Every conclusion and bullet has `at`, plus `photo` when it cites one, resolved exactly as items are ("How the hub generates them").
+- **No Markdown.** No text contains `**`. Bold is given by `strong` (below).
+- **Icons.** `icon` is one of `progress`, `schedule`, `release`, `performance`, `metrics`, `tooling`, `quality`, `design`, `people`, `customer`, `budget`, `risk`, `general`. A client treats a value it does not know as `general`, so the list can grow.
+
+Limits, in characters (Unicode code points). A text cut to its limit ends in "…", which counts towards it:
+
+| Field | Limit |
+| --- | --- |
+| `headline` | One line, at most 120. Left out when empty or the same as `title`. |
+| `conclusions` | At most 4, each at most 200. |
+| Group `title` | At most 24. |
+| Topics | At most 12 in all. `title` at most 40. |
+| Bullet `text` | At most 400, like the text of every item (a cut keeps 399 and "…"). |
+| `strong` | At most 2 per text, each 1 to 20 characters, never the whole text. |
+
+### Bold (`strong`)
+
+`strong` lists the substrings of `text` to set in bold, in the order they appear. Every client, and the Markdown, find them the same way:
+
+1. Start at the beginning of `text`.
+2. For each entry, find its first exact occurrence at or after that point (comparing code units, with no case folding or normalization) and bold it.
+3. Continue from the end of that occurrence. An entry that is not found is skipped; its words are still shown, just not in bold.
+
+The hub keeps an entry only when this rule finds the exact place the model marked, so a figure that appears twice is never bolded in the wrong place. It also moves spaces and punctuation at the ends of an entry outside it, except the signs a figure or a name holds (`%`, `‰`, `‱`, `#`, `@`, `&`, `-`): `**92%.**` gives `92%`, `**(-5%)**` gives `-5%`, and `**#42**` stays `#42`.
+
+`strong` uses substrings rather than offsets because Go, Swift, JavaScript and Kotlin count string positions differently. No client parses Markdown in these texts: words from a transcript or a photo could otherwise become live links.
+
+### How the hub makes it
+
+- **What the model writes.** The prompts (`prompts/kb/minutes.md`, `minutes_merge.md`) ask for the same minutes in a new shape. Besides `title`, `where`, `attendees`, `actions` and `open`, the answer has:
+  - `headline`: about 40 Chinese characters.
+  - `conclusions`: 2 to 4 entries, each `{text, line}` (or `photo`), saying where the meeting landed. A conclusion cites a photo only when a point or decision of a topic cites the same photo; otherwise it cites the line that supports it ("Conclusions" below).
+  - `topics`: 2 to 8 of them (at most 10), in the order they were first discussed. Each is `{title, group, icon, points, decisions}`, and its points and decisions are written as before (`{text, line, who}`, `{text, line}`).
+
+  Each point or decision is one short, self-contained line that names its subject and reads right without its topic or group heading (older apps and the meeting material show it on its own), and marks its key figure or status with `**…**`. Actions and open questions stay plain text, with no markers. It marks at most two places of a few words each, such as "module X **done**" or "QPS raised to **40K**". A topic has 2 to 4 of these lines, and one with more than 5 is split into two topics. `group` is a short name (about 8 Chinese characters), given only when there are 4 or more topics that fall into 2 to 4 groups. `icon` is one of the list above, always written in English.
+- **Checking it.** `buildMinutes` checks every point and decision in every topic exactly as it checks items today: an allowed citation, a name that was spoken or is on the calendar, no duplicates. It takes the `**` markers out of the text. The plain text goes into `points` or `decisions`, and the marked places into `strong`. A stray `**` in the minutes' title, the place, a name or a deadline as said (actions and open questions too) is taken out as well, so a name still matches the calendar and the transcript. The legacy lists are sorted and capped as before, and action ids (`a1`…) are numbered as before.
+- **Conclusions** need an allowed citation too, lose their markers the same way, and are capped at 4. They never count as the citation that makes an answer usable: minutes still need an item that cites the transcript. A conclusion may cite a photo only when a bullet of the overview cites the same photo; otherwise its photo citation does not count, and it is dropped unless it also cites a line. So the photos the items cite are all the photos the minutes cite, which an older hub's photo delete and trim also see.
+- **Titles and icons.** The headline and the topic and group titles are put on one line, stripped of markers and clipped to their limits. An icon not in the list becomes `general`. Two topics with the same title (ignoring case) are merged into one.
+- **Groups.** Topics keep their groups only when there are at least 4 topics, every topic names a group, and there are 2 to 4 distinct groups. Otherwise all topics go into one group without a title.
+- **What the counts count.** The gates below, the 12-topic limit and the group rule count what is kept: items that passed the citation, name and duplicate checks (an unsupported name is cleared, as today, without dropping the point), topics with at least one kept item after their titles are cleaned, and same-titled topics merged (ignoring case: the first one in the answer gives the merged topic its title, `group` and `icon`; its place follows its first bullet's time). Group names are compared after cleaning, ignoring case.
+- **When there is no overview.** The overview is written only when every point and decision belongs to a titled topic. The hub leaves it out, writes the minutes exactly as before, and logs why when:
+  - the answer has no point or decision;
+  - it has points or decisions outside `topics` (the old shape, or a mix of both);
+  - a topic with items has no title;
+  - there are more than 12 topics.
+
+  A malformed `headline` or `conclusions` (or one entry of them), or a topic's malformed `title`, `group` or `icon`, never makes the answer unusable: that value is dropped (an icon becomes `general`, a topic left without a title leaves the overview out, as above), and the topic's points and decisions are kept. The answer is unusable only when `topics` is not a list (a `null` one is none, as for the answer's other lists), a topic is not an object (`null` included, even beside usable topics), or a topic's `points` or `decisions` are malformed the way a malformed `points` is today; that counts towards `failed` ("How the hub generates them"). The minutes' own `title` is decoded as today.
+- **Long meetings.** Each part's notes keep every point and decision the part gives, inside `topics` or not. Those under a titled topic carry its title, so the merging call reads lines like `[12]〈Export〉 text`; the others carry no tag. Before the per-part cap (`max(2, 60/parts)` per section, as today), the top-level and topic items of each section are put in the order of the line or photo they cite (photo first, as citations resolve). The cap then keeps a part's earliest notes whatever order the topics came in; later notes, a whole later topic included, can still be left out, as later items are today. The merging call is asked to:
+  - merge the parts' topics (the same topic may have a different name in each part);
+  - put every point and decision, tagged or not, into one merged topic;
+  - write the headline and conclusions for the whole meeting from the notes, with later parts overriding earlier ones.
+
+  A part writes no headline and no conclusions. Notes carry no `**`; the merging call marks the texts again. Its answer is checked as above, and it can still cite only the lines and photos that appear in the notes.
+- **Live topics and highlights.** The overview is made from the transcript and photos only. It does not read the room's topics and highlights ("Phase 2: live view", "Phase 2b: highlights"): they exist only for meetings Persona attended, they are made from the live lines rather than the final transcript, and they are deleted with the transcript.
+- **Photos.** Before the recording is trimmed, deleting a photo also removes the conclusions and bullets that cite it, together with their items ("Phase 3: photos"). A topic left without bullets is removed, then a group left without topics, and the group rule above is applied again; the overview is removed when no topic is left. On a trimmed recording the minutes stay as they are, the overview included, and are not made again; a citation of the deleted photo shows "Photo removed", as Phase 3 says. A photo a conclusion cites is also cited by a bullet (above), so it is kept at the transcript cut.
+- **Older minutes and regenerating.** Minutes written before #6563 have no overview and are never rewritten automatically to add one. Regenerate writes new minutes with it; to-dos carry over by `who` and `what`, as with every rewrite. If an older hub (after a rollback) rewrites minutes that have an overview, it drops the overview, since it does not know the field, and clients show the minutes as before. Confirming a to-do there does not render the Markdown again, so `markdown` and `minutes.md` keep the summary-card layout until the minutes are next rendered (a photo deleted, new minutes); every photo the minutes cite is still cited by an item, so its photo delete and trim work as today.
+
+### Markdown
+
+`markdown` and `minutes.md` follow the overview when there is one. Minutes this hub renders without one are written byte for byte as before (a write that only links to-dos keeps the stored Markdown, as today). Headings and fixed words come from `kb-minutes.json` in the minutes' language, which gains `conclusions`, `decided` and `ai_note`:
+
+```
+# Sprint review
+
+- When: 2026-11-10 14:00–15:10
+- Location: Room 3
+- Attendees: Ada, Bo, Cy
+
+Export ships with the size cap; the release date waits on the cache fix
+
+## Core conclusions
+
+- [14:25:04] Export ships with the **4 MB** cap and a warning
+- [14:38:10] The release date hangs on the cache fix by **Wednesday**
+- [14:30:30] Load target raised to **40K** QPS
+
+## Project progress
+
+### Export
+
+- [14:05:12] Export drops entries over **4 MB** (Ada)
+- [14:10:55] The export size-limit message is **done**
+- [14:25:04] Decided: Export **keeps the cap**, with a warning when an entry is skipped
+
+### Release date
+
+- [14:30:10] The release on the 20th is **at risk**
+- [14:38:10] Decided: The release moves **a week** unless the cache bug is fixed by Wednesday
+
+## Tooling and performance
+
+### Load testing
+
+- [14:30:30] Load-test QPS raised to **40K** (Bo)
+
+### Cache bug
+
+- [14:32:30] The cache bug reproduced **once** on a weak network (photo 2)
+
+## Action items
+
+- [14:35:00] Bo: Add the warning text and the regression test (Friday)
+- [14:39:10] Cy: Share the load-test report
+
+## Open questions
+
+- [14:40:08] Whether the cap is per entry or per recording
+
+*AI-generated from the recording. Check anything important.*
+```
+
+- With one group, each topic is a `##` heading and there are no `###` headings. The headline line is left out when there is no headline.
+- There is no "Key points" or "Decisions" section. Decisions sit in their topic after `decided`, so `kb_get` and `kb_search` still find them.
+- Action items are written as in minutes without an overview, with no checkbox: the minutes do not know a to-do's state, and `minutes.md` is also what a follow-up's seed and `kb_search` read, so a `[ ]` would say the action is still open. `kb_get` prints the real state right after the minutes.
+- A literal `*` in the text is written as `\*`. Bold places are wrapped according to the rule above.
+- If the minutes are partial, the partial note comes before the AI note.
+
+### Clients
+
+A client decodes `overview` on its own, apart from the legacy fields, and shows the summary card only when a bullet is left after this cleaning; in every other case it shows the minutes as before, from the same payload. The mock hub, the iPhone and the web check the same malformed cases against one shared fixture.
+
+- A missing, `null` or non-object `overview`, or a missing or non-array `groups`, means no overview.
+- In `groups`, `topics` and `bullets`, members that are not objects are dropped. A group without an array `topics`, and a topic without an array `bullets` or without a non-blank string `title`, are dropped. A group `title` that is missing or not a string is `""`.
+- Bullets and conclusions without a non-blank string `text` are dropped. A missing or wrong-typed `headline`, `conclusions`, `who` or `strong` counts as absent; in `conclusions` and `strong`, invalid entries are dropped. Only the boolean `true` marks a decision.
+- An unknown `icon` becomes `general`.
+- An `at` that is not a non-negative number shows no time.
+- A `photo` that is not a positive whole number counts as absent.
+- A `strong` entry that is not found bolds nothing.
+- Then empty topics and empty groups are dropped.
+
+The choice between the two layouts is made where the minutes are prepared for display, never while drawing. A broken overview never stops the rest of the minutes from decoding.
+
+Both clients follow these rules:
+
+- **Order.** First the summary card: the headline (or the minutes' title when there is no headline) and the core conclusions. Then the topic cards under their group headings, then Action Items, then Open Questions, then the AI note. Points and decisions are not shown again in cards of their own.
+- **Bullets.** A bullet shows its words with the `strong` places in bold, its photo as items show theirs, and its time, which jumps to the transcript as an item's time does. A decision shows the decision mark instead of the dot, and the word "Decision" where a point shows its speaker, so nothing depends on the glyph or a color alone.
+- **Folding.** A topic card shows its first 4 bullets, then "Show N more" (and "Show less"), which open the rest in place.
+- **Conclusions.** A conclusion shows its words, its bold places, its photo and its time. It has no transcript disclosure, because it sums up more than one line.
+- **Colors.** The cards of a group share one of four topic tints, chosen by the group's position (the first group gets the first tint). The model never chooses a tint, and a tint is never a status color: no red, orange, green or yellow, and not the AI color. The conclusions box uses the AI tint and the lightbulb, because these are the AI's own words. Each client draws its own glyph for `icon`.
+- **Action items.** Add to to-dos, Added and Add all stay, and the versioned confirmation (`POST …/minutes/todos`) is unchanged. On the iPhone, an added action whose to-do the app holds shows that to-do's done circle, which ticks it as the To-dos list does. A suggested action never shows a box.
+- **Copy and Share** send `markdown` (the iPhone too, in this layout; minutes without an overview keep the iPhone's own text).
+- **AI note.** It is the client's own string, with the same words as the Markdown's.
+
+**iPhone** (`RecordingMinutesSummary`, prepared in `RecordingMinutesCards`): one column on every iPhone. Each topic is its own card, a section of the page's list like the four cards today. In the sketch, `*x*` stands for bold.
+
+```
++-----------------------------------------------+
+| Sprint review                                 |  page header, switch, Copy and
+| Tue, Nov 10, 14:00-15:10 . Room 3             |  Share: unchanged
++-----------------------------------------------+
+| Export ships with the size cap; the release   |  headline
+| date waits on the cache fix                   |
+| +-------------------------------------------+ |
+| | (bulb) Core Conclusions                   | |  AI tint well
+| | Export ships with the *4 MB* cap and a    | |
+| | warning                           [25:04] | |
+| | The release date hangs on the cache fix   | |
+| | by *Wednesday*                    [38:10] | |
+| | Load target raised to *40K* QPS   [30:30] | |
+| +-------------------------------------------+ |
+| [ Regenerate ]                                |
++-----------------------------------------------+
+  o Project progress                               group heading, dot in its tint
++-----------------------------------------------+
+| [tile] Export                                 |  icon tile in the group's tint
+| .  Export drops entries over *4 MB*           |
+|    Ada                          [5:12]  (v)   |
+| .  The export size-limit message is *done*    |
+|                                [10:55]  (v)   |
+| #  Export *keeps the cap*, with a warning     |  # = the decision mark
+|    when an entry is skipped                   |
+|    Decision                    [25:04]  (v)   |
++-----------------------------------------------+
++-----------------------------------------------+
+| [tile] Release date                           |
+| ...                                           |
++-----------------------------------------------+
+  o Tooling and performance
+  ...
++-----------------------------------------------+
+| [todo] Action Items                       (2) |
+| (o) Add the warning text and the regression   |  (o) = its to-do's circle, once added
+|     test                                      |
+|     Bo . Friday . Due Nov 13   [35:00]  (v)   |
+|     ---------------------------------------   |
+|     Share the load-test report [39:10]  (v)   |
+|     Cy                                        |
+|     [ Add to To-Dos ]                         |
++-----------------------------------------------+
+| [?] Open Questions                        (1) |
+| ...                                           |
++-----------------------------------------------+
+  (sparkle) AI-generated from the recording.       footer
+  Check anything important.
+```
+
+- The summary card shows when, where and the attendees only where the page header does not already.
+- The conclusions box is an inset well inside the summary card, never a `.surface`; a surface's shadow is cut off in a list row.
+- At the largest text sizes, times and disclosures go under the words (as items do today), the tile goes above the topic's title, and group headings wrap.
+- VoiceOver headings, in order: the headline, Core Conclusions, each group, each topic, Action Items, Open Questions. The dot, the decision mark and the tiles are hidden from VoiceOver. "Show N more" names its topic.
+- iPad and landscape layouts with several cards per row come later. Until then they use the one column.
+
+**Web** (`RecordingMinutes.tsx`): one card, as today, inside the recording page's existing column. Each group's topics form a grid with as many columns as fit cards of the minimum width token, but never more than three. That is two columns in today's 720 px column, one on a narrow screen, and a lone card takes its whole row. The topic area is a single child of the card, so there are no dividers between topic cards.
+
+```
+ Minutes                                          [Copy] [Regenerate]
++--------------------------------------------------------------------+
+| Export ships with the size cap; the release date waits on the      |
+| cache fix                                                          |
+| Tue, Nov 10, 2026 14:00-15:10 . Room 3 . Ada . Bo . Cy             |
+| +----------------------------------------------------------------+ |
+| | (light) Core conclusions                                       | |
+| | Export ships with the *4 MB* cap and a warning           14:25 | |
+| | The release date hangs on the cache fix by *Wednesday*   14:38 | |
+| | Load target raised to *40K* QPS                          14:30 | |
+| +----------------------------------------------------------------+ |
+| Project progress                                                   |
+| +-------------------------------+ +------------------------------+ |
+| | [trend] Export                | | [calendar] Release date      | |
+| | . Export drops entries over   | | . The release on the 20th is | |
+| |   *4 MB*  Ada           14:05 | |   *at risk*            14:30 | |
+| | . The export size-limit       | | # The release moves *a week* | |
+| |   message is *done*     14:10 | |   unless the cache bug is    | |
+| | # Export *keeps the cap*, ... | |   fixed by Wednesday         | |
+| |   Decision              14:25 | |   Decision             14:38 | |
+| +-------------------------------+ +------------------------------+ |
+| Tooling and performance                                            |
+| +-------------------------------+ +------------------------------+ |
+| | [gauge] Load testing   ...    | | [shield] Cache bug     ...   | |
+| +-------------------------------+ +------------------------------+ |
+|--------------------------------------------------------------------|
+| Action items                                            [Add all]  |
+| Bo  Add the warning text and the regression test                   |
+|     [Fri, Nov 13]  14:35                         [Add to to-dos]   |
+|--------------------------------------------------------------------|
+| Open questions                                                     |
+| - Whether the cap is per entry or per recording              14:40 |
+|--------------------------------------------------------------------|
+| (sparkles) AI-generated from the recording. Check anything         |
+| important.                                                         |
++--------------------------------------------------------------------+
+```
+
+- On a narrow screen everything is one column: the conclusions box, then each card under its group's heading.
+- Headings: "Minutes" is the section's h2 and the headline (or title) h3. Core conclusions, Action items and Open questions are h4. With named groups, each group is a `section` labelled by its h4 heading and its topics have h5 headings; with the single untitled group there is no group heading, the grid is a plain `div`, and each topic has an h4 heading. Each topic is an `article` labelled by its title. The reading order runs row by row.
+- Times and photos use the page's existing citations, as items do today: the cited photo, otherwise the transcript time. A time is disabled when there is no transcript line to jump to, as after the trim; a photo the trim kept still opens under Photos, and a deleted one shows "Photo removed".
+- Topic tints are design tokens with light and dark values; the bold text and the times keep their contrast on every tint.
+
+### Compatibility
+
+| Hub | Client | Result |
+| --- | --- | --- |
+| Older | Any | No `overview`, so the minutes look as before. |
+| This one | Older (any platform, the watch) | `overview` is ignored. The client gets the same `points`, `decisions`, `actions` and `open`, now short card-style lines. Copy on the web and on Android sends the new Markdown. |
+| This one | This one | The summary card when `overview` is present. Minutes from before it, and those the hub wrote without one, look as before. |
+| Rolled back to an older one | This one | The first rewrite by the older hub drops `overview`, and the page falls back. A to-do confirmed there leaves the summary-card Markdown in place until the minutes are next rendered. Photo deletes and the trim work as today, since every cited photo is also cited by an item. |
 
 ## Privacy
 
@@ -296,7 +604,7 @@ All of it is optional and additive. A phone that sends none of it, and a hub wit
 
 ### What the hub gives the answering model
 
-Everything in the answer's input may end up said aloud, and the question and the live sentences come from people in the room, who can ask for anything in it. So the boundary is what the hub puts there, not the ranking or the prompt. An answer is one model call, purpose `meeting.answer` (a use of Information processing, `kb`, [model-config.md](./model-config.md)), with **no tools**. Until a meeting can be marked private (#3862 phase 1), its input contains **only this meeting**: the upload’s title and calendar hint, live lines and earlier asks. `kb.Engine.EarlierMeetingsInAnswers` is false in production and gates earlier meetings, their projects and their action-item to-do states together. No earlier-meeting lookup or to-do-state lookup runs for an answer. The retrieval code and its opt-in tests stay ready for phase 1 to enable eligible material per meeting with the mark.
+Everything in the answer's input may end up said aloud, and the question and the live sentences come from people in the room, who can ask for anything in it. So the boundary is what the hub puts there, not the ranking or the prompt. An answer is one model call, purpose `meeting.answer` (a use of Information processing, `kb`, [model-config.md](./model-config.md)), with **no tools**. It stays there when the In-meeting conversation is set apart (#7980): it answers when the room cannot, so it must not depend on the room's launcher or computer. Until a meeting can be marked private (#3862 phase 1), its input contains **only this meeting**: the upload’s title and calendar hint, live lines and earlier asks. `kb.Engine.EarlierMeetingsInAnswers` is false in production and gates earlier meetings, their projects and their action-item to-do states together. No earlier-meeting lookup or to-do-state lookup runs for an answer. The retrieval code and its opt-in tests stay ready for phase 1 to enable eligible material per meeting with the mark.
 
 The current source (1) and the future, gated sources (2–4) are:
 
@@ -324,7 +632,7 @@ The system prompt is one fixed template that takes only the owner's name, today'
 - Lists as attending sessions: the main chat (sent by omitting `attending_session`, never by its id); the other conversations of `GET /api/v1/assistant` that are not archived; and the Agent sessions of `GET /api/v1/sessions` that take messages; in each case only those that pass "Sessions that never attend" below.
 - Uploads an attending recording at once, ahead of other pending uploads and outside the save debounce, then streams finished sentences with `…/live`, resuming from `next` after a reconnect or a `409 live_gap`.
 - Shows that an AI is attending, on the recording screen and in the Live Activity, for as long as the role is not `off`.
-- Asks with a tap: typed on the recording screen, or with no text from the Live Activity. Shows the answer (on the recording screen, and the latest one in the Live Activity; the hub posts no notification for answers), and in a participant meeting says it aloud through the voice route (headset, else the loudspeaker): in the realtime voice of voice chats, with the model and voice the owner uses, when the hub's voice extension lists `speak` (#5004); in the phone's on-device voice when it doesn't, fails or hasn't started within 8 seconds.
+- Asks with a tap: typed on the recording screen, or with no text from the Live Activity. Shows the answer (on the recording screen, and the latest one in the Live Activity; the hub posts no notification for answers), and in a participant meeting says it aloud through the voice route (headset, else the loudspeaker): in the voice of an extension's `speech` contribution when one runs and reads (#8712, [extensions.md](../extensions/extensions.md) "Speech": the built-in Volcengine speech's); else in the realtime voice of voice chats, with the model and voice the owner uses, when the hub's voice extension lists `speak` (#5004); in the phone's on-device voice when neither does, it fails or hasn't started within 8 seconds.
 - Keeps Persona's echo out of the transcript and the live log (required): a sentence that overlaps a span when the phone was speaking and says the words Persona said there ("Persona's echo" below). It stays on the recording, marked, and goes up marked to a hub that lists `meeting_echo`. Echo cancellation is optional, set only when a recording starts as `participant` and never switched mid-recording. Persona's answers stay on the hub as `asks`, not as transcript lines.
 
 ### Persona's echo (#5905)
@@ -377,11 +685,12 @@ Each phase ships on its own, behind its own flag ("Flags and compatibility").
 | 0 Retention | Minutes outlive their transcript | Done (#3936) | Done | Done | — |
 | 1 Meeting conversation | The room conversation and asking it, Just me, the private mark (and earlier meetings marked not private back as material), the follow-up conversation, one thread | The room (guest kind `meeting` without the owner's Claude Code setup, meeting tools, batches), `meeting.json`, `…/ask` answered by it, `…/just-me` with its turn mark, `…/private`, `…/followup`, two origins, the `meeting_live` event, deleting the room at the transcript cut | One thread on the recording detail, the private switch, the follow-up composer | The meeting page (thread, Ask, Just me, role, private), the Live Activity's answer and Turn off | `meeting_conversation` |
 | 2 Live view | Live transcript and topics | Done (#3862): `lines` and `topics` on `GET …/live`, the topics tool, `lines` and `topics` in `meeting_live` | Done (#3862): Topics and live lines on the detail while it records | Done (#3862): 15-second segments; Topics and Live on the page; topic and latest line in the Live Activity | `meeting_live_view` |
-| 2b Highlights | 3–4 highlights of the meeting so far, each back to its moment in the transcript (#5891) | Done (#5891): `highlights` and `highlights_at` on `GET …/live` (with `revs` and `?parts=highlights`), `meeting_highlights_set` resolving each `said_at` to its minute's lines, the highlights in the batches and the follow-up's seed, `[m:ss · HH:MM]` lines from `meeting_lines`, `highlights` in `meeting_live` | — (the recording detail keeps Topics and Live) | Highlights at the top of the page (the gist only; the words as said one tap away, on Full Transcript) | `meeting_highlights` |
+| 2b Highlights | 3–4 highlights of the meeting so far, each back to its moment in the transcript (#5891) | Done (#5891): `highlights` and `highlights_at` on `GET …/live` (with `revs` and `?parts=highlights`), `meeting_highlights_set` resolving each `said_at` to its minute's lines, the highlights in the batches and the follow-up's seed, `[m:ss · HH:MM]` lines from `meeting_lines`, `highlights` in `meeting_live` | — (the recording detail keeps Topics and Live) | Done (#5891): the flag kept from the start; the Highlights card at the top of the page (the gist only, each time opening the transcript at its minute, lit; a waiting line before the first while Persona attends), Full Transcript one tap away, the newest highlight alone while typing | `meeting_highlights` |
 | 3 Photos | Photos as meeting material | Done (#3862): `…/photos`, storage with the recording, forwarding to the room, notes, citations in the minutes, retention | Photos on the detail, photo citations in the minutes | Camera and library on the page, on-device text recognition | `meeting_photos` |
 | 4 Realtime voice | Talk to Persona by voice during the meeting | Done (#3862): meeting calls in the built-in voice extension (`meeting` in `features`; `start.mode` `meeting` with `recording_id`, checked with `…/live`, else `not_meeting_room`; a room refuses other calls, `meeting_room`, its origin said on its session row by the manager; `delegate_task` to the room only, with no prefixes, the meeting instructions, the room's own questions and answers, no notes; `talk` frames, silence fed between spans, a span closed past 90 s; no pausing, no observed turns; the user-speech gate always on, with no Send Anyway) | — | Done (#3862): the meeting call on the recorder's capture (`mode: "meeting"`, `recording_id`, the room as `target`, `echo_cancellation`; never claims the microphone, no idle end, reconnects then every 30 s), Talk held on the page and a talk window from the Live Activity (`talking`, `TalkInMeetingIntent` with the action its button showed, its speech the owner's over the room's level), audio only inside spans (placed where it was captured, the press never early), Talk without a call through `…/ask` (`spoken: true`, also for a span the call lost and for any span opened before the Wording was on screen or seen), typed questions as `text` frames, echo cancellation from a participant start, the voice's and spoken answers' spans kept as they played with the words said in them (the call's: its captions), so Persona's echo is marked by #5905's rule, the privacy Wording, no voice in a room opened as a chat | `meeting` in the voice extension's `features` |
-| 5 Hub transcription | Hub mode | The `transcription` extension point and its built-in adapter, the audio socket, the live log's fallback to the phone's text, gap uploads, the transcript of record, the 4× final pass | Mode and gaps on the detail | The uplink from the recorder's tap, the timeline, gap uploads, the mode choice, privacy texts per mode | `meeting_transcription` |
+| 5 Hub transcription | Hub mode | The `transcription` extension point and its built-in adapter, the audio socket, the live log's fallback to the phone's text, gap uploads, the transcript of record, the 4× final pass | Mode and gaps on the detail | Done (#3862): the uplink from the recorder's tap (the 60-second ring, the resend from `ready.from`, gaps for what fell out), the timeline, no `POST …/live` in hub mode, gap uploads from the phone's segments, Hub Transcription on Wi-Fi Only, the mode on the start (On the Hub only while ready) and the default and glossary in Settings › Meetings, the hub's lines and caption on the page and its line on the Lock Screen, the fallback notice, the mode, state and gaps on the recording's page, privacy texts per mode | `meeting_transcription` |
 | 6 Talk about this meeting | The follow-up from any recording, by text and voice | Done (#3862): the minutes push's `recording_id`; `kind` on `GET /api/v1/kb-search` and on the voice `search_knowledge`; `…/followup` for any recording | Done (#3862): **Talk about this meeting** on the detail | Partly (#3862): the same on the detail and after Stop; the minutes push opens the meeting; voice once the follow-up exists, dictating the first request not done | none (phase 1's route) |
+| 7 Long meetings | Lean batches every two minutes and a scheduled in-place compaction (#8253) | Lean batches, lists at boundaries, the room's CLAUDE.md, the compaction | — | — | none (no wire change) |
 
 ### The parts
 
@@ -402,6 +711,7 @@ Each phase has a feature flag that the hub lists in WS `hello.features` and trus
 - `meeting_conversation` (phase 1): the upload's `room` and `private`, the room conversation, `…/ask` answered by it, `…/just-me`, `…/private`, `…/followup`, the origins `meeting` and `meeting_followup`, the `meeting_live` event, and the fields phase 1 adds to `GET …/live` and `detail.meta`. A manager that names it names `meeting_attendance` too.
 - `meeting_live_view` (phase 2), `meeting_photos` (phase 3) and `meeting_transcription` (phase 5): what those phases add. Each comes only with `meeting_conversation`, and `meeting_transcription` only with `meeting_live_view` too (it uses phase 2's `lines` and `?from=`).
 - `meeting_highlights` (phase 2b): what "Phase 2b: highlights" adds. It comes only with `meeting_live_view`. Without it the meeting page stays as phase 2 has it.
+- `meeting_notes` (#8851): the room's `notes` role ("The notes role (#8851)"). It comes only with `meeting_live_view`. Without it a meeting Persona is not in starts `off`, with no live view.
 - `meeting_echo` (#5905) comes with `meeting_attendance`, with or without the conversation: echo lines marked on the upload and `spoken` ("Persona's echo"). The phone reads it at every upload, not once per meeting.
 - Phase 4 belongs to the built-in voice extension: `meeting` in the `features` of its `GET /info` and `ready`.
 - Phase 6 adds no flag: it uses phase 1's route, and the new push field and `kind` parameter are optional.
@@ -432,7 +742,7 @@ On `PUT /api/v1/recordings/{id}`, with `kind: "meeting"`:
 }
 ```
 
-- `room` replaces the top-level `attendance` and `attending_session`: the hub opens one room conversation for the meeting and feeds it. `room.attendance` takes #2981's roles and rules: a value that is not one of the three is stored as `off` with `attendance_problem: "unknown_role"`, a role on a recording whose `kind` is not `meeting` as `off` with `"not_meeting"`. A `room` that is not an object counts as absent. Absent on every upload: the #2981 behavior.
+- `room` replaces the top-level `attendance` and `attending_session`: the hub opens one room conversation for the meeting and feeds it. `room.attendance` takes #2981's roles and rules, and `notes` on a hub that lists `meeting_notes` ("The notes role (#8851)"): any other value is stored as `off` with `attendance_problem: "unknown_role"`, a role on a recording whose `kind` is not `meeting` as `off` with `"not_meeting"`. A `room` that is not an object counts as absent. Absent on every upload: the #2981 behavior.
 - With `meeting_conversation` the phone sends `room` on every upload of every meeting recording, whatever the role (`{"attendance": "off"}` included), and never the top-level `attendance` or `attending_session`; the hub ignores those two beside `room`. The role travels inside `room` so that an older manager after a rollback, which reads only the top-level `attendance`, sees a meeting that is off and feeds nothing ("Flags and compatibility").
 - A recording that once had `room` stays a room meeting: a later upload without it turns the role `off` and changes nothing else (its top-level `attendance` and `attending_session` stay ignored), so a meeting never moves from its room to another session.
 - The `200` carries the top-level `attendance` (the role in effect, as every #2981 `200` does) and `room` (the object in "Fields on `GET …/live` and `detail.meta`") for every room meeting, at least `{"state": "none"}`. Only a `200` without `room` means an older manager. A problem with `room` or `private` never fails the upload, which carries the transcript.
@@ -440,12 +750,32 @@ On `PUT /api/v1/recordings/{id}`, with `kind: "meeting"`:
 - As in #2981, the phone sends no `…/live` or `…/ask` for a recording until an upload carrying its current `room` has returned a `200` with `room`.
 - **Where the manager keeps it.** A room meeting's role, the room's state and ids, `private`, the follow-up's ids, the pending creations ("Made once" below) and (phase 5) the transcription mode and the timeline are kept in `recordings/<id>/meeting.json` beside `meta.json`, never in `meta.json`: an older manager rewrites `meta.json` without the fields it does not know, and when it starts resumes feeding every recording whose `meta.json` has an `attendance`. `detail.meta` and `…/live` still report `attendance`, read from `meeting.json`. Search skips `meeting.json`, and the trim keeps it (an older manager's trim removes it, which leaves the meeting with no mark, so private). A manager test pins that a room meeting's `meta.json` never carries `attendance` or `attending_session`, after an upload, a role change or the trim.
 
+#### The notes role (#8851)
+
+A meeting Persona is not in still gets its live view. Since #8731 a meeting starts with only the user, and Persona joins when invited; until then the phone starts the meeting as `notes`.
+
+- **Where it is taken.**
+  - `room.attendance` takes `notes`, and so do the timeline's `roles` (phase 5) and the `attendance` that `GET …/live` and the upload's `200` report.
+  - #2981's top-level `attendance` does not: `notes` there is `unknown_role`.
+- **What the room does.** It opens and is fed as for `listener`:
+  - sentences that end while the role is `notes` join the live log;
+  - the room keeps the topics and highlights;
+  - photos reach it.
+
+  Its first message and its batches name the role, the note-taker, and no question reaches it.
+- **Persona answers nothing.**
+  - `POST …/ask` answers `409 not_attending`, as for `off`. An ask accepted before the switch still gets its answer.
+  - The phone runs no meeting call and no Talk.
+- **Inviting and removing.** Inviting Persona switches the same room to `listener` or `participant`; removing it switches the room back to `notes`. The room is never replaced.
+- **Default.** `meeting_attendance_default` keeps its three values. When it is `off` and the hub lists `meeting_notes`, the phone starts a meeting in `notes`.
+- **Older managers.** An older manager after a rollback reads `notes` as an unknown role, so the meeting is stored `off`: no live view, and minutes as usual. A hub-mode timeline that names `notes` is ignored whole there, like any malformed timeline.
+
 #### The room conversation
 
-- **When.** The hub opens it once a room meeting has the role `listener` or `participant`, after the upload has been answered (never inside the upload request: the start needs the node). Until then `room.state` is `none`; a meeting that starts `off` and turns attending on later gets its room then, and one that stays `off` never gets one. One per recording, never a second, and none after the meeting's end ("The meeting's end" below).
+- **When.** The hub opens it once a room meeting has the role `notes`, `listener` or `participant`, after the upload has been answered (never inside the upload request: the start needs the node). Until then `room.state` is `none`; a meeting that starts `off` and turns attending on later gets its room then, and one that stays `off` never gets one. One per recording, never a second, and none after the meeting's end ("The meeting's end" below).
 - **Made once, also across a restart.** Before it asks the node, the manager writes the creation to `meeting.json` as pending, with the session id the conversation will have: a UUID derived from the recording id and the part (`room`, or `followup` for "After the meeting: the follow-up", whose record also keeps the `id` of the call making it). The node starts it under that id (a new `session_id` in the node's start, Claude Code's `--session-id`, never the warm spare), and a start under an id the node already has returns that conversation instead of a second one; its first message's `client_msg_id` (`meeting-<recording id>` for the room's header, `followup-<id>` for the follow-up's) is sent once. A pending creation found after a restart is settled first: when the node has a conversation under that id, that is the one; when it has none, the room is started again under the same id, and the follow-up's record is dropped so the phone's repeat of the call (same `id`) makes it. A node that cannot start under a given id gives the room `unavailable` with `node_too_old`.
 - **What it is.** A guest conversation ([assistant.md](./assistant.md) "Guest conversations") of a new kind, `meeting`, on the assistant's computer:
-  - Claude Code only, on the CLI, and every process it runs in has `--tools ""` and `--strict-mcp-config`. It runs on the main chat's launcher and model; when the main chat runs on the Agent SDK, the room still runs on the CLI (#4648), since this room's built-in-tool removal is defined on the CLI. No live snapshot, none of the assistant's CLAUDE.md, memory or skills, never the warm spare process.
+  - Claude Code only, on the CLI, and every process it runs in has `--tools ""` and `--strict-mcp-config`. It runs on the **In-meeting conversation** model (`meeting.room`, #7980: the main chat's launcher, model and effort until it is set apart in Model settings, [model-config.md](./model-config.md) "Meeting minutes and the in-meeting conversation (#7980)"), resolved when the room starts and kept until it is deleted; when the main chat runs on the Agent SDK, the room still runs on the CLI (#4648), since this room's built-in-tool removal is defined on the CLI. No live snapshot, none of the assistant's CLAUDE.md, memory or skills, never the warm spare process.
   - One directory per meeting, `.persona/guest-meeting/<recording id>` in the node's state directory, prepared with `assistant.guest_prepare` like the extensions' guests but with a meeting CLAUDE.md (the owner's name, the language and the rules below), not the directory extension guests share.
   - **Nothing of the owner's Claude Code setup.** `--tools ""` and `--strict-mcp-config` remove only built-in tools and other MCP servers; Claude Code would still load the user's own instructions, settings and hooks. The room's processes load none of them, as no guest conversation's do ([assistant.md](./assistant.md) "Guest conversations"): not the user's CLAUDE.md (`~/.claude/CLAUDE.md`, or the one under `CLAUDE_CONFIG_DIR`) or rules (`~/.claude/rules`), not a CLAUDE.md, AGENTS.md or `.claude/rules` in a parent of its directory (such as `~/CLAUDE.md`), not auto memory, not the hooks, output style or plugins of the user's settings. Only the meeting CLAUDE.md and what the node passes itself (Persona's MCP server and hooks, the launcher's environment in the room's own `--settings`) reach the model.
   - **It signs in as the assistant does.** The room starts in the profile the assistant's conversations had before each new conversation got a private profile (`config_dir` `legacy`, [assistant.md](./assistant.md)): a private profile is a config directory with no login in it. The manager asks for it (on a node too old to be told a profile it starts the room without one, in the profile all that node's conversations use), and a node starts a new room that names no profile in it too. Its own `--settings` carries the environment, login and model keys (`env`, `model`, `apiKeyHelper`, the AWS and `forceLogin…` keys) of that profile's `settings.json` as well as the start's, the start's over the profile's, `env` merged by name: `--setting-sources project` leaves the user's settings out, and a gateway's token in their `env` with them. Nothing else of that file reaches the room.
@@ -469,13 +799,13 @@ On `PUT /api/v1/recordings/{id}`, with `kind: "meeting"`:
 | `meeting_photo_note {photo, text}` | Describes a photo ("Phase 3: photos") | 3 |
 | `meeting_highlights_set {highlights}` | Replaces the highlights with the whole list given ("Phase 2b: highlights"); a list over a limit is refused, saying which, and changes nothing | 2b |
 
-- **Feeding.** As "Feeding the attending session" above, to the room: live lines in batches (at most one a minute, at most 12000 characters, then the end batch), message source `meeting`, only while the role is not `off`; a room that comes up late first gets the meeting so far. Three differences: a batch is held while an ask waits for the room or runs in it; there is no meeting-turn mark (the whole conversation is limited, so nothing needs lifting); and the room is exempt from "Sessions that never attend", which refuses every guest conversation, for its own meeting only. That test keeps other people's words away from sessions that could act on them unasked, and the room has no tool that acts; every other meeting, #2981 ones included, still refuses it.
+- **Feeding.** As "Feeding the attending session" above, to the room: live lines in batches (at most one a minute, at most 12000 characters, then the end batch; at most one every two minutes, without the rules and lists in each, for a room started with lean batches, "Long meetings: lean batches and compaction (#8253)"), message source `meeting`, only while the role is not `off`; a room that comes up late first gets the meeting so far. Three differences: a batch is held while an ask waits for the room or runs in it; there is no meeting-turn mark (the whole conversation is limited, so nothing needs lifting); and the room is exempt from "Sessions that never attend", which refuses every guest conversation, for its own meeting only. That test keeps other people's words away from sessions that could act on them unasked, and the room has no tool that acts; every other meeting, #2981 ones included, still refuses it.
 - **States** (`room.state`), an open set: a client reads a value it does not know as `starting`.
   - `none`: no room, since the role has been `off` from the start. It stays `none` while the role does, also after the meeting's end. No ids.
   - `starting`, `ready`, and `unavailable` (with `problem`).
   - `ended`: the meeting is over for the room ("The meeting's end").
   - `deleted`: removed at the transcript cut or with the recording ("Deletion"). No ids.
-  - `problem`, an open set (an unknown value reads "Persona can't take part in this meeting right now"): `runtime_unsupported` (the main chat's launcher is not Claude Code, the assistant's computer has none, or none that can run a room without the owner's setup; a main chat on the Agent SDK is not one), `node_too_old`, `machine_offline`, `start_failed`. The last two are retried every minute until the meeting's end; the first two are not.
+  - `problem`, an open set (an unknown value reads "Persona can't take part in this meeting right now"): `runtime_unsupported` (the In-meeting conversation's launcher, the main chat's unless it is set apart, is not Claude Code, the assistant's computer has none, or none that can run a room without the owner's setup; a main chat on the Agent SDK is not one), `node_too_old`, `machine_offline`, `start_failed`. The last two are retried every minute until the meeting's end; the first two are not.
   - While the room is `unavailable`, asks are answered from meeting material by `meeting.answer`, as in #2981 (`via: "material"`); while it is `starting` they wait for it ("Asking the room"). A start that has not made the room `ready` within 2 minutes turns it `unavailable` with `start_failed`, so no ask waits longer.
 - **The meeting's end** is the moment #2981's end batch is due: the first upload carrying both `ended_at` and `complete: true`, or 3 minutes after the first upload carrying `ended_at`, whichever comes first. A meeting whose phone never sends `ended_at` (lost or reset mid-meeting) ends 12 hours after its last upload, when the feeder stops looking at it (`feedStale`), and a trimmed one has ended. Then:
   - a `ready` room whose role is not `off` gets the end batch and turns `ended` once that turn ends, 3 minutes later at the latest (an end batch not delivered by then is dropped);
@@ -494,7 +824,7 @@ On `PUT /api/v1/recordings/{id}`, with `kind: "meeting"`:
 - A **heard** question (no `question`) goes as a message with source `meeting`: the lines of the 45 seconds before `at` in a context block (the same lines and `live_next` wait as #2981) and a line asking for the question just asked in the room. Its `question` stays `""`, and `heard` lists those lines.
 - **Attempts.** The message an ask sends has `client_msg_id` `ask-<id>-<k>`, `k` its attempt (1 for the first). The ask keeps each attempt, its message id and the room turn it started, with the asks in `live.json`. A repeated request while an attempt is pending observes that attempt and its turn. Asking a `failed` ask again ("Attendance fields") starts attempt `k+1` under the next id, so the send-once check of `client_msg_id` cannot swallow it. After a restart the manager first looks for attempt `k`'s message and turn in the room before it decides anything: a turn still running is awaited, a turn that ended settles the ask, and a message never delivered is sent again under the same id. The ask's own `id` never changes.
 - The answer is the room's reply to that message: the turn's answer with Markdown removed, cut at a sentence end to at most 400 characters (the thread keeps the whole reply). A turn that ends with no text is `failed` with `no_answer`. A turn that ended in a model error (its row's `turn_error`: Claude Code's own words for a failed request, such as "Not logged in · Please run /login", are no answer) is `failed` with `model_error`; when the error is one the owner must fix (the sign-in, a key, the model, a usage limit) the room also turns `unavailable` with `start_failed`, so the asks after it are answered from meeting material until the room is retried. `sources` are the earlier meetings and projects `meeting_earlier` returned during that turn, at most 6.
-- Order: an ask waits for a batch turn that is running, then goes ahead of any held batch. One room answers one ask at a time; `429 ask_busy` still allows two in flight. `model_timeout` counts 3 minutes from the message's send.
+- Order: an ask waits for a batch turn that is running (and in a room started with lean batches for a compaction, as long as one may run: "Long meetings: lean batches and compaction (#8253)"), then goes ahead of any held batch. One room answers one ask at a time; `429 ask_busy` still allows two in flight. `model_timeout` counts 3 minutes from the message's send.
 - **Which way an ask goes** (`via`) is fixed when its first attempt goes out, and never changes. While the room is `starting` the ask waits for it (within its own hold, then as a pending ask) and goes to the room once it is `ready`; if the room turns `unavailable` or `ended` first, it goes to `meeting.answer`. While the room is `unavailable`, `meeting.answer` answers at once. Until its first attempt goes out an ask has no `via`. Asking a `failed` ask again goes the same way: a `room` ask asked again while the room is `unavailable` fails at once with `room_unavailable`, and the phone then asks a new question (a new `id`), which goes to `meeting.answer`.
 - `409 meeting_ended` once the room is `ended`, right after the `409 not_attending` check: ask in the follow-up.
 - `Ask` gains `via` (`room` or `material`; absent on #2981 meetings, which are `material`, and while the ask waits for a `starting` room), `heard` (`[{start, end, text}]`, heard asks in a room meeting), `question_source` `spoken`, and `error` `no_answer` and `room_unavailable`.
@@ -599,8 +929,8 @@ Its row in protocol.md's WebSocket table and the hub's list of manager message t
 ### Phase 2: live view
 
 - `GET /api/v1/recordings/{id}/live?from=<n>` adds `lines`: the live log from position `n`, `[{"n", "start", "end", "text"}]`, at most 500, and `more: true` when there are more (read again from the last `n` plus one). Every position is listed, so `n` counts on without a hole; a placeholder position (an empty sentence) has `text` `""`, which clients skip. Without `from` there are no `lines`, so #2981 reads stay small; a `from` that is not a non-negative integer is `400` (after `410` and `404`). A `from` at or past the end gives `[]`.
-- `topics`, always present on `GET …/live` from this phase (`[]` before the first), and `topics_at` (RFC 3339, the last change; absent before the first): `[{"title", "state", "at"?, "note"?}]`, `state` `done`, `current` or `open` (at most one `current`), `at` the seconds the topic began, `title` at most 80 characters, `note` at most 200, at most 20 topics. The `200` of `POST …/live` carries neither, as it carries no `revs`. The room sets them with `meeting_topics_set` after a batch: each batch shows it the topics so far, and it changes them only when the meeting moved on. A call that breaks a limit is refused with an error saying which, and changes nothing; titles and notes are put on one line first. The same list again changes nothing (no new revision). A room started before the hub had the tool keeps the tools it started with: its batches show no topics, and it sets none.
-- Topics come from the room, so they are meeting material: the follow-up's seed lists them after the minutes. They live in `live.json` and go with the transcript.
+- `topics`, always present on `GET …/live` from this phase (`[]` before the first), and `topics_at` (RFC 3339, the last change; absent before the first): `[{"title", "state", "at"?, "note"?}]`, `state` `done`, `current` or `open` (at most one `current`), `at` the seconds the topic began, `title` at most 80 characters, `note` at most 200, at most 20 topics. The `200` of `POST …/live` carries neither, as it carries no `revs`. The room sets them with `meeting_topics_set` after a batch: each batch shows it the topics so far (a room started with lean batches sees them only at the boundaries in "Long meetings: lean batches and compaction (#8253)" and otherwise works from the list it set), and it changes them only when the meeting moved on. A call that breaks a limit is refused with an error saying which, and changes nothing; titles and notes are put on one line first. The same list again changes nothing (no new revision). A room started before the hub had the tool keeps the tools it started with: its batches show no topics, and it sets none.
+- Topics come from the room, so they are meeting material: the follow-up's seed lists them after the minutes. They live in `live.json` and go with the transcript. The minutes do not read them ("Summary card (#6563)").
 - `?parts=lines` returns the lines (with `more`) only beside `from`, and `revs.lines` always; `?parts=topics` returns `topics` and `topics_at` with `revs.topics`. `revs.topics` goes up with every change of the topics.
 - Live lines are shown only through `…/live`, to full devices; `kb_get` and `GET /api/v1/kb/recordings/{id}` still never show them (#2981).
 - `meeting_live` adds `lines` (after every append that stored a position, `revs.lines` the live log's length) and `topics` (after every change).
@@ -627,13 +957,24 @@ While a meeting records, the top of the meeting page shows **3–4 highlights of
   - A call is refused, with an error saying which limit it broke, and changes nothing when `highlights` is absent, `null` or not a list; when it has more than 4; when a highlight is not an object with a string `text` and a string `said_at`, has no text or more than 80 characters of it; or when a `said_at` is not `H:MM` or `HH:MM`, or no line of the live log so far is in that minute.
   - The same list again, once resolved (each `text`, `at` and `end`), changes nothing (no new revision). A kept highlight whose minute has gained lines since gets the later `end`, and that is a change. Only `[]` clears the highlights.
   - Why a minute and not the line: batch lines carry only their `[HH:MM]` (both apps read that form when they show a batch's lines in the thread, and a wider stamp would change those rows), and the room copies it from the line without counting seconds; an exact line would take a `meeting_lines` call in every batch's turn. The phone lights the minute's lines, so the point is among them.
-- **After each batch.** A batch shows the room the highlights so far after the topics in its context block ("None yet" before the first), each on a line of its own as `- [HH:MM] text`, never as a line that starts with `[`: both apps read every line of a batch's block that starts with a clock stamp as a line of the meeting. Beside the topics (both calls may go in the same step), the room updates the highlights when the batch changed what matters most in the meeting so far, and otherwise leaves them. The instruction asks for 3 to 4 once the meeting has that many points, fewer before; each one short sentence in the meeting's language (about 30 characters in Chinese or Japanese, about 12 words otherwise), stating the point itself rather than that it was discussed, with the `[HH:MM]` of the line where it came to a head.
+- **After each batch.** A batch shows the room the highlights so far after the topics in its context block ("None yet" before the first; for a room started with lean batches only at the boundaries in "Long meetings: lean batches and compaction (#8253)"), each on a line of its own as `- [HH:MM] text`, never as a line that starts with `[`: both apps read every line of a batch's block that starts with a clock stamp as a line of the meeting. Beside the topics (both calls may go in the same step), the room updates the highlights when the batch changed what matters most in the meeting so far, and otherwise leaves them. The instruction asks for 3 to 4 once the meeting has that many points, fewer before; each one short sentence in the meeting's language (about 30 characters in Chinese or Japanese, about 12 words otherwise), stating the point itself rather than that it was discussed, with the `[HH:MM]` of the line where it came to a head.
   - Highlights it keeps are sent again word for word with their `[HH:MM]`, so a kept point never changes its wording; it changes only what the batch changed. A point can give way to a weightier one, and a decision outweighs the discussion that led to it. An open question the meeting has answered gives way to its answer, at the answer's line. It never clears them.
   - A person is named only when the words name them (owner decision 6), since the highlights are shown and may be said aloud.
 - **Older rooms.** A room started before the hub had the tool keeps the tools it started with: its batches show no highlights and it sets none, so its meeting's `highlights` stay `[]`.
-- **Meeting material.** The highlights come from the room, so they are material like the topics: the follow-up's seed lists them after the topics. They live in `live.json` and go with the transcript: the trim empties them, and `revs.highlights` starts again from 0 ("The `meeting_live` event"). `detail.meta` and `kb_get` never show them. They are among what may be said aloud or shown on the Lock Screen ("What may be said aloud"), although the Live Activity does not show them.
+- **Meeting material.** The highlights come from the room, so they are material like the topics: the follow-up's seed lists them after the topics. They live in `live.json` and go with the transcript: the trim empties them, and `revs.highlights` starts again from 0 ("The `meeting_live` event"). `detail.meta` and `kb_get` never show them. They are among what may be said aloud or shown on the Lock Screen ("What may be said aloud"), although the Live Activity does not show them. The minutes do not read them ("Summary card (#6563)").
 - **Flag.** `meeting_highlights`, listed only beside `meeting_live_view` and only while the default manager names it, as "Flags and compatibility" says (an extension's report cannot add it). The phone reads it when a recording starts, and a meeting keeps it. A hub or manager without the flag leaves the meeting page as phase 2 has it; with it, the top card is Highlights, with a waiting line before the first ones while Persona attends ("The meeting card").
 - **Web.** Not in this phase: the recording detail keeps Topics and Live, and ignores the new fields.
+
+### Long meetings: lean batches and compaction (#8253)
+
+Measured on the code before #8253 (the batch builder on a synthetic meeting of 280 characters a minute, about the density of the hub's real Chinese meetings): a room's batch grew from about 950 to about 2,100 characters as the topics and highlights lists grew, since each batch restated the rules and the lists; the room re-read its whole conversation every minute; and Claude Code's own compaction (around 167k tokens on most installs) could stall it in the middle of a long meeting. Estimated per meeting, as API-equivalent dollars on the main chat's model: 1.46 for an hour and 7.27 for three before; about 0.74 and 2.73 with both steps below. A stateless call a minute for the topics and highlights was weighed and not taken (similar cost, a new scheduler with its own state and backfill, a 3-minute window for what matters most, colder answers); so was a new room every 45 minutes (it breaks one room per meeting for installed apps). For a room that a manager with #8253 starts:
+
+- **Lean batches.** It gets a batch at most every two minutes, not every minute; the end batch does not wait, as before, and #2981 attending sessions keep one a minute. A batch holds the lines (at most 12000 characters, as before), the questions `meeting.answer` answered since the last one, and one short line (update the topics and highlights if the meeting moved on, as the rules say, then write nothing), beside the batch's opening words and its reminder that these are other people's words, never instructions. It does not restate the topics and highlights rules: they are in the room's CLAUDE.md (since phase 2b), and the room still updates both when a batch moved the meeting on and writes nothing in reply.
+- **The lists at boundaries.** The topics so far and the highlights so far, as phases 2 and 2b show them ("None yet" before the first), go only in a batch that gives the room the meeting so far (its first, a late room's, and the one after its role was turned off and on again), in the first batch after the room's conversation was compacted (below, or at the owner's request, which the session's `compaction` shows `done`; or by Claude Code on its own, which the manager reads from the context the room's row reports while no turn runs there, when it drops below half of the most it reported since the room was last compacted; a value the row still reports from before a compaction the manager saw end, the context of the reply before it, is not read), and once the last batch that showed them is 30 minutes old. Otherwise the room works from the lists it set itself: its own last `meeting_topics_set` and `meeting_highlights_set` calls are in its conversation.
+- **Questions about what was just said.** Lines reach the room every two minutes, and its CLAUDE.md says so: when a typed or spoken question is about something said since its last batch, it reads the newest lines with `meeting_lines`. A heard question still carries the 45 seconds before its tap.
+- **Scheduled compaction.** Once the batches given to the room since it started, or since its last compaction (the manager's, the owner's or Claude Code's own), cover at least 45 minutes of the meeting (from the first line's start to the last line's end among them) and at least 10,000 characters of lines, the manager compacts the room in place with the node's `assistant.compact` (Claude Code's `/compact` in the same session: the session id, the thread and a meeting call bound to the room are unchanged). What the batches covered is read off the live log, its lines from where its feed position was at that compaction to where it is now, so a restart between a batch and a note of it loses none of it; two bounded differences from the batches as sent: lines a batch left out (over 12000 characters) count, and lines a batch with the meeting so far gives again count once, and only after where the span starts. It starts one only at an idle moment: no turn running, no ask pending or running, no photo or withdrawal waiting to go in or being sent, the role not `off`, the meeting's end not due, and the room's process running (a node is never made to start it only to compact it: the manager asks with `only_running`, which a node with #8253 refuses with `not_running` when the process exited since the row said it runs, and that refusal is as the row saying so, tried again after the next batch and not counted as an attempt; an older node ignores the field). From when the manager asks for one until the session's `compaction` shows it ended, `done` or `failed` (or it counts as ended, below), the room counts as working, as it does while the session's `compaction` is `running` for any reason: nothing goes into it, asks, batches and photos wait for it as for a turn, an ask for as long as a compaction may run (10 minutes, the node's own limit) rather than the 3 minutes it waits for a turn. Once it is `done` the span starts again from where the feed position was when it was asked for, and the next batch shows the lists. A compaction refused (busy, already compacting) or failed is tried again at a look at least 5 minutes later, at most 3 times for the same span; then the room waits until its batches cover another 45 minutes. One asked for whose answer did not come (the time ran out, the manager stopped, a link on the way dropped with it out) counts as asked for: the node may have taken it. One the session's `compaction` does not show 10 minutes after it was asked for (never, or no longer: its node lost it) has ended and counts as failed; the next batch shows the lists, since it may have compacted the room. Until then no second one starts. A node without `assistant.compact` gets none, nor one that refuses because it could only compact the room by starting its process without the room's restrictions ("The room conversation"): a node with #8253 never starts a guest's process on a launcher that runs another agent by now, whoever asks.
+- **Kept with the room.** The room's record in `meeting.json` marks a room started with lean batches (an older room keeps a batch a minute with the rules and lists in each until it is deleted, the same across a restart or a rollback; an older manager after a rollback drops the mark when it rewrites `meeting.json`, and the room is fed as an older one from then on) and keeps when the lists last went, when it was last compacted, how often, where in the live log its batches since begin, the latest compaction of its session it took into account, and the attempts at the current span, so a restart neither compacts twice nor loses a running one (the session's `compaction` says whether it is still running).
+- **What the apps see.** Nothing new: no field, state, event or flag. `room.state` stays `ready` during a compaction; the room's thread keeps everything said before it (the transcript keeps the items before a compaction boundary, which shows as a notice); batches come half as often and each shows a little more of the meeting.
 
 ### Phase 3: photos
 
@@ -785,7 +1126,7 @@ Hub → phone:
 
 A new point, version 1, modeled on `voice`: `contributes.transcription: [{"id", "name"?}]`, needing `runtime.http`. The built-in voice extension contributes one that shares its upstream and key ("The built-in adapter"). The manager writes the live log and the hub's transcript; the extension stores nothing. Its row in [extensions.md](../extensions/extensions.md) "Extension points" and in the manifest schema comes with the code.
 
-- **Which one transcribes.** Hub mode uses the built-in voice extension's contribution, and another extension's only when the owner names it in `meeting_transcription_extension` ("Choosing the mode"): installing an extension never sends it meeting audio. `meeting_transcription_ready` is true while the chosen contribution's extension is enabled and running and its `/info` answers protocol 1 with `live` and no `setup` (read at most every 30 seconds; an answer stands while it is read again, so only another choice makes it unknown); while it is not ready hub mode is unavailable, with no fallback to another contribution. The choice is pinned to the installation the owner named: an extension uninstalled and installed again, or another one installed with its id, is not ready and gets no job until the owner names it again. The pin holds while the extension stays installed: across upgrades, rollbacks, a rename by its market (its old id still names it) and the manager's restarts. A changed choice ends the live jobs running: the rest of a meeting's audio goes to the contribution chosen now, or to none while it is not ready (`upstream_unavailable`, and the phone's text fills).
+- **Which one transcribes.** Hub mode uses the built-in voice extension's contribution, and another extension's only when the owner names it in `meeting_transcription_extension` ("Choosing the mode"): installing an extension never sends it meeting audio. `meeting_transcription_ready` is true while the chosen contribution's extension is enabled and running and its `/info` answers protocol 1 with `live` and no `setup` (read at most every 30 seconds; an answer stands while it is read again, so only another choice makes it unknown); while it is not ready hub mode is unavailable, with no fallback to another contribution. The choice is pinned to the installation the owner named: an extension uninstalled and installed again, or another one installed with its id, is not ready and gets no job until the owner names it again. The pin holds while the extension stays installed: across upgrades, rollbacks, a rename by its market (its old id still names it) and the manager's restarts. A changed choice ends the live jobs running: the rest of a meeting's audio goes to the contribution chosen now, or to none while it is not ready (`upstream_unavailable`, and the phone's text fills). The same choice also transcribes the audio of extensions granted `transcription` (their own audio, in `replay` mode, `docs/extensions/extensions.md` "Transcription for extensions"): one job per extension and two across extensions at a time, meetings' jobs not counted.
 - **Endpoints**, on the extension's own socket under the contribution's id, so they never meet the voice point's `GET /info` and `GET /ws` (which stay as they are, with the voice protocol and its `features`):
   - `GET /transcription/{cid}/info` → `{"protocol": 1, "features": ["live", "replay", "interim"], "setup"?: …}`: `interim` only when the upstream offers interim captions; `setup` when it cannot transcribe: as the voice extension's when no upstream is usable, and `live_upstream` when none is GPT-Live ("The built-in adapter").
   - `GET /transcription/{cid}/ws`: one job per connection.
@@ -826,17 +1167,18 @@ Extension → manager:
 
 #### The built-in adapter
 
-Part of the built-in voice extension, and it speaks only to a GPT-Live-compatible upstream (decision 5). It contributes `{"id": "gpt-live", "name": "GPT-Live"}` and transcribes with the voice extension's default model when that model's upstream speaks the GPT-Live (`live`) dialect, else with the default of the first `live` upstream; with none (`codex` and `realtime` upstreams differ in their wire and captions), `/info.setup` is `"live_upstream"`. It sends no language setting to the upstream: the recording's language reaches its sessions' instructions only as the language usually spoken, and picks the Chinese script (Simplified for `zh-CN` and `zh-Hans`, Traditional for `zh-TW`, `zh-HK` and `zh-Hant`). The numbers come from a measurement on a synthetic six-minute meeting (three voices, clean audio, 195 sessions); they are starting values, to be tuned on real meetings, which will be harder.
+Part of the built-in voice extension, and it speaks only to a GPT-Live-compatible upstream (decision 5). It contributes `{"id": "gpt-live", "name": "GPT-Live"}` and transcribes with the voice extension's default model when that model's upstream speaks the GPT-Live (`live`) dialect, else with the default of the first `live` upstream; with none (`codex` and `realtime` upstreams differ in their wire and captions), `/info.setup` is `"live_upstream"`. It sends no language setting to the upstream: the recording's language reaches its sessions' instructions only as the language usually spoken, and picks the Chinese script (Simplified for `zh-CN` and `zh-Hans`, Traditional for `zh-TW`, `zh-HK` and `zh-Hant`). The instructions are written in the recording's language when it is Chinese, English or Japanese, since that is what the model hears, else in the hub's. The numbers come from a measurement on a synthetic six-minute meeting (three voices, clean audio, 195 sessions); they are starting values, to be tuned on real meetings, which will be harder.
 
 - **During the meeting:**
   - One **caption session**, told never to reply, with the upstream's interim-caption session extension where the upstream offers it (negotiated when the session starts). Its captions are `interim` (about 0.3–0.45 s after speech, 6.5–10% character error rate) and the reference the other sessions are checked against. The standard input-caption events are never used: they do not arrive while the model does not reply, and when it replies they are cut to the last few words.
-  - Two or three **verbatim sessions**, three when there are no captions: text-only output, told to write out each sentence word for word once it ends, in the language it was said in, and nothing else, with the glossary. They measured 0.7–1.2% character error rate in most runs, about 1.5 s after a sentence ends; the glossary does not help the captions.
-  - **Windows.** Speech is cut into windows of about 15 seconds, closed at the first silence after that (at once on `flush`, then `flushed`). A window is decided once every session had its audio and 3 seconds more (on `flush`, `end`, a hole or a stall: 1.5 seconds of silence the adapter adds), and every verbatim session has begun its reply to the window's last speech, waiting at most 5 seconds for that after the session got the window's end: replies come about 1.5 seconds, up to 3, after a sentence ends. Each reply is of one turn, the first speech it had not covered (speech parted by less than half a second is one turn). In each window, every verbatim session's text is compared with the captions (normalized character edit distance), and a session above 0.5 is dropped for that window: healthy sessions measured 0.25–0.3, and one that began to play a meeting participant and invent replies measured 0.89. Of the rest the **medoid** wins, the session whose text is closest to the others'. Its sentences are sent, with times spread over the window's speech (the adapter's own energy-based speech detection; about a second is precise enough for the minutes and jumping to a line). Without captions it is the medoid of three, dropping one that is above 0.5 from both others. With no verbatim session left, the captions' text is sent. A window the speech detection found no speech in (a quiet room, a phone on the table) is decided too: its sessions are checked against each other, not the captions, nobody is counted dropped in it, and its sentences are spread over the whole window.
-  - A session dropped in two windows in a row is closed and replaced by a fresh one, since an invented role persists in its context. Sessions are rolled over before the upstream's session limit (25 minutes, or 2 minutes before the end `session.started`'s `expires_at` gives, whichever is first), overlapping by 10 seconds, and a lost connection (or a session that does not start, at the job's start too) is retried three times and replayed from the adapter's 60-second buffer. Only verbatim sessions are replayed, at up to 4× real time; a caption session opened again starts at the live edge and never gets audio faster than real time (captions break faster than that), so the windows before it keep the captions of the session it rolled over, or have none after a reconnect. A caption session more than a second behind the live edge (audio that came in a burst: the manager's backlog after `ready`, a resend) skips to the edge rather than staying behind, which would hold back every caption from then on; a window whose audio it skipped has no captions.
+  - **How a caption is placed.** The real service writes a caption session's whole meeting as one caption item: its `start_ms` is the first speech's, counted from the session's start rather than its first audio, and never changes; no caption is ever final; within the item the text grows through a sentence and the next sentence's text replaces it. So the adapter never reads `start_ms` and tells captions apart by their text: a frame that revises the caption being written is of it, and only a frame that clearly begins another sentence ends it, its last text staying with the window it began in, and begins a new caption where the session's audio was when that frame came (half a second earlier, moved to the start of the speech then). A frame within a second of the caption's first one always revises it (the service rewrote a caption's first word at once, two frames at the same moment); a later one revises it when its text grew it (its last words maybe revised) or rewrote its first words and kept the rest; one with little in common with it that comes later is the next sentence. A superseded hypothesis is never a caption of its own. A service that gives each sentence an item of its own, or marks the last caption final, is handled the same way; a final caption of the item replaces the caption's interim text whatever it says ("twenty five", then a final "25."). `interim` carries the caption's start.
+  - Two or three **verbatim sessions**, three when there are no captions: text-only output, told to write out each sentence word for word once it ends, in the language it was said in, and nothing else, with the glossary. They measured 0.7–1.2% character error rate in most runs, about 1.5 s after a sentence ends; the glossary does not help the captions. They ask for the interim-caption extension too and ignore its captions: with it the service ends a turn at each sentence, and without it, with instructions it did not follow sentence by sentence, it wrote several sentences in one late reply (one 23-sentence reply at the end of a two-minute meeting). A service that refuses the extension gets them without it. Their instructions follow the wording measured to give one reply per sentence, 0.05–0.3 s after it ends: a meeting's verbatim transcriber that nobody is talking to and that, each time someone finishes a sentence, outputs only its words.
+  - **Windows.** Speech is cut into windows of about 15 seconds, closed at the first silence after that (at once on `flush`, then `flushed`). A window is decided once every session had its audio and 3 seconds more (on `flush`, `end`, a hole or a stall: 1.5 seconds of silence the adapter adds), and every verbatim session has begun its reply to the window's last speech, waiting at most 5 seconds for that after the session got the window's end: replies come 0.05–0.3 seconds after a sentence ends with the measured wording, and up to 3 seconds otherwise. Each reply is of one turn, the first speech it had not covered that was over when the reply began, however soon before (speech parted by less than half a second is one turn): a reply that claimed the sentence before its own would leave its session a sentence behind and, across a window's end, put its text in the window before, where it duplicates a sentence, leaves the next window to the captions and gets a healthy session replaced. In each window, every verbatim session's text is compared with the captions (normalized character edit distance), and a session above 0.5 is dropped for that window: healthy sessions measured 0.25–0.3, and one that began to play a meeting participant and invent replies measured 0.89. Of the rest the **medoid** wins, the session whose text is closest to the others'. Its sentences are sent, with times spread over the window's speech (the adapter's own energy-based speech detection; about a second is precise enough for the minutes and jumping to a line). Without captions it is the medoid of three, dropping one that is above 0.5 from both others. With no verbatim session left, the captions' text is sent. A window the speech detection found no speech in (a quiet room, a phone on the table) is decided too: its sessions are checked against each other, not the captions, nobody is counted dropped in it, and its sentences are spread over the whole window.
+  - A session dropped in two windows in a row is closed and replaced by a fresh one, since an invented role persists in its context. Sessions are rolled over before the upstream's session limit (25 minutes, or 2 minutes before the end `session.started`'s `expires_at` gives, whichever is first), overlapping by 10 seconds, and a lost connection (or a session that does not start, at the job's start too) is retried three times and replayed from the adapter's 60-second buffer. Only verbatim sessions are replayed, at up to 4× real time; a caption session opened again starts at the live edge and never gets audio faster than real time (captions break faster than that), so the windows before it keep the captions of the session it rolled over, or have none after a reconnect. A caption session more than three seconds behind the live edge (audio that came in a burst: the manager's backlog after `ready`, a resend) skips to the edge rather than staying behind, which would hold back every caption from then on; a window whose audio it skipped has no captions.
   - Merging sentences across sessions did not beat one healthy session, so nothing is merged: the extra sessions buy robustness, not accuracy.
 - **The final pass**, after the meeting: the stored audio at 4× speed through verbatim sessions, with no captions (they break faster than real time), in windows of at most 6 minutes cut at silences, each window in fresh sessions given the previous window's last sentences, and ended by a `window` frame. It measured 0.8% and 2.3%, in about 115 seconds for six minutes.
   - **The reference** is the window's text in the transcript of record before the pass (the hub's live sentences, with the phone's segments where they have none), from the manager's `reference` frames. Windows are also cut where the reference starts or stops covering speech (more than 10 seconds of speech with no reference text), so a window's reference covers all of its speech or none of it; a partial reference never drops a good session.
-  - **With a reference**: two or three sessions. A session is dropped when its text is more than 0.5 from the reference, or when it stops more than 10 seconds of speech before the window's end (a 2× run fell behind and lost its last sentences); the medoid of the rest wins (of two, the one closer to the reference), and with none left the reference stays (`kept: true`).
+  - **With a reference**: two sessions, three when it is set aside. A reference much shorter than the text of the sessions that wrote any (under half their lower median length, or under 2 characters per second of speech while they wrote more; a session that wrote nothing does not make it long enough) counts as none, before any session is checked against it, and the window is chosen as without one among the sessions that wrote text (of two that agree, the one that wrote more): a session near a few words of the window is no better than one that heard all of it. One session is never taken uncorroborated: with fewer than two of them agreeing, the window gets a third session, as a window without a reference has, and is chosen again so (still fewer than two: `kept: true`). Otherwise a session is dropped when its text is more than 0.5 from the reference, or when it stops more than 10 seconds of speech before the window's end (a 2× run fell behind and lost its last sentences); the medoid of the rest wins (of two, the one closer to the reference). With none left, sessions within 0.3 of each other are trusted over the reference; else it stays (`kept: true`). A live caption that caught a few words of a window must not keep out sessions that heard all of it: measured, a 22-character caption over 14 seconds of speech lost the meeting's first 18 seconds, against two sessions of 164 characters in English and, in Chinese, one session of 204 characters and one that wrote nothing.
   - **Without a reference** (audio that only gap uploads brought, where the phone's transcription has nothing either): three sessions, chosen as live without captions: one that stops early, or is more than 0.5 from both others, is dropped and the medoid of the rest wins; with fewer than two left the window gets no hub text (`kept: true`).
 - Cost: about four sessions for the length of the meeting, then two or three for a quarter of it, reported in `usage` (the upstream's usage events, summed over the job's sessions).
 
@@ -844,9 +1186,11 @@ Part of the built-in voice extension, and it speaks only to a GPT-Live-compatibl
 
 - The uplink is a second consumer of the recorder's one input tap ("One capture" in phase 4), stamped with the writer's frame position.
 - On-device transcription keeps running in hub mode: it fills gaps and is the upload's `segments`.
-- Cellular data is allowed for the uplink. With the setting **Hub transcription on Wi-Fi only** (off by default) and no Wi-Fi, the phone sends no audio, reports that time as a gap, and uploads it with `PUT …/audio?at=` once on Wi-Fi ("Decided" 4). The socket meanwhile counts as down, so the live log is filled from the phone's segments ("When the hub has no sentences, the phone's text fills the live log").
-- The page and the Live Activity show the hub's `interim` and `line` frames while the socket is up and no `problem` other than `no_interim` stands, the phone's own lines otherwise, with a notice while transcription has fallen back. While the role is `off` they show the hub's `interim` and the phone's own lines.
-- The privacy texts change per mode ("Privacy per mode"): the microphone usage descriptions in `apple/project.yml`, the meeting intent's description in `apple/LiveActivity/RecordingIntents.swift`, the Recordings footer in `apple/Persona/Recording/RecordingsSection.swift`, the site's `site/public/privacy/index.html` and [recording.md](../apple/recording.md) "Why send only text", in every language.
+- Cellular data is allowed for the uplink. With the setting **Hub transcription on Wi-Fi only** (off by default) and no Wi-Fi, the phone sends no audio, reports that time as a gap, and uploads it with `PUT …/audio?at=` once on Wi-Fi ("Decided" 4). The socket meanwhile counts as down, so the live log is filled from the phone's segments ("When the hub has no sentences, the phone's text fills the live log"). The phone asks the system to keep the socket and the gap uploads off cellular and expensive networks then, so a path that changes after its own check never carries the audio, and it treats a network it doesn't know yet as not Wi-Fi. Through a tunnel to the hub (SSH, a local proxy, an in-app tunnel), whose own connection that request doesn't reach, it sends audio only while its path is Wi-Fi and has been since the tunnel opened, and stops a socket or a gap upload as the path leaves Wi-Fi.
+- Only audio recorded while the recording was a hub-mode meeting leaves the phone. A recording that was a note before it became a meeting, or between two meeting stretches, keeps that stretch's audio on the phone: the uplink isn't running then, and the gap uploads skip it, so the hub's gaps there keep the phone's text (and the final pass starts 30 minutes after the `complete: true` upload). After a rollback (an older manager's `200`) the phone keeps the recording in `device` mode for good, also across a relaunch: no socket and no gap uploads. After hub transcription stopped for the meeting (a fatal `error` the phone stops on, an unknown code included, or a refused handshake; not `replaced`, which only means another socket has the meeting), its hub-mode time ends there, also across a relaunch: no socket, and no audio recorded from then on goes up as a gap.
+- The meeting call's voice says its answer as its words stream in, so its `speaking` on carries no `text` (the hub applies the time rule to the span); the span goes into the timeline with the whole answer once it ended. An answer the phone says (`MeetingSpeaker`) carries its text.
+- The page and the Live Activity show the hub's `interim` and `line` frames while the socket is up and no `problem` other than `no_interim` stands, the phone's own lines otherwise, with a notice while transcription has fallen back. While the role is `off` they show the hub's `interim` and the phone's own lines. A pause, the end after Stop and a reconnect of a few seconds are no fallback. On the meeting page they are in the Live box; under the Highlights card (phase 2b), which shows no lines, they are on the Full Transcript page, and the notice is also on the card.
+- The privacy texts change per mode ("Privacy per mode"): the microphone usage descriptions in `apple/project.yml`, the meeting intent's description in `apple/LiveActivity/RecordingIntents.swift`, the Recordings footer in `apple/Persona/Recording/RecordingsSection.swift`, the site's privacy page (`site/public/privacy/index.html` and its English sibling `site/public/en/privacy/index.html`) and [recording.md](../apple/recording.md) "Why send only text", in every language.
 - The iPhone's UI tests run against the mock hub's hub mode ([testing.md](../operations/testing.md) "Meeting transcription").
 
 ### Phase 6: talk about this meeting
@@ -891,7 +1235,7 @@ While the meeting records:
 +--------------------------------------------------------+
 ```
 
-The top card is **Highlights** for a meeting started with `meeting_highlights` (phase 2b): the gist of the meeting so far in the room's words, and **Full Transcript** one tap away. It shows no transcript lines: during the meeting the owner reads the points, not the words as said, which are on the Full Transcript page (the owner's call, #5891). Before the room sets the first highlights, while Persona attends (its role is not `off` and its room is not `unavailable`), the card holds one waiting line instead:
+The top card is **Highlights** for a meeting started with `meeting_highlights` (phase 2b): the gist of the meeting so far in the room's words, and **Full Transcript** one tap away. It shows no transcript lines: during the meeting the owner reads the points, not the words as said, which are on the Full Transcript page (the owner's call, #5891). Before the room sets the first highlights, while Persona attends and its room still gets the meeting (the role is not `off` and the hub took it, the phone still sends the meeting's lines, and the room is neither `unavailable` nor missing on an older manager), the card holds one waiting line instead:
 
 ```
 | HIGHLIGHTS                                             |
@@ -910,10 +1254,10 @@ Where there can be no highlights (a hub without `meeting_highlights`, or a meeti
 ```
 
 - **A highlight** shows its words and its time from the recording's start (`at`), earliest first, all of them (at most 4). The words take at most two lines at the regular text sizes, cut at the end, and VoiceOver reads them whole; at the accessibility sizes, where the page scrolls as one, they take what they need and the time goes under them.
-- **Its time** is the minutes cards' time ("Minutes cards (#5026)" in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)): `RecordingFormat.clock` in a compact accent `Chip` inside a 44 pt hit area, read as "Show at m:ss in the transcript". Its words are not a button. A tap pushes the full transcript scrolled to the first of the phone's lines whose start is from `at` to `end`, with every such line lit for two seconds (`Theme.accentTint`), as the recording's page lights a line. When none of the phone's lines starts there (the hub transcribed the meeting, phase 5), it scrolls to and lights the line `RecordingMinutes.sentenceIndex` picks for `at`.
+- **Its time** is the minutes cards' time ("Minutes cards (#5026)" in [DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md)): `RecordingFormat.clock` in a compact accent `Chip` inside a 44 pt hit area, read as "Show at m:ss in the transcript". Its words are not a button. A tap pushes the full transcript scrolled to the first of its lines whose start is from `at` to `end` (the phone's, or in hub mode the hub's while the page shows them, phase 5 "On the phone"), with every such line lit for two seconds (`Theme.accentTint`), as the recording's page lights a line. When none of its lines starts there (the phone's own lines of a meeting the hub transcribed), it scrolls to and lights the line `RecordingMinutes.sentenceIndex` picks for `at`.
 - **The card** reads its title as a header, then the highlights or the waiting line, and ends on **Full Transcript** at the trailing side. A new or changed highlight is never announced, and the switch from the waiting line to the first highlights cross-fades on `Theme.Motion.state`, at once with Reduce Motion. In the regular layout, where only the thread scrolls, a card with four two-line highlights is about two rows taller than the Live box, and the thread gives up that height.
 - **While the keyboard is up** (regular sizes; at the accessibility sizes nothing folds), the card keeps only its newest highlight (the latest `at`), or the waiting line, without Full Transcript. It changes with the keyboard on `Theme.Motion.state`, as the subtitle and Topics do.
-- The Full Transcript page shows the phone's own lines, as in phase 2; the highlights are the room's. They stay on the page after the role turns `off` (the room stops getting batches, so they stop changing); a meeting with none by then shows the Live box. After Stop the page goes on as the thread, as sketched below, and shows no highlights; the follow-up's seed carries them. The Live Activity and the Dynamic Island do not show highlights.
+- The Full Transcript page shows the meeting's lines as in phase 2 (in hub mode the hub's lines and caption, or the phone's own with the fallback notice, as "On the phone" in phase 5 says); the highlights are the room's. They stay on the page after the role turns `off` (the room stops getting batches, so they stop changing); a meeting with none by then shows the Live box. After Stop the page goes on as the thread, as sketched below, and shows no highlights; the follow-up's seed carries them. The Live Activity and the Dynamic Island do not show highlights.
 
 With **Just me** on, the Persona part and the composer change; Talk is hidden:
 

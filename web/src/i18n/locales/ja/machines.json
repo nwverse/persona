@@ -37,5 +37,7 @@
   "load_value": "負荷 {value}",
   "memory_last_hour": "直近1時間のメモリ",
   "network_last_hour": "直近1時間のネットワーク：ダウンロード（オレンジ）、アップロード（紫）",
-  "tokens_last_hour": "直近1時間のトークン"
+  "view_label": "表示",
+  "view_cards": "カード",
+  "view_capabilities": "機能一覧"
 }

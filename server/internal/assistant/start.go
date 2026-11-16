@@ -269,6 +269,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.Model != "" {
 		params["model"] = p.Model // picked with the first message, as with a message (sendModel): a typed id too
 	}
+	if p.ServiceTier != "" {
+		params["service_tier"] = p.ServiceTier // acknowledged on a new native thread before its first turn
+	}
 	if p.ConfigDir != "" {
 		params["config_dir"] = p.ConfigDir
 	}
@@ -306,12 +309,16 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
+	// A guest's profile is its own: the main chat's setting is for the user's conversations only.
+	fromSetting := p.GuestTools == nil && s.withNewConversationProfile(ctx, machine, purpose, params)
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
-	// can both change it.
+	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
+	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent before
+	// starting anything, and the start goes again without it: startSignedIn's, and the main chat's below (#6884).
 	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
-		if agent := s.launcherAgent(ctx, machine, used); agent != "" && agent != "claude" {
+		if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && agent != "claude" {
 			delete(params, "config_dir")
 		}
 	}
@@ -327,7 +334,17 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if main && p.Space == "" && p.GuestTools == nil {
+		cfg := s.settings(ctx)
+		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
+		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
+		// Claude Code, which alone has profiles, starts without one.
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	}
 	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
 	if err != nil {
 		if d, ok := s.device(ctx, machine); ok {
@@ -502,6 +519,10 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	if carried != nil && (p.Launcher != "" || p.Model != "") {
 		carried = nil
 	}
+	if carried != nil && p.ServiceTier != "" && p.Launcher == "" && p.Model == "" {
+		// An unnamed tier can belong only to the client's displayed default, not to this carried setup it did not show.
+		p.ServiceTier = ""
+	}
 	if carried != nil {
 		// Held to what a message on it is held to: one that can't run here any more refuses this start, saying why
 		// with the same codes, and is dropped, so the next start runs on the default. Never a silent fallback.
@@ -527,7 +548,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		return proto.Session{}, err
 	}
 	if carried != nil {
-		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort)
+		s.keepStartPick(ctx, &sess, carried.Launcher, carried.Model, carried.Effort, true)
 	}
 	if _, err := s.updateSettings(ctx, func(v *Settings) error {
 		*v = s.effective(ctx, *v)
@@ -782,7 +803,8 @@ func (s *Service) startRoutes() {
 			Model          string        `json:"model"` // the first message's model (#5033): a model id, typed or listed
 			PermissionMode string        `json:"permission_mode"`
 			Effort         string        `json:"effort"`
-			Main           bool          `json:"main"` // becomes the main conversation
+			ServiceTier    string        `json:"service_tier"` // native Codex speed for the first turn, independent of effort
+			Main           bool          `json:"main"`         // becomes the main conversation
 			// Purpose is the model purpose it runs under ("assistant" when empty; a plugin's /agent asks for its own);
 			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
@@ -850,7 +872,7 @@ func (s *Service) startRoutes() {
 		// The main conversation is the assistant's, on its machine.
 		ctx, note := withLauncherNote(ctx)
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, Model: in.Model, PermissionMode: in.PermissionMode,
-			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
+			Effort: in.Effort, ServiceTier: in.ServiceTier, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
 			OpenedBy: requestOpener(r), GuestTools: guestTools, Human: own && in.Via == "" && assistantwire.HumanStartOf(r.Context())})
 		var refused *pickError
 		switch {
@@ -861,8 +883,9 @@ func (s *Service) startRoutes() {
 			apierr.Call(w, err)
 			return
 		}
-		if in.Purpose == "" && in.Guest == nil {
-			s.keepStartPick(ctx, &sess, in.Launcher, in.Model, in.Effort) // its later messages keep what it started on
+		if in.Purpose == "" && in.Guest == nil && in.Main {
+			// Only the main conversation keeps its start as a per-conversation pick (#6911).
+			s.keepStartPick(ctx, &sess, in.Launcher, in.Model, in.Effort, in.Main)
 		}
 		if in.ReportTasks && !in.Main {
 			s.markReporter(ctx, sess.MachineID, sess.SessionID)
@@ -1038,6 +1061,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
+	if err := s.putSupervisionInstructions(ctx, p.MachineID, p.SessionID, params); err != nil {
+		return nil, false, err
+	}
 	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
 		return nil, false, err // an ended room: 409 meeting_ended (meeting_room.go)
 	}
@@ -1105,6 +1131,10 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	// down to Haiku on a run of 429s) was carried over as what it runs, for good.
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine || s.isTaskConversation(ctx, machine, sid) ||
 		s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
+	// The owner-visible recovery rule (#7824) covers the main conversation and the leader/background supervisors, but
+	// not worker Agent task conversations, whose cheaper-tier behavior stays unchanged. The node marks the protected
+	// ones so it can publish and persist the model-recovery marker only for them.
+	p["follows_setting"] = s.isLeader(ctx, sid) || s.isBackground(ctx, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {
 		m = strings.TrimSpace(m)

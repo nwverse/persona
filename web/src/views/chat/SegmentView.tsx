@@ -105,7 +105,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
   const forwards = msg.contexts.filter((c) => c.kind === "forward");
   const contexts = forwards.length ? msg.contexts.filter((c) => c.kind !== "forward") : msg.contexts;
   return (
-    <div className="ml-auto flex max-w-[488px] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
+    <div className="ml-auto flex max-w-[min(100%,488px)] min-w-0 flex-col items-end gap-1.5 pl-[12%]" style={pending ? { animation: `fade-up 300ms ${EASE} both` } : undefined} data-user-bubble data-send-state={sendState} data-items={pending || starting ? undefined : [msg.id, ...msg.images.map((i) => i.id)].join(" ")}>
       {msg.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-1.5">
           {msg.images.map((im) => (
@@ -128,7 +128,9 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
           </MessageActions>
         ))}
       {pinned && <span className="text-[11px] text-ink-3 tabular-nums" data-latest-time>{clock(msg.ts)}</span>}
-      {(pending || starting || msg.queued) && feedback !== "" && <span className="text-[11px] text-ink-3 whitespace-nowrap">{feedback === "processing" ? t("chat-segmentview.processing") : feedback === "unknown" ? t("lib-outbox.delivery_unknown") : pending || starting ? t("chat-segmentview.sending") : t("chat-segmentview.queued")}</span>}
+      {/* a message waiting its turn says so under it; one on its way (Sending, Processing, delivery unknown) is said once,
+          by the chat's status line under the last message (ChatView's data-message-feedback), not here as well */}
+      {msg.queued && !pending && !starting && feedback !== "" && <span className="text-[11px] text-ink-3 whitespace-nowrap">{t("chat-segmentview.queued")}</span>}
       {!pending && !starting && <ChannelSource clientMsgId={msg.client_msg_id} openedBy={openedBy} />}
     </div>
   );
@@ -309,7 +311,7 @@ export const SegmentView = memo(function SegmentView({
    *  of lines at a time, and still while a tool runs. The live work row stays under them; the headless assistant's
    *  words stream as they are written and stand for it. */
   batchedWords?: boolean;
-  expandFold: (f: Item) => Promise<void>;
+  expandFold: (f: Item) => Promise<boolean | void>;
   /** Drawn between the work and the agent's last words (the wakes chip, #3783); above the work while it is live. */
   beforeWords?: ReactNode;
   /** An opened supervision round shows its original input instead of the injected hint. */

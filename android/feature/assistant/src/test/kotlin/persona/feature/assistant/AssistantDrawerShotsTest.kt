@@ -39,6 +39,7 @@ import persona.core.contracts.DirectionTaskState
 import persona.core.contracts.DirectionTree
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
+import persona.core.contracts.api.AssistantSearchHit
 import persona.core.contracts.api.LeaderCounts
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -225,15 +226,15 @@ class AssistantDrawerShotsTest {
         rule.onAllNodesWithText("工作中").assertCountEquals(1)
     }
 
-    // #6230: one spinning activity mark. A lead whose own conversation is idle while the Agents under it work spins in
-    // every style; a lead with nothing running keeps its quiet row.
+    // #6230, #6626: one spinning activity mark. A lead whose own conversation is idle while something under it runs (the
+    // tree's `running`) spins in every style, with no 「在做 N」 beside it; a lead with nothing running keeps its quiet row.
     @Test fun anIdleLeadWithAgentsWorkingSpins() {
         var style by mutableStateOf(AppStyle.Glass)
         val idleLead = Session(machineId = "hub", sessionId = "l9", title = "1110 | 探索 | 基建", status = "idle",
             updatedAt = minutesAgo(8), lastText = "等待下一轮。")
         val groups = ConversationGroups(main, listOf(idleLead), recent,
             names = mapOf("l9" to "基建"),
-            counts = mapOf("l9" to LeaderCounts(working = 2, needsYou = 0)))
+            counts = mapOf("l9" to LeaderCounts(running = true, needsYou = 0)))
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
@@ -242,7 +243,7 @@ class AssistantDrawerShotsTest {
                 }
             }
         }
-        rule.onNodeWithText("在做 2").assertExists()
+        rule.onNodeWithText("在做", substring = true).assertDoesNotExist()
         for (s in AppStyle.entries) {
             style = s
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
@@ -262,7 +263,7 @@ class AssistantDrawerShotsTest {
         val leadB = Session(machineId = "hub", sessionId = "l2", title = "1110 | 探索 | 支付", status = "idle", updatedAt = minutesAgo(20))
         val groups = ConversationGroups(main, listOf(leadA, leadB), recent,
             names = mapOf("l1" to "增长", "l2" to "支付"),
-            counts = mapOf("l1" to LeaderCounts(working = 2, needsYou = 1), "l2" to LeaderCounts(needsYou = 3)))
+            counts = mapOf("l1" to LeaderCounts(running = true, needsYou = 1), "l2" to LeaderCounts(needsYou = 3)))
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
@@ -273,8 +274,10 @@ class AssistantDrawerShotsTest {
         }
         rule.onNodeWithText("常驻").assertExists()
         rule.onNodeWithText("增长").assertExists()
-        rule.onNodeWithText("在做 2 · 等你 1").assertExists()
+        // what waits on you in words, never 「在做 N」 (#6626: what runs is the spinner)
+        rule.onNodeWithText("等你 1").assertExists()
         rule.onNodeWithText("等你 3").assertExists()
+        rule.onNodeWithText("在做", substring = true).assertDoesNotExist()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             style = s; dark = d
             androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
@@ -472,5 +475,36 @@ class AssistantDrawerShotsTest {
         rule.onNodeWithText("设为常驻").assertExists()
         rule.onNodeWithText("归档").assertExists()
         rule.onNodeWithText("结束…").assertExists()
+    }
+
+    @Test fun drawsSearchResultsInEveryStyle() {
+        val said = AssistantSearchHit(itemId = "m1", snippet = "前面的话青石巷后面还有一句", ranges = listOf(listOf(4, 7)))
+        val route = Session(machineId = "hub", sessionId = "route", title = "路线", status = "idle",
+            updatedAt = minutesAgo(10), lastText = "最后一句不该盖住命中。")
+        val titled = Session(machineId = "hub", sessionId = "titled", title = "周末去哪儿", status = "idle", updatedAt = minutesAgo(20))
+        val archived = Session(machineId = "hub", sessionId = "old", title = "旧的旅行", status = "idle",
+            archived = true, updatedAt = minutesAgo(40))
+        val found = listOf(FoundChat(main, said), FoundChat(titled, null), FoundChat(route, said), FoundChat(archived, null))
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                    AssistantDrawer("青石巷", {}, ConversationGroups(main, emptyList(), emptyList()),
+                        active = null, hasMain = true, onEnd = null, onMain = {}, onOpen = {}, onInfo = {},
+                        onNew = {}, onSettings = {}, found = found, searchPartial = true)
+                }
+            }
+        }
+        rule.onAllNodesWithText("青石巷", substring = true).assertCountEquals(3)
+        rule.onNodeWithText("周末去哪儿").assertExists()
+        rule.onNodeWithText("已归档").assertExists()
+        rule.onNodeWithText("较早的对话还在整理，可能有些暂时搜不到。").assertExists()
+        rule.onAllNodesWithText("Persona").assertCountEquals(1)
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+            capture("drawer-search-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
     }
 }

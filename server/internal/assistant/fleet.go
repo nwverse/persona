@@ -41,6 +41,8 @@ type fleetBook struct {
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
 	// the turn it starts is pushed however short it is.
 	reportSent map[string]time.Time
+	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
+	cardTell sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -60,6 +62,7 @@ type fleetBook struct {
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).
 	upgradeEvery, upgradeFor time.Duration
+	upgrades                 sync.WaitGroup // active screen-upgrade loops; database-backed fixtures wait during teardown
 	// hooked: Persona's hooks run in the session (a hook event came since the manager started).
 	hooked map[[2]string]bool
 	// stopSig: the signature of the reply each session's latest Stop ended its turn with; pushedSig: the one a
@@ -114,18 +117,19 @@ type fleetBook struct {
 
 // fleetReport is what the session lists are decorated with from the assistant's snapshot.
 type fleetReport struct {
-	mu       sync.RWMutex
-	got      bool
-	sessions map[string]SessionView // by session id
-	work     map[[2]string]proto.WorkState
-	workOn   bool
-	links    map[[2]string]TodoLink
-	quiet    map[[2]string]bool
-	marks    map[[2]string][]string  // conversation → the channels its messages came from, newest first
-	turns    map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
-	inbox    map[string]bool         // the inbox agents' conversations
-	tasks    []TaskView              // the scheduled tasks (nil: not read yet)
-	profile  *Profile                // its settings as the hub's features need them (nil: not read yet)
+	mu        sync.RWMutex
+	got       bool
+	sessions  map[string]SessionView // by session id
+	work      map[[2]string]proto.WorkState
+	workOn    bool
+	links     map[[2]string]TodoLink
+	completed map[[2]string]TodoLink
+	quiet     map[[2]string]bool
+	marks     map[[2]string][]string  // conversation → the channels its messages came from, newest first
+	turns     map[[2]string]time.Time // conversation → when a channel's turn in it was answered (zero: followed now)
+	inbox     map[string]bool         // the inbox agents' conversations
+	tasks     []TaskView              // the scheduled tasks (nil: not read yet)
+	profile   *Profile                // its settings as the hub's features need them (nil: not read yet)
 }
 
 // fleetStore is what of the store the fleet keeps (db.DB); a store without it keeps nothing.

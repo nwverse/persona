@@ -15,7 +15,7 @@
     ]
   },
   "assistant": {
-    "count": 51,
+    "count": 56,
     "files": [
       "assistant/acceptance.md",
       "assistant/acceptance_input.md",
@@ -23,6 +23,7 @@
       "assistant/ask_later.md",
       "assistant/codex_memory.md",
       "assistant/context.md",
+      "assistant/inbox_to_agent.md",
       "assistant/interject.md",
       "assistant/lost_tasks.md",
       "assistant/main_handoff.md",
@@ -47,8 +48,11 @@
       "assistant/snapshot_app.md",
       "assistant/snapshot_closeout.md",
       "assistant/snapshot_cut.md",
+      "assistant/snapshot_following.md",
       "assistant/snapshot_omitted.md",
+      "assistant/snapshot_own_tasks.md",
       "assistant/snapshot_plan.md",
+      "assistant/snapshot_task.md",
       "assistant/snapshot_workflow.md",
       "assistant/spawn_notice.md",
       "assistant/standing_authorizations.md",
@@ -61,6 +65,7 @@
       "assistant/task_done_input.md",
       "assistant/task_done_when.md",
       "assistant/task_ended.md",
+      "assistant/task_goal.md",
       "assistant/task_notice.md",
       "assistant/task_run.md",
       "assistant/turn_context.md",
@@ -84,7 +89,7 @@
     ]
   },
   "inbox": {
-    "count": 13,
+    "count": 16,
     "files": [
       "inbox/agent.md",
       "inbox/agent_ref.md",
@@ -98,18 +103,25 @@
       "inbox/item.md",
       "inbox/judge.md",
       "inbox/judge_input.md",
+      "inbox/merge_title_input.md",
+      "inbox/settled.md",
+      "inbox/settled_input.md",
       "inbox/tiers.md"
     ]
   },
   "inbox/handling": {
-    "count": 7,
+    "count": 11,
     "files": [
       "inbox/handling/agent_started.md",
+      "inbox/handling/agent_stopped.md",
+      "inbox/handling/check.md",
       "inbox/handling/closed.md",
       "inbox/handling/handback.md",
       "inbox/handling/instructed.md",
       "inbox/handling/new_messages.md",
       "inbox/handling/rejected.md",
+      "inbox/handling/self_read.md",
+      "inbox/handling/self_replied.md",
       "inbox/handling/sent.md"
     ]
   },
@@ -123,7 +135,7 @@
     ]
   },
   "kb": {
-    "count": 26,
+    "count": 28,
     "files": [
       "kb/compress.md",
       "kb/compress_input.md",
@@ -137,7 +149,9 @@
       "kb/items.md",
       "kb/items_input.md",
       "kb/known_projects.md",
+      "kb/minutes_card.md",
       "kb/minutes_input.md",
+      "kb/minutes_marks.md",
       "kb/minutes_meeting.md",
       "kb/minutes_merge_input.md",
       "kb/moments_link.md",
@@ -154,7 +168,7 @@
     ]
   },
   "mcp/agents": {
-    "count": 12,
+    "count": 13,
     "files": [
       "mcp/agents/agent_send.md",
       "mcp/agents/agent_start.md",
@@ -163,6 +177,7 @@
       "mcp/agents/direction_name.md",
       "mcp/agents/interaction_answer.md",
       "mcp/agents/task_plan.md",
+      "mcp/agents/task_plan_withdraw.md",
       "mcp/agents/task_retry.md",
       "mcp/agents/task_review.md",
       "mcp/agents/task_scope.md",

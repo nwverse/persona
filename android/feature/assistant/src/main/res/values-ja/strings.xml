@@ -7,6 +7,8 @@
     <string name="assistant_profile">アシスタントのプロフィール</string>
     <string name="assistant_got_it">OK</string>
     <string name="assistant_composer_placeholder">%1$sに質問…</string>
+    <string name="assistant_model_setup_title">アシスタントのモデルを接続</string>
+    <string name="assistant_model_setup_detail">アシスタントは%1$sで動作しています。このClaude Code設定ではモデルに接続できません。既存のプロバイダーを選ぶか、お使いのゲートウェイを追加してください。</string>
     <string name="assistant_info_settings">アシスタントの設定</string>
     <string name="assistant_info_knowledge">ナレッジ</string>
     <string name="assistant_info_schedule">定期タスク</string>
@@ -84,6 +86,7 @@
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>
     <string name="assistant_phone_permissions_pending">スマホの権限を確認待ち</string>
     <string name="assistant_search_chats">チャットを検索</string>
+    <string name="assistant_search_partial">以前のチャットを整理中です。まだ表示されないものがあります。</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->
@@ -112,7 +115,6 @@
     <string name="assistant_make_leader_text">このチャットは常駐に移り、「最近」には出なくなります。</string>
     <string name="assistant_end_leader_title">常駐をやめますか？</string>
     <string name="assistant_end_leader_text">「%1$s」は「最近」に戻ります。進行中のタスクはメインチャットの監督に戻り、終了や削除はされません。</string>
-    <string name="assistant_leader_working">作業中 %1$d</string>
     <string name="assistant_leader_needs_you">対応待ち %1$d</string>
     <string name="assistant_direction_todos_of">%1$s の ToDo</string>
     <string name="assistant_direction_agents_of">%1$s の Agent</string>
