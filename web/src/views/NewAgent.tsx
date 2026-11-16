@@ -15,6 +15,8 @@ import { ForwardBar } from "./chat/ForwardBar";
 import { lazyPage } from "../lib/lazy-page";
 import { browserStartKeys, launchAgent, presetPrompt, type NewAgentPreset } from "../lib/new-agent";
 import { whenStarted } from "../lib/new-agent-started";
+import { startCompare } from "../lib/compare-runner";
+import { MAX_RUNS } from "../lib/compare-runs";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
 import { startChoices, startGroups } from "../lib/workspace-start";
@@ -226,6 +228,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setInWorktree(false);
     setWtBranch("");
     setWtError("");
+    setRunTimes(1);
   }, [open]);
   // a worktree of its own (#6115): offered for a folder in a Git repository (what the computer says of it), off each
   // time the sheet opens
@@ -233,6 +236,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const [wtBranch, setWtBranch] = useState("");
   const [wtBusy, setWtBusy] = useState(false);
   const [wtError, setWtError] = useState("");
+  // Compare runs (#8916): the same start 2–4 times, each in a worktree of its own; offered only with the worktree switch
+  // on, 1 (a start as ever) each time the sheet opens
+  const [runTimes, setRunTimes] = useState(1);
   // Cleanup fences completions even when the transport ignores abort. A target change starts a new admission scope.
   useLayoutEffect(() => {
     submitted.current = false;
@@ -488,6 +494,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const desktopStart = startsInDesktopApp(desktopLauncher);
   const codexApp = desktopLauncher?.source === CODEX_APP_SOURCE;
   const desktopScratch = desktopStart && !cwdPicked && !workspace;
+  // not for a start handed in for something of its own (Inbox's "New agent…", #5933): that waits for one Agent
+  const runsOffered = inWorktree && worktreeOffered && !desktopScratch && !preset?.onStarted;
+  const runCount = runsOffered ? runTimes : 1;
   const desktopProjects = useMemo(
     () => (desktopStart ? projectsFolder(getState().sessions[mid] ?? [], codexApp) ?? "" : ""),
     [mid, desktopStart, codexApp],
@@ -596,16 +605,18 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const setup = { machine: mid, cwd: dir, launcher, model: picks.model ?? "", agent_type: agent, mode: claude ? permissionMode : "", effort: claude ? (picks.effort ?? "") : "" };
     // only an explicit "on" is sent: off is what a new Claude is anyway
     const ultra = ultracodeShown && !ultracodeBlocked && ultracode ? true : undefined;
+    const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
+      ? inlineTextStart(launchers.find((l) => l.name === listLauncher), opensIn ?? hostDefault, snapshot.text, snapshot.attachments.length)
+      : undefined;
+    // what every start of this sheet goes with (each run of a comparison too)
+    const target = { launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra,
+      ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) };
     const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
-      const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
-        ? inlineTextStart(launchers.find((l) => l.name === listLauncher), opensIn ?? hostDefault, snapshot.text, snapshot.attachments.length)
-        : undefined;
-      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent,
-        ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) });
+      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, ...target, text: snapshot.text, attachments: sent });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -618,6 +629,22 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts.
     // From a picked Paseo workspace (#8856) the start goes into the workspace Paseo made for the worktree, not the one picked.
     if ((!workspace || paseoPicked) && inWorktree && worktreeOffered && !desktopScratch) {
+      // Compare runs (#8916): the sheet closes at once on the runs' page, which shows each worktree and start as it goes
+      // (lib/compare-runner.ts); the task stays in this tab for a run's retry, so the draft goes now
+      if (runCount > 1) {
+        const hint = agentNameHint(prompt, cwd);
+        const id = startCompare({ mid, cwd: cwd.trim(), nameHint: hint, branch: wtBranch.trim() || agentBranch(hint), count: runCount, spec: target,
+          paseo: paseoPicked, text: snapshot.text, attachments: snapshot.attachments });
+        rememberSetup({ ...setup, at: setupTime() });
+        releaseAttachments(attachmentsRef.current);
+        attachmentsRef.current = [];
+        setAttachments([]);
+        if (promptRevision.current === revision) setPrompt("");
+        setForwards([]);
+        dismiss();
+        navigate({ name: "compare", id });
+        return;
+      }
       setWtBusy(true);
       setWtError("");
       void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner }, opensIn)
@@ -693,7 +720,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
               {t("common.cancel")}
             </Button>
             <Button tone="primary" busy={wtBusy} disabled={loadingModels || !workspaceCurrent || !online.some((m) => m.id === mid) || !(cwd.trim() || desktopScratch) || (needsFirst && !prompt.trim())} onClick={start}>
-              {t("newagent.start")}
+              {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
         }
@@ -819,6 +846,19 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 <p data-worktree-path className="mt-1 truncate pl-[21px] font-mono text-[11px] text-ink-3">
                   {t("newagent.worktree_path", { path: shortPath(suggestedPath(repo.checkouts, wtBranch.trim() || agentBranch(agentNameHint(prompt, cwd)))) })}
                 </p>
+              )}
+              {runsOffered && (
+                <div data-new-agent-runs className="mt-1.5 pl-[21px]">
+                  <div className="flex items-center gap-2">
+                    <span id="new-agent-runs" className="shrink-0 text-submeta text-ink-3">{t("newagent.runs")}</span>
+                    <div role="radiogroup" aria-labelledby="new-agent-runs" className="flex gap-1">
+                      {Array.from({ length: MAX_RUNS }, (_, i) => i + 1).map((n) => (
+                        <Choice key={n} radio selected={runTimes === n} onClick={() => setRunTimes(n)}>{n}</Choice>
+                      ))}
+                    </div>
+                  </div>
+                  {runTimes > 1 && <p className="mt-1 text-submeta leading-snug text-ink-3">{t("newagent.runs_hint", { count: runTimes })}</p>}
+                </div>
               )}
               {wtError && <p role="alert" className="mt-1 pl-[21px] text-[11.5px] leading-snug text-red">{t("newagent.worktree_failed", { error: wtError })}</p>}
             </div>

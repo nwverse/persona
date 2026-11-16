@@ -72,7 +72,7 @@ export struct SettingsPage {
     scope: string, generation: number): void {
     if (!this.appearanceCurrent(owner, revision, scope, generation) || this.agentWorkspace !== workspace ||
       !workspace.isBoundTo(owner) || workspace.loading) return;
-    workspace.setGroupingMode(['flat', 'machine', 'repository', 'worktree'][index] || 'flat');
+    workspace.setGroupingMode(['state', 'machine', 'space'][index] || 'state');
   }
 
   private applyDensity(index: number, owner: ClientModel, revision: number, scope: string, generation: number): void {
@@ -97,7 +97,7 @@ export struct SettingsPage {
   }
 
   private agentGroupingIndex(workspace: AgentWorkspace): number {
-    const index = ['flat', 'machine', 'repository', 'worktree'].indexOf(workspace.groupingMode);
+    const index = ['state', 'machine', 'space'].indexOf(workspace.groupingMode);
     return index < 0 ? 0 : index;
   }
 
@@ -1147,10 +1147,9 @@ export struct SettingsPage {
       Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center, space: { main: LengthMetrics.vp(Tokens.gap), cross: LengthMetrics.vp(Tokens.gap) } }) {
         Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).flexShrink(0).constraintSize({ maxWidth: '100%' })
         if (this.agentWorkspace.isBoundTo(this.model) && !this.agentWorkspace.loading) {
-          Select([{ value: tr('agent_group_flat') }, { value: tr('agent_filter_machine') },
-            { value: tr('agent_filter_repository') }, { value: tr('agent_filter_worktree') }])
+          Select([{ value: tr('agent_group_state') }, { value: tr('agent_filter_machine') }, { value: tr('agent_group_space') }])
             .selected(this.agentGroupingIndex(this.agentWorkspace))
-            .value(tr(['agent_group_flat', 'agent_filter_machine', 'agent_filter_repository', 'agent_filter_worktree'][this.agentGroupingIndex(this.agentWorkspace)]))
+            .value(tr(['agent_group_state', 'agent_filter_machine', 'agent_group_space'][this.agentGroupingIndex(this.agentWorkspace)]))
             .flexShrink(0).constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).enabled(this.appearanceCurrent(this.model, this.appearanceRevision, this.model.scope(), this.model.connectionGeneration()))
             .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
         } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))

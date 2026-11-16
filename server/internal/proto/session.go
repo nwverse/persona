@@ -463,10 +463,10 @@ type Session struct {
 	Host string `json:"host,omitempty"`
 	// Hierarchy is where the session stands among the sessions that started one another, and when it began
 	// (docs/protocol/protocol.md "Session hierarchy"); nil for most rows. Its members are written on the row itself
-	// (parent_agent_id, folded_under, folded_as, children, started_at, asking_parent_session_id: sessionWire), so it has
+	// (parent_agent_id, folded_under, folded_as, children, started_at, asking_parent_session_id, deleted: sessionWire), so it has
 	// no key of its own. Read it with ParentAgentID, FoldedUnder, FoldedAs, Children, StartedAt and
-	// AskingParentSessionID; it is shared by every copy of the row, so it is never written in place: SetParentAgentID,
-	// SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
+	// AskingParentSessionID and IsDeleted; it is shared by every copy of the row, so it is never written in place:
+	// SetParentAgentID, SetFold, SetStartedAt, SetAskingParentSessionID and SetDeleted put a new one.
 	Hierarchy *SessionHierarchy `json:"-"`
 }
 

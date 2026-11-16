@@ -27,6 +27,7 @@ import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, Symb
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
+import { ResourceRow, HubProfile, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { Conversation } from '../components/Conversation';
@@ -108,6 +109,7 @@ struct Index {
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
+  @Local environment: NativeEnvironment = nativeEnvironment;
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local spacesShown: boolean = false;
   @Local spacesInset: number = 0;

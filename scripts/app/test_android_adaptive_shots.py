@@ -2,6 +2,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -28,6 +29,7 @@ class FakeAdb:
         self.ui_failures = 0
         self.png_frames = []
         self.ui_text = ""
+        self.probe_text = ""
         self.window = {
             "widthDp": 600, "heightDp": 480, "widthPx": 1200, "heightPx": 960,
             "densityDpi": 320, "orientation": "landscape", "taskId": 42, "bounds": (0, 0, 1200, 960),
@@ -67,6 +69,8 @@ class FakeAdb:
             return '<hierarchy><node resource-id="field" text="%s" content-desc="" class="EditText" bounds="[0,0][10,10]" focused="true" /></hierarchy>' % self.ui_text
         if arguments[:2] == ("cat", "/proc/uptime"):
             return "100.00 100.00\n"
+        if arguments == ("run-as", APP_ID, "cat", shots.PROBE_PATH):
+            return self.probe_text
         if arguments[:2] == ("run-as", APP_ID) and "cat" in arguments and any(arg.endswith("shell-position.json") for arg in arguments):
             return '{"tab":"Agents","chats":{"Agents":{"machineId":"machine","sessionId":"session"}}}'
         if arguments[:2] == ("run-as", APP_ID) and "shell-position.json" in arguments:
@@ -90,7 +94,62 @@ def make_runner(adb, output, document=None, reset=False):
         return shots.AdaptiveRunner(adb, document or scenario(), output, "light", reset=reset)
 
 
+def composer_probe():
+    return {"fieldVersion": 1, "session": "test-session", "pid": 42, "updatedAtNanos": 100_000_000_000,
+            "pages": {"chat:machine/session": {"updatedAtNanos": 100_000_000_000,
+                                               "composer": {"draftLoaded": True}}}}
+
+
 class AdaptiveShotsTest(unittest.TestCase):
+    def test_embedded_assistant_waits_for_its_live_composer_without_a_root_chat(self):
+        adb = FakeAdb()
+        adb.probe_text = json.dumps(composer_probe())
+        with tempfile.TemporaryDirectory() as output:
+            runner = make_runner(adb, output)
+            runner.read_navigation = mock.Mock(return_value=("Persona", None))
+            runner.wait_ready({"session": "machine/session", "conversationKind": "assistant", "timeout": 0.01})
+            runner.read_navigation.assert_not_called()
+            self.assertIn(["run-as", APP_ID, "cat", shots.PROBE_PATH], adb.commands)
+
+    def test_embedded_assistant_keeps_live_chat_identity_and_draft_guards(self):
+        for failure in ("wrong-chat", "missing-composer", "unloaded", "wrong-pid", "stale", "stale-page"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as output:
+                probe = composer_probe()
+                page = probe["pages"]["chat:machine/session"]
+                if failure == "wrong-chat":
+                    probe["pages"] = {"chat:other/session": page}
+                elif failure == "missing-composer":
+                    del page["composer"]
+                elif failure == "unloaded":
+                    page["composer"]["draftLoaded"] = False
+                elif failure == "wrong-pid":
+                    probe["pid"] = 43
+                elif failure == "stale":
+                    probe["updatedAtNanos"] = 0
+                else:
+                    page["updatedAtNanos"] = 0
+                adb = FakeAdb()
+                adb.probe_text = json.dumps(probe)
+                runner = make_runner(adb, output)
+                runner.read_navigation = mock.Mock(return_value=("Persona", None))
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "composer draft"):
+                    runner.wait_ready({"session": "machine/session", "conversationKind": "assistant", "timeout": 0.01})
+
+    def test_agent_keeps_its_root_chat_gate_before_reading_the_composer(self):
+        for kind in (None, "agent"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                adb.probe_text = json.dumps(composer_probe())
+                runner = make_runner(adb, output)
+                runner.read_navigation = mock.Mock(return_value=("Persona", None))
+                step = {"session": "machine/session", "timeout": 0.01}
+                if kind is not None:
+                    step["conversationKind"] = kind
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "selected session"):
+                    runner.wait_ready(step)
+                runner.read_navigation.assert_called()
+                self.assertNotIn(["run-as", APP_ID, "cat", shots.PROBE_PATH], adb.commands)
+
     def test_navigation_reads_default_and_explicit_tabs(self):
         chat = {"machineId": "machine", "sessionId": "session"}
         cases = [
@@ -528,6 +587,34 @@ cleanup_shots
             self.assertIn(["wm", "density", "reset"], adb.commands)
             self.assertIn(["emu", "posture", "3"], adb.commands)
 
+    def test_text_preserves_literal_percent_s_after_android_decoding(self):
+        for text in ("%s", "100%sure", "%s%s", "%%s", "%ss", "literal %s and spaces",
+                     " %s  %s ", "'%s'; $(echo unsafe) & `echo unsafe` \\\"",
+                     "hello world", "100% safe", "".join(chr(code) for code in range(32, 127))):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                runner.text({"text": text})
+                commands = [command for command in adb.commands if command[:2] == ["input", "text"]]
+                arguments = [shlex.split(command[2]) for command in commands]
+                self.assertTrue(all(len(argument) == 1 for argument in arguments))
+                # Android InputShellCommand.sendText decodes %s after the remote shell removes quotes.
+                received = "".join(argument[0].replace("%s", " ") for argument in arguments)
+                self.assertEqual(text, received)
+                if "%s" not in text:
+                    self.assertEqual(1, len(commands))
+                self.assertEqual([{"type": "text", "length": len(text), "ascii": True}],
+                                 [action for action in runner.action_log if action["type"] == "text"])
+
+    def test_text_rejects_invalid_input_before_any_text_command(self):
+        for text in (None, 17, "", "中文", "valid%s\ninvalid", "valid%s\tinvalid", "\x7f"):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                with self.assertRaises(shots.AdaptiveFailure):
+                    runner.text({"text": text})
+                self.assertFalse(any(command[:2] == ["input", "text"] for command in adb.commands))
+
     def test_scenario_validation_and_ascii_input_boundaries(self):
         document = scenario()
         document["manifestId"] = "r1-adaptive-window"
@@ -535,10 +622,10 @@ cleanup_shots
         invalid = scenario([{"step": "launch", "tab": "Agents"}, {"step": "rotate"}, {"step": "open", "tab": "Agents"}])
         with self.assertRaisesRegex(shots.AdaptiveFailure, "cannot restore"):
             shots.validate_scenario(invalid)
-        self.assertEqual("hello%sworld", shots.ascii_input_argument("hello world"))
+        self.assertEqual(["hello%sworld"], shots.ascii_input_arguments("hello world"))
         for text in ("中文", "line\nfeed", ""):
             with self.subTest(text=text), self.assertRaises(shots.AdaptiveFailure):
-                shots.ascii_input_argument(text)
+                shots.ascii_input_arguments(text)
 
 
 if __name__ == "__main__":

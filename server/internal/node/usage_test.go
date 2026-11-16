@@ -172,6 +172,53 @@ func TestUsageMeterCountsAForkOnce(t *testing.T) {
 	}
 }
 
+// A workflow run's agents write <session>/subagents/workflows/<run>/agent-*.jsonl (#9255): the sweep lists them in
+// every config directory, their replies count under their session's launcher, and a reply that is also in another
+// transcript is counted once.
+func TestUsageMeterCountsWorkflowAgents(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	n, home := testNode(t)
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	session := filepath.Join(home, ".claude", "projects", "-work-app", "s1")
+	files := map[string]string{
+		session + ".jsonl": claudeReply(now, "m1", "claude-opus-5-5", 2, 100, 1000, 50),
+		filepath.Join(session, "subagents", "workflows", "wf_1", "agent-a.jsonl"): claudeReply(now, "m1", "claude-opus-5-5", 2, 100, 1000, 50) +
+			claudeReply(now, "w1", "claude-opus-5-5", 3, 10, 2000, 70),
+		filepath.Join(session, "subagents", "workflows", "wf_1", "agent-b.jsonl"): claudeReply(now, "w2", "claude-sonnet-5-5", 4, 20, 3000, 90),
+		filepath.Join(session, "subagents", "workflows", "wf_1", "journal.jsonl"): claudeReply(now, "j1", "claude-opus-5-5", 9, 9, 9, 9),
+	}
+	for p, body := range files {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := newUsageMeter()
+	sessions := map[string]bool{}
+	m.launcherOf = func(s string) string { sessions[s] = true; return "claude" }
+	cutoff := now.Add(-usageWindow)
+	listed := 0
+	for _, f := range n.usageFiles(cutoff) {
+		listed++
+		m.scan(f.path, f.st, cutoff)
+	}
+	if listed != 3 {
+		t.Fatalf("listed %d transcripts, want the session's and its two workflow agents' (not the run's journal)", listed)
+	}
+	minute := now.Unix() / 60 * 60
+	if b := m.buckets[usageKey{minute, "claude-opus-5-5", "claude"}]; b == nil || b.Requests != 2 || b.Output != 120 || b.CacheRead != 3000 {
+		t.Fatalf("opus = %+v, want m1 once and w1", b)
+	}
+	if b := m.buckets[usageKey{minute, "claude-sonnet-5-5", "claude"}]; b == nil || b.Requests != 1 || b.Output != 90 {
+		t.Fatalf("sonnet = %+v, want w2", b)
+	}
+	if len(sessions) != 1 || !sessions["s1"] {
+		t.Fatalf("launchers asked for %v, want the workflow's session s1", sessions)
+	}
+}
+
 func TestUsageMeterCountsACodexForkOnce(t *testing.T) {
 	now := time.Now().UTC()
 	line := func(kind, payload string) string {
@@ -205,6 +252,7 @@ func TestUsageSession(t *testing.T) {
 	for path, want := range map[string]string{
 		"/h/.claude/projects/-p/0f1e.jsonl":                                                                    "0f1e",
 		"/h/.claude/projects/-p/0f1e/subagents/agent-a1.jsonl":                                                 "0f1e",
+		"/h/.claude/projects/-p/0f1e/subagents/workflows/wf_9c/agent-a2.jsonl":                                 "0f1e",
 		"/h/.codex/sessions/2026/10/29/rollout-2026-10-29T10-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl": "0199a213-81c0-7800-8aa1-bbab2a035a53",
 	} {
 		if got := usageSession(path); got != want {

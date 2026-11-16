@@ -303,6 +303,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         assistantPending = conversation
         return true
     }
+    val visibleAgentChat = remember { kotlinx.coroutines.flow.MutableStateFlow<SessionKey?>(null) }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
@@ -349,6 +350,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val agents = remember(session, navigator) {
         object : AgentsDependencies by session.agents {
             override fun wiring() = object : AgentsWiring { override val state = navigationWiring }
+            override fun visibleChat() = visibleAgentChat
         }
     }
     val assistantNavigator = remember {
@@ -377,6 +379,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val visible = stacks.getValue(selected).lastOrNull()
     val visibleChat = when (visible) { is ChatRoute -> visible; is InteractionRoute -> visible.chat; else -> null }
+    LaunchedEffect(visibleChat) {
+        visibleAgentChat.value = visibleChat?.takeIf { it.kind != ConversationKind.Assistant }
+            ?.let { SessionKey(it.machineId, it.sessionId) }
+    }
     DisposableEffect(visibleChat, session.demo) {
         if (session.demo == null) Notify.viewing(visibleChat?.let { SessionKey(it.machineId, it.sessionId) })
         onDispose { if (session.demo == null) Notify.viewing(null) }
@@ -589,7 +595,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                 settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                 settingsOpened = true
                             }, headModifier = head, trailing = trailing, fallback = fallback)
-                    })
+                    },
+                    // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
+                    fullWindowSearch = regular)
             }
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.

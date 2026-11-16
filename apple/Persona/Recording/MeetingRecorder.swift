@@ -75,10 +75,15 @@ import UserNotifications
     /// main chat, else off (`MeetingAttendees.defaultAttendance`), or, with the meeting conversation, as a room meeting in
     /// the default role, not private (`MeetingAttendees.startAttendance`).
     @discardableResult
-    func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil) async -> Outcome {
+    /// `event`: the calendar meeting it is for (the Meetings home's Upcoming row), else the one on now; `title`: the name
+    /// typed on the quick start (#8731), kept over the calendar's.
+    func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil,
+                      event: RecordingMeeting? = nil, title: String? = nil) async -> Outcome {
         if openPage ?? inForeground { Self.openRecordings() }
         guard capture.state == .idle else { return .alreadyRecording }
-        let meeting = await MeetingCalendar.meetingOffMain() ?? RecordingMeeting()
+        var meeting: RecordingMeeting
+        if let event { meeting = event } else { meeting = await MeetingCalendar.meetingOffMain() ?? RecordingMeeting() }
+        if let typed = title.map(RecordingTitle.cleaned), !typed.isEmpty { meeting.title = typed }
         let picked = attendance != nil
         let attendance = attendance ?? MeetingAttendees.startAttendance(AppModel.shared)
         // A room meeting's engine carries a meeting call's player (#3862 phase 4); one that starts taking part asks for the
@@ -156,6 +161,8 @@ import UserNotifications
     func setRole(_ role: MeetingAttendance, recordingID: String?) -> Bool {
         guard let id = capture.recordingID, recordingID == nil || recordingID == id.uuidString,
               let entry = RecordingLibrary.shared.entry(id), entry.isMeeting, entry.source == .phone else { return true }
+        // Persona out of the meeting: its room keeps following it where the meeting started with the notes role (#8851).
+        let role = role.answers ? role : entry.attendance?.outRole ?? .off
         guard (entry.attendance?.sentRole ?? .off) != role else { return true }
         let at = capture.timeline
         // A room meeting (#3862) keeps its room, photos and private mark, and has no attending session to look up.

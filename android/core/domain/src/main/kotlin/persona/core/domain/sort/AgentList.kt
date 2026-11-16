@@ -27,6 +27,10 @@ data class AgentListSettings(
     val hideBotmux: Boolean = false,
     /** sessions_hierarchy: even an orphan without rollup fields stays an ordinary, counted row. */
     val hierarchy: Boolean = false,
+    /** UI-only row-cap expansion, distinct from [expandedIdle] so Show All never unfolds idle agents. */
+    val expandedAll: Set<String> = emptySet(),
+    /** The caller's instant for `since:`; the list projection never reads a clock. */
+    val now: java.time.Instant = java.time.Instant.now(),
 )
 
 /**
@@ -223,7 +227,7 @@ fun buildFlatAgentList(
     directions: DirectionTree? = null,
 ): AgentListResult {
     val machineNames = machines.associate { it.id to it.name }
-    val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames) && !(settings.hideBotmux && it.session.isBotmux) }
+    val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames, settings.now) && !(settings.hideBotmux && it.session.isBotmux) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
         .associateWith { filter -> base.count { !it.isNestedSubtask && filter.matches(it) } }
     val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }

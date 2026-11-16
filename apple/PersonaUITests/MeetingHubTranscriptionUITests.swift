@@ -117,13 +117,13 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
 
     // MARK: The start
 
-    /// With the flag and the hub ready, the start has a Transcription row (the hub's default, On This iPhone here); On the
-    /// Hub changes the line under Record to hub mode's privacy text.
+    /// With the flag and the hub ready, the quick start's Transcription line is a menu (the hub's default, This iPhone
+    /// here, #8731); Cloud changes the line under Start Meeting to hub mode's privacy text.
     @MainActor func testTheStartOffersOnTheHubWhileTheHubCanTranscribe() throws {
         let hub = try mockHub()
         let app = launchRecordings(hub)
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-        let row = element(app, "meeting-transcription-start")
+        let row = element(app, "meeting-transcription-line")
         if !row.waitForExistence(timeout: 20) { reveal(row, in: app) }
         XCTAssertTrue(row.waitForExistence(timeout: 5), "no Transcription row with the hub ready: \(app.debugDescription)")
         let line = element(app, "recording-start-privacy")
@@ -136,8 +136,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         // The row itself, settled (at the largest text sizes the line under Record scrolled it away).
         sleep(1)
         try shot(app, "start-row")
+        XCTAssertTrue(waitFor(5) { row.label.contains("本机 iPhone") }, "This iPhone by default: \(row.label)")
         row.tap()
-        let onHub = app.buttons["在 hub 上"].firstMatch
+        let onHub = app.buttons["云端 · Persona"].firstMatch
         XCTAssertTrue(onHub.waitForExistence(timeout: 5), "no On the Hub in the menu: \(app.debugDescription)")
         onHub.tap()
         reveal(line, in: app)
@@ -146,8 +147,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
     }
 
     /// The hub can't transcribe (`ready: false`), or has no hub transcription at all (`on: false`, as
-    /// MOCK_NO_MEETING_TRANSCRIPTION=1): no Transcription row, and the line under Record keeps privacy mode's words even
-    /// with the hub's default `hub` (a one-tap start then records on the phone too).
+    /// MOCK_NO_MEETING_TRANSCRIPTION=1): the Transcription line says This iPhone and is no menu (not ready with the hub's
+    /// default `hub`: in the warning words), and the line under Start Meeting keeps privacy mode's words (a one-tap start
+    /// then records on the phone too).
     @MainActor func testTheStartOffersNoHubWhenTheHubCantTranscribe() throws {
         let hub = try mockHub()
         try put(hub, "/api/v1/assistant", ["meeting_transcription_default": "hub"])
@@ -155,14 +157,14 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
             try post(hub, "/mock/meeting_transcription", switches)
             let app = launchRecordings(hub)
             XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-            let privately = element(app, "meeting-private-start")
-            if !privately.waitForExistence(timeout: 15) { reveal(privately, in: app) }
-            XCTAssertTrue(privately.exists, "no room meeting's options: \(app.debugDescription)")
+            XCTAssertTrue(element(app, "meeting-invite-persona").waitForExistence(timeout: 15), "no room meeting's start: \(app.debugDescription)")
             // A launch goes by what the last hub said until this one's hello and settings are in.
-            let row = element(app, "meeting-transcription-start")
-            XCTAssertTrue(waitFor(20) { !row.exists }, "a Transcription row with the hub \(why)")
-            sleep(3)
-            XCTAssertFalse(row.exists, "and it stays away (\(why))")
+            let row = element(app, "meeting-transcription-line")
+            let words = why == "not ready" ? "云端现在用不了" : "本机 iPhone"
+            XCTAssertTrue(waitFor(20) { row.label.contains(words) }, "the line with the hub \(why): \(row.label)")
+            row.tap()
+            sleep(1)
+            XCTAssertFalse(app.buttons["云端 · Persona"].exists, "a Cloud choice with the hub \(why)")
             let line = element(app, "recording-start-privacy")
             reveal(line, in: app)
             XCTAssertFalse(line.label.contains("会经你的 hub"), "hub mode's words with the hub \(why): \(line.label)")

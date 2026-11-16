@@ -230,9 +230,10 @@ class RustCoreDeviceAttribution {
             afterRuntime.patchCloneNs > beforeRuntime.patchCloneNs
                 && afterRuntime.patchEncodeNs > beforeRuntime.patchEncodeNs
         } else {
-            // Dispatch: pending + flush are measured after the JNI call; worker activity must also have advanced.
-            (afterRuntime.pendingLockCalls > beforeRuntime.pendingLockCalls
-                && afterRuntime.workerActions == beforeRuntime.workerActions + 1)
+            // Dispatch: the worker-side action counter must have advanced by exactly one. The pending lock no
+            // longer exists on the dispatch fast path (pending is an atomic), so the earlier pendingLockCalls
+            // check has been removed; the queueSendNs and workerActions deltas still bracket the work.
+            afterRuntime.workerActions == beforeRuntime.workerActions + 1
         })
 
     private fun vmJson(value: VmCounters): JSONObject = JSONObject()

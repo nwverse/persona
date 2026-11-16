@@ -153,7 +153,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_dispatch(
         let Ok(action) = env.convert_byte_array(&action) else {
             return false;
         };
-        runtime.dispatch(&action)
+        // Move the Vec<u8> straight into the worker's channel; no second copy on the main thread.
+        runtime.dispatch_owned(action)
     }))
     .map_or(JNI_FALSE, boolean)
 }
@@ -199,7 +200,28 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNI
     }
 }
 
-/// Projects the Agents list from a JSON input string. Pure function, no runtime handle needed.
+/// Projects the source-derived WebSocket envelope from one raw JSON document. Pure diagnostic function (#8955).
+/// It does not route an event or use a runtime handle; malformed input returns an empty string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectWireEnvelope<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let projection = persona_core_domain::wire_envelope::project(input.as_bytes())?;
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects the Agents list from a JSON input string. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
     mut env: JNIEnv<'a>,
@@ -250,6 +272,26 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamChun
         let input: String = env.get_string(&input).ok()?.into();
         let input: persona_core_domain::stream_chunks::Input = serde_json::from_str(&input).ok()?;
         let projection = persona_core_domain::stream_chunks::split(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Repairs only an open code fence and reports this slice's code/text end state. Pure function, no runtime handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepair<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_repair::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::project(&input);
         let json = serde_json::to_string(&projection).ok()?;
         env.new_string(json).ok()
     }))
@@ -318,7 +360,7 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTaskIndex<
     .unwrap_or_default()
 }
 
-/// Projects the viewed-image strip for the tool call in a lines input. Pure function, no runtime handle needed.
+/// Projects the viewed-image strip for the first represented work group in a lines input. Pure function.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectViewedImages<'a>(
     mut env: JNIEnv<'a>,

@@ -673,6 +673,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(no_auto_lock: on)))
     }
 
+    /// x264 for this Mac's live screen (#8859; the plugin's screen_x264, asked on the phone first).
+    func setComputerScreenX264(machine: String, _ on: Bool) async throws -> MachineComputer {
+        struct Body: Encodable { var screen_x264: Bool }
+        return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(screen_x264: on)))
+    }
+
     /// The machine page's Install Cua Driver, Grant Access and Cancel: `install`, `grant`, `cancel`.
     func computerJob(machine: String, _ action: String) async throws -> MachineComputer {
         try JSON.decoder.decode(MachineComputer.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/\(action)"))
@@ -773,8 +779,9 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
     func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
-        try await get("/api/v1/machines/\(machine)/launchers",
-                      query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try await client.get("/api/v1/machines/\(machine)/launchers",
+                                    query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
     }
     /// Built-in catalog prices for the ids a turn used (`POST /api/v1/launchers/catalog`, #5426). An id the catalog
     /// leaves out is absent; a known id with no price is present and nil. Empty in, empty out.
@@ -800,10 +807,14 @@ nonisolated struct APIClient: Sendable {
         try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
-    /// ask (a few seconds, kept 10 minutes); refresh asks it again.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false) async throws -> LauncherModels {
+    /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
+    /// even when the computer's Agent engine has a provider of the same name.
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
-        return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
+        var query = refresh ? ["refresh": "1"] : [:]
+        if let purpose { query["purpose"] = purpose }
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
     /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
     /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
@@ -866,7 +877,9 @@ nonisolated struct APIClient: Sendable {
         var query = ["range": range.rawValue]
         if let model { query["model"] = model }
         if let launcher { query["launcher"] = launcher.isEmpty ? "-" : launcher }
-        return try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        var usage = try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        usage.receivedAt = Date() // the step under way has run until now (#9205)
+        return usage
     }
     func sessions() async throws -> [Session] {
         let data = try await request("GET", "/api/v1/sessions")
@@ -1635,8 +1648,11 @@ nonisolated struct APIClient: Sendable {
         var lastStatus: String?   // of the last run: ok / failed / skipped
         var lastError: String?
         var nextRun: Date?
+        /// Read-only (#8045): the kinds of task this task's own runs start without the plan card. Only the owner adds to it,
+        /// on one of its runs' cards; the editor shows it and removes kinds (`revokeStartGrant`), and never sends it.
+        var startGrant: StartGrant?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox, startGrant = "start_grant"
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
@@ -1686,6 +1702,7 @@ nonisolated struct APIClient: Sendable {
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
+            startGrant = (try? c.decodeIfPresent(StartGrant.self, forKey: .startGrant)) ?? nil
         }
         func encode(to e: Encoder) throws { // only what the user edits; "" = the default
             var c = e.container(keyedBy: CodingKeys.self)
@@ -1703,6 +1720,44 @@ nonisolated struct APIClient: Sendable {
             }
         }
     }
+    /// A scheduled task's own start grant (#8045): the kinds of task its runs start without the plan card, each a trust key
+    /// ("machine|folder|read" or "…|edit", as Auto-Start Tasks' kinds), read into `kinds` once, as it is decoded.
+    struct StartGrant: Decodable, Hashable, Sendable {
+        /// One kind as the page names it: the computer, the folder (it covers the folders under it), whether the tasks only
+        /// read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it whole as the folder.
+        struct Kind: Hashable, Sendable {
+            var key: String
+            var machine: String
+            var folder: String
+            var readonly: Bool
+
+            init(key: String) {
+                self.key = key
+                let parts = key.components(separatedBy: "|")
+                let mode = parts.count > 1 ? parts[parts.count - 1] : ""
+                readonly = mode == "read"
+                if parts.count == 3, mode == "read" || mode == "edit" {
+                    machine = parts[0]; folder = parts[1]
+                } else {
+                    machine = ""
+                    folder = mode == "read" || mode == "edit" ? parts.dropLast().joined(separator: "|") : key
+                }
+            }
+        }
+        var kinds: [Kind]
+        var grantedAt: Date?
+        enum CodingKeys: String, CodingKey { case kinds, grantedAt = "granted_at" }
+
+        init(keys: [String], grantedAt: Date? = nil) {
+            kinds = keys.filter { !$0.isEmpty }.map(Kind.init(key:))
+            self.grantedAt = grantedAt
+        }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            self.init(keys: (try? c.decodeIfPresent([String].self, forKey: .kinds)) ?? [],
+                      grantedAt: (try? c.decodeIfPresent(Date.self, forKey: .grantedAt)) ?? nil)
+        }
+    }
     struct TasksBody: Decodable { var tasks: [ScheduledTask] }
     struct TaskBody: Codable { var task: ScheduledTask }
     func scheduledTasks() async throws -> [ScheduledTask] { try await get("/api/v1/assistant/tasks", as: TasksBody.self).tasks }
@@ -1715,6 +1770,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(TaskBody.self, from: data).task
     }
     func deleteTask(_ id: String) async throws { try await delete("/api/v1/assistant/tasks/\(id)") }
+    /// Stops one kind (a trust key) from starting without asking in task `id`'s runs (#8045); returns the task as the hub
+    /// then has it.
+    func revokeStartGrant(task id: String, kind: String) async throws -> ScheduledTask {
+        let data = try await request("DELETE", "/api/v1/assistant/tasks/\(TodosLogic.pathComponent(id))/start-grant", body: ["kind": kind])
+        return try JSON.decoder.decode(TaskBody.self, from: data).task
+    }
 
     /// A saved place (Settings › Assistant › Saved Places, #1598): what a reminder by place goes off at when the user says
     /// "home" or "the office". The hub keeps them; the assistant reads them (`list_places`).
@@ -2023,6 +2084,11 @@ nonisolated struct APIClient: Sendable {
         /// Why the relay gave no grant, in its words ("403 topic not served", a redirect, a network error): the hub
         /// says it beside this device in Settings › Devices and `hub doctor` (#5998).
         var relayError: String?
+        /// Urgent calls (docs/assistant/urgent-call.md): the PushKit token while calls are on, the relay's grant for it
+        /// (topic `<bundle id>.voip`) and why there is none. An older hub ignores them.
+        var voipToken: String?
+        var voipGrant: String?
+        var voipError: String?
         /// What this app understands beyond the first version's pushes: `withdraw`, a silent push naming the cards that
         /// are over, whose notifications it then removes (#4349). An older hub ignores it.
         var features: [String]?
@@ -2032,13 +2098,24 @@ nonisolated struct APIClient: Sendable {
             case name, kind, topic, locale, features
             case deviceID = "device_id", apnsToken = "apns_token", apnsEnv = "apns_env"
             case pushKey = "push_key", relayURL = "relay_url", relayGrant = "relay_grant", relayError = "relay_error"
+            case voipToken = "voip_token", voipGrant = "voip_grant", voipError = "voip_error"
         }
     }
     /// Registers this device's push token; the hub answers which way its pushes take (nil: an older hub, which does
     /// not say).
     func register(device: DeviceBody) async throws -> PushRoute? {
-        struct Answer: Decodable { var push: PushRoute? }
-        return try await post("/api/v1/devices", body: device, as: Answer.self).push
+        try await registerRoutes(device: device).push
+    }
+
+    /// What a registration answers: the way pushes reach the device, and the way an urgent call's ring does (nil: an
+    /// older hub, which does not say).
+    struct DeviceRoutes: Decodable, Sendable {
+        var push: PushRoute?
+        var call: PushRoute?
+    }
+
+    func registerRoutes(device: DeviceBody) async throws -> DeviceRoutes {
+        try await post("/api/v1/devices", body: device, as: DeviceRoutes.self)
     }
 
     /// The way a hub's pushes reach a device (docs/operations/push-relay.md "Which way a device is pushed").
