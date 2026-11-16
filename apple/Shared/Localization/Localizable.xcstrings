@@ -92396,24 +92396,24 @@
       },
       "extractionState" : "manual"
     },
-    "Model not connected: Claude Code isn't signed in" : {
+    "Model not connected: Claude Code CLI isn't signed in" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Model not connected: Claude Code isn't signed in"
+            "value" : "Model not connected: Claude Code CLI isn't signed in"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "モデル未接続：Claude Code にログインしていません"
+            "value" : "モデル未接続：Claude Code CLI にログインしていません"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模型没接好：Claude Code 没登录"
+            "value" : "模型没接好：Claude Code 命令行没登录"
           }
         }
       },
@@ -109039,24 +109039,24 @@
       },
       "extractionState" : "manual"
     },
-    "On %@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:" : {
+    "Persona runs the Claude Code CLI on %@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "On %1$@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:"
+            "value" : "Persona runs the Claude Code CLI on %1$@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ でターミナルを開き、次の語を入力して Return キーを押し、案内に従ってブラウザで一度ログインしてください："
+            "value" : "Persona は %1$@ の Claude Code CLI を使い、Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータでターミナルを開き、次のコマンドを実行して、ブラウザで一度ログインしてください："
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 %1$@ 上打开终端，输入下面这个词，回车，按提示在浏览器里登录一次："
+            "value" : "Persona 用的是 %1$@ 上的 Claude Code 命令行，Claude 桌面版登录了也不算。在那台电脑上打开终端，运行下面这条命令，按提示在浏览器里登录一次："
           }
         }
       },
@@ -146202,24 +146202,24 @@
       },
       "extractionState" : "manual"
     },
-    "Sign in once on that computer, or use an API key instead." : {
+    "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sign in once on that computer, or use an API key instead."
+            "value" : "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "そのコンピュータで一度ログインするか、代わりに API キーを使ってください。"
+            "value" : "Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータのターミナルで claude auth login を実行するか、代わりに API キーを使ってください。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在那台电脑上登录一次，或者改用 API Key。"
+            "value" : "Claude 桌面版登录了也不算。在那台电脑的终端里运行 claude auth login，或者改用 API Key。"
           }
         }
       },
