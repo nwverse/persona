@@ -167,9 +167,19 @@ class RecoveryIntegrationTests(unittest.TestCase):
                          ["git", "ls-remote", "origin", "refs/pull/7/head"])
         self.assertEqual(execute.call_args_list[2].args[0],
                          ["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
-                          "origin", "+refs/pull/7/head:refs/pr-watch/heads/7"])
+                          "origin", "b" * 40])
         self.assertEqual(execute.call_args_list[-1].args[0],
                          ["git", "update-ref", "refs/pr-watch/heads/7", "b" * 40])
+        with patch.object(pr_watch_common, "run", side_effect=[
+                subprocess.CompletedProcess([], 2, "", "rename detection was skipped"),
+                subprocess.CompletedProcess([], 0, "c" * 40 + "\trefs/pull/7/head\n", ""),
+                successful([]), successful([]), successful([])]) as execute:
+            self.assertEqual(pr_watch_common.checked(["git", "fetch", "-q", "origin", "pull/7/head"]),
+                             "c" * 40 + "\n")
+        self.assertEqual(execute.call_args_list[1].args[0],
+                         ["git", "ls-remote", "origin", "refs/pull/7/head"])
+        self.assertEqual(execute.call_args_list[-1].args[0],
+                         ["git", "update-ref", "FETCH_HEAD", "c" * 40])
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 128, "", "fatal: corrupt")):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])

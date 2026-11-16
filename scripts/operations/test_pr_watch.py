@@ -236,8 +236,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("the exact failed assertion", self.comments[-1])
 
     def test_conflict_exhaustion_retains_the_final_reason_without_starting_another_repair(self):
-        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3,
-                               failure="original conflict resolution failed")
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               repair_rounds=3, failure="original conflict resolution failed")
         with patch.object(pr_watch_repair, "update_branch_with_main") as update:
             with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")):
                 self.watcher.process("example/one", 7)

@@ -72,20 +72,20 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
 
 def registration_path(checkout, candidate):
     """Resolve only this checkout's own administrative worktree file."""
-    marker = Path(candidate) / ".git"
-    if not marker.is_file() or marker.is_symlink():
-        return None
-    text = marker.read_text(encoding="utf-8").strip()
-    if not text.startswith("gitdir: "):
-        return None
-    destination = Path(text[len("gitdir: "):])
-    if not destination.is_absolute():
-        destination = candidate / destination
-    destination = destination.resolve(strict=False)
     common_text = checked(["git", "rev-parse", "--git-common-dir"], cwd=checkout).strip()
     common = (Path(checkout).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
-    if destination.parent != common / "worktrees" or destination.name != candidate.name:
-        raise WatchError("worktree registration escapes the trusted checkout")
+    destination = common / "worktrees" / candidate.name
+    if not destination.exists():
+        return None
+    marker = candidate / ".git"
+    if marker.is_file() and not marker.is_symlink():
+        text = marker.read_text(encoding="utf-8").strip()
+        if text.startswith("gitdir: "):
+            referenced = Path(text[len("gitdir: "):])
+            if not referenced.is_absolute():
+                referenced = candidate / referenced
+            if referenced.resolve(strict=False) != destination.resolve(strict=False):
+                raise WatchError("worktree registration does not match the owned checkout")
     return destination
 
 

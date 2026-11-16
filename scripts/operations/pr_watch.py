@@ -228,8 +228,7 @@ class Watcher:
                     item["failure_posted"] = False
                 if item.get("outcome") == "findings":
                     item["published_findings"] = list(item.get("findings", []))
-                    item["review_posted"] = False
-                    item.pop("review_fingerprint", None)
+                    item["review_posted"] = bool(item.get("review_posted"))
                 if item.get("outcome") == "failed" and item.get("semantic") == "passed":
                     item["outcome"] = "retry"
                     item["retry_after"] = 0
@@ -510,13 +509,17 @@ class Watcher:
         """Persist a terminal reason before its exactly-once best-effort comment."""
         reason = bounded(str(failure) or "The repair worker did not provide a diagnostic.", 12000)
         previous = self.state.get(repo, number)
+        if previous.get("head") != pr["headRefOid"] or previous.get("evidence_key") != evidence_key:
+            self.log("%s#%s discarded an exhausted repair result for a superseded head" % (repo, number))
+            return False
         current = self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                                  outcome="repair_exhausted", repair_exhausted=True, failure=reason,
                                  repair_rounds=max(int(previous.get("repair_rounds", 0)), REPAIR_LIMIT))
         if not current.get("failure_posted") or current.get("published_failure") != reason:
+            if self.dry_run:
+                return False
             try:
-                if not self.dry_run:
-                    self.comment(repo, number, "Automatic repair stopped after %d rounds. The last failure was:\n\n```text\n%s\n```" % (
+                self.comment(repo, number, "Automatic repair stopped after %d rounds. The last failure was:\n\n```text\n%s\n```" % (
                         REPAIR_LIMIT, reason))
             except WatchError as error:
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
@@ -732,6 +735,8 @@ class Watcher:
         if old.get("outcome") == "continuation":
             return
         if old.get("outcome") == "repair_comment_pending":
+            if self.dry_run:
+                return False
             reason = old.get("failure") or "The previous repair budget was exhausted without a recorded diagnostic."
             if not self.dry_run:
                 self.comment(repo, number, "The previous repair budget was exhausted. The last failure was:\n\n```text\n%s\n```\n\nThe new three-round budget permits one more repair attempt." % bounded(reason, 12000))

@@ -111,22 +111,25 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
             remote_name = argv[3] if len(argv) > 3 else "origin"
             original_refspecs = argv[4:]
             refspecs = [refspec.split(":", 1)[0].lstrip("+") for refspec in original_refspecs]
+            remote_refspecs = [refspec if refspec.startswith("refs/") else "refs/" + refspec for refspec in refspecs]
             if remote_name.startswith("-") or any(refspec.startswith("-") for refspec in refspecs):
                 raise WatchError("cannot recover an unsafe fetch refspec")
-            refreshed = run(["git", "ls-remote", remote_name, *refspecs], cwd=cwd,
+            refreshed = run(["git", "ls-remote", remote_name, *remote_refspecs], cwd=cwd,
                             timeout=60, environ=environ)
             if refreshed.returncode == 0:
                 entries = [line.split(None, 1) for line in refreshed.stdout.splitlines() if line.strip()]
                 if (len(entries) == 1 and len(entries[0]) == 2
-                        and entries[0][1] in refspecs and SHA.fullmatch(entries[0][0])):
+                        and entries[0][1] in remote_refspecs and SHA.fullmatch(entries[0][0])):
                     # The commit was received but the ref transaction was
                     # refused. Re-fetch just the object without rename checks,
                     # then finish the exact ref update requested by the caller.
                     checked(["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
-                             remote_name, *original_refspecs], cwd=cwd, timeout=timeout, environ=environ)
+                             remote_name, entries[0][0]], cwd=cwd, timeout=timeout, environ=environ)
                     checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
                             timeout=60, environ=environ)
-                    original_refspec = next(value for value in argv[4:] if value.split(":", 1)[0].lstrip("+") == entries[0][1])
+                    original_refspec = next(value for value in original_refspecs
+                                            if (value.split(":", 1)[0].lstrip("+") == entries[0][1]
+                                                or "refs/" + value.split(":", 1)[0].lstrip("+") == entries[0][1]))
                     if ":" in original_refspec:
                         destination = original_refspec.split(":", 1)[1]
                         if not destination.startswith("refs/"):
