@@ -457,9 +457,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         countTone = when (choice.tone) { InboxBar.Tone.Needs -> Status.NeedsYou; InboxBar.Tone.Neutral -> Status.Idle; null -> null })
                 }
                 // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
-                // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4).
+                // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4), and the edge
+                // that cuts choices off fades so the strip reads as one that scrolls.
                 QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
-                    onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true)
+                    onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true,
+                    fadeCut = true)
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
             }

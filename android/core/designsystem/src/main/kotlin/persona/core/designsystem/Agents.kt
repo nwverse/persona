@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1099,41 +1100,63 @@ data class Bay(
  * #9053), a bar that scrolls sideways scrolls it whole into sight ([revealWhenSelected]).
  * [pinFirst]: the first bay stays at the bar's start and only the rest scroll beside it, so its count is in sight
  * whichever bay is chosen (the Inbox's Needs you, #9053); a bar that fits looks the same either way.
+ * [fadeCut]: an edge of the part that scrolls fades where it cuts bays off, as the Agents capsule's (#9121): the trailing
+ * edge while more lie past it, the leading one once it has moved from its start, so a strip that runs past the screen
+ * reads as one that scrolls (the Inbox's section bar, #9053). A bar that fits draws as it would without it.
  */
 @Composable
 fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, revealSelected: Boolean = false,
-                   pinFirst: Boolean = false) {
+                   pinFirst: Boolean = false, fadeCut: Boolean = false) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val scroll = rememberScrollState()
     val reveal = scroll.takeIf { revealSelected }
     // How many bays sit outside the part that scrolls: the first, when pinned.
     val pinned = if (pinFirst && bays.size > 1) 1 else 0
+    // How far a cut edge fades: the Agents capsule's width, growing with the text; a chosen bay is kept clear of it.
+    val fadeWidth = if (fadeCut) AgentFilterTokens.fade * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f) else Tokens.Space.flush
+    // Read in drawing only: the fade's frames redraw the strip and never recompose it. A strip not yet measured counts
+    // as one that fits, and one with nothing to fade draws without the fade's layer, exactly as without the option.
+    val fade: Modifier = if (!fadeCut) Modifier else {
+        val spec: androidx.compose.animation.core.AnimationSpec<Float> =
+            if (PersonaTheme.reduceMotion) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(Tokens.Motion.State.duration)
+        val measured = scroll.viewportSize > 0
+        val leading = androidx.compose.animation.core.animateFloatAsState(if (measured && scroll.canScrollBackward) 1f else 0f, spec, label = "quick-filter-fade-leading")
+        val trailing = androidx.compose.animation.core.animateFloatAsState(if (measured && scroll.canScrollForward) 1f else 0f, spec, label = "quick-filter-fade-trailing")
+        val fading by androidx.compose.runtime.remember { androidx.compose.runtime.derivedStateOf { leading.value > 0f || trailing.value > 0f } }
+        if (fading) Modifier.agentFilterEdgeFade(palette.surfaceOpaque, fadeWidth, { leading.value }, { trailing.value }) else Modifier
+    }
     when (PersonaTheme.style) {
         AppStyle.Glass -> {
             val gap = 8.dp.dense
             @Composable fun chip(index: Int) {
                 val bay = bays[index]
-                JChip(bay.label, Modifier.revealWhenSelected(reveal?.takeIf { index >= pinned }, index == selected), selected = index == selected,
+                JChip(bay.label, Modifier.revealWhenSelected(reveal?.takeIf { index >= pinned }, index == selected, fadeWidth), selected = index == selected,
                     onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false, countTone = bay.countTone)
             }
-            if (pinned == 0) Row(modifier.fillMaxWidth().horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+            if (pinned == 0) Row(modifier.fillMaxWidth().then(fade).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
                 bays.indices.forEach { chip(it) }
             } else Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
                 chip(0)
-                Row(Modifier.weight(1f).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                Row(Modifier.weight(1f).then(fade).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
                     (pinned until bays.size).forEach { chip(it) }
                 }
             }
         }
-        // Tabs that do not fit scroll sideways rather than being cut off at the edge.
+        // Tabs that do not fit scroll sideways rather than being cut off at the edge. Fading the cut edge, the tabs keep
+        // part of the next one in sight under the fade (TabPeek): an edge that fell between two tabs showed none of it.
         AppStyle.Brief -> {
             val segments = bays.map { JSegment(it.label, it.count, countTone = it.countTone) }
-            if (pinned == 0) JSegmented(segments, selected, onSelect, modifier.horizontalScroll(scroll), revealIn = reveal)
+            @Composable fun strip(shown: List<JSegment>, chosen: Int, pick: (Int) -> Unit, place: Modifier) =
+                if (!fadeCut) JSegmentedStrip(shown, chosen, pick, place.horizontalScroll(scroll), revealIn = reveal)
+                else BoxWithConstraints(place) {
+                    JSegmentedStrip(shown, chosen, pick, Modifier.then(fade).horizontalScroll(scroll), revealIn = reveal, revealMargin = fadeWidth,
+                        peek = TabPeek(constraints.maxWidth, fadeWidth / 2))
+                }
+            if (pinned == 0) strip(segments, selected, onSelect, modifier)
             else Row(modifier) {
                 JSegmented(segments.take(pinned), if (selected < pinned) selected else -1, onSelect)
-                JSegmented(segments.drop(pinned), selected - pinned, { onSelect(it + pinned) },
-                    Modifier.weight(1f).padding(start = JSegmentedBriefGap).horizontalScroll(scroll), revealIn = reveal)
+                strip(segments.drop(pinned), selected - pinned, { onSelect(it + pinned) }, Modifier.weight(1f).padding(start = JSegmentedBriefGap))
             }
         }
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
@@ -1177,15 +1200,15 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
             }
             if (fits) Row(frame.height(IntrinsicSize.Min)) {
                 bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.weight(1f)) }
-            } else if (pinned == 0) Row(frame.horizontalScroll(scroll).height(IntrinsicSize.Min)) {
-                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected)) }
+            } else if (pinned == 0) Row(frame.then(fade).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected, fadeWidth)) }
             } else Row(frame.height(IntrinsicSize.Min)) {
                 cell(0, Modifier.widthIn(min = bayWidth))
                 rule()
-                Row(Modifier.weight(1f).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                Row(Modifier.weight(1f).then(fade).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
                     (pinned until bays.size).forEach { index ->
                         if (index > pinned) rule()
-                        cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected))
+                        cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected, fadeWidth))
                     }
                 }
             }
