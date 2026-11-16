@@ -185,10 +185,11 @@ nonisolated struct SessionListChanges: Equatable, Sendable {
     }
 
     init?(since: JSONValue?, changed: JSONValue?) {
-        guard let since = since?.string, !since.isEmpty, let list = changed?.array else { return nil }
+        // Strings only (`JSONValue.string` would also read a number as one).
+        guard case .string(let since)? = since, !since.isEmpty, let list = changed?.array else { return nil }
         var pairs: [(machineID: String, sessionID: String)] = []
         for id in list {
-            guard let pair = id.array, pair.count == 2, let machine = pair[0].string, let session = pair[1].string else { return nil }
+            guard let pair = id.array, pair.count == 2, case .string(let machine) = pair[0], case .string(let session) = pair[1] else { return nil }
             pairs.append((machine, session))
         }
         self.init(since: since, changed: pairs)

@@ -517,6 +517,7 @@ import PersonaWire
         #expect(changes(#"{"changed":[["demo"]],"revision":"r2","since":"r1","type":"sessions_list"}"#) == nil, "not a pair")
         #expect(changes(#"{"changed":[["demo","s1"]],"revision":"r2","type":"sessions_list"}"#) == nil, "no since")
         #expect(changes(#"{"changed":[["demo","s1"]],"revision":"r2","since":7,"type":"sessions_list"}"#) == nil, "since of another shape")
+        #expect(changes(#"{"changed":[["demo",1]],"revision":"r2","since":"r1","type":"sessions_list"}"#) == nil, "an id of another shape")
     }
 
     /// An open chat reads its own row again only for a hint that may be about it (#9479, the web's rule since #6685): one
