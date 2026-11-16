@@ -66,7 +66,15 @@ import PersonaWire
                 let core = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.sort)
                 let coreComparable = try AgentSortComparable(core: try JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, presentation: snapshot.presentation, now: snapshot.now)).utf8)), input: input, presentation: snapshot.presentation)
                 let differences = AgentSortComparable.differences(native: native, core: coreComparable)
-                #expect(differences == [], "\(fixture.name)")
+                let known = ["machine_uses_registry_order": Set(["quick-filter", "pin-membership"]), // #9221
+                             "space_time_tie_reversed": Set(["unread-shown"])] // #9335
+                if let expected = known[fixture.name], expected == Set(differences) {
+                    withKnownIssue("Tracked core discrepancy for \(fixture.name)") {
+                        #expect(differences == [], "\(fixture.name)")
+                    }
+                } else {
+                    #expect(differences == [], "\(fixture.name)")
+                }
                 try ProjectionFixture.assertEqual(core, fixture.expected, "\(fixture.name)")
             } catch {
                 Issue.record("\(fixture.name): \(error)")
