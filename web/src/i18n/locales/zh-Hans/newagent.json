@@ -52,5 +52,8 @@
   "carry_dropped": "{computer} 上用不了 {name}，已换回这台电脑的默认设置。",
   "preset_picked": "预设 {name} · {what}",
   "typed_now": "这次手输的模型 ID",
-  "temporary_session": "临时会话"
+  "temporary_session": "临时会话",
+  "runs": "运行次数",
+  "runs_hint": "把这个任务启动 {count} 次，每次在单独的 worktree 里，再对比结果。",
+  "start_runs": "启动 {count} 次"
 }

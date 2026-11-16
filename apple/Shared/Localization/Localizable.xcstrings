@@ -77124,6 +77124,72 @@
         }
       }
     },
+    "It's in use, as the default or with a computer, so it can't be hidden now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's in use, as the default or with a computer, so it can't be hidden now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中（デフォルト、またはコンピュータあり）のため、今は非表示にできません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它正在使用（是默认助手或有电脑），现在不能隐藏"
+          }
+        }
+      }
+    },
+    "It's listed for now because it has a computer. It's hidden again once it has none." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's listed for now because it has a computer. It's hidden again once it has none."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータがあるため、今は表示されています。コンピュータがなくなると、再び非表示になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它有电脑，所以暂时仍会列出；没有电脑后会再次隐藏。"
+          }
+        }
+      }
+    },
+    "It's listed for now because it's the default. It's hidden again once another one is." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's listed for now because it's the default. It's hidden again once another one is."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトのため、今は表示されています。別のアシスタントがデフォルトになると、再び非表示になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它是默认助手，所以暂时仍会列出；别的助手成为默认后会再次隐藏。"
+          }
+        }
+      }
+    },
     "It's Mine" : {
       "localizations" : {
         "en" : {
@@ -131294,6 +131360,28 @@
       },
       "extractionState" : "manual"
     },
+    "Show in Switcher" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in Switcher"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替えリストに表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在切换列表中显示"
+          }
+        }
+      }
+    },
     "SMS" : {
       "localizations" : {
         "en" : {
@@ -153151,6 +153239,28 @@
         }
       }
     },
+    "The default assistant is always listed. To hide this one, make another one the default first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The default assistant is always listed. To hide this one, make another one the default first."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトのアシスタントは常に表示されます。このアシスタントを非表示にするには、先に別のアシスタントをデフォルトにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认助手总会列出。要隐藏这个助手，先把别的助手设为默认。"
+          }
+        }
+      }
+    },
     "The details are on your screen." : {
       "localizations" : {
         "en" : {
@@ -162387,6 +162497,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This hub's version can't hide it yet. Update the hub and try again" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub's version can't hide it yet. Update the hub and try again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブのバージョンではまだ非表示にできません。ハブをアップデートしてからもう一度お試しください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 的版本还不能隐藏它，升级 hub 后再试"
+          }
+        }
+      }
     },
     "This iPhone can take urgent calls." : {
       "localizations" : {
@@ -183380,6 +183512,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "When off, it isn't listed where you switch assistants while it isn't used. It's listed again by itself once it becomes the default or has a computer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When off, it isn't listed where you switch assistants while it isn't used. It's listed again by itself once it becomes the default or has a computer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフにすると、使っていない間はアシスタントの切り替えリストに表示されません。デフォルトになるかコンピュータを持つと、自動的にまた表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关掉后，它没在用时不出现在切换助手的列表里。成为默认助手或有了电脑后，它会自动重新出现。"
+          }
+        }
+      }
     },
     "When Persona or an agent you drive from Lark needs an answer or approval, you get a card in Lark. One tap does it" : {
       "localizations" : {
