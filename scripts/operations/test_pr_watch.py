@@ -119,22 +119,24 @@ class WatcherTests(unittest.TestCase):
 
     def test_failed_stale_comment_never_closes(self):
         old = time.time() - 8 * 86400
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
         with patch.object(self.watcher, "stale_progress_at", return_value=old), \
                 patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute, \
                 patch.object(self.watcher, "comment", side_effect=pr_watch_common.WatchError("offline")), \
                 patch.object(pr_watch, "pr_snapshot") as snapshot:
             with self.assertRaises(pr_watch_common.WatchError):
-                self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {})
+                self.watcher.mark_and_close_stale(config, pr(), {})
         self.assertEqual(execute.call_count, 1)
         snapshot.assert_not_called()
 
     def test_new_activity_after_stale_notice_keeps_pr_open(self):
         old = time.time() - 8 * 86400
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
         with patch.object(self.watcher, "stale_progress_at", side_effect=[old, old + 30]), \
                 patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute, \
                 patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(self.watcher, "comment"):
-            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {}))
+            self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
         self.assertEqual(execute.call_count, 1)
         self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
 
@@ -144,7 +146,9 @@ class WatcherTests(unittest.TestCase):
             [{"createdAt": "2026-11-14T00:00:00Z"}], [],
             [{"committedDate": "2026-11-15T00:00:00Z"}])
         self.assertGreater(activity, pr_watch_common.github_time(snapshot["createdAt"]))
-        for bad in (None, "2026-11-15", "2026-11-15T00:00:00+08:00"):
+        self.assertEqual(pr_watch_common.github_time("2026-11-15T12:34:56.123456Z"),
+                         pr_watch_common.github_time("2026-11-15T12:34:56Z") + 0.123456)
+        for bad in (None, "2026-11-15", "2026-11-15T00:00:00+08:00", "2026-11-15T12:34:56.Z"):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.github_time(bad)
         with self.assertRaises(pr_watch_common.WatchError):
@@ -154,8 +158,9 @@ class WatcherTests(unittest.TestCase):
         old = time.time() - 8 * 86400
         with patch.object(self.watcher, "stale_progress_at", return_value=old) as activity, \
                 patch.object(pr_watch, "run") as execute:
+            config = dict(self.watcher.config["repositories"][0], close_stale=True)
             self.watcher.dry_run = True
-            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {}))
+            self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
             self.watcher.dry_run = False
             config = dict(self.watcher.config["repositories"][0], close_stale=False)
             self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
@@ -282,6 +287,40 @@ class WatcherTests(unittest.TestCase):
         finding_calls = [call for call in self.github.call_args_list
                          if call.args[0][:2] == ["gh", "api"]]
         self.assertEqual(len(finding_calls), 1)
+
+    def test_mixed_findings_are_fully_published_before_blocking_repair(self):
+        findings = [
+            {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"},
+            {"path": "x.py", "line": 4, "severity": "P2", "summary": "note", "suggestion": "consider it"},
+        ]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(self.watcher, "comment_findings") as publish, \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        publish.assert_called_once_with("example/one", 7, pr(), findings)
+        repair.assert_called_once_with(self.watcher.config["repositories"][0], pr(), self.root / "checkout", [findings[0]])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["published_findings"], findings)
+
+    def test_superseded_unpublished_findings_are_grouped_once_before_new_review(self):
+        findings = [
+            {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"},
+            {"path": "x.py", "line": 4, "severity": "P2", "summary": "note", "suggestion": "consider it"},
+        ]
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="reviewed", semantic="findings",
+                               findings=findings, review_posted=False, published_findings=[])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(SHA_B)), \
+                patch.object(self.watcher, "comment_findings") as publish, \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        publish.assert_called_once_with("example/one", 7, pr(SHA_B), findings, inline=False)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
+        history = self.watcher.state.data["finding_publications"]["example/one#7"]
+        self.assertEqual(history["published_findings"], findings)
 
     def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
         self.watcher.config["repositories"][0]["merge"] = False
@@ -2058,6 +2097,7 @@ class WatcherTests(unittest.TestCase):
         path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}]}))
         config = pr_watch.load_config(path)
         self.assertFalse(config["repositories"][0]["merge"])
+        self.assertFalse(config["repositories"][0]["close_stale"])
         self.assertEqual(len(config["repositories"]), 1)
 
 

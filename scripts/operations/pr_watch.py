@@ -62,11 +62,11 @@ def load_config(path):
             raise WatchError("verify config must be an object")
         if item.get("merge", False) is not True and item.get("merge", False) is not False:
             raise WatchError("merge must be a boolean")
-        if item.get("close_stale", True) is not True and item.get("close_stale", True) is not False:
+        if item.get("close_stale", False) is not True and item.get("close_stale", False) is not False:
             raise WatchError("close_stale must be a boolean")
         repos.append({"name": repo, "checkout": str(Path(root).expanduser()), "base": base,
                       "verify": item["verify"], "merge": item.get("merge", False),
-                      "close_stale": item.get("close_stale", True),
+                      "close_stale": item.get("close_stale", False),
                       "privacy": item.get("privacy"), "notify_command": item.get("notify_command")})
     reviewer = raw.get("reviewer", {})
     if not isinstance(reviewer, dict):
@@ -466,7 +466,21 @@ class Watcher:
                 self.repositories[repo]["checkout"], self.config["state"], error,
                 protected=self.active_worktrees(), state=self.state, repo=repo)
 
-    def comment_findings(self, repo, number, pr, findings):
+    def record_review_publication(self, repo, number, pr, findings, posted):
+        """Keep PR-level publication history outside replaceable head evidence."""
+        key = repo + "#" + str(number)
+        with self.state.lock:
+            item = self.state.data.setdefault("finding_publications", {}).setdefault(key, {})
+            current = item.get("findings", [])
+            if current != findings:
+                item.update(head=pr["headRefOid"], findings=findings,
+                            published_findings=findings if posted else [])
+            elif posted:
+                item["published_findings"] = findings
+            item["updated_at"] = int(time.time())
+            atomic_json(self.state.path, self.state.data)
+
+    def comment_findings(self, repo, number, pr, findings, inline=True):
         blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
         if not self.repositories[repo]["merge"]:
             action = "Review-only mode: no automatic repair or merge will be attempted. Please correct the findings in a new head."
@@ -482,9 +496,16 @@ class Watcher:
                      "body": "**%s** — %s\n\n**Suggestion:** %s" % (f["severity"], f["summary"], f["suggestion"])}
                     for f in findings]
         payload = {"commit_id": pr["headRefOid"], "event": "COMMENT", "body": body, "comments": comments}
-        result = run(["gh", "api", "repos/%s/pulls/%s/reviews" % (repo, number), "--input", "-"],
-                     input_text=json.dumps(payload), timeout=90)
-        if result.returncode:
+        if not inline:
+            fallback = body + "\n\nThe following findings belong to the previous head; they are grouped because its line anchors are no longer current.\n\n" + "\n\n".join(
+                "%d. **%s `%s:%s`** — %s\n   **Suggestion:** %s" %
+                (index, f["severity"], f["path"], f["line"], f["summary"], f["suggestion"])
+                for index, f in enumerate(findings, 1))
+            result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", bounded(fallback, 55000)], timeout=90)
+        else:
+            result = run(["gh", "api", "repos/%s/pulls/%s/reviews" % (repo, number), "--input", "-"],
+                         input_text=json.dumps(payload), timeout=90)
+        if result.returncode and inline:
             # A moved diff anchor must not discard the useful review or permit a merge.
             fallback = body + "\n\n" + "\n\n".join(
                 "%d. **%s `%s:%s`** — %s\n   **Suggestion:** %s" %
@@ -493,6 +514,7 @@ class Watcher:
             result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", bounded(fallback, 55000)], timeout=90)
         if result.returncode:
             raise WatchError("could not post review findings: " + bounded(result.stderr, 1000))
+        self.record_review_publication(repo, number, pr, findings, posted=True)
 
     def comment(self, repo, number, body):
         result = run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", bounded(body, 55000)], timeout=90)
@@ -609,6 +631,7 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
+            self.record_review_publication(repo, number, pr, old.get("findings", findings), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
@@ -718,6 +741,7 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
+            self.record_review_publication(repo, number, pr, old.get("findings", findings), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
@@ -759,7 +783,7 @@ class Watcher:
     def mark_and_close_stale(self, config, pr, old):
         """Explain and mark before closing; neither action counts as new progress."""
         repo, number = config["name"], pr["number"]
-        if (not config.get("close_stale", True) or self.dry_run
+        if (not config.get("close_stale", False) or self.dry_run
                 or old.get("outcome") == "continuation" or pr["isDraft"]):
             return False
         last_progress = self.stale_progress_at(repo, number, pr, old)
@@ -832,6 +856,15 @@ class Watcher:
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old
+            history = self.state.data.get("finding_publications", {}).get(repo + "#" + str(number), {})
+            unpublished = (previous.get("head") and previous.get("findings")
+                           and history.get("published_findings") != previous["findings"])
+            if unpublished and not self.dry_run:
+                # A changed head invalidates line anchors, not the usefulness
+                # of the complete old review. Publish it once as grouped text,
+                # then review the new head independently.
+                self.comment_findings(repo, number, pr, previous["findings"], inline=False)
+                self.record_review_publication(repo, number, pr, previous["findings"], posted=True)
             old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if (old.get("head") == head and old.get("format") == FORMAT_VERSION
                 and old.get("retry_reason") != "semantic_review"

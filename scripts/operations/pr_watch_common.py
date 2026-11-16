@@ -27,10 +27,12 @@ def github_time(value):
     """Parse only GitHub's explicit UTC timestamps; missing dates fail closed."""
     if not isinstance(value, str):
         raise WatchError("GitHub timestamp is missing")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", value):
+        raise WatchError("GitHub timestamp is not explicit UTC")
     try:
-        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+        return datetime.fromisoformat(value[:-1] + "+00:00").timestamp()
     except ValueError as error:
-        raise WatchError("GitHub timestamp is not explicit UTC") from error
+        raise WatchError("GitHub timestamp is invalid") from error
 
 
 def progress_timestamp(snapshot, comments, reviews, commits):
