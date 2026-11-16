@@ -2,8 +2,10 @@
 
 How the To-dos page decides where each to-do shows (#3156). The page's default list is by **status section**; the older
 grouping by folder stays available as a secondary view (List › Status | Folder). The code follows this document:
-`web/src/lib/todo-triage.ts` (`triage`, `triageTodos`), with tests in `web/src/lib/todo-triage.test.ts`, and its
-native copies (see "Clients"). A change to the rules changes all of them in the same PR.
+`web/src/lib/todo-triage.ts` (`triage`, `triageTodos`), with tests in `web/src/lib/todo-triage.test.ts`, and native copies
+(see "Clients"). The hub and web use fresh `pr_status` facts for the Waiting for merge section; native clients retain
+their existing presentation and ignore the added field. Only web adds the separate Waiting for merge group to its
+conversation tray; this does not change the native lifecycle or presentation.
 
 ## Principle: real signals only
 
@@ -13,7 +15,7 @@ work. An agent writing "done" in its reply does not finish anything; its turn en
 | Signal | Where it comes from | Values used |
 | :--- | :--- | :--- |
 | Agent alive and running | The linked, not released agents' sessions (herdr and other engines, via the hub's session list) | asking (`needs_you`), cut off by a model error (`turn_error`), working or starting, finished unseen (`unread`), idle, gone |
-| PR / delivery | `delivery.state` and `pr_url` on the to-do (`docs/assistant/todos.md`, "Delivery") | none, PR open (`pr`, or a `pr_url` with no delivery past it), merged not deployed (`merged`, `off`), deployed (`live`) |
+| PR / delivery | `pr_status` facts and `pr_url` on the to-do, plus delivery lifecycle (`docs/assistant/todos.md`, "Delivery") | fresh matching PR facts (checked within 15 minutes), PR open and non-draft; merged and closed are terminal PR observations |
 | Review verdict | The latest `task_review` in the to-do's supervision (`docs/assistant/unified-entry.md`) | `accepted`, `rework`, `needs_user`, `cancelled`, pending review |
 | Ask | The to-do's `ask` (`docs/assistant/todos.md`, "Waiting for the owner") | a decision, "cannot be done", "done", "please verify" |
 | Last activity | The latest of: the to-do's created, updated, reopened and done times; its supervision's update, last report and last review; its delivery and ask times; each linked agent's session update; a restore from Shelved | a moment |
@@ -27,7 +29,7 @@ then the folded ones, Done last. The same order decides which member leads a mer
 | :--- | :--- | :--- |
 | Waiting on you | open | Something only the owner can move: an answer, an approval, a decision, a retry |
 | Working | open | An agent is running on it now |
-| PR to merge | open | Its work stopped at a pull request that is still open and nothing runs: however old, it stays here, with the PR link and how long since it moved |
+| Waiting for merge | open | Fresh facts match its PR URL; the PR is open and non-draft, no agent is active and no owner decision is pending. Show the PR link and review/check/conflict blockers, or that it awaits a maintainer |
 | Parked (web) | open | An explicitly parked task whose wait has not expired; it is unfinished, even if its last agent turn was seen |
 | Other open | open | Open, recently active, none of the above (an agent stopped and seen, a reminder of the user's own) |
 | Just finished | open | Worth a look: closed, accepted or deployed in the last 24 hours, or a turn nobody has seen / a review not done yet (those stay until seen or reviewed); the owner has not seen it since (see "Seen") |
@@ -50,7 +52,7 @@ The first rule that holds wins.
 | 6 | `accepted` | The latest review accepted it and no review came since, even when the hub reopened it (see "Accepted tasks") | Just finished for 24 hours after the review or until seen, then Done |
 | 7 | `deployed` | `delivery.state` is `live` | Just finished for 24 hours or until seen, then Done |
 | 8 | `finished_unseen` | An agent finished a turn nobody has seen, the review is pending, or its ask says done / please verify; not seen since it last moved | Just finished |
-| 9 | `pr_open` | Its PR is open (rule "PR / delivery" above); a `pr_url` whose stage is Merge or later is a merged PR, never this (#3205) | PR to merge |
+| 9 | `pr_open` | Fresh facts of one of its PRs (`pr_status` matching `pr_url`, or an earlier PR in `other_prs`, #7935) say open and non-draft; no active agent or owner decision, and not accepted or deployed (rules 6 and 7 keep finished work finished whatever its PR facts say; an open concern, which those rules skip, still waits for merge). Stale, absent or mismatched facts do not imply waiting for merge; merged/closed facts suppress legacy `delivery.state=pr` | Waiting for merge |
 | 9a | `seen` | Rule 8's signals, seen by the owner since it last moved (see "Seen"); not an open concern | Done |
 | 10 | `stale` | Shelvable (see "Shelving") and no activity for 48 hours | Shelved |
 | 11 | `rest` | Anything else | Other open |
@@ -70,7 +72,7 @@ A closed concern (`done_at` set by its report) follows rule 5 like any closed to
 carries one neutral **Concern** tag next to its title, using the client's existing tag component; other rows do not change.
 A client whose older hub does not send `kind` keeps its previous behavior.
 
-On the web, the header's Parked count is the number of to-dos in the Parked section (included in open).
+On the web, the header's Parked count is the number of to-dos in the Parked section (included in open). Waiting for merge is another display section, not a lifecycle state: its to-dos remain open and count toward the existing open total.
 Inactive counts only automatic 48-hour shelving. The Parked section and review badge use the same localized name.
 Apple (`apple/Shared/TodoTriage.swift`) and Android (`TodoTriage.kt` in `android/core/domain`) still need this
 parked rule and naming alignment; #5929 records the parity gap. This web fix does not claim native-client delivery.
@@ -112,7 +114,7 @@ who can unhold it, and the to-do falls under rules 10 and 11.
 
 An open to-do that names a PR and says nothing past it (no delivery, `none` or `pr`; stage before Deploy), whatever
 told it, is looked at the same way by that sweep: its PR merged and in the running hub makes it deployed (`live`:
-Just finished), merged and not in it "merged, not deployed" with the watch above; an open PR stays a PR to merge. Such a
+Just finished), merged and not in it "merged, not deployed" with the watch above; a fresh confirmed open PR with no active work stays in Waiting for merge. Such a
 to-do is asked about again only when the hub's commit changes, or every 10 minutes while its PR is open. It gets no
 "Please verify": no turn said it was deployed.
 
@@ -130,8 +132,42 @@ the deployed commit first, then its ancestors newest first, as `git log --max-co
 prints them. It is believed only when its first commit is the one the running hub reports, and only for PRs of its
 repository. A PR is found by its merge's subject (a squash merge's `… (#N)`, a merge commit's `Merge pull request #N …`):
 found, it is deployed, with no network. Not found, GitHub is asked; when GitHub cannot answer (no route, a failure
-pauses it for 10 minutes), it is "not in the running hub" (held, "等部署"), and the open to-dos' sweep leaves such a
+pauses transient checks for 10 minutes), verification is unavailable, and the open to-dos' sweep leaves such a
 to-do as it is (its PR may still be open). The file is checked first, GitHub only when the file cannot say.
+
+Every manual development deployment must regenerate this receipt from the exact source commit used to build the
+candidate, not from a moving branch name or an unrelated checkout:
+
+```sh
+python3 scripts/deploy/deployed_commits.py --commit <built-commit> --out <state-directory>/deployed-commits.txt
+```
+
+Run this from the build checkout, under the deployment lock, before switching the hub, and preserve the old receipt
+with the rollback binary. The writer atomically replaces the file. After switching, compare its first non-comment
+commit with `/api/v1/health`'s commit and check that the expected PR subjects (or proven `# pr:` heads) are present.
+Do not hand-write PR entries: the generator verifies ancestry, including explicitly named `--pr` entries.
+The standard deploy script generates and installs the receipt next to the binary; manual local switches must do
+the equivalent. A stale receipt is ignored, not accepted as evidence of a different build.
+
+An unavailable verification service does not mean unfinished work. Keep the task's state and retry verification
+after recovery rather than requesting another merge/deployment, parking, or cancelling it solely for that reason.
+Direct GitHub failures retain only a sanitized message and allowlisted status/rate-limit/request-ID metadata.
+Permission errors do not pause other PRs. A transient pause reports its original failure and UTC recovery time;
+it does not claim a fresh request was made. There are no automatic request retries.
+
+**Authenticated GitHub reads**: the gate first borrows the signed-in built-in connector. When an extension has
+replaced it and does not provide that transport, the gate uses `gh api --include --method GET --hostname github.com`
+on the hub machine, under the hub user's existing GitHub CLI authorization. The CLI performs credential lookup and
+the request itself; Persona never calls `gh auth token`, exports credentials, or falls back to anonymous HTTP.
+When `gh` is not installed, the gate can instead make an authenticated HTTP GET using the hub service's explicitly
+configured `GH_TOKEN` (preferred) or `GITHUB_TOKEN`. It sends this authorization only to `api.github.com` and does not
+follow redirects. It does not extract CLI credentials or retry a failed CLI request through another transport.
+Install `gh` on the hub service's PATH and authorize it using the CLI's normal sign-in flow if this fallback is
+needed. Without either the CLI or explicit environment authorization, or after a failed request, verification stays
+unavailable, not unfinished.
+The service log identifies this authenticated route and records response status, quota and request ID. The existing
+public-host restriction still applies to connectors. A versioned plugin delivery-snapshot capability remains a
+possible follow-up, not a requirement for the authenticated CLI path.
 
 **Deployed before the upstream merge** (#4867): a hub built from a local branch can run a PR that is still open. The PR has
 no merge commit, and GitHub's compare does not know a local commit. So the file names such a PR by a commit of its own,
@@ -148,8 +184,9 @@ the hub's binary. A hub built and installed by hand, a local `dev` build, gets t
 `python3 scripts/deploy/deployed_commits.py --commit <the built commit> --out "$PERSONA_HOME/bin"`, run in the checkout it
 was built from.
 
-GitHub is read through the hub's GitHub connector when it is signed in, else with `GH_TOKEN` / `GITHUB_TOKEN` from the assistant's environment when set, else anonymously (enough
-for a public repository; a private one without a token stays held as "cannot tell").
+GitHub reads require the signed-in connector, the authorized GitHub CLI, or (when the CLI is absent) explicit
+`GH_TOKEN` / `GITHUB_TOKEN` authorization in the hub service's environment, as described above. Without authorization,
+even a public repository stays held as "cannot tell"; the gate never uses anonymous HTTP.
 
 ### Deployed work is verified by the supervising assistant
 
@@ -176,7 +213,7 @@ top of the list (#5707). Now the owner files it:
   5), its accepting review (6), its delivery (7), or its last activity (8). Anything that happens after the mark (a
   reopen, a new close, a new turn, a review) brings it back to Just finished until it is seen again or its 24 hours pass.
 - A finished turn seen (rule 9a) is filed under Done even though the to-do is not closed: the owner has looked, and it
-  no longer counts as open. A PR still waiting on the owner keeps it in PR to merge, an open concern in Other open.
+  no longer counts as open. A confirmed open PR that waits on a maintainer keeps its to-do open in Waiting for merge.
 - Checks: the shared cases (`*_seen*`, `unfinished_before_just_finished_and_seen_in_done`), `server/internal/assistant/todo_seen_test.go`,
   `web/src/views/Todos.seen.test.tsx`, `apple/PersonaTests/TodoTriageTests.swift` and `TodosLogicTests.swift`. In a
   browser and the simulator against the mock hub (`MOCK_TODO_LIST=1`; `MOCK_TODO_SEEN=off` is a hub without it):
@@ -189,7 +226,7 @@ The web's header reads "N open · N parked · N inactive · N done" beside the t
 Android lists have no such line (#3712): it said again what the sections say, so each section's title carries the number of
 to-dos its rows list (a merged row's related ones too), in the section's state color, and the counts follow a search and the
 list's filter (#3740). **Open** counts to-dos that are not closed, not accepted or deployed,
-and not shelved: Waiting on you, Working, PR to merge, Other open, and Just finished rows still open (a finished turn
+and not shelved: Waiting on you, Working, Waiting for merge, Other open, and Just finished rows still open (a finished turn
 is not a closed to-do; only a review or the user closes it; once the owner has seen it, rule 9a, it is in Done and not
 counted). **Parked**, **inactive** and **done** count the to-dos in the Parked, Shelved and Done sections as their titles
 do (a merged row's related to-dos under the row's section), so the header and each section's title say the same number;
@@ -237,14 +274,48 @@ into its row. A closed concern groups like any closed to-do.
 
 ## Accepted tasks
 
-When `task_review` accepts a task, the hub closes it. If its agent is then sent more work, the hub reopens it
-(`taskWorking` → `closedTurnReopens` → `reopenTodo`, `docs/assistant/todos.md`) while the supervision still says
-`accepted`. For a task with no plan (an adopted agent, often kept on for other work), only the task's conversation
-sending more (`agent_send`, or the owner's message on its card) reopens it; that agent's other turns leave it closed
-(#6726). Earlier the
-page treated every reopened task as not reviewed: it showed "Follow up", its badge "Supervising", and criteria added
-with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the list grew from 5 to 8) as open
-with a clock and counted them ("5/8").
+When `task_review` (or the judge's spot check) accepts a task, the hub closes it. If its conversation, its supervisor
+or the background supervisor that follows it up for the main chat then sends its agent more work (`agent_send`,
+`agent_interrupt` with `then`, or the owner's message on that task's card), the hub reopens it while the supervision
+still says `accepted` (`docs/assistant/todos.md`). The background supervisor counts only for a task whose ledger names
+the main chat: a task a side chat supervises reopens for that chat's sends, not for the background supervisor's.
+
+The send is noted before it goes, with the task and its acceptance. The note is kept in the assistant's settings
+(`assistant.sends_out`, `server/internal/assistant/tasks_sends_out.go`), so a manager restart does not lose it; when it
+cannot be saved, the send is not made and says so. A later write of the notes that fails (removing a refused send's,
+say) is tried again in the background until one goes through. How the send went decides:
+
+- the agent's computer took it: the task reopens at once (`reopenTodo`, stored);
+- it definitely failed (refused, or it never left the manager: `rpc.ErrNotSent`): nothing reopens;
+- its answer never came (the wait ran out, the link dropped), the manager restarted before it came, or the computer
+  could not confirm it (`delivered: unknown`: typing failed part way, a Claude inbox holds the text for approval): the
+  text may still arrive, however late (queued behind a long turn, or let in when the person at the computer looks), so
+  the agent's next turn reopens the task. The note goes once the task is no longer that agent's closed task on that
+  acceptance (reopened, the agent moved to another task), once the task is accepted again (also while it is still
+  closed: that acceptance answers every send before it, even one whose answer is still to come), and after a week at
+  the latest.
+
+A turn of the agent that starts while the send is still out waits for that answer (`closedTurnReopens`): if the send
+definitely failed and no other send for the task is out, the turn was other work and the task stays closed through it;
+otherwise the turn is the task's, its end included, also when a later send to the agent went out meanwhile or the
+manager restarted before the answer (`recoverSendsOut`). A bare `/exit` or `/quit` asks for no work (the agent's
+computer closes the agent) and reopens nothing; on the card of a task whose agents have all stopped it starts no new
+agent (`route_agents_exited`). A card message reopens only the task whose card it was sent from;
+when the task's agents have all stopped, it reopens the task once the new agent started, and leaves it closed when that
+start definitely failed. That agent's other turns leave the task closed, whether or not its plan started the agent: a
+wakeup it set itself, other conversations' work, the owner typing in its session (#6726, #7539). Their ends raise no
+review signal either.
+
+Gaps remain. A send whose answer is unknown and whose text never arrived reopens the task on the agent's next turn of
+other work, whenever it comes within the week; one whose text the agent takes up more than a week later leaves the
+task closed. A refused send whose removal cannot be written at all until the manager restarts (the database refuses
+every write meanwhile) reads after the restart as a send with an unknown answer. And after a restart, a turn of other
+work that was already running when the send was taken ends as the reopened task's: the conversation gets one extra
+receipt for it, with no judgment and no review signal.
+
+Earlier the page treated every reopened task as not reviewed: it showed "Follow up", its badge "Supervising", and
+criteria added with the extra work (`agent_supervise` / `agent_send` replace `done_when`, so the list grew from 5 to
+8) as open with a clock and counted them ("5/8").
 
 The acceptance now stands until a newer review replaces it (`acceptanceStands` in `web/src/lib/supervision.ts`):
 

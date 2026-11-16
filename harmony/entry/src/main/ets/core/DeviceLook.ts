@@ -232,8 +232,9 @@ function readableBubble(fill: string, suppliedText: string | undefined): [string
 }
 
 function styleColors(style: string, dark: boolean): DeviceLookColorSet {
-  const brand = dark ? '#9BB4FF' : '#0055FF';
+  const brand = style === 'system' ? '#0071E3' : dark ? '#9BB4FF' : '#0055FF';
   const bubbles: Record<string, [string, string]> = {
+    system: ['#DCEAFF', '#233B57'],
     glass: ['#E0EDFF', '#263E61'],
     brief: ['#F1EADB', '#403B2E'],
     board: ['#DCE8F4', '#283A4D']
@@ -241,7 +242,7 @@ function styleColors(style: string, dark: boolean): DeviceLookColorSet {
   const selected = bubbles[style] || bubbles.glass;
   const bubble = dark ? selected[1] : selected[0];
   const text = dark ? '#FFFFFF' : '#000000';
-  return { brand: brand, emphasize: brand, userBubble: bubble, userBubbleText: text };
+  return { brand: brand, emphasize: style === 'system' ? dark ? '#86B6FF' : '#0064C8' : brand, userBubble: bubble, userBubbleText: text };
 }
 
 interface PresetColors {

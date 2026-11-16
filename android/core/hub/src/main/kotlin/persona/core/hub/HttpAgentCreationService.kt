@@ -44,9 +44,13 @@ class HttpAgentCreationService(
         }
     }
     private fun request(vararg segments: String) = Request.Builder().url(url(*segments)).header("Authorization", "Bearer $token")
-    override suspend fun launchers(machineId: String): List<AgentLauncher> {
+    override suspend fun launchers(machineId: String): List<AgentLauncher> = launcherList(machineId).launchers
+    override suspend fun launcherList(machineId: String): AssistantLaunchers {
         val body = read(request("api", "v1", "machines", machineId, "launchers").build())
-        return JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList()))
+        // What New Agent lists off there (#8109) adds to the answer: a list this client can't read costs none of the launchers.
+        val unavailable = try { JsonCodec.decodeFromJsonElement<List<UnavailableLauncher>>(body["unavailable"] ?: JsonArray(emptyList())) }
+            catch (_: IllegalArgumentException) { emptyList() }
+        return AssistantLaunchers(JsonCodec.decodeFromJsonElement(body["launchers"] ?: JsonArray(emptyList())), unavailable = unavailable)
     }
     override suspend fun directories(machineId: String, path: String): AgentDirectories = JsonCodec.decodeFromJsonElement(read(
         request("api", "v1", "machines", machineId, "dirs")
@@ -137,14 +141,25 @@ class HttpAgentCreationService(
     // The catalog covers every computer of the hub: only [machineId]'s rows. An older hub (404), an offline catalog or
     // any other failure shows no workspace choice, never an error.
     override suspend fun workspaces(machineId: String): List<AgentWorkspace> = try {
+        workspaceCatalog(machineId)
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { emptyList() }
+
+    override suspend fun workspaceCatalog(machineId: String): List<AgentWorkspace> {
         val body = read(request("api", "v1", "workspaces").build())
+        // Partial refreshes retain the last inventory of their failed source, including its pin state.
+        val failed = (body["errors"] as? JsonArray).orEmpty().any { element ->
+            val error = element as? JsonObject
+            error?.get("machine_id")?.jsonPrimitive?.content == machineId &&
+                error["source"]?.jsonPrimitive?.content.let { it.isNullOrEmpty() || it == "paseo" }
+        }
+        if (failed) throw IllegalStateException("Workspace catalog refresh failed")
         // Every computer's workspaces: decoded off the caller's (the form's main) thread.
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             JsonCodec.decodeFromJsonElement<List<AgentWorkspace>>(body["workspaces"] ?: JsonArray(emptyList()))
                 .filter { it.machineId == machineId }
         }
-    } catch (cancelled: CancellationException) { throw cancelled }
-    catch (_: Exception) { emptyList() }
+    }
 
     // git can take a while on a big repository: the start's budget, not the list's.
     private suspend fun worktree(machineId: String, action: String, body: JsonObject) = read(

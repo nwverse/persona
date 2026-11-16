@@ -1,5 +1,17 @@
 # Bounded Agents list verification
 
+## Paseo workspace pins
+
+```sh
+node web/e2e/paseo-workspace-pins.mjs <loopback-web-origin> <artifact-directory> [Chromium-executable]
+```
+
+Uses the real Agents page and sidebar against an owned local web server, with all hub HTTP and WebSocket requests
+answered by synthetic data. Checks a pinned empty workspace ahead of its main sibling and an unrelated repository,
+refreshes an unpin, and verifies that selection, disclosure and Persona's separate session pin survive. Covers desktop
+and phone widths, light and dark, and standard and large text. No preference or Agent writes are allowed. Screenshots
+and `results.json` are written outside the repository; a 180-second watchdog bounds the run.
+
 ## Direct completion of a decision task
 
 ```sh
@@ -27,7 +39,7 @@ Opens the real app on an Agent's session page against a loopback web server (Vit
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
-MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 MOCK_TABLE_CHIPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
 node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
 ```
@@ -40,11 +52,31 @@ the browser, whose place and harness Settings › Assistant shows instead (item 
 a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
 your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
 no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
-covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+covers no header words of a table that fits (item 77); in a 1440 px window a table with a sentence in its second column
+takes the room it needs up to the column, wider than the old 18em cell cap, each long cell on at most two lines, and at
+both widths no short code chip in a cell is broken across lines (#9146). `--big` runs against the mock started with `MOCK_BIG=1` instead
 (item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
 drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
+## An extension's dashboard page: UI version 8's columns layout (#9158)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-columns.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 the five cards are in reading order in two columns,
+the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
+each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
+its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
+(the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
+run, and the last line is the verdict.
 
 ## User-input navigation acceptance
 
@@ -100,7 +132,17 @@ MOCK_SESSIONS_LIST=1 [MOCK_MANAGERS=1] PORT=<port> python3 scripts/mock/mock_hub
 node web/e2e/overview-machines-layout.mjs http://127.0.0.1:<web port> <artifact-directory> [--channel chrome]
 ```
 
-Run against an exclusively owned mock-backed web server, once with `MOCK_MANAGERS=1` (one assistant) and once with the mock's default roster (several assistants); `MOCK_SESSIONS_MANY=300` adds a list longer than its first page. The runner reads the mock's own complete session list (every page, `roots=1`) and holds each Machines card to it: the agents that are not offline, without the assistant's conversations, on a hub that pushes no sessions. At 768, 1024, 1280 and 1920 px, light and dark, it checks every online card's count, a gap of at least 8 px between the card's state line and its versions, and that no metric value is cut (the text's own width against its box, since `scrollWidth` rounds away the half pixel Chrome already cuts with "…"), with the widest rate a card can show ("↓ 1023 MB/s", "↑ 1000 KB/s") answered for one computer in the browser, and that a card's metrics are one row or two columns, never three with one left alone (one row at 1280 and 1920 px). On Overview it answers an example extension's overview card in the browser (its place, list and view, with the UI-slot features added to the hub's hello) and checks that a lone card is the page's width at 1280 px and one of two columns at 1440, 1680 and 1920 px. Then it fails the list Overview counts from in the browser (the paged list's reads with one assistant, the complete list's with several) and checks that the summary says it couldn't read the agents, in the line's live region, with **Retry**, with no **All set** and no computer count; after the route is lifted, **Retry** brings the summary back, its counts outside the live region (left empty), and each online computer's count matches the mock's, or, while the paged list has more pages, no count. Nothing is written to the hub. It saves a screenshot of each page and size, prints one line per check, and ends with a verdict; it exits 1 on a failed check and 2 on its three-minute timeout.
+Run against an exclusively owned mock-backed web server, once with `MOCK_MANAGERS=1` (one assistant) and once with the mock's default roster (several assistants); `MOCK_SESSIONS_MANY=300` adds a list longer than its first page. The runner reads the mock's own complete session list (every page, `roots=1`) and holds each Machines card to it: the agents that are not offline, without the assistant's conversations, on a hub that pushes no sessions. At 768, 1024, 1280 and 1920 px, light and dark, it checks every online card's count, a gap of at least 8 px between the card's state line and its versions, and that no metric value is cut (the text's own width against its box, since `scrollWidth` rounds away the half pixel Chrome already cuts with "…"), with the widest rate a card can show ("↓ 1023 MB/s", "↑ 1000 KB/s") answered for one computer in the browser, and that a card's metrics are one row or two columns, never three with one left alone (one row at 1280 and 1920 px). On Overview it answers an example extension's overview card in the browser (its place, list and view, with the UI-slot features added to the hub's hello) and checks that a lone card is the page's width at 1280 px and one of two columns at 1440, 1680 and 1920 px. Then it fails the list Overview counts from in the browser (the paged list's reads with one assistant, the complete list's with several) and checks that the summary says it couldn't read the agents, in the line's live region, with **Retry**, with no **All set** and no computer count; after the route is lifted, **Retry** brings the summary back, its counts outside the live region (left empty), and each online computer's count matches the mock's complete count, including while the paged list has more pages. Nothing is written to the hub. It saves a screenshot of each page and size, prints one line per check, and ends with a verdict; it exits 1 on a failed check and 2 on its three-minute timeout.
+
+## Machines alerts and what fixes them (#8037)
+
+```sh
+MOCK_MACHINE_ALERTS=1 MOCK_MANAGERS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort --host 127.0.0.1 &)
+node web/e2e/machine-alerts.mjs http://127.0.0.1:<web port> <artifact-directory> [--lang en|zh-Hans|ja] [--chromium <executable>]
+```
+
+Run against an exclusively owned mock-backed web server with the mock's alert fleet (made-up computers, one per alert: memory, disk, version, offline, launchers, healthy). Light and dark at 1280 and 390 px, it screenshots the cards with their alert chips, the memory sheet and its Stop idle Agents confirmation, the hand-off picker, the disk sheet with its cleanup confirmation, the version sheet, the offline and launcher sheets, and the Capabilities view; it checks that every chip is a labelled button, that the offline computer is first and the healthy one last, that the cache in use can't be picked, that the offline computer is not a hand-off target and an eligible one is ranked first, that the version sheet says how much older the node's build is, that no button's text wraps and nothing is wider than a sheet, and that the page logs no errors. Its last scene redeploys the mock's Studio Mac through the stepper to the node's new build (restart the mock to run it again). It prints one line per check and a verdict; it exits 1 on a failed check and 2 on its four-minute timeout.
 
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 

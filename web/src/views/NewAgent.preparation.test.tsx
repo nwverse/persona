@@ -470,11 +470,40 @@ describe("New Agent workspace list (#7259)", () => {
     expect(document.querySelector('[data-testid="new-agent-workspaces"]')).toBeNull();
     expect(document.querySelector('input[placeholder="' + t("newagent.folder_placeholder") + '"]')).toBeNull();
     await tick(401);
-    expect(document.querySelector('[data-testid="new-agent-worktree"]')).toBeNull();
+    // its repository can still give the Agent a worktree of its own (#8856), off until turned on
+    expect(document.querySelector('[data-testid="new-agent-worktree"] [role="switch"]')!.getAttribute("aria-checked")).toBe("false");
     expect(button("Second computer").disabled).toBe(false);
     await click(t("newagent.start")); await tick();
     expect(starts()).toHaveLength(1);
     expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/projects/fix-login", workspace_id: "fix-login", host: "paseo" });
+    expect(pending).toHaveLength(0);
+  });
+
+  it("starts in a new worktree Paseo makes from the Paseo workspace chosen (#8856)", async () => {
+    await list([paseo("demo-main", { title: "demo", branch: "main", is_main: true })]);
+    await act(async () => choices()[0].click());
+    const request = await prepare();
+    // Paseo says where its worktree goes and makes it, from the workspace's folder
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toEqual({ cwd: "/projects/demo-main", kind: "paseo" });
+    expect(request.body).toMatchObject({ cwd: "/projects/demo-main", kind: "paseo" });
+    await answer(request, { path: "/paseo/demo/persona-submitted-task", branch: "persona/submitted-task", root: "/projects/demo-main", workspace_id: "made-for-it" });
+    expect(starts()).toHaveLength(1);
+    // into the workspace made for the worktree, not the one chosen
+    expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/paseo/demo/persona-submitted-task", workspace_id: "made-for-it", host: "paseo" });
+  });
+
+  it("offers no worktree for a chosen Orca workspace, and a switch turned on does not carry to the next choice", async () => {
+    await list([paseo("fix-login"), { ...paseo("orca-row"), source: "orca" }]);
+    await act(async () => choices().find((b) => b.textContent?.includes("fix-login"))!.click());
+    await tick(401);
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="new-agent-worktree"] [role="switch"]')!.click());
+    await click(t("newagent-workspace.choose_folder"));
+    await act(async () => choices().find((b) => b.textContent?.includes("orca-row"))!.click());
+    await tick(401);
+    expect(document.querySelector('[data-testid="new-agent-worktree"]')).toBeNull();
+    await click(t("newagent.start")); await tick();
+    expect(pending).toHaveLength(0);
+    expect(starts()[0].body).toMatchObject({ cwd: "/projects/orca-row", workspace_id: "orca-row", host: "orca" });
   });
 
   it("goes back to a folder, and another computer drops the choice", async () => {

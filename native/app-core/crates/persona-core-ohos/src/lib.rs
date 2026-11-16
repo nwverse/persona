@@ -9,6 +9,8 @@ mod binding {
     use napi_derive_ohos::napi;
     use napi_ohos::bindgen_prelude::{Buffer, FnArgs, Result, Status};
     use napi_ohos::threadsafe_function::ThreadsafeFunction;
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
 
     use crate::registry::{self, CoreHost};
 
@@ -60,11 +62,45 @@ mod binding {
         registry::config().into()
     }
 
+    fn from_json<T: DeserializeOwned>(input: &str) -> Result<T> {
+        serde_json::from_str(input).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+    }
+
+    fn to_json<T: Serialize>(value: &T) -> Result<String> {
+        serde_json::to_string(value).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+    }
+
     #[napi(catch_unwind)]
     pub fn core_project_sort(input: String) -> Result<String> {
-        let input: persona_core::sort::Input =
-            serde_json::from_str(&input).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))?;
-        let projection = persona_core::sort::project(&input);
-        serde_json::to_string(&projection).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+        to_json(&persona_core::sort::project(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_answer(input: String) -> Result<String> {
+        let input: persona_core::answer::Input = from_json(&input)?;
+        let transition = persona_core::answer::project(&input)
+            .ok_or_else(|| napi_ohos::Error::from_reason("answer: operation has no transition"))?;
+        to_json(&transition)
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_display_answer(label: String) -> Result<String> {
+        // Unlike the object projections, this NAPI function takes the bare option label.
+        to_json(&persona_core::answer::display(&label))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_stream_chunks(input: String) -> Result<String> {
+        to_json(&persona_core::stream_chunks::split(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_task_index(input: String) -> Result<String> {
+        to_json(&persona_core::task_index::project(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_turns(input: String) -> Result<String> {
+        to_json(&persona_core::turns::project(&from_json(&input)?))
     }
 }

@@ -52,6 +52,9 @@ const (
 	// AssistantConfigDir: assistant.send / assistant.warm / session.send honor an explicit
 	// config_dir and preserve the selected Claude profile when resuming a conversation.
 	AssistantConfigDir = "assistant_config_dir"
+	// AssistantSupervisionInstructions: per-conversation system policy, including explicit
+	// removal, is applied on startup/resume and isolated by the process fingerprint.
+	AssistantSupervisionInstructions = "assistant_supervision_instructions"
 	// SessionSkills: session.skills and validated explicit skill selections on ordinary session.send.
 	SessionSkills = "session_skills_v1"
 	// AssistantServiceTier: assistant.send takes service_tier for a new Codex conversation and acknowledges it before
@@ -71,6 +74,10 @@ const (
 	// Ultracode: session.start takes ultracode and session.ultracode switches it (docs/protocol/protocol.md "Claude Code
 	// ultracode"). A node without it would start a session and drop the field without a word.
 	Ultracode = "ultracode"
+	// StartGoal: session.start takes goal, a Claude Code /goal condition typed after the first message is in
+	// (docs/integrations/agent-goal.md "A goal set at the start"). A node without it would start the session and drop
+	// the goal without a word.
+	StartGoal = "start_goal"
 	// HealthSpaces: file.upload.begin (dest=health) and health.reports.list / health.reports.delete take health_dir,
 	// another manager's health space (health-<id>, docs/assistant/managers.md "Directories on a computer"). A node without it
 	// would use the built-in manager's.
@@ -123,6 +130,10 @@ const (
 	// (docs/operations/node-update.md "Usage"). sessions.list answers update_busy, that check, and the hub waits on it;
 	// for a node without it (or a list without the field) it waits on the old rule, every Agent idle.
 	NodeUpdateIdle = "node_update_idle"
+	// MachineDiagnose: machine.diagnose and machine.cleanup, a computer's bounded self-description (largest process
+	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
+	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
+	MachineDiagnose = "machine_diagnose"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -152,7 +163,7 @@ const (
 const RestartExitCode = 75
 
 // Announced is what a node built from this code announces.
-var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace}
+var Announced = []string{SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

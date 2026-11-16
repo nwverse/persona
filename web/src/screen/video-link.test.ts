@@ -84,6 +84,19 @@ describe("ScreenVideoLink", () => {
     expect(l.retryAt! - now).toBe(30_000); // the waits start over
   });
 
+  it("says two devices already watch when the hub refused the stream as busy, and tries again as for a lost one (#8320)", async () => {
+    const { l, transports, said } = link();
+    l.want({ display: null, rect: null });
+    l.rfb({ pair: "p" });
+    transports[0].end("busy");
+    expect(said).toEqual(["busy"]);
+    expect(l.retryAt).toBe(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    transports[1].feed(prefix(3)); // one of them left: video comes, the line goes
+    await flush();
+    expect(said).toEqual(["busy", null]);
+  });
+
   it("says the Mac is locked or hasn't allowed video from paused, and stops without a word while the page is held", async () => {
     expect([pausedFallback("locked"), pausedFallback("login_window"), pausedFallback("permission"), pausedFallback("busy")]).toEqual(["locked", "locked", "notAllowed", "lost"]);
     const { l, transports, said } = link();
@@ -180,11 +193,12 @@ describe("ScreenVideoLink", () => {
   });
 });
 
-/** The fixture's hello from a helper with tiers on a 960×600-point display, then its format. */
+/** The fixture's hello from a helper with tiers on a 960×600-point display, then its format and first frame (the
+ *  start tier goes out with it). */
 function tieredHello(): Uint8Array {
-  const raws = new VideoParser().push(prefix(2));
+  const raws = new VideoParser().push(prefix(3));
   const h = decode(raws[0].type, raws[0].body) as Hello;
   const hello = framed({ ...h, features: ["tiers"], points: [960, 600], pixels: [1920, 1200] });
-  const format = framed(decode(raws[1].type, raws[1].body));
-  return new Uint8Array([...hello, ...format]);
+  const rest = raws.slice(1).map((r) => framed(decode(r.type, r.body)));
+  return new Uint8Array([...hello, ...rest.flatMap((m) => [...m])]);
 }

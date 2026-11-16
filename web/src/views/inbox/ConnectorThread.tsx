@@ -217,12 +217,13 @@ function ConnectorText({ item, problem, onRetry }: { item: InboxItem; problem?: 
   );
 }
 
-/** The assistant's own row whose text is only its title and summary, already shown above: no Content section. */
+/** The assistant's own row whose text is only its title and summary (or its Markdown `body`), already shown above: no
+ *  Content section. */
 function onlyTitleAndSummary(item: InboxItem, context: string | null): boolean {
   if (item.source !== "assistant" || !item.summary) return false;
-  const text = (context ?? item.preview ?? "").replace(/\s+/g, " ").trim();
-  const known = `${item.title} ${item.summary}`.replace(/\s+/g, " ").trim();
-  return text === "" || text === known || text === item.summary.replace(/\s+/g, " ").trim();
+  const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+  const text = flat(context ?? item.preview ?? "");
+  return text === "" || [item.summary, item.body].some((s) => !!s && (text === flat(`${item.title} ${s}`) || text === flat(s)));
 }
 
 // ── the answer box ───────────────────────────────────────

@@ -31,7 +31,7 @@ import { neverConnected } from "../lib/add-computer";
 import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
 import { NavRow, SessionRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
-import type { WorkspaceTarget } from "../lib/workspace-catalog";
+import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
 import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
 
@@ -150,7 +150,7 @@ export function TreeBranch({ branch, top, folded, onToggle, toggleLabel, icon, t
   );
   const body = (
     <Collapse open={!folded} sidebarFold>
-      <div data-tree-branch-list className="flex flex-col gap-px pl-3" inert={folded || undefined}>
+      <div data-tree-branch-list className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>
         {children ?? (empty ? <EmptyHint text={empty} /> : null)}
       </div>
     </Collapse>
@@ -365,6 +365,7 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
           <Icon name="chevron" size={9} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
         </button>
         {w.main && <Icon name="home" size={11} stroke={2} className="shrink-0 text-ink-3" />}
+        <SpaceMarks pinned={workspacePinTime(w.workspace) !== undefined} muted={false} />
         <button type="button" title={title} aria-pressed={selected === w.key} aria-expanded={!folded} onClick={() => { if (w.target) actions.onSelectWorkspace?.(w.target); toggle(); }} className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink [@media(pointer:coarse)]:min-h-11">{label}</button>
         {w.workspace?.available === false && <Icon name="warning" size={11} className="shrink-0 text-ink-3" aria-label={t("workspace-tree.unavailable")} />}
         <span className="ml-auto shrink-0 text-[10.5px] text-ink-3 tabular-nums">{running > 0 ? t("sidebar.worktree_agents", { count: w.sessions.length }) : t("sidebar.idle")}</span>
@@ -593,7 +594,7 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
         {right(folded)}
       </div>
       <Collapse open={!folded} sidebarFold>
-        <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>{children}</div>
+        <div className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>{children}</div>
       </Collapse>
     </div>
   );
@@ -766,7 +767,7 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
         </button>
       </div>
       <Collapse open={!folded} sidebarFold>
-        <div className="flex flex-col gap-px pl-3" inert={folded || undefined}>
+        <div className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>
           {tab.sessions.map((s, i) => {
             const key = rowKey(s);
             const branch = Boolean(tab.launcher) && s !== tab.launcher;

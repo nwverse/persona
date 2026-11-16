@@ -49,6 +49,19 @@ type UIPlace struct {
 
 // uiPlaces are the plugins' UI of placement (every slot's but launcher sections' when it is empty); for launcher
 // sections, those whose hosts have the gateway at base.
+// localizeUI puts each place's title and extension name in l, as its extension's translations have them.
+func (ps *extensions) localizeUI(l i18n.Lang, places []UIPlace) []UIPlace {
+	for i, u := range places {
+		p := ps.reg.Snapshot(u.Extension)
+		if p == nil || len(p.L10n) == 0 {
+			continue
+		}
+		places[i].Title = p.L10n.UITitle(l, u.ID, u.Title)
+		places[i].ExtensionName = p.L10n.Name(l, u.ExtensionName)
+	}
+	return places
+}
+
 func (ps *extensions) uiPlaces(placement, base string) []UIPlace {
 	out := []UIPlace{}
 	if ps == nil {
@@ -472,7 +485,7 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 				base = gw.base
 			}
 		}
-		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.uiPlaces(placement, base))})
+		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base)))})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {
 		if principalOf(r.Context()).Role != roleFull {

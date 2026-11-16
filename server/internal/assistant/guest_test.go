@@ -324,7 +324,7 @@ func TestGuestConversationContextAndSends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(params) != 2 || params["text"] != "more" || params["is_main"] != false {
+	if len(params) != 3 || params["text"] != "more" || params["is_main"] != false || params["supervision_instructions"] != "" {
 		t.Fatalf("a guest's send params: %v", params)
 	}
 }
@@ -369,7 +369,9 @@ func TestGuestRecordUnreadable(t *testing.T) {
 	ft := newFleetTest(t)
 	s := ft.s
 	s.SetExtensions(&guestExt{})
-	ft.st.failSetting = errors.New("database down")
+	// Isolate the guest-record failure: an unreadable deletion ledger separately
+	// refuses conversation access, including an otherwise ordinary conversation.
+	ft.st.failKey(guestsKey, errors.New("database down"))
 	ctx := context.Background()
 	raw, _ := json.Marshal(map[string]any{"assistant": true, "session_id": "o1", "name": "lark_chats", "args": map[string]any{}})
 	out, _, err := s.NodeRequest(ctx, "mac", "mcp.call", raw)

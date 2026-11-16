@@ -110,3 +110,23 @@ These five files are the contract of `docs/assistant/inbox.md` ("Following up") 
 | `inbox_showcase` | `showcase.json` | the screenshot runs of every client | the list, then the `detail` item with its timeline folded and expanded, at `now_clock`, in zh-Hans and en, light and dark; `sessions` are the linked conversations as the app's session list has them (wire sessions, as in `spec/fixtures/needs-you`) |
 
 Who may change what: the keys, sections and words are fixed with the contract; a lane that needs a different input (how the manager marks a muted item, say) changes the case's input and says so in its PR.
+
+## Section bar: choices, counts, landing and search (#9053)
+
+These three files are the contract of `docs/assistant/inbox.md` ("Section bar") for web, iOS / iPadOS and Android; each client replays all three. The data is made up and the expected values come from the rules below, not from a client.
+
+| operation | File | Input | Expected |
+| --- | --- | --- | --- |
+| `inbox_bar` | `bar.json` | `inbox_list`'s input (items, interactions, sessions, mutes) with `settings.chosen` (`action`, `working`, `fyi`, `done` or `all`) in place of `settings.expanded`, and an optional `done_days_total` (the hub's day counts added up; absent on a hub without them) | `bar`: the choices shown, in order, each `{id, count, tone}`; `shown_sections`: the sections drawn (`inbox_list` group ids); `empty`: `null`, `caught_up`, `section`, `filtered` or `no_match` |
+| `inbox_bar_landing` | `bar_landing.json` | one item opened from outside the list | `{choice, open_collapsed}` |
+| `inbox_bar_search` | `bar_search.json` | `start` (`chosen`, `saved`, `query`) and `steps`: `{query}` (the search text becomes this), `{pick}` (a choice tapped) or `{enter}` (the Inbox entered with this search text) | `after`: `{chosen, saved}` after each step |
+
+Rules the expected values follow:
+
+- **Rows** are `inbox_list`'s: an item's section is its known `status`, else `tier` (fyi, noise), else Needs you; `done_at` wins. Waiting Agents count in Needs you when no source is chosen and the kind is all or Agent, muted ones never. Source, kind and search narrow every count.
+- **Choices**: `action` and `all` always; `working` and `fyi` while they have a row or are chosen; `done` while it has a row, while the hub's day counts are above zero with no filter or search, or while chosen. Collapsed has no choice; it shows under `all`.
+- **Counts**: `action` its rows with tone `needs`; `working` and `fyi` their rows with tone `neutral`; `done` and `all` `null`. A count of 0 stays in the data; the badge hides it.
+- **Shown sections**: the chosen one when it has rows (Done also when the day counts name groups); under `all`, every section with rows in `inbox_list`'s order.
+- **Empty**: Done chosen and empty is `filtered` with a source or kind, `no_match` with a search, else `section`. Otherwise nothing shown with rows somewhere else open is `section`; nothing open anywhere is `filtered`, `no_match` or `caught_up`, in that order.
+- **Landing**: the item's section, Done for a done item, and `all` with `open_collapsed` for a collapsed one. When a list applies it (an outside opening, or a list shown beside the item) is the module doc's rule, not part of these cases.
+- **Search**: text appearing saves the choice and shows `all`; a pick narrows; text cleared restores the saved choice (`action` when none). Entering the Inbox shows `action`, or `all` with `saved: action` when a kept search text comes with it.

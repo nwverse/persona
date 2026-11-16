@@ -158,7 +158,7 @@ export struct AssistantViewCard {
           }
         }
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.page)
       .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(Tokens.gap)
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.visibleAreaChanged(visible, ratio))
   }

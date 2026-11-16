@@ -282,7 +282,7 @@ struct MeetingThreadView: View {
             ForEach(apart, id: \.self) { photoID in photoRow(photoID, inRoom: false, roomReady: ready) }
         }
         if mode == .live {
-            if roomKey == nil, role.attends, meeting.room?.known == .starting {
+            if roomKey == nil, role.answers, meeting.room?.known == .starting {
                 HStack(spacing: Theme.Space.s) {
                     ProgressView()
                     Text("Persona is joining the meeting…").font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -296,7 +296,7 @@ struct MeetingThreadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
             }
-            if roomKey != nil, meeting.room?.known == .ready, role.attends, local.isEmpty, !Self.asked(roomEntries) {
+            if roomKey != nil, meeting.room?.known == .ready, role.answers, local.isEmpty, !Self.asked(roomEntries) {
                 Text(role.speaks ? String(localized: "Ask Persona about the meeting. Answers may be heard by the room.")
                      : String(localized: "Ask Persona about the meeting. Answers are shown on this screen."))
                     .font(Theme.Font.secondary).foregroundStyle(.secondary)

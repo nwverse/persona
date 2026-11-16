@@ -496,8 +496,8 @@ test('a merged row keeps its manager on detail and conversation reads without ch
 test('done, reopen, and handoff writes keep the selected row owner and route the acknowledged conversation', async () => {
   const detail = mailDetail('cross-manager-mail', 51, 'target-v1', { manager: 'work' });
   const f = makeHarness({ manager: 'personal', details: { 'cross-manager-mail': detail } });
-  const workspace = new InboxWorkspace(); await workspace.open(f.client, rowFor(detail));
-  assert.equal(await workspace.processInbox(), true);
+  const workspace = new InboxWorkspace(), scoped = rowFor(detail); scoped.group=f.client.profile.id; await workspace.open(f.client, scoped);
+  assert.equal(await workspace.processInbox(), true); assert.equal(workspace.selected.key(),scoped.key());
   assert.equal(await workspace.processInbox(), true);
   const target = await workspace.handoff('Review this with me');
   assert.ok(target);
@@ -810,4 +810,24 @@ test('an inbox list refresh never dispatches through a repository replaced by a 
   await workspace.refresh();
   assert.equal(f.calls.length, 0); assert.deepEqual(workspace.items.map(row => row.id), ['first']);
   await workspace.close();
+});
+
+
+test('refreshing an inbox detail preserves its captured Hub routing identity',async()=>{
+ const data=item('scoped-detail'),{client}=makeHarness({rows:[data],details:{'scoped-detail':data}}),workspace=new InboxWorkspace(),row=rowFor(data);
+ row.group=client.profile.id;await workspace.open(client,row);assert.equal(workspace.selected.key(),row.key());await workspace.close();
+});
+
+
+test('successful handoff keeps the captured Hub key for both direct and reread acknowledgments',async()=>{
+ for(const direct of [true,false]){
+  const data=item('scoped-handoff',{handoffs:[{machine_id:'server',session_id:'main-session'}]}),f=makeHarness({rows:[data],details:{'scoped-handoff':data},handle:async c=>c.method==='POST'&&pathOnly(c.path).endsWith('/handoff')?{item:data,session:direct?{machine_id:'server',session_id:'main-session'}:{}}:undefined}),w=new InboxWorkspace(),row=rowFor(data);
+  row.group=f.client.profile.id;await w.open(f.client,row);const target=await w.handoff('Review');assert.equal(w.selected.key(),row.key());assert.equal(target.session,'main-session');assert.equal(f.calls.filter(c=>c.method==='POST'&&pathOnly(c.path).endsWith('/handoff')).length,1);await w.close();
+ }
+});
+
+
+test('acknowledged reply retains the captured Hub key and clears its stored draft',async()=>{
+ const data=mailDetail('scoped-reply'),f=makeHarness({rows:[data],details:{'scoped-reply':data}}),w=new InboxWorkspace(),row=rowFor(data);row.group=f.client.profile.id;await w.open(f.client,row);w.replyDraft='Reply once';w.setReplyDraft('Reply once');await w.draftWrite;
+ assert.equal(await w.replyInbox('Reply once',w.replyConfirmationSnapshot('Reply once')),true);assert.equal(w.selected.key(),row.key());assert.equal(w.replyDraft,'');await w.close();
 });

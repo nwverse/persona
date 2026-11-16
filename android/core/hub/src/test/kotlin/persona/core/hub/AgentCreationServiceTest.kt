@@ -47,6 +47,25 @@ class AgentCreationServiceTest {
         assertEquals("claude", JsonCodec.decodeFromString<AgentLauncher>("""{"name":"default","agent_type":"","agent":null}""").agentType)
     }
 
+    /**
+     * A runtime's provider (#8261): its label as `display_name` and, when its agent is not Claude Code, the permission
+     * modes a start takes. A list that is not of words is left out, never the launcher with it.
+     */
+    @Test fun aProvidersNameAndPermissionModesDecode() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"launchers":[""" +
+                """{"name":"grok","agent":"paseo","display_name":"Grok","permission_modes":["default","bypassPermissions"]},""" +
+                """{"name":"kimi","agent":"paseo","permission_modes":["default"]},""" +
+                """{"name":"odd","agent":"paseo","permission_modes":"default"},{"name":"claude"}]}"""))
+            val launchers = service.launchers("computer")
+            assertEquals(listOf("grok", "kimi", "odd", "claude"), launchers.map { it.name })
+            assertEquals(listOf("Grok", "kimi", "odd", "claude"), launchers.map { it.title })
+            assertEquals(listOf(listOf("default", "bypassPermissions"), listOf("default"), null, null), launchers.map { it.permissionModes })
+            assertEquals(listOf("paseo", "paseo", "paseo", "claude"), launchers.map { it.agentType })
+        }
+    }
+
     @Test fun lostStartResponseQueriesTheReceiptWithoutPostingAgain() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
@@ -136,6 +155,21 @@ class AgentCreationServiceTest {
         }
     }
 
+    @Test fun catalogPinRefreshDistinguishesClearFromFailure() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            fun body(pin: String) = """{"workspaces":[{"machine_id":"computer","source":"paseo","source_id":"w","pinned_at":$pin}]}"""
+            server.enqueue(MockResponse().setBody(body("\"2026-11-16T10:00:00Z\"")))
+            assertEquals("2026-11-16T10:00:00Z", service.workspaceCatalog("computer").single().pinnedAt)
+            server.enqueue(MockResponse().setBody(body("null")))
+            assertNull(service.workspaceCatalog("computer").single().pinnedAt)
+            server.enqueue(MockResponse().setBody("""{"workspaces":[],"errors":[{"machine_id":"computer","source":"paseo","error":"offline"}]}"""))
+            assertTrue(runCatching { service.workspaceCatalog("computer") }.isFailure)
+            server.enqueue(MockResponse().setBody("""{"workspaces":[]} """))
+            assertTrue(service.workspaceCatalog("computer").isEmpty())
+        }
+    }
+
     /** A start in a catalog workspace names its engine (`host`); a start without one sends the same body as before. */
     @Test fun aStartInAWorkspaceCarriesItsHostAndOnlyThen() = runBlocking {
         MockWebServer().use { server ->
@@ -154,6 +188,41 @@ class AgentCreationServiceTest {
             assertFalse("workspace_id" in byFolder)
             assertEquals("""{"machine_id":"laptop","cwd":"/code/persona","launcher":""}""", JsonCodec.encodeToString(AgentStartRequest.serializer(),
                 AgentStartRequest("laptop", "/code/persona", "")))
+        }
+    }
+
+    /**
+     * New Agent's list with what it lists off there (#8109): the hub's `unavailable`, in the main chat's shape, next to the
+     * launchers; none from an older hub, and a list that can't be read costs none of the launchers.
+     */
+    @Test fun newAgentsListCarriesTheProvidersLeftOutThereWithWhy() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude","agent":"claude"}],"default":{"provider":"claude","model":"","effort":""},""" +
+                """"tiers":[],"unavailable":[{"name":"deepseek","display_name":"DeepSeek","kind":"launcher","agent":"claude",""" +
+                """"code":"launcher_own_service","reason":"Studio already has its own Claude Code service.","x":1},""" +
+                """{"name":"cx-gw","kind":"launcher","agent":"codex","code":"launcher_own_service","reason":"Codex is signed in."}]}"""))
+            val list = service.launcherList("computer")
+            assertEquals("/api/v1/machines/computer/launchers", server.takeRequest().path)
+            assertEquals(listOf("claude"), list.launchers.map { it.name })
+            assertEquals(listOf(
+                UnavailableLauncher("deepseek", "DeepSeek", "launcher", "claude", code = "launcher_own_service", reason = "Studio already has its own Claude Code service."),
+                UnavailableLauncher("cx-gw", kind = "launcher", agent = "codex", code = "launcher_own_service", reason = "Codex is signed in."),
+            ), list.unavailable)
+            assertEquals(listOf("DeepSeek", "cx-gw"), list.unavailable.map { it.title })
+            // an older hub: no such list
+            server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude"}]}"""))
+            assertEquals(AssistantLaunchers(listOf(AgentLauncher("claude"))), service.launcherList("computer"))
+            // one this client can't read: the launchers stay
+            for (odd in listOf(""""unavailable":"none"""", """"unavailable":[{"name":["x"]}]""")) {
+                server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude"},{"name":"work_gw"}],$odd}"""))
+                val read = service.launcherList("computer")
+                assertEquals(odd, listOf("claude", "work_gw"), read.launchers.map { it.name })
+                assertTrue(odd, read.unavailable.isEmpty())
+            }
+            // launchers() is the same list
+            server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude"}],"unavailable":[{"name":"deepseek","code":"launcher_own_service"}]}"""))
+            assertEquals(listOf(AgentLauncher("claude")), service.launchers("computer"))
         }
     }
 

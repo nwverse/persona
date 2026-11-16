@@ -166,3 +166,4 @@ struct WorkoutSplitsTests {
     }
 }
 #endif
+import PersonaWire

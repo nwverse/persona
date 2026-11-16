@@ -37,7 +37,7 @@ export interface WorkProps {
   sid: string;
   /** Keys the reader's open / closed state (expanded.ts) to this chat. */
   scope: string;
-  expandFold: (f: Item) => Promise<void>;
+  expandFold: (f: Item) => Promise<boolean | void>;
   agentStatus: (s: ToolStep) => AgentStatus;
   /** The Workflow calls whose run the hub lists (#3434): those draw the run's card. */
   workflowCalls?: WorkflowCalls;
@@ -135,7 +135,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
     setFailed(false);
     folds
       // each fold that comes in runs this again with the rest: this run stops there
-      .reduce((done, f) => done.then(() => (live ? expandFold(f) : undefined)), Promise.resolve())
+      .reduce<Promise<boolean | void>>((done, f) => done.then(() => (live ? expandFold(f) : undefined)), Promise.resolve())
       .catch(() => live && setFailed(true))
       .finally(() => live && setLoading(false));
     return () => {
@@ -151,6 +151,7 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
         onClick={opens ? toggle : undefined}
         disabled={!opens}
         aria-expanded={opens ? open : undefined}
+        title={g.clock ? t(g.clock === "run" ? "chat-workgroup.run_clock" : "chat-workgroup.exchange_clock") : undefined}
         // on a touch screen 40 tall, the margin taking back what it adds, so nothing around it moves
         className={cx("flex w-full min-w-0 items-center gap-1.5 py-[2px] text-left select-none [@media(pointer:coarse)]:-my-[7.5px] [@media(pointer:coarse)]:min-h-10", opens ? "cursor-pointer transition-opacity hover:opacity-80" : "cursor-default")}
       >

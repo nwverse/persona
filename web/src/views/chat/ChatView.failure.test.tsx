@@ -41,7 +41,7 @@ vi.mock("./Composer", async (importOriginal) => ({
   },
 }));
 // one transcript for every render: a new one each time would re-run the sending bubble's echo check forever
-const transcript = vi.hoisted(() => ({ items: [] as unknown[], loading: false, firstRead: true, error: "", hasMore: false, streaming: "" }));
+const transcript = vi.hoisted(() => ({ items: [] as unknown[], loading: false, firstRead: true, error: "", hasMore: false, streaming: "", reload: vi.fn() }));
 vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
 vi.mock("../../lib/store", async (importOriginal) => {
   const store = await importOriginal<typeof import("../../lib/store")>();
@@ -120,6 +120,7 @@ beforeEach(() => {
   localStorage.clear();
   resetMessageFeedback();
   resetRestoredForTests();
+  transcript.reload.mockClear();
   for (const key of Object.keys(getState().outbox)) setOutbox(key, []);
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(String(input).endsWith("/messages") ? reply() : json({}))));
   host = document.createElement("div");
@@ -404,6 +405,7 @@ describe("a message that did not go, in an agent's chat (#1122)", () => {
 
 describe("a send whose answer came back in doubt (the hub stopped waiting, the message went in)", () => {
   const failed = () => host.querySelector('[data-user-bubble][data-send-state="failed"]');
+  const action = (label: string) => Array.from(host.querySelectorAll("[data-outbox] button")).find((b) => b.textContent === label) as HTMLButtonElement | undefined;
   let bodies: { client_msg_id: string; text: string }[];
   let answer!: (r: Response) => void;
   beforeEach(() => {
@@ -420,6 +422,60 @@ describe("a send whose answer came back in doubt (the hub stopped waiting, the m
     transcript.items = [];
   });
   const inDoubt = () => json({ error: "The message may have been sent: the computer did not answer in time.", delivered: "unknown" }, 502);
+
+  it("offers read-only Check instead of Retry; an inconclusive answer sends nothing", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "只核对，不重发", images: [] }); });
+    await flush();
+    answer(inDoubt());
+    await act(async () => void (await sending));
+    await flush();
+    const check = action(t("chat-outboxbubbles.check"));
+    expect(check).toBeDefined();
+    expect(action(t("chat-outboxbubbles.retry"))).toBeUndefined();
+    expect(action(t("chat-outboxbubbles.delete"))).toBeDefined();
+
+    await act(async () => check!.click());
+    await flush();
+    const id = bodies[0].client_msg_id;
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith(`/ops/${id}`))).toBe(true);
+    expect(transcript.reload).toHaveBeenCalledOnce();
+    expect(bodies).toHaveLength(1);
+    expect(action(t("chat-outboxbubbles.check"))).toBeDefined();
+    expect(action(t("chat-outboxbubbles.retry"))).toBeUndefined();
+  });
+
+  it("a late Check answer settles only its original bubble, never the next chat or its draft", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "原会话的消息", images: [] }); });
+    await flush();
+    answer(inDoubt());
+    await act(async () => void (await sending));
+    await flush();
+    const id = bodies[0].client_msg_id;
+    let finish!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).endsWith(`/ops/${id}`)
+      ? new Promise<Response>((resolve) => { finish = resolve; })
+      : Promise.resolve(json({}))));
+    await act(async () => action(t("chat-outboxbubbles.check"))!.click());
+
+    localStorage.setItem("draft:hub/c2", "新会话的草稿");
+    act(() => root.render(<ChatView mid="hub" sid="c2" />));
+    await act(async () => {
+      finish(json({ id, kind: "message", target: { path: "/api/v1/sessions/hub/c1/messages" }, state: "done" }));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(getState().outbox["hub/c1"]?.[0]).toMatchObject({ id, state: "sent" });
+    expect(getState().outbox["hub/c2"]).toBeUndefined();
+    expect(localStorage.getItem("draft:hub/c2")).toBe("新会话的草稿");
+    expect(transcript.reload).not.toHaveBeenCalled();
+    expect(bodies).toHaveLength(1);
+  });
 
   it("shows as sent once its line reaches the transcript, without the hub tying it, so nothing asks to send it again", async () => {
     act(() => root.render(<ChatView mid="hub" sid="c1" />));
@@ -457,6 +513,62 @@ describe("a send whose answer came back in doubt (the hub stopped waiting, the m
     await flush();
     expect(failed()).toBeNull();
     expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+  });
+
+  // A Claude desktop session in bypass permissions mode holds Persona's message for approval on the computer: the node
+  // says so (peer_held, delivered unknown). The bubble said "Not sent: not sure it arrived, check this message", and Check
+  // changed nothing, so the owner could not tell what had happened or what to do.
+  it("a message held for approval on the computer says so, is no failure, and Check says it is still waiting", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "等电脑上批准的消息", images: [] }); });
+    await flush();
+    answer(json({ code: "peer_held", error: "held there", detail: "the node's words", delivered: "unknown" }, 409));
+    await act(async () => void (await sending));
+    await flush();
+    const line = host.querySelector("[data-outbox] [data-in-doubt]");
+    expect(line?.getAttribute("data-in-doubt")).toBe("held");
+    expect(line?.getAttribute("role")).toBe("status");
+    expect(line?.textContent).toContain(t("lib-outbox.held_on_computer"));
+    expect(line?.textContent).not.toContain(t("chat-outboxbubbles.failed", { error: "" }));
+    expect(line?.textContent).not.toContain(t("lib-outbox.delivery_unknown"));
+    expect(action(t("chat-outboxbubbles.retry"))).toBeUndefined();
+
+    vi.mocked(toast).mockClear();
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).includes("/ops/")
+      ? Promise.resolve(json({ id: bodies[0].client_msg_id, kind: "message", target: { path: "/api/v1/sessions/hub/c1/messages" }, state: "unknown" }))
+      : Promise.resolve(json({}))));
+    await act(async () => action(t("chat-outboxbubbles.check"))!.click());
+    await flush();
+    expect(toast).toHaveBeenCalledWith(t("lib-outbox.still_held"), "info");
+    expect(bodies).toHaveLength(1);
+
+    // approved there: its line reaches the transcript and the bubble goes, nothing sent again
+    transcript.items = [{ id: "line-held", seq: 1, role: "user", kind: "text", text: bodies[0].text, ts: new Date().toISOString() }];
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(failed()).toBeNull();
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("an unconfirmed peer send names the computer, and a bubble kept with the generic words says it in the code's", async () => {
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    let sending!: Promise<boolean>;
+    act(() => { sending = captured.onSend!({ text: "没确认收下的消息", images: [] }); });
+    await flush();
+    answer(json({ code: "peer_unconfirmed", error: "not taken", delivered: "unknown" }, 409));
+    await act(async () => void (await sending));
+    await flush();
+    const line = () => host.querySelector("[data-outbox] [data-in-doubt]");
+    expect(line()?.getAttribute("data-in-doubt")).toBe("unknown");
+    expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed"));
+    // an entry an older page kept with the generic words (before this fix) shows the code's words too
+    const kept = getState().outbox["hub/c1"]!;
+    act(() => setOutbox("hub/c1", kept.map((e) => ({ ...e, error: t("lib-outbox.delivery_unknown") }))));
+    await flush();
+    expect(line()?.textContent).toContain(t("lib-outbox.peer_unconfirmed"));
   });
 
   it("a refusal stays failed even with the same words in the chat", async () => {

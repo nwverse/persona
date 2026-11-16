@@ -8,9 +8,11 @@ import {
   groupEntries,
   groupResults,
   hitView,
-  KB_KINDS,
   KIND_TITLE,
+  LIST_KINDS,
+  mergeMeetingLists,
   projectInfo,
+  recordingKindTag,
   rowTags,
   statusLabel,
   topicPointCount,
@@ -26,7 +28,7 @@ import { contextMenuProps } from "../../ui/context-menu";
 import type { MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { lists, listKey, remember, searches, searchKey } from "./cache";
-import { Badges, Card, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile } from "./KBParts";
+import { Badges, Card, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Rows drawn at once in a section; more on "Show more" (people run to thousands). */
@@ -58,7 +60,9 @@ export function ListPane({
     setList(lists.get(key));
     setError("");
     const ac = new AbortController();
-    api<KBList>(`/kb/${kind}${tag ? `?tag=${enc(tag)}` : ""}`, { signal: ac.signal })
+    const read = (k: string) => api<KBList>(`/kb/${k}${tag ? `?tag=${enc(tag)}` : ""}`, { signal: ac.signal });
+    // Meetings are one list with the recordings (#8871): both are read, and either failing fails the page.
+    (kind === "meetings" ? Promise.all([read("meetings"), read("recordings")]).then(([m, r]) => mergeMeetingLists(m, r)) : read(kind))
       .then((l) => {
         const v = { items: l.items ?? [], tags: l.tags ?? [] };
         lists.set(key, v);
@@ -210,7 +214,7 @@ export function ListPane({
                     re-wrapped the row and moved every chip after it; each section under them says how many it holds. With
                     nothing that changes their width they stay put, while a kind loads too. */}
                 <div role="tablist" aria-label={t("knowledge-kblist.kinds")} className="flex min-w-0 flex-1 flex-wrap gap-1">
-                  {KB_KINDS.map((k) => {
+                  {LIST_KINDS.map((k) => {
                     const on = k === kind;
                     return (
                       <a
@@ -326,8 +330,9 @@ export function ListPane({
 function EntryRow({ e, tag, selected, onOpen, onMenu }: { e: KBEntry; tag?: string; selected: boolean; onOpen: (e: KBEntry) => void; onMenu?: (at: MenuAt) => void }) {
   const tags = rowTags(e, tag);
   const when = ago(e.updated);
+  const recordingTag = recordingKindTag(e);
   const status = projectInfo(e)?.status === "paused" ? statusLabel("paused") : null;
-  const badges = e.importance || e.relevance > 0 || tags.length || status || e.kind === "projects" || topicPointCount(e) !== null;
+  const badges = recordingTag || e.importance || e.relevance > 0 || tags.length || status || e.kind === "projects" || topicPointCount(e) !== null;
   return (
     <a
       href={href({ name: "kb", kind: e.kind, id: e.id })}
@@ -348,6 +353,7 @@ function EntryRow({ e, tag, selected, onOpen, onMenu }: { e: KBEntry; tag?: stri
         {badges && (
           // One line high: tags that would wrap fall below it and out of sight, so only whole ones show.
           <span className="mt-1.5 flex h-[18px] flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden">
+            {recordingTag && <TonePill>{recordingTag}</TonePill>}
             <Badges entry={e} status={status} />
             {tags.map((t) => (
               <span key={t} className="whitespace-nowrap text-[11px] text-ink-3">
@@ -464,6 +470,7 @@ const EMPTY_TITLE: Record<KBKind, string> = {
  *  recordings from the phone; the rest from the archived chats. Under a tag the page is empty because of the filter, so
  *  it says how to see the rest instead. */
 const EMPTY_BODY: Partial<Record<KBKind, string>> = {
+  meetings: t("knowledge-kblist.empty_meetings_body"),
   topics: t("knowledge-kblist.empty_topics_body"),
   events: t("knowledge-kblist.empty_events_body"),
   recordings: t("knowledge-kblist.empty_recordings_body"),

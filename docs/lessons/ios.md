@@ -31,6 +31,23 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
+## Scroll perf tests: which page did the test actually measure (#8824)
+
+`PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
+session list in, the real page of a working agent (title, tabs, status, live work line, Stop), or without it, a generic
+page ("对话", no tabs, nothing live). The first reads about 50 ms/s of hitches, the second about 25, whatever the build.
+Once loaded its chat fits on one screen: the swipes scroll little, but each one folds and unfolds the header
+(`-holdChromeOpen` only stops the fold after 3 idle seconds), so the number is mostly what the header's fold costs on a
+working chat, not a long scroll. A fix to the header fold (#8793) was merged on an A/B whose "after" runs all happened to
+open the generic page; it was reverted. Since #8828 the test waits for the session's own title in the header and
+relaunches (up to three times) until the real page is there; about one run in five still never gets it and fails.
+
+Before trusting a before/after: take a screenshot during each run (`xcrun simctl io <udid> screenshot`) and check both
+builds measured the same page; sort runs by state before comparing. Also: Time Profiler leaves about nine samples in ten
+of a lazy list's scroll without an app frame, and the SwiftUI instrument does not record on the simulator; a local build
+with a switch per suspect part, measured alternately, attributes the cost instead. Builds or CI on the same Mac during a
+run move the numbers more than most fixes; log the load average with each run.
+
 ## A reversed range traps on the audio tap's thread (#7740)
 
 A TestFlight iPhone crashed with `EXC_BREAKPOINT` (`brk 1`) on the recorder's input-tap queue, an `NSLock` and a
@@ -40,6 +57,26 @@ inside the 60 seconds held, which it does every 5 seconds while streaming, the l
 trapped: every streaming hub-mode meeting about a minute in. `..<` and `...` check their bounds in Release too. Where
 positions come from two clocks (the tap's and the other side's acknowledgements), compare them before making a range,
 and test the ring full with an acknowledgement inside it, not only behind it.
+
+## A recording keeps the app under iOS's background CPU limit (#9108)
+
+A TestFlight iPhone's hub-mode meetings stopped one and two minutes in, in the background, with no crash log and the
+Dynamic Island still counting. iOS had killed the app ("cpu usage … Process killed", 80 % over 60 s, not frontmost):
+a chat the app had open was prewarming its rows (`ChatView.prewarmRows`, a detached utility task) and one user message,
+a relative path ending in a hash, sent `PathRefs`'s pattern of then (#8911) into exponential backtracking. In the
+foreground that is a busy thread nobody notices; a recording keeps the app running in the background, where the same
+thread gets it killed, and the recording ends at its last finished segment (`RecordingLibrary.recover` at the next
+launch writes the end). Find what spun from the system's CPU report: symbolicate against an archive of the same commit,
+and when the UUID differs (other build paths), check that every return address follows a `bl` to the next frame's
+function before trusting it.
+
+- Work the screen alone needs doesn't run in the background (`RowMemo.prewarms(in:)`): a recording may be what keeps the
+  app alive there.
+- `NSRegularExpression` has no time limit and a cancelled task doesn't stop a running match; text from messages goes
+  through `BoundedRegex`, whose `.reportProgress` enumeration stops at a deadline.
+- A killed app can't end its Live Activity, so a running recording's activity has to be told it is still running.
+- The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
+  under Analytics Data instead.
 
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
@@ -168,6 +205,48 @@ A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a
   test that first waited for Needs You saw one row without the fix: the query had made the cards, and their fold capped
   it. `testNeedsYouAtTheLargestTextSize` lets the page settle without asking for anything, and counts the rows at its
   first look.
+
+## A split's posture belongs to SwiftUI (#4206)
+
+- **Don't set what `NavigationSplitView` sets.** SwiftUI writes the `UISplitViewController`'s `preferredSplitBehavior`,
+  `minimumSecondaryColumnWidth` and `presentsWithGesture` back on every update. A representable that reached the split and set
+  them started a tug: each set laid the split out, the layout updated SwiftUI, SwiftUI set its own back, 5–11 times a second
+  on a turn. A Debug build on the open iPhone Duo ran past the scene-update watchdog (0x8BADF00D, 10 s). Say it to SwiftUI
+  instead: the detail column's least width is `navigationSplitViewColumnWidth(min:ideal:)` on the detail content, and SwiftUI
+  sets `minimumSecondaryColumnWidth` from it (`SplitPageMin`).
+- **A column and page at the edge of fitting never settle.** With a 320 pt column on the Duo upright (349 pt left for the
+  page) and the system's own least page width, UIKit put the column away and back on every pass, 728 times in 290 s on the
+  simulator, and the chat was laid out again each time. Give the page an explicit least width
+  (`Theme.Size.splitPageMin`), so the decision is never borderline.
+- **A turn's sizes do not arrive together.** As a turn lays the split out, SwiftUI's geometry and the split's own bounds
+  change at different moments, and the split's change of columns can come before either. Before keeping a person's choice,
+  check both (`SplitColumnState.fitsBeside`). In the Separate layout the tab not shown is turned too, and its size is not
+  read until it shows: keep nothing for a split that is not in a window.
+- **The app switcher's snapshots lay a backgrounded app out in the other orientations.** The watchdog's stack shows
+  `-[UIApplication _performSnapshotsWithAction:…]` → `_createSnapshotContextForScene`. Don't write UserDefaults or change
+  layout state there (`scenePhase != .active`). `StoredValue` writes only a changed value: a write wakes every `@AppStorage`
+  view, whatever its key, and waits on the preferences daemon. A key a launch argument sets is written still: the value
+  read is the argument's, and skipping the write left an earlier test's stale value for the next launch without it.
+- **Watching a column's geometry costs a frame each time it goes or comes.** #4853's margin read each column's top safe
+  area with `onGeometryChange` on the column itself. On the iPad that laid the column out once more, its list's rows too,
+  as it went and as it came: about 40 ms of main-thread time in an extra frame at each fold's end and show's start. A
+  transform that returned a constant still cost the same, so the cost is the observation itself, not the state writes.
+  Watch only where the value is used, from a clear view behind the column whose `if` comes and goes (`readsSafeTop`): an
+  `if` around the modifier on the column would rebuild the column's content as the Duo turns, losing its scroll position and view state.
+- **Finding which change costs a frame.** Line up `deltas_ms` / `busies_ms` with the cue to find the frame that grew.
+  Then put temporary DEBUG launch-argument switches in one optimized build, one switch per suspect piece. Each test run
+  turns one piece off, and the piece whose removal brings the frame back to main's is the cause. Split a switch that
+  covers several pieces into finer ones before fixing. A `sample` diff of the two builds only says that SwiftUI layout
+  grew, not whose.
+- **Finding such a loop.** A temporary per-second count of view bodies and of the split's column changes, with
+  `Thread.callStackSymbols` on the first few changes, printed to stdout (`devicectl device process launch --console`) and to
+  the app's `tmp/` (`simctl get_app_container … data`). It names the loop in one run; the watchdog's crash report only shows
+  where the main thread happened to be.
+- **The open Duo simulator in Device Hub.** Folding switches only in Device Hub (`simctl io … screenConfig` cannot).
+  `XCUIDevice.shared.orientation` does nothing there, and Simulator.app's rotate items are disabled. Device Hub turns it
+  with ⌘← / ⌘→ (osascript to System Events, to Device Hub's window for that simulator), each a quarter turn from where it
+  is. XCUITest's synthetic drags do not reach it either; a mouse drag in its window does (`CGEvent` left-button events at
+  the screen's place in the window, found from `screencapture -l <window id>` and the device's bezel).
 
 ## Tab selection and targeted opens are different navigation intents (#5641)
 
@@ -313,6 +392,20 @@ this by changing a locale, allowing an address or rearranging the generated plis
 - Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
 - A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
 
+## Resuming an interrupted TestFlight archive (#8890)
+
+A retained release worktree is not clean just because its source is unchanged: `release.sh` generates
+`apple/Persona.xcodeproj`, and an unignored generated project makes `testflight_action.py` reject its own next run.
+Ignore that generated directory for future worktrees. An older immutable tag may still contain the old negated ignore
+rule, so the recovery tool must independently recognize only its five known generated files, reject any other file or
+symlink, then discard and regenerate them from the exact tag. Never trust the old generated content as source (#8933).
+The action must
+also recognize `PERSONA_OPERATION_LOCKS` as well as `PERSONA_OPERATION_RELEASE_LOCKED`; otherwise it nests the lock
+wrapper before doing any work. An `upload_started` checkpoint with no remote build means the upload did not complete
+or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
+never uploaded a second time. A locked login screen can leave extension `codesign` waiting indefinitely for keychain
+authorization; that is not archive success or a TestFlight upload.
+
 ## Device names in Siri intent descriptions (#3113)
 
 App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.
@@ -456,6 +549,19 @@ page and the newest message stays over the composer. A fade drawn by the footer 
 - **Whatever is drawn after the fade covers what is drawn before it.** The footer's gradient also dimmed Jump to Latest, which is
   an overlay of the list. The fog is now the list's first overlay; the navigator and the arrow come after it.
 
+## A blurred footer over a list beside the iPad's sidebar (2026-11-16, #9008)
+
+- `safeAreaBar(edge: .bottom)` gives a bar the system's scroll-edge blur, but beside the iPad's floating sidebar it took
+  12 pt off the list's leading margin, whatever the bar held: the to-do page's cards sat 8 pt from the sidebar and 20 pt
+  from the other side (iPhone unaffected). A ZStack around the list, `listSectionMargins`, `contentMargins`,
+  `listStyle(.insetGrouped)` and a narrower bar left it as it was. Its automatic edge was also the hard one there, a
+  lighter band with a line along its top; `.scrollEdgeEffectStyle(.soft)` removes the line, not the margin.
+- `floatingFooter` keeps `safeAreaInset` (margins as before) and draws its own blur under the bar: a material masked along
+  `EasedFade`, one fixed layer, so scrolling never redraws it. The material alone lit a black page gray in dark; washing
+  it halfway back to the page's color (`Theme.groupedPage` behind a grouped list) keeps dark black.
+- Check a bottom bar on an iPad in landscape beside the sidebar, both edges of the cards measured against the build
+  before, and in dark as well as light.
+
 ## Personal Agent entry availability (#2935)
 
 - Gate entry points on source setup, configured accounts and an unfiltered session list, not the personal page's search/unread preferences. Unknown availability starts hidden; a source/account response alone cannot reveal the chip. Keep an event listener alive while the Agents tab is visible so the first session can reveal a previously hidden entry, and fence cancelled reads and changed hub credentials.
@@ -467,6 +573,17 @@ page and the newest message stays over the composer. A fade drawn by the footer 
 - Any motion that carries the shell's pages sideways is the same bug: the drawer slid the whole page aside to uncover the sidebar (#3755). Sampled through three opens and closes on the Duo simulator, the navigation controllers' relayout (`-[UINavigationController __viewWillLayoutSubviews]` → `-[_UIViewControllerTransitionConductor startDeferredTransitionIfNeeded]` → `_layoutTopViewControllerLookForNested:`) was over half of the main thread's busy samples, against 21 samples on an iPhone: 35 ms a frame (p95), 1.1 ms once the page stayed and the sidebar slid in over it (`AssistantDrawer.inPlace`). A new sideways motion of a page needs the same check on the Duo simulator. A breakpoint on `-[UINavigationController _startDeferredTransitionIfNeeded]` never fires in iOS 27.2 (the conductor runs it); count `transitionConductor:didStartDeferredTransition:context:` instead.
 - A sidebar that slides over the page must be opaque all the way in: `AssistantDrawer.settle` sets the sidebar's alpha inside its `UIView.animate`, so it faded in while sliding and the page showed through it; under side bars the alpha is set with `UIView.performWithoutAnimation`.
 - Measuring with the runtime CLI (`scripts/app/personactl.py launch`), install the build first (`xcrun simctl install`): the launcher runs whatever is installed, and a round of experiments once measured an older build.
+
+## A sideways scroll view draws into the safe area beside it (2026-11-15, #8212)
+
+- A reply's code block scrolls its long lines sideways in a `ScrollView(.horizontal)`. On the iPhone Duo's displays, whose
+  status bar runs down the trailing edge (the outer display, the inner one on its side), those lines ran past the block's
+  background and on under that bar: a scroll view clips to its frame plus the safe area beside it, and the chat's own
+  scroll view hands that room down to its rows. iPhone and iPad never show it; the Duo has no landscape orientation to
+  fake it with on an iPhone, which is portrait only.
+- Give a sideways scroll view inside a column `.clipped()` (before its background) when nothing in it should reach past
+  its frame. `CodeBlockOverflowUITests` checks the strip beside a code block for drawn text; run it on the Duo simulator,
+  folded or open on its side (Device Hub folds it; `simctl io … screenshot --display=1` captures the outer display).
 
 ## A split's detail stack shares its modifiers only with its root page (#3680)
 
@@ -1117,7 +1234,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   `ChromeHeader` had the same trap (2026-11-02): expanded / collapsed layers in ZStack used opacity / `allowsHitTesting`,
   leaving both Back buttons in accessibility. Expanded content moved into clipping after collapse; its Back was over the status bar, deemed hittable but tapping did not return.
   `accessibilityHidden` on layers or plain buttons still failed. Remove invisible layers from the tree (do not build collapsed strip before halfway;
-  expanded layer uses `.hidden()` after fading, retaining layout measurement). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
+  expanded layer gives way to a clear placeholder of its measured height after fading; a `.hidden()` copy kept measuring but
+  built the whole header again at every fold and unfold, #9103). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
   (`ChatView.somethingPresented`, `ChatHeaderPresentationTests`).
 - Do not measure per-frame drag / animation main-thread cost under XCUITest: accessibility adds substantial SwiftUI work each frame. Script display-frame-driven execution of the same path in-app,
   launched with `simctl launch` (`DrawerAutoDrag`, `docs/operations/testing.md` ("Sidebar dragging")).
@@ -1160,6 +1278,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   `additionalSafeAreaInsets`, `view.transform`, `contentInsetAdjustmentBehavior` / `contentInset` are reset on next layout, or stored positions restore offsets
   (150–180 pt jumps). `ignoresSafeArea` / negative `safeAreaPadding` instead change container frames, oscillating between 0 and 90+ during transitions (2026-11-02, #413,
   search flicker while status row collapses; six approaches' per-frame data in issue). Measure which layer moves with probes such as `probe.agents-scroll` before choosing a fix.
+- A row of chips moves whenever one changes width (#7507, the Knowledge kind chips): a count only the picked chip shows, a count that appears once its
+  list loads, or the picked chip's heavier weight (semibold against medium) each widened one chip, shifted every chip after it and could re-wrap a
+  flowing row. Show the count where it does not share a row (the section header), and draw the label over a `.hidden()` copy in the
+  heavier weight so every chip keeps that width (`KBKindBar`). Check with frames read before and after each pick and each load (`KnowledgeKindPillsUITests`),
+  not by eye: 14 pt in a wrapped second row is easy to miss.
 
 ## Swift and compilation
 
@@ -1177,13 +1300,21 @@ Use an invalidation revision as the task key and handle the flag after completio
   rather than removing app isolation for tests. Run all PersonaTests before submitting; one noncompiling file blocks the target (2026-10-31 `KnowledgeTests`).
 - The app defaults to MainActor isolation. System-owned callbacks on system queues (`PHPhotoLibrary.performChanges`, `SFSpeechRecognizer.requestAuthorization`,
   `fetchReminders`, `PHImageManager`, `WCSession.sendMessage` reply / error…) without SDK `Sendable` annotation compile without warnings but inherit main isolation,
-  crashing when runtime isolation checks fail (`dispatch_assert_queue_fail`, every image save on 2026-10-31). Always write `{ @Sendable … in`; `BackgroundCallbackTests` checks source.
+  crashing when runtime isolation checks fail (`dispatch_assert_queue_fail`, every image save on 2026-10-31; turning on urgent calls, #9256). Always write
+  `{ @Sendable … in`; `scripts/test/test_apple_background_callbacks.py` checks the source. It was the PersonaTests class `BackgroundCallbackTests`, which
+  only `xcodebuild test` runs: #9092 merged without running it and shipped the crash it lists (#9258). A check that only reads source belongs in
+  `scripts/test/`, where every Apple PR's guard pass runs it without a build.
   SDK `NS_SWIFT_SENDABLE` callbacks (HealthKit, URLSession) and main-thread delegates need no change. Actual system-feature UI tests (`PhotoSaveTests`) expose it.
+- Where the check is (#9256): the trap is compiled into a main-actor closure handed to a block parameter that is not `Sendable`, as above. A main-actor
+  method that satisfies a plain Swift protocol's requirement (LiveCommunicationKit's `ConversationManagerDelegate`, an isolated conformance) has no
+  check, so the framework calling it on its own queue does not stop the app; it is still main-actor code running off the main thread, so such a delegate's
+  methods are `nonisolated` and hop. To see which closures carry the check, disassemble a Debug object file (`xcrun llvm-objdump -d -r X.o`) and list the
+  functions that call `swift_task_reportUnexpectedExecutor`. Most are SwiftUI and collection closures run in place; the ones that matter are those handed to a system API.
 - `{ @Sendable … in` is not enough for a new thread's body. In some batch builds (Xcode 26.3, `MainThreadWatchdog.swift` batched with
   `LinkSheet.swift`) `Thread(block:)` is imported as taking a `@MainActor @Sendable` block, and a closure literal passed to it takes that isolation,
   so the watchdog loop trapped on its own thread about a second after every DEBUG launch (`dispatch_assert_queue_fail`, #4703). The same file
   compiled alone was fine, so single-file experiments hid it. Bind the body to a typed `let body: @Sendable () -> Void = { … }` and pass
-  `Thread(block: body)`; `BackgroundCallbackTests` rejects closure literals handed to `Thread` / `detachNewThread`.
+  `Thread(block: body)`; `scripts/test/test_apple_background_callbacks.py` rejects closure literals handed to `Thread` / `detachNewThread`.
 - For custom concurrency helpers delivering results to main, mark the function `@MainActor` and use `withTaskGroup(…, isolation: MainActor.shared)`.
   An `isolation: isolated (any Actor)? = #isolation` parameter alone did not reliably keep task groups on caller actor: `HubFanOut.run`
   callbacks ran in background, and reading `AppModel` triggered isolation checks, crashing every launch (`dispatch_assert_queue_fail`,
@@ -1273,9 +1404,10 @@ Use an invalidation revision as the task key and handle the flag after completio
   first build locally `xcodebuild build -configuration Release -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO` and run `release.sh` `strings` checks on `Release-iphoneos/Persona.app/Persona`.
   It happened again with `WorkspaceSidebarCard.openAgent` vs `-openAgent` (2026-11-09, #1675 stopped TestFlight 214, renamed `selectAgent` in #2179):
   name closure properties `select…` / `on…`, not `open…` / `show…`. `@State` / `@Binding` / `@Environment` properties are stored as `_name` and never collide.
-  A quick check against the source: the list in `release.sh` into a file, then
-  `git grep -hoE '(var|let|case)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' -- 'apple/*.swift' ':!apple/PersonaTests' ':!apple/PersonaUITests' ':!apple/Persona/Debug' | awk '{print $2}' | sort -u | grep -xF -f <list>`
-  (each hit that is not a property wrapper or a Mac-only case is a collision).
+  And again on 2026-11-15 with `openAgent` (two views) and `openMachines` (#8306), so it is now a check:
+  `python3 scripts/test/test_apple_release_switch_names.py` reads the app's sources outside `#if DEBUG` (the conditions as a
+  device Release archive sees them) for stored properties, enum cases, `@objc` names and string literals equal to a name on
+  `release.sh`'s list. It runs with the other `scripts/test/test_apple*.py` checks before merge.
 - Launch-argument defaults are `strings` (`-dev.compact YES` is "YES"). Read booleans / numbers with `bool(forKey:)` / `integer(forKey:)` / `double(forKey:)` like AppStorage,
   not `object(forKey:) as? Bool`, which silently falls back (#1473 `StoredValue` broke `-dev.compact YES`; `CompactListShots` showed cards instead of compact rows, #2147).
 - Live Activities (`docs/apple/live-activity.md`): ActivityKit uses default JSONDecoder for `content-state`; `Date` values start 2001; pass Unix-second numbers.
@@ -2119,7 +2251,7 @@ but UIKit still had a page with only Agents Back and empty content.
 - A List does not animate a row's height: removing a view in the row, or `frame(height:)` down to 0, relays out the list at once (at 0 not even that), and the rows below jump. Slide the list as a picture (`offset`, no relayout) and switch layouts at the moment both look the same (the animation's end or start), adding the offset in the same frame (`ListShift`, `setCompact`).
 - The first keyboard of a launch stalls the main thread ~0.4 s: an animation started before it skips over that stretch. Start moving on `keyboardWillShow`.
 - A list's own `.safeAreaBar(edge: .top)` whose content is fully clear (`Color.clear`) gets no scroll-edge blur; the page color at 1% opacity does, with no pixel changed. It must be on the `List` itself (a few modifiers in between, such as a background, and it is gone). The drawer's bar used the hard edge (`.scrollEdgeEffectStyle(.hard, for: .top)`): set it explicitly, and show it only while rows are really under the bar (not while the folded field's 54 pt scroll up, `scrollEdgeEffectHidden`).
-- `insetGrouped` cells have a 26 pt `cornerConfiguration` and clip: whatever the first row draws to the cell's edge (the field's rounded corners) is cut. For a row without a background turn the cell's `clipsToBounds` off (the list turns it on again when it configures the cell: watch it with KVO, restore on leaving).
+- `insetGrouped` cells have a 26 pt `cornerConfiguration` and clip: whatever the first row draws to the cell's edge (the field's rounded corners) is cut. For a row without a background turn the cell's `clipsToBounds` off (the list turns it on again when it configures the cell: watch it with KVO, restore on leaving). `.unclippedListRow()` does this for any SwiftUI row: the Knowledge kind bar's first pills each lost a corner to it, the top-left of the first row's and the bottom-left of the last row's (#7735; `KnowledgeKindBarCornersUITests` compares each row's first pill's left end with its right end).
 - Faded out, the shell's top bar was still in the accessibility tree over the risen field (☰ found and tappable): it leaves the tree once the list takes its searching layout. And the list at rest with the field folded sits a band down from its top: `ReaderAnchor` must count that as the top, or a change at launch keeps a row and throws the list ~350 pt down.
 - Measuring: resting states pixel by pixel against master (screenshots of each state, diffed); motion from the app writing each block's place every frame (`SearchTrace`, a CADisplayLink reading presentation layers). The simulator's home indicator strip differs from one screenshot to the next (~6400 px): leave it out.
 - The shell's chrome grows with the text (`shellScaled`, the top bar up to XXXL: 50 → 60 pt tall), the navigation bar, the shell's room and the field's band do not. A timing worked out at the standard size (the bar gone by 0.35 of the field's way) let the field into the bar's rows at XXXL while the bar was still ~8 % there (#4928): derive such timings from where things are drawn, and run motion tests at a larger size too. A 60 Hz trace can step over a crossing that lasts one frame; check the geometry, not only the frames.
@@ -2324,6 +2456,24 @@ A worktree's display name and its Agents' conversation names are different comma
 
 - **What went wrong**: the Persona chat's avatar menu nests "Launcher" › each launcher › its models. The models are read a moment after the bar comes up. An `.id` on the innermost menu (built from the list) was not enough: the "Launcher" menu around it had none, kept the launchers' submenus it was built with before the lists came in, and the claude submenu showed only Default and "Other Model…" for as long as the app ran, although the state had all ten models. Whether a run saw it depended on when the outer menu happened to be built first, so a passing UI test proved little.
 - **Now**: every level of a nested `Menu` whose items come from state that loads or changes gets an `.id` built from that state (`AssistantTopBar.launcherMenuID` on "Launcher", the list and pick on each launcher). When a menu's items look stale, log the state first: if it is right, the menu was not built again.
+
+## Assistant and Agent launcher names are not execution identities (2026-11-16, #4663)
+
+The new-conversation composer read New Agent's launcher cache. On a Paseo computer that list described Paseo providers,
+but the assistant started the shell command of the selected name; the model label could describe another executable and
+account. Fetch `purpose=assistant` for the launcher list and every model-list request, including a nested typed-model
+sheet. Keep purpose in a reused model loader's request key so a late response cannot replace another scope's list.
+For old hubs that ignore purpose, honor an explicit assistant capability before falling back to the shell source and
+agent kind; an agent kind alone does not prove a runtime provider is a runnable shell launcher.
+The same applies to thinking effort: the starter's global Claude list offered levels another model did not support.
+Read the effective default model's advertised efforts and reset on a launcher switch. Check cached capabilities again
+at the start route, because suggestions and Resend bypass the composer's submit action. Never put fresh catalog requests
+in front of sending, or turn a failed read into proof that the saved effort is unsupported. Freeze the manager explicitly
+for assistant catalog requests outside `/assistant`, and include it and the settings revision in cache keys; a late answer
+must not restore an earlier manager's choices. Health uses the default manager even while another one is shown.
+Validate the same capability on the execution path: the native Codex catalog offered Ultra, but the assistant's first
+message rejected it because the backend classified a custom command name as Claude. Resolve the launcher's actual
+agent for Codex-only levels, and test both an explicit effort and a configured effort reaching native `turn/start`.
 
 ## App Intents that say yes to an agent need `.requiresAuthentication` (2026-11-09, #1878)
 
@@ -2641,3 +2791,37 @@ could not read the actor's own `static let`s. The fix is per declaration, and on
   nonisolated. A plain actor can still conform to a `nonisolated ... : Sendable` protocol.
 - A `@Sendable` closure that must touch a main-actor API (`UIApplication.shared.isProtectedDataAvailable`) wraps the
   read in `MainActor.assumeIsolated { ... }`; give tests an injectable closure so they never hit the real API.
+
+## A UI test's scroll drags whatever is under the finger (2026-11-13, #6783)
+
+`TodoStageBarUITests` scrolled the to-do's page by dragging from the middle of the window. Before the interface stopped
+growing at xxxLarge (#6813), `FormDatePicker` was a wheel across its row at AX5 (#6108), and the page could stop with
+the Due date's wheel under the middle: every later drag turned the wheel (moving the mock's due date by weeks) instead of
+scrolling, and the stage bar never came into view. Where the page stops depends on the language and the iOS version: on
+iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
+
+- Scroll a form or list in a UI test by dragging its margin at the screen's leading edge
+  (`coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: …))`), where no row draws a control. The middle of the
+  screen holds a different row in each language and text size.
+- Not the trailing edge: the chat list's edge navigator lives there (#2615). A quick vertical drag from the leading edge
+  starts neither the back swipe nor the drawer.
+- A test that must not change what it reads (the mock's to-dos are shared by the whole run) checks that itself:
+  `TodoStageBarUITests` reads the to-do's `due_at` (`GET /api/v1/todos/todo_weather`) in `setUpWithError` and compares
+  it in `tearDownWithError`, which runs after a failure too.
+- A launch at `UICTContentSizeCategoryAccessibilityXXXL` no longer reaches the accessibility layouts of interface views
+  (`dynamicTypeSize.isAccessibilitySize` is false under the cap); a UI test that expects one fails on `main`. A view that
+  still needs another form at the largest size picks it by measured width (`ViewThatFits`, as `TodoStageBar` since
+  #7268), so its test accepts either form there.
+- A fixed band (the window less 15% at each end) is not the part of a page nothing covers: the to-do page's bottom
+  buttons stack at the largest size (#6151) and covered the stage bar in Japanese while the test, checking only the
+  window, passed with a screenshot that didn't show it. Take the bottom from the frames of each page's own bottom
+  controls (on the chat, the action bar's entries, which also reach above the band at the largest size).
+
+## A fixed-size overlay grows past the screen when a line gets longer (2026-11-16, #8859)
+
+- The live screen's Connection Stats panel is `.fixedSize()`: it is as wide as its longest line. At xxxLarge the
+  codec line ("3.4 Mbps · 60 fps · HEVC · 2268×1472") already fills an iPhone 17 Pro's width; appending "· x264" made
+  the panel wider than the screen, and the whole page laid out wider with it (the toolbar buttons were cut off at both
+  edges). At the default size it looked fine.
+- Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
+  screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.

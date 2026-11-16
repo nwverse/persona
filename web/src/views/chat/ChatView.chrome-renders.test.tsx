@@ -18,7 +18,8 @@ vi.mock("./SessionDialogs", async (load) => {
   const { createElement } = await import("react");
   return {
     ...real,
-    SessionInfoDialog: (p: Parameters<typeof real.SessionInfoDialog>[0]) => (renders.info++, createElement(real.SessionInfoDialog, p)),
+    // a lazy dialog now (its chunk loads on its first open): still drawn by the header on each of its renders
+    SessionInfoDialog: (p: ComponentProps<typeof real.SessionInfoDialog>) => (renders.info++, createElement(real.SessionInfoDialog, p)),
   };
 });
 vi.mock("./PermissionPicker", async (load) => {
@@ -189,18 +190,20 @@ it("the assistant: the header draws again only when what its face reads changes"
   expect(renders.chips).toBe(0);
 });
 
-it("the main conversation's composer has the model pill; another Persona conversation's has none (#5032, #5033, #6911)", async () => {
+it("the main conversation's composer has the model pill, without an effort chip (#5032, #5033)", async () => {
   getState().assistant = { machine_id: "mac", launcher: "claude", main: "s1", conversations: [] };
   await open(<ChatView mid="mac" sid="s1" assistant />);
   expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
-  expect(host.querySelector(`button[title="${t("chat-sessiondialogs.effort")}"]`)).toBeNull(); // no effort chip
-  // A leader, the supervisor or another assistant conversation is not the main one: no per-conversation picker.
-  act(() => root.render(<></>));
+  expect(host.querySelector(`button[title="${t("chat-sessioninfo.effort")}"]`)).toBeNull(); // no effort chip
+});
+
+it("a Persona conversation that is not the main one has the model pill too, as the hub keeps its pick (#9248)", async () => {
   getState().assistant = { machine_id: "mac", launcher: "claude", main: "other", conversations: [] };
   await open(<ChatView mid="mac" sid="s1" assistant />);
-  expect(host.querySelector("[data-model-pill]")).toBeNull();
-  // An Agent's session still gets its own pill.
-  act(() => root.render(<></>));
+  expect(host.querySelector("button[data-model-pill]")).not.toBeNull();
+});
+
+it("an Agent's session has its own model pill", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(host.querySelector("[data-model-pill]")).not.toBeNull();
 });

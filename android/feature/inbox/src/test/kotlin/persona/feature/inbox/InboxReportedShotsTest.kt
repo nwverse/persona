@@ -13,15 +13,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -41,10 +46,17 @@ import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
 
-/** Native-graphics evidence that a long reported original expands inline once, in every style and appearance. */
+/**
+ * Native-graphics evidence that a long reported original expands inline once, including at 200% text.
+ *
+ * Set `JAVA_TOOL_OPTIONS` to `-Dpersona.shots=<absolute-directory> -Dpersona.shots.phase=expanded` so both
+ * test-JVM properties reach Robolectric. The output root has no timestamp or generated suffix; `expanded` writes only
+ * expanded PNGs, while `collapsed` and the default `all` are also supported. The same before/after command therefore
+ * differs only in its output root, while every layout and interaction check runs.
+ */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "en-w400dp-h1000dp-xhdpi")
+@Config(sdk = [35], qualifiers = "en-w400dp-h2600dp-xhdpi")
 class InboxReportedShotsTest {
     @get:Rule val rule = createComposeRule()
 
@@ -123,7 +135,24 @@ class InboxReportedShotsTest {
         )
     }
 
-    private fun reportedShotsCapture(name: String) {
+    private fun reportedShotsAssertWholeOriginalIsCaptured(context: String) {
+        val container = rule.onNodeWithTag(REPORTED_SHOTS_TAG).getBoundsInRoot()
+        val original = rule.onNodeWithText(REPORTED_SHOTS_ORIGINAL, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(
+            "$context: the complete original, including S1-END, must fit inside the capture: $original / $container",
+            original.left >= container.left && original.top >= container.top &&
+                original.right <= container.right && original.bottom <= container.bottom,
+        )
+        rule.onNodeWithText(REPORTED_SHOTS_ORIGINAL).assertIsEnabled()
+    }
+
+    private val reportedShotsSelectedPhase = System.getProperty("persona.shots.phase") ?: "all"
+
+    private fun reportedShotsCapture(name: String, phase: String) {
+        check(reportedShotsSelectedPhase in setOf("all", "collapsed", "expanded")) {
+            "persona.shots.phase must be all, collapsed or expanded"
+        }
+        if (reportedShotsSelectedPhase != "all" && reportedShotsSelectedPhase != phase) return
         rule.waitForIdle()
         val bitmap = rule.onNodeWithTag(REPORTED_SHOTS_TAG).captureToImage().asAndroidBitmap()
         val background = bitmap.getPixel(1, 1)
@@ -142,19 +171,30 @@ class InboxReportedShotsTest {
 
     @Test
     fun reportedOriginalExpandsAndCollapsesInEveryStyleAndAppearance() {
+        reportedShotsMatrix(fontScale = 1f, expandedHeightDp = 900, nameSuffix = "-100pct")
+    }
+
+    @Test
+    fun reportedOriginalAt200PercentExpandsAndCollapsesInEveryStyleAndAppearance() {
+        reportedShotsMatrix(fontScale = 2f, expandedHeightDp = 2400, nameSuffix = "-200pct")
+    }
+
+    private fun reportedShotsMatrix(fontScale: Float, expandedHeightDp: Int, nameSuffix: String) {
         val record = reportedShotsRecord()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        var shotHeightDp by mutableIntStateOf(900)
         var run by mutableIntStateOf(0)
         rule.setContent {
             CompositionLocalProvider(
+                LocalDensity provides Density(LocalDensity.current.density, fontScale),
                 LocalInboxClock provides { REPORTED_SHOTS_CLOCK },
                 LocalInboxZone provides ZoneOffset.UTC,
             ) {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     key(run) {
                         LazyColumn(
-                            Modifier.testTag(REPORTED_SHOTS_TAG).width(400.dp).height(900.dp)
+                            Modifier.testTag(REPORTED_SHOTS_TAG).width(400.dp).height(shotHeightDp.dp)
                                 .background(PersonaTheme.palette.background),
                         ) {
                             eventChain(record, emptyList(), AgentPreferences()) { target ->
@@ -168,24 +208,29 @@ class InboxReportedShotsTest {
 
         for (appearance in AppStyle.entries) for (night in listOf(false, true)) {
             val mode = if (night) "dark" else "light"
-            val context = "$appearance/$mode"
+            val context = "$appearance/$mode/fontScale=$fontScale"
             rule.runOnIdle {
                 style = appearance
                 dark = night
+                shotHeightDp = 900
                 run++
             }
             rule.waitForIdle()
             reportedShotsAssertCollapsed(context)
+            reportedShotsAssertWholeOriginalIsCaptured("$context collapsed")
             rule.onNodeWithText("11:59", useUnmergedTree = true).assertExists()
             rule.onNodeWithText("Assistant says: $REPORTED_SHOTS_ORIGINAL", useUnmergedTree = true).assertDoesNotExist()
-            reportedShotsCapture("reported-collapsed-${appearance.name.lowercase()}-$mode")
+            reportedShotsCapture("reported-collapsed-${appearance.name.lowercase()}-$mode$nameSuffix", "collapsed")
 
             rule.onNodeWithText(REPORTED_SHOTS_ORIGINAL).performClick()
+            rule.runOnIdle { shotHeightDp = expandedHeightDp }
             rule.waitForIdle()
             reportedShotsAssertExpanded(context)
-            reportedShotsCapture("reported-expanded-${appearance.name.lowercase()}-$mode")
+            reportedShotsAssertWholeOriginalIsCaptured("$context expanded")
+            reportedShotsCapture("reported-expanded-${appearance.name.lowercase()}-$mode$nameSuffix", "expanded")
 
             rule.onNodeWithText(REPORTED_SHOTS_ORIGINAL).performClick()
+            rule.runOnIdle { shotHeightDp = 900 }
             rule.waitForIdle()
             reportedShotsAssertCollapsed("$context after collapsing again")
         }

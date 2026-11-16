@@ -33,6 +33,34 @@ Both start after installation and at login, and restart on exit. There is no UI 
 
 Build without installing: `./scripts/app/mac-link.sh build`; output is `apple/PersonaLink/build/Persona Link.app`. Use `UNIVERSAL=1` for Apple silicon and Intel. `mac.link_bundle_id` or `PERSONA_LINK_BUNDLE_ID` controls Persona Screen's bundle-id prefix, defaulting to `app.bundle_id` + `.link`; without either the build stops and says what to set. Keep it the same from build to build: macOS keeps Persona Screen's Screen Recording grant per bundle id, so a Mac that ran a build with another id (such as an earlier `com.example.persona.link` placeholder build) asks for Screen Recording again once (#7569).
 
+### Keeping the helpers' permissions across updates
+
+Persona Screen (Screen Recording) and Persona Input (Accessibility) are signed ad hoc by default, and macOS keeps an ad-hoc program's permission only while its bytes stay the same. `mac-link.sh` keeps each helper by a hash of its own sources and the one narrow kit it is built from (`PersonaScreenCore`, `PersonaInputKit`). It reuses the same build for every later Persona Link build until those sources change, so most updates leave both permissions alone (#7927). A change to a helper's own code still means allowing its permission again once.
+
+To keep the permissions across any change, sign the helpers with a code signing certificate of your own, once per Mac:
+
+1. Have a code signing certificate in the login keychain. An Apple Development certificate works; Xcode › Settings › Accounts › Manage Certificates makes one for any Apple ID. `security find-identity -v -p codesigning` lists them.
+2. Put its name, exactly as that list prints it between the quotes, in `~/.config/persona/config.json` as `mac.link_signing_identity`, or export it as `PERSONA_LINK_SIGNING_IDENTITY`. It stays on this Mac: never in the repository.
+3. Build in a Terminal window of your login session: from ssh, codesign can't reach the login keychain. The first time, macOS asks whether codesign may use the key. Answer with your login password and **Always Allow**.
+4. Install or copy the new `Persona Link.app`, then allow Screen Recording for Persona Screen and Accessibility for Persona Input once more: the certificate's signature is a new program to macOS.
+
+From then on, macOS matches the helpers by their bundle ids and the certificate, so later builds keep both permissions, even ones that change the helpers' code. A renewed certificate with the same name keeps them too. A different certificate means allowing both once more. Without the setting, builds are signed ad hoc as before.
+
+### Optional: a faster live screen with your own ffmpeg (x264)
+
+On a Mac you watch from an iPhone on the same network, the live screen can be encoded by x264 instead of the Mac's
+built-in encoder: each frame is ready about 6 ms sooner, for some CPU. Persona doesn't include x264 or ffmpeg (they
+are GPL software). To use it, install ffmpeg yourself, for example with Homebrew:
+
+```bash
+brew install ffmpeg
+```
+
+The node looks for it at `/opt/homebrew/bin`, `/usr/local/bin` and `/opt/local/bin` and checks that it works. Then
+the Mac's page in the iPhone app shows **Live Screen with x264** under Control Computer; it is off until you turn it
+on, and it is used only while the iPhone is on the same network as the Mac. Uninstalling ffmpeg turns it back to the
+built-in encoder. Details: [computer-use.md](../extensions/computer-use.md) "x264 on a direct LAN (#8859)".
+
 ### Moving from the retired menu bar app
 
 Keep the existing `~/.persona/link.json` and node service. First stop the old menu bar app and any foreground `persona-link run`; otherwise two connectors will contend for the same run lock. The installer does not kill or replace an unmanaged running connector. Do not use `persona-link uninstall --purge`, which would delete the pairing you want to keep.
@@ -55,6 +83,8 @@ The historical migration record is in [link-menu-tray.md](../archive/operations/
 For passive mode, use `persona-link pair --listen` and paste the printed link into hub admin **Computers › Add computer › Hub connects**. SSH tunnel setup and other advanced options remain in the CLI; see [link.md](link.md), "SSH tunnel".
 
 ## Everyday commands
+
+Human-readable command output follows the terminal locale (`PERSONA_LANG`, then `LC_ALL`, `LC_MESSAGES` and `LANG`), with English as the fallback and `en`, `zh-Hans` and `ja` shipped together. JSON, saved status and peer messages keep their canonical form. The Electron setup window and `scripts/deploy/install.sh` do not currently forward their independently selected interface language as `PERSONA_LANG`; set it explicitly on a Link invocation when its output needs a particular language.
 
 | Command | Purpose |
 | --- | --- |
@@ -83,4 +113,7 @@ To remove the resident node too, inspect its actual service and binary first, th
 - **Hub cannot reach the local node**: `persona-link node status`; logs are in `~/.persona/node-attach.log`.
 - **LAN unreachable**: check macOS local-network permission for the connector. Other routes and TLS errors are explained by `persona-link status`.
 - **Persona Input permission**: `Contents/Helpers/Persona Input.app`; its Accessibility grant is its own. `mac-link.sh` rebuilds it only when its sources change (it keeps the built helper in `~/.persona/cache/persona-input`), so an update leaves the grant alone; `./scripts/app/mac-link.sh verify-input` checks that two clean builds are the same.
-- **Persona Screen permission**: the helper remains at `/Applications/Persona Link.app/Contents/Helpers/Persona Screen.app`, the path the node already searches. Its Screen Recording grant is separate from the Electron app and the connector.
+- **No "Live Screen with x264" switch**: the node found no ffmpeg with libx264 at the paths above, or the one it
+  found failed its 3-frame self-test. The node's log says which ("screen x264: … doesn't qualify: <why>"); it tries
+  the same ffmpeg again a minute after a failure, and at once after `brew upgrade ffmpeg`.
+- **Persona Screen permission**: the helper remains at `/Applications/Persona Link.app/Contents/Helpers/Persona Screen.app`, the path the node already searches. Its Screen Recording grant is separate from the Electron app and the connector. Like Persona Input, it is rebuilt only when its own sources or `PersonaScreenCore` change (`~/.persona/cache/persona-screen`); `./scripts/app/mac-link.sh verify-screen` checks that two clean builds are the same. Deleting the cache, or building on another Mac or with another Xcode with nothing cached, can make different bytes, which means allowing it again once. "Keeping the helpers' permissions across updates" above avoids that.

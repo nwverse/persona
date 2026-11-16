@@ -1,8 +1,10 @@
+import { conversationDeleted, conversationDeletionRevision, conversationDeletionScope } from "../lib/conversation-deleted";
+import { shownManager, useShownManager } from "../lib/manager-choice";
 // ⌘K: Beautiful UI's Search, over every agent and Persona conversation — and the terminal panes of the computers
 // (lib/terminals.ts, the /terminal page's data). `>` first (or ⌘⇧P) is command mode: the registered commands with their
 // shortcuts, and whatever other modules add through registerContextCommands (lib/palette.ts). docs/web/web.md"Keyboard shortcuts".
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { enc, api } from "../lib/api";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { credentialOwner, subscribeCredentialOwner, enc, api } from "../lib/api";
 import { machineWithHub } from "../lib/mesh";
 import { createPortal } from "react-dom";
 import { ago, sessionTitle, shortPath, stateOf, tabLabel } from "../lib/format";
@@ -13,6 +15,7 @@ import type { EvidenceSnippet } from "../lib/agent-chatlist-filter";
 import { storedValue } from "../lib/compatibility";
 import { useScope } from "../lib/current-assistant";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
+import { supportsPagedAgents } from "../lib/runtime-list";
 import { SESSIONS_TODO_FEATURE } from "../lib/session-groups";
 import { GROUPING_KEY, pagedAgentList } from "../lib/sidebar-api";
 import { filterAgentList } from "../lib/agent-list-filters";
@@ -137,6 +140,14 @@ function previousChat(recent: { entries: string[]; current: string }, sessions: 
 /** `listShown`: the sidebar's column, with its Agents list, is on screen (not a narrow screen's drawer or the rail). */
 export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listShown = true }: { open: boolean; onClose: () => void; onNewAgent: () => void; pane?: { mid: string; sid: string }; route?: Route; listShown?: boolean }) {
   // what is typed lives in the store (lib/palette.ts): the shortcuts open it in a mode (`>` for commands) and read it
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = useShownManager();
+  const epoch = useStore(conversationDeletionScope);
+  const revision = useStore(conversationDeletionRevision);
+  const scope = JSON.stringify([owner, epoch, manager]);
+  const account = JSON.stringify([owner, epoch]);
+  const priorAccount = useRef(account);
+  const currentScope = useCallback(() => scope === JSON.stringify([credentialOwner(), conversationDeletionScope(), shownManager()]), [scope]);
   const q = usePalette().query;
   const setQ = setPaletteQuery;
   const { mode, text } = parseQuery(q);
@@ -167,7 +178,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const byTodo = useStore((s) => s.features.includes(SESSIONS_TODO_FEATURE));
   const todosSupported = useStore((s) => s.todosSupported);
   const several = useScope().several;
-  const completeList = !pagedAgentList({ bounded, byTodo, todosSupported, pins, stored: storedValue(GROUPING_KEY), several });
+  const agentsPaging = useStore((s) => supportsPagedAgents(s.features));
+  const completeList = !pagedAgentList({ bounded: agentsPaging, byTodo, todosSupported, pins, stored: storedValue(GROUPING_KEY), several });
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
   // Persona chats found by what was said in them too (#6283): the manager's search, merged into the local matches
   const searchOn = useStore((s) => s.features.includes("assistant_search"));
@@ -227,24 +239,34 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
 
   // loaded on intent (the palette is idle-tier, src/startup-preload.ts IDLE_TIER_BUDGET): the first query typed loads
   // lib/assistant-search.ts; asked 200 ms after the last key, each query cancelling the one before
-  const [found, setFound] = useState<{ q: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
+  const [found, setFound] = useState<{ q: string; scope?: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
   // a found chat's line starts just before its match, as much of a lead-in as the row's width holds (#7045)
   const phone = useMedia(PHONE);
   const asked = open && !managing && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
+  useLayoutEffect(() => {
+    if (priorAccount.current !== account) { priorAccount.current = account; onClose(); }
+  }, [account, onClose]);
   useEffect(() => {
+    setFound({ q: "", scope });
     if (!asked) return;
     const ctrl = new AbortController();
     const id = window.setTimeout(() => {
       void import("../lib/assistant-search")
-        .then((m) => m.searchAssistantChats(asked, ctrl.signal).then((answer) => setFound({ q: asked, answer: answer ?? undefined, marks: m.markParts })))
+        .then((m) => {
+          if (ctrl.signal.aborted || !currentScope()) return;
+          return m.searchAssistantChats(asked, ctrl.signal).then((answer) => {
+            if (!ctrl.signal.aborted && currentScope()) setFound({ q: asked, scope, answer: answer ?? undefined, marks: m.markParts });
+          });
+        })
         .catch(() => {}); // a failed search leaves the local matches
     }, 200);
     return () => {
       clearTimeout(id);
       ctrl.abort();
     };
-  }, [asked]);
-  const said = { answer: asked && found.q === asked ? found.answer : undefined };
+  }, [asked, scope, currentScope]);
+  useEffect(() => { setFound((f) => f.answer ? { ...f, answer: { ...f.answer, results: f.answer.results.filter((r) => !conversationDeleted(r.machine_id, r.session_id)) } } : f); }, [revision]);
+  const answer = asked && found.q === asked && found.scope === scope ? found.answer : undefined;
   const hits = useMemo((): Row[] => {
     if (mode !== "jump") return [];
     const query = text.toLowerCase();
@@ -265,7 +287,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     }
     // what the manager found: a chat found by a message opens at it (not one found by its title); one not listed here
     // (archived) is the result's own row
-    for (const r of said.answer?.results ?? []) {
+    for (const r of answer?.results ?? []) {
+      if (conversationDeleted(r.machine_id, r.session_id)) continue;
       const key = `j:${r.session_id}`;
       const hit = r.hits[0];
       const at = r.title_match ? undefined : hit?.item_id;
@@ -300,7 +323,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     let others = 0;
     const window = all.filter((row) => remoteKeys.has(row.key) || others++ < 40);
     return [...recentRows, ...savedRows, ...orderGroups<Row & { score: number }>([window, mail, go]).flat()];
-  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer, saved.state.document, saved.state.unsupported, runtimeSearch.hits, runtimeSearch.loaded, runtimeSearch.supported, runtimeSearch.loading, runtimeSearch.loadingMore, runtimeSearch.hasMore, runtimeSearch.error, runtimeSearch.moreError, runtimeSearch.mergeHits]);
+  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, answer, saved.state.document, saved.state.unsupported, runtimeSearch.hits, runtimeSearch.loaded, runtimeSearch.supported, runtimeSearch.loading, runtimeSearch.loadingMore, runtimeSearch.hasMore, runtimeSearch.error, runtimeSearch.moreError, runtimeSearch.mergeHits, revision]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {
@@ -341,6 +364,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const card = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const kept = useRef<ReactNode>(null);
+  const keptAt = JSON.stringify([scope, revision]);
+  const keptScope = useRef(keptAt);
+  if (keptScope.current !== keptAt) kept.current = null;
+  keptScope.current = keptAt;
   const exit = useExit(open, EXIT_MS.card, () => [
     backdrop.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS.card, easing: "ease-out", fill: "forwards" }),
     card.current?.animate(CARD_OUT, { duration: EXIT_MS.card, easing: EASE, fill: "forwards" }),
@@ -362,6 +389,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   }
   if (!exit.mounted) return null;
   const pick = (r: Row) => {
+    if (!currentScope() || (r.kind === "session" && conversationDeleted(r.hit.s.machine_id, r.hit.s.session_id))) return;
     if (r.kind === "saved") { setQ(r.item.query); input.current?.focus({ preventScroll: true }); return; }
     onClose();
     if (r.kind === "command") r.cmd.run();

@@ -122,21 +122,29 @@ func TestTaskReviewDismissalReceiptAndRestart(t *testing.T) {
 
 // Don't handle hides a round, which is not an answer: the hub takes no default at its deadline and sends nothing.
 func TestTaskReviewDismissalSuppressesDeadline(t *testing.T) {
-	at := time.Now().UTC().Add(-time.Hour)
-	e := dismissalEnv(t, &memStore{}, at, true)
-	before := todoNow(e.s, "task")
-	a, _ := e.s.askCopy("task")
-	callsBefore := e.f.callCount()
-	dismissReview(t, e, at)
-	e.s.sweepTaskDeadlines(time.Now())
-	if after, _ := e.s.askCopy("task"); !reflect.DeepEqual(a, after) {
-		t.Fatalf("dismiss changed acceptance/deadline: %+v", after)
-	}
-	if after := todoNow(e.s, "task"); !reflect.DeepEqual(before, after) {
-		t.Fatal("dismiss accepted or closed task")
-	}
-	if e.f.sends != nil || e.f.callCount() != callsBefore {
-		t.Fatal("dismiss or the suppressed default reached a device")
+	for _, reversible := range []bool{true, false} {
+		t.Run(map[bool]string{true: "default", false: "reminder"}[reversible], func(t *testing.T) {
+			at := time.Now().UTC().Add(-time.Hour)
+			e := dismissalEnv(t, &memStore{}, at, true)
+			e.s.accept.asks["task"].Reversible = reversible
+			before := todoNow(e.s, "task")
+			a, _ := e.s.askCopy("task")
+			callsBefore := e.f.callCount()
+			dismissReview(t, e, at)
+			e.s.sweepTaskDeadlines(time.Now())
+			if result, err := e.s.acceptTryAs(context.Background(), "task", "", true); result.taken || err != nil {
+				t.Fatalf("dismissed default: %v, %v", result, err)
+			}
+			if after, _ := e.s.askCopy("task"); !reflect.DeepEqual(a, after) {
+				t.Fatalf("dismiss changed acceptance/deadline: %+v", after)
+			}
+			if after := todoNow(e.s, "task"); !reflect.DeepEqual(before, after) {
+				t.Fatal("dismiss accepted or closed task")
+			}
+			if e.f.sends != nil || e.f.callCount() != callsBefore {
+				t.Fatal("dismiss or the suppressed default/reminder reached a device")
+			}
+		})
 	}
 }
 
@@ -185,6 +193,7 @@ func TestTaskReviewDismissalSlowAcceptDoesNotBlockTodoList(t *testing.T) {
 		t.Run("option="+option, func(t *testing.T) {
 			at := time.Now().UTC().Add(-time.Hour)
 			e := dismissalEnv(t, &memStore{}, at, true)
+			dismissReview(t, e, at)
 			e.s.todos.todos["task"].Origin = "conversation"
 			e.s.todos.todos["task"].Agents = []TodoAgent{{MachineID: "server", SessionID: "worker"}}
 			e.s.todos.todos["independent"] = &Todo{ID: "independent", Title: "Independent task", Supervision: &Supervision{

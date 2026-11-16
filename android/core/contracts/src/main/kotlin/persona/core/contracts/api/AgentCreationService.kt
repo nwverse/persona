@@ -11,6 +11,14 @@ import kotlinx.serialization.json.*
 interface AgentCreationService {
     val scope: String
     suspend fun launchers(machineId: String): List<AgentLauncher>
+
+    /**
+     * [launchers] with the rest of the hub's answer (`GET /api/v1/machines/{id}/launchers`): what New Agent's picker lists
+     * off on that computer, with why (#8109: the Persona-managed providers their own-service rule leaves out where the
+     * agent has a sign-in of its own), in the main chat's shape. Its `unavailable` is empty from an older hub; its
+     * `default` is not read (New Agent reads [newAgentModel]).
+     */
+    suspend fun launcherList(machineId: String): AssistantLaunchers = AssistantLaunchers(launchers(machineId))
     suspend fun directories(machineId: String, path: String = ""): AgentDirectories
     suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult
     suspend fun operation(operationId: String): AgentStartResult
@@ -57,6 +65,9 @@ interface AgentCreationService {
      * choice: empty from an older hub (404) and on any failure, which then shows no choice.
      */
     suspend fun workspaces(machineId: String): List<AgentWorkspace> = emptyList()
+
+    /** A catalog refresh for an existing list: failures propagate so a transient outage cannot clear native pins. */
+    suspend fun workspaceCatalog(machineId: String): List<AgentWorkspace> = workspaces(machineId)
 }
 
 /**
@@ -84,6 +95,8 @@ data class AgentWorkspace(
     val online: Boolean? = null,
     val available: Boolean? = null,
     val owned: Boolean? = null,
+    /** The source's workspace pin, independent of Persona's session/project preferences. */
+    @SerialName("pinned_at") val pinnedAt: String? = null,
 )
 
 /**
@@ -105,9 +118,17 @@ data class WorktreeStatus(
     val unmerged: Int = 0,
 )
 
-/** What `worktree/add` made: the checkout the agent starts in. */
+/**
+ * What `worktree/add` made: the checkout the agent starts in, and [workspaceId] the workspace a runtime engine made for
+ * it (Paseo, #8856), which the start goes into; null for a worktree a terminal host makes, or from an older node.
+ */
 @Serializable
-data class WorktreeAdded(val path: String, val branch: String = "", val root: String? = null)
+data class WorktreeAdded(
+    val path: String,
+    val branch: String = "",
+    val root: String? = null,
+    @SerialName("workspace_id") val workspaceId: String? = null,
+)
 
 /** What `worktree/remove` did. */
 @Serializable
@@ -167,30 +188,47 @@ data class AgentLauncher(
     val assistant: Boolean = false,
     /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
     val health: LauncherHealth? = null,
-    /** A Persona-managed provider's own name (feature `launcher_auto_name`), shown over [name]; null for the others. */
+    /**
+     * Its own name, shown over [name]: a Persona-managed provider's (feature `launcher_auto_name`), or the label a
+     * runtime gives its provider (Paseo's "Grok" for `grok`, #8261); null for the others.
+     */
     @SerialName("display_name") val displayName: String? = null,
     /** This computer can open Codex before its first message; absent on older nodes. */
     @SerialName("prompt_optional") val promptOptional: Boolean = false,
+    /**
+     * The permission modes a start on it takes when its agent is not Claude Code (#8261, the node's `permission_modes`:
+     * Paseo's Grok, OpenCode or Codex): `default`, its own approval, sent as no mode, and `bypassPermissions` where it has
+     * an Allow everything. Null for Claude Code's launchers, which take its five, and for every other one, which takes none.
+     */
+    @SerialName("permission_modes") val permissionModes: List<String>? = null,
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
     val title: String get() = displayName?.trim()?.takeIf(String::isNotEmpty) ?: name
 }
 
-/** Prefer the configured agent type, falling back to the hub's `agent` field, as on the web. */
+/**
+ * Prefer the configured agent type, falling back to the hub's `agent` field, as on the web. A `permission_modes` that is
+ * not a list of words is dropped rather than losing the launcher.
+ */
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 object AgentLauncherSerializer : JsonTransformingSerializer<AgentLauncher>(AgentLauncher.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement {
         val fields = element as? JsonObject ?: return element
         val agent = sequenceOf("agent_type", "agent").mapNotNull { fields[it] as? JsonPrimitive }
             .firstOrNull { it != JsonNull && it.content.isNotEmpty() } ?: JsonPrimitive("claude")
-        return JsonObject((fields - "agent_type") + ("agent" to agent))
+        val modes = fields["permission_modes"]
+        val kept = if (modes == null || (modes is JsonArray && modes.all { it is JsonPrimitive && it.isString })) fields
+            else fields - "permission_modes"
+        return JsonObject((kept - "agent_type") + ("agent" to agent))
     }
 }
 
 /**
  * What the assistant's computer lists for Persona chats (`GET /api/v1/machines/{mid}/launchers?purpose=assistant`,
  * docs/protocol/protocol.md): the launchers that can run them, the main chat's default (Model configuration › Main chat)
- * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`).
+ * and what can't run them there, with the hub's reason ([UnavailableLauncher], feature `assistant_model_pick`). Without
+ * a purpose (New Agent, [AgentCreationService.launcherList]) the same shape: the computer's launchers and the providers
+ * its own-service rule leaves out there (#8109).
  */
 @Serializable
 data class AssistantLaunchers(
@@ -210,8 +248,9 @@ fun launcherModel(launcher: AgentLauncher): String? = launcher.model
 data class LauncherDefault(val provider: String = "", val model: String? = null, val effort: String? = null)
 
 /**
- * A launcher or provider that can't run Persona chats on that computer (#5033): [kind] `launcher` or `api`, [code] why
- * (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`, `launcher_own_service`) and [reason] in the request's language.
+ * A launcher or provider that can't run Persona chats on that computer (#5033), or, for New Agent, can't start Agents
+ * there (#8109): [kind] `launcher` or `api`, [code] why (`not_main_chat`, `api_protocol`, `launcher_out_of_scope`,
+ * `launcher_own_service`) and [reason] in the request's language.
  */
 @Serializable
 data class UnavailableLauncher(

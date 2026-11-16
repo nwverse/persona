@@ -83,6 +83,7 @@ object ChatWiringModule {
                     embedded = options.embedded, showTopBar = options.showTopBar,
                     // The conversation's manager is offline: history only, its 最后同步于 where the composer was.
                     historyReadOnly = options.readOnlyNote != null,
+                    healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
             }
             CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
@@ -173,7 +174,12 @@ private class RoutedAssistantManagement(
     override suspend fun memory() = api().memory()
     override suspend fun saveMemory(name: String, content: String) = api().saveMemory(name, content)
     override suspend fun deleteMemory(name: String) = api().deleteMemory(name)
+    override suspend fun places() = api().places()
+    override suspend fun savePlace(place: SavedPlace) = api().savePlace(place)
+    override suspend fun deletePlace(id: String) = api().deletePlace(id)
     override suspend fun skills() = api().skills()
     override suspend fun alwaysGrants(session: SessionKey) = api().alwaysGrants(session)
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = api().revokeAlwaysGrant(session, keyHash)
+    override suspend fun standingAuthorizations() = api().standingAuthorizations()
+    override suspend fun revokeStandingAuthorization(id: String) = api().revokeStandingAuthorization(id)
 }

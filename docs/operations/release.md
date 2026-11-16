@@ -392,6 +392,7 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
   - Before upload, run `check_bundle_privacy.py --whole-short`: binaries must contain none of the configured values (except Go module paths; values of four characters or fewer match whole words,
     since Unicode tables and compressed JS contain short letter combinations everywhere). A few protocol names, official contact links and standard network constants in public dependencies are classified by exact context, without allowing whole domains or private network ranges;
     it requires the binary's `public` marker, unreplaced dependencies and checksums matching `server/go.sum`, and `go mod verify` before building. Registered personal values always take precedence and are blocked; see `docs/lessons/testing.md`.
+- Build the iPhone helper `persona-iphone-bridge-<os>-<arch>` for the four platforms when this computer can (`native/iphone-bridge/release.sh`; macOS needs `rustup target add aarch64-apple-darwin x86_64-apple-darwin`, Linux needs `zig` and `cargo install cargo-zigbuild` plus `rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu`). Cargo keeps its build directory at `PERSONA_BRIDGE_TARGET` (default `~/.cache/persona/iphone-bridge-target`). A platform it can't build, or whose build fails, is left out with a `note:` line; the release goes on without it. `latest.json` lists only the builds that are there under `helpers`, and they are kept with the node builds under `dl/<version>/` ([iphone-bridge.md](../extensions/iphone-bridge.md), "Releases"). A version-tag upload should carry `persona-iphone-bridge-<os>-<arch>.gz` with the other downloads; when it doesn't, `tag_release.py` warns and uploads `latest.json` without those helpers instead of failing.
 - Build the connector `persona-link-<os>-<arch>` for the same four platforms too (2026-11-02, node service, `install.sh --node`, see `docs/operations/link.md` ("Installing the node service")), plus `persona-link-windows-amd64.exe` and `persona-link-windows-arm64.exe`, with the same privacy scan and gzip compression, included in `SHA256SUMS`. `latest.json` lists all six connectors under `links`; hub updates never swap them. `persona-link version -v` reports the same version, channel and build as personad so the manifest verifier can identify every connector. Windows download and scheduled-task installation commands are in [windows.md](windows.md) ("Install and start at logon"). The POSIX `install.sh` remains Linux/macOS-only.
 - Build the device's own program `persona-node-<os>-<arch>` (`server/cmd/persona-node`) for the same four platforms, scanned, compressed and included in `SHA256SUMS` the same way (it must report the same `version -v` as personad). `install.sh --node` installs it at `~/.persona/bin/persona-node` and the node service runs it ([link.md](link.md) "The device's program"). `latest.json` lists it under `nodes` (old hubs ignore that): hub self-update still brings `personad-*` alone, and the manager fetches persona-node from `dl/<version>/` for a device that runs it (`docs/operations/node-update.md` ("Node packages")).
 - Downloads are `personad-<os>-<arch>.gz`: scan the raw binary first, then compress with `gzip -n -9`; `SHA256SUMS` verifies the archive. The installer verifies it before unpacking and installing; failed verification / decompression never overwrites the old version. Public artifacts and their index use only Persona names, including `persona-link-<os>-<arch>.gz`; old-name aliases remain inside installed runtime compatibility, not new downloads. The installer still reads historical manifests with older names.
@@ -523,6 +524,21 @@ A private configuration has only these fields, with no secrets:
   `releases/latest/download` never sees a manifest whose files are not there yet.
 - A receipt that carries `android.json` (the Android platform's) must ship the
   APK it names, at its size and sha256, for the tag's version.
+- Windows CLI bundles (`Persona-<version>-windows-<arch>.zip`) also require a
+  native verification report before upload (#8338). On Windows of that
+  architecture, run `python scripts/operations/windows_release.py --archive
+  <archive.zip> --version <version> --build <build>`. It runs the bundled
+  `persona-link version`, `personad version -v`, and `personad node-update-check`
+  with time limits, without installing or starting services. Success writes
+  `<archive-stem>.verification.json` beside the ZIP; failure removes a previous
+  report. Include the ZIP, report and `BUILD.json` or `latest.json` in the
+  private artifact receipt. The coordinator checks the requested version,
+  build, command results, ZIP digest and executable digests before any upload.
+  This report is output from the trusted release pipeline, preventing stale or
+  mismatched verification; it is not a signed attestation against a malicious
+  publisher. Cross-compilation or a matching build number alone does not prove
+  the Windows programs report the intended version. A missing Windows runner
+  is an explicit publication prerequisite, not a passed or skipped check.
 
 For the first release, merge this consumer's PR before pushing `v0.1.0` from
 the merged `main` commit. The public workflow creates the Release and image;
@@ -567,6 +583,20 @@ version codes and update each other:
   A hub reads it beside `latest.json` to offer the APK to its phones (#5563). A prerelease tag's APK is attached to
   its Release, but `releases/latest/download` never points at a prerelease.
 
+### Android build commit
+
+Settings › About shows the commit an Android APK was built from ([android.md](../android/android.md) "Build commit"). Release
+builds pass it explicitly: `android_release_worker.py` adds `-PpersonaBuildCommit=<sha>` with the full sha it checked out (the
+same value as the receipt's `source_sha`, for main-branch and version-tag builds), and `scripts/app/android.sh release` passes
+this repository's `HEAD`. Version names, version codes, signing and R8 are unchanged.
+
+- **Receipt reuse**: `build.json` records `build_commit` (the full sha). A run directory whose `unsigned.apk` receipt has no
+  `build_commit`, or one that is not the source sha, is built again; an `unsigned.apk` made before this metadata existed is never
+  published, and nobody has to delete the directory by hand.
+- **Check before keeping the APK**: after `:app:assembleRelease` and the R8 check, and before `unsigned.apk` is copied,
+  `scripts/release/check_android_build_commit.py` reads `persona_build_commit` with `aapt2 dump resources` and fails unless it equals
+  the source sha. A build without the injection, with a wrong value, or one that left an old APK behind stops there and writes no receipt.
+
 ## Android publisher repository migration and status retries
 
 `scripts/release/android_release_worker.py` uses a private configuration file. Its `repository`, `git_url`, `branch` and
@@ -586,7 +616,11 @@ removes `app/build/outputs/apk/release` and `mapping/release` before the build, 
 signed. After `:app:assembleRelease` and before the APK is copied for signing, it runs `scripts/release/check_android_shrink.py`
 on it and on R8's output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app
 reaches only by name and that R8 removed, and any exception, the app's or a library's, that R8 merged into another class,
-fails the build, so nothing is signed or published. It then keeps R8's `mapping.txt` gzipped as
+fails the build, so nothing is signed or published. It also fails when any method grows past 10,000 dex code units,
+which ART would then leave interpreted, the libraries' included because R8 merges classes across packages; a method in
+`scripts/release/known_oversized_methods.txt` (one full signature per line) only warns while it stays at or below the
+size recorded there, and one between 9,000 and 10,000 warns as the next split's deadline
+(docs/android/android.md "Release shrinking"). It then keeps R8's `mapping.txt` gzipped as
 `runs/<source>/mapping-<unsigned sha256>.txt.gz` (about 12 MB), which `retrace` needs for frames from optimized code. Before
 the first shrunk or optimized release, install it on a phone and
 open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings

@@ -51,12 +51,14 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 	if supervisor != self && !s.isMain(ctx, self) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: record the owner's answer from the main conversation or its supervisor", t.ID)
 	}
-	var taken bool
+	var result acceptResult
 	var err error
 	if a.ToldAgent {
+		var taken bool
 		taken, err = s.decisionTold(ctx, t.ID, a.Option, machine, self, a.Said)
+		result.taken = taken
 	} else {
-		taken, err = s.chooseOption(ctx, t.ID, "", a.Option)
+		result, err = s.chooseOption(ctx, t.ID, "", a.Option)
 	}
 	if ask, ok := s.askCopy(t.ID); errors.Is(err, errDecisionOption) && ok {
 		labels := make([]string, 0, len(ask.Options))
@@ -69,8 +71,11 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 	if err != nil {
 		return "", err
 	}
-	if !taken {
+	if !result.taken {
 		return "", fmt.Errorf("task %s has no decision waiting for the owner (answered, re-asked or closed meanwhile): nothing recorded", t.ID)
+	}
+	if result.undelivered != nil {
+		return fmt.Sprintf("Recorded: the owner chose %q for task %s's decision. The ask is answered and the supervisor was told to pass the choice on; no running Agent received it.", a.Option, t.ID), nil
 	}
 	if a.ToldAgent {
 		return fmt.Sprintf("Recorded: the owner chose %q for task %s's decision. The decision is answered (out of their Needs you); nothing was sent to its agent again.", a.Option, t.ID), nil
@@ -85,11 +90,6 @@ func (s *Service) toolTaskDecided(ctx context.Context, machine, self string, arg
 func (s *Service) decisionTold(ctx context.Context, id, label, machine, session, said string) (bool, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	if t, ok := s.todoNow(id); ok {
-		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
-			return false, err
-		}
-	}
 	a, err := s.askRound(id, "")
 	if err != nil || a == nil {
 		return false, err
@@ -97,6 +97,11 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 	label = strings.TrimSpace(label)
 	if !slices.ContainsFunc(a.Options, func(o DecisionOption) bool { return o.Label == label }) {
 		return false, errDecisionOption
+	}
+	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return false, err
 	}
 	s.deadlineAnswered(ctx, id, a.AskedAt)
 	if st := s.todoDB(); st != nil {
@@ -117,5 +122,6 @@ func (s *Service) decisionTold(ctx context.Context, id, label, machine, session,
 		chosen = "" // as "OK" takes it
 	}
 	s.endAsk(ctx, id, a.AskedAt, "", chosen)
+	completeDismissal()
 	return true, nil
 }

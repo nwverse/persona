@@ -290,19 +290,15 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 }
 
 // chooseOption: the owner chose option label of task id's decision (asked: its round). The recommended one is taken as
-// "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's agent, which ends
-// the decision. False: the round is over. errDecisionOption: no such option; else acceptTry's errors, or the send's.
-func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bool, error) {
+// "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's Agent, which ends
+// the decision. With no Agent that can receive it, the choice is still recorded and handed to the supervisor. A zero
+// result means the round is over. errDecisionOption: no such option; another delivery error leaves the round retryable.
+func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	if t, ok := s.todoNow(id); ok {
-		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
-			return false, err
-		}
-	}
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
-		return false, err
+		return acceptResult{}, err
 	}
 	label = strings.TrimSpace(label)
 	i := slices.IndexFunc(a.Options, func(o DecisionOption) bool { return o.Label == label })
@@ -310,17 +306,25 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bo
 	case label == a.Recommend && label != "":
 		return s.acceptTryAsDismissalLocked(ctx, id, "", false)
 	case i < 0:
-		return false, errDecisionOption
+		return acceptResult{}, errDecisionOption
 	}
 	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return acceptResult{}, err
+	}
 	l := s.botLang(ctx)
 	s.deadlineAnswered(ctx, id, a.AskedAt) // their own answer: no default at its deadline, even if the send fails
 	msg := i18n.T(l, "assistant-reports.decision_chosen_to_agent", i18n.Args{"option": label, "leads_to": a.Options[i].LeadsTo})
+	var sendErr error
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 		return cur.DoneAt == nil && !acceptAskStale(a, cur)
 	}); err != nil {
 		s.logf("task %s: decision to agent: %v", id, err)
-		return false, err
+		if !noAgentCanTake(err) {
+			return acceptResult{}, err
+		}
+		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
 		at, dec := decisionNow(), "dec_"+randomHex(8)
@@ -333,9 +337,15 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bo
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
-	s.userDecided(ctx, id)
+	result := acceptSucceeded()
+	if sendErr != nil {
+		result = s.decisionNotDelivered(ctx, id, a.AskedAt, label, sendErr)
+	} else {
+		s.userDecided(ctx, id)
+	}
 	s.endAsk(ctx, id, a.AskedAt, "", label)
-	return true, nil
+	completeDismissal()
+	return result, nil
 }
 
 // routeDecisionAnswer is an explicitly addressed chat answer, not an inference from arbitrary conversation text.
@@ -354,15 +364,16 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 	if !ok || t.Origin != conversation {
 		return FeedItem{}, i18n.Err("assistant-tasks.route_no_task")
 	}
-	if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
-		return FeedItem{}, err
-	}
 	a, err := s.askRound(id, asked)
 	if err != nil {
 		return FeedItem{}, err
 	}
 	if a == nil {
 		return FeedItem{}, i18n.Err("assistant-feishu_cards.already_handled")
+	}
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return FeedItem{}, err
 	}
 	s.deadlineAnswered(ctx, id, a.AskedAt)
 	item, err := s.routeToTaskChecked(ctx, conversation, id, text, func(cur Todo) bool {
@@ -378,6 +389,7 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 	if _, err := s.insertDecision(ctx, st, row); err != nil {
 		return FeedItem{}, err
 	}
+	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
 	s.userDecided(ctx, id)
 	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
@@ -424,11 +436,6 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response string) (bool, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	if t, ok := s.todoNow(id); ok {
-		if err := s.undoDismissalForAnswer(ctx, t); err != nil { // an answer beats Don't handle
-			return false, err
-		}
-	}
 	if !slices.Contains(ownerResponses, response) {
 		return false, nil
 	}
@@ -437,6 +444,10 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 		return false, err
 	}
 	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return false, err
+	}
 	now := time.Now().UTC()
 	stays := response == respondExplainFirst || response == respondDecideYourself && neverDefault(a.WhyOwner)
 	v, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
@@ -456,6 +467,7 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", errAcceptStore, err)
 	}
+	completeDismissal()
 	if response == respondExplainFirst {
 		s.deadlineAnswered(ctx, id, a.AskedAt) // they asked for more first: its default is not taken meanwhile
 		b := &s.accept

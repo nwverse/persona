@@ -48,11 +48,12 @@ type StateStore interface {
 const inboxStateKey = "connector.larkcli.inbox"
 
 type persistedInboxState struct {
-	Cursor       string   `json:"cursor,omitempty"`
-	PageToken    string   `json:"page_token,omitempty"`
-	Topics       []string `json:"topics,omitempty"`
-	Seen         []string `json:"seen,omitempty"`
-	TopicsSeeded bool     `json:"topics_seeded,omitempty"`
+	Cursor       string                          `json:"cursor,omitempty"`
+	PageToken    string                          `json:"page_token,omitempty"`
+	Topics       []string                        `json:"topics,omitempty"`
+	Seen         []string                        `json:"seen,omitempty"`
+	TopicsSeeded bool                            `json:"topics_seeded,omitempty"`
+	Things       map[string]connector.InboxThing `json:"things,omitempty"`
 }
 
 type inboxGroup struct {
@@ -408,14 +409,14 @@ func (c *Connector) Collect(context.Context) ([]connector.InboxThing, error) {
 // falls back to messages-send.
 func (c *Connector) Reply(ctx context.Context, r connector.InboxReply) error {
 	if strings.HasPrefix(r.Thread, "doc:") {
-		return fmt.Errorf("lark-cli document comments are read-only")
+		return fmt.Errorf("%w: lark-cli document comments are read-only", connector.ErrCannotReply)
 	}
 	if c == nil || c.runner == nil {
 		return &adapter.Error{Kind: adapter.KindNotInstalled}
 	}
 	chatID, ok := chatIDFromThread(r.Thread)
 	if !ok {
-		return fmt.Errorf("%s cannot be replied to", r.Thread)
+		return fmt.Errorf("%w: the thread names no chat", connector.ErrCannotReply) // never the thread: it is a private id
 	}
 	var err error
 	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
@@ -487,6 +488,11 @@ func (c *Connector) loadInboxStateLocked(ctx context.Context) error {
 		return nil
 	}
 	c.inboxState = saved
+	for thread, thing := range saved.Things {
+		if thread != "" {
+			c.inboxThings[thread] = thing
+		}
+	}
 	for _, id := range saved.Seen {
 		if id != "" {
 			c.inboxSeen[id] = struct{}{}
@@ -504,7 +510,11 @@ func (c *Connector) saveInboxStateLocked(ctx context.Context) error {
 	if c.inboxStore == nil {
 		return nil
 	}
-	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded}
+	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded,
+		Things: make(map[string]connector.InboxThing, len(c.inboxThings))}
+	for thread, thing := range c.inboxThings {
+		state.Things[thread] = thing
+	}
 	for topic := range c.inboxTopics {
 		state.Topics = append(state.Topics, topic)
 	}
@@ -752,7 +762,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Title:    title,
 		Sender:   latest.Sender.Name,
 		Preview:  firstLine(text),
-		Context:  contextText(contextMessages),
+		Context:  contextText(contextMessages, me),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
 		ReplyTo:  replyTo(lang, name, group.threadID != ""),
@@ -977,10 +987,35 @@ func messageKey(message adapter.Message) string {
 	return message.ChatID
 }
 
+// atAll is an @all written in the content: lark-cli lists only people in mentions, so an @all reaches the Inbox as
+// "@_all" in a text message and as <at user_id="all"> in a post.
+var atAll = lazyre.New(`(?:^|\s)@_all(?:\s|$)|<at\s+user_id="all"`)
+
 func messageMentions(message adapter.Message, me string) bool {
+	return mentionsOwner(message, me) || mentionsAll(message)
+}
+
+// mentionsOwner: the message @'s the owner, by the mention's id only: another person can have the owner's display name.
+func mentionsOwner(message adapter.Message, me string) bool {
+	if me == "" {
+		return false
+	}
+	for _, mention := range message.Mentions {
+		if mention.ID == me {
+			return true
+		}
+	}
+	return false
+}
+
+// mentionsAll: the message @'s everyone.
+func mentionsAll(message adapter.Message) bool {
+	if atAll.MatchString(rawText(message.Content)) {
+		return true
+	}
 	for _, mention := range message.Mentions {
 		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
-		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
+		if id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
 			return true
 		}
 	}
@@ -1111,7 +1146,16 @@ func rawText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-func contextText(messages []adapter.Message) string {
+// The marks after a sender that say whom a message @'s, as the tier criteria read them (prompts/inbox/tiers.md): there a
+// Lark group message without them did not @ the owner.
+const (
+	markOwner = "（@了我）"  // i18n-ignore: the tier criteria's mark, read by the model
+	markAll   = "（@所有人）" // i18n-ignore: the tier criteria's mark, read by the model
+)
+
+// contextText is the conversation as the models read it, a line a message: "<sender><marks>: <text>", the marks from
+// the message's structured mentions (both when it @'s the owner and everyone). me is the owner's id.
+func contextText(messages []adapter.Message, me string) string {
 	var b strings.Builder
 	for _, message := range messages {
 		text := strings.TrimSpace(messageText(message))
@@ -1121,12 +1165,19 @@ func contextText(messages []adapter.Message) string {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
+		start := b.Len()
 		name := message.Sender.Name
 		if name == "" {
 			name = message.Sender.ID
 		}
-		if name != "" {
-			b.WriteString(name)
+		b.WriteString(name)
+		if mentionsOwner(message, me) {
+			b.WriteString(markOwner)
+		}
+		if mentionsAll(message) {
+			b.WriteString(markAll)
+		}
+		if b.Len() > start {
 			b.WriteString(": ")
 		}
 		b.WriteString(text)

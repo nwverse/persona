@@ -147,7 +147,8 @@ async function hint() {
   await act(async () => {
     for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
     await list.load();
-    await vi.advanceTimersByTimeAsync(0);
+    // past the invalidation throttle window (lib/session-list.ts): a section's trailing read has gone out
+    await vi.advanceTimersByTimeAsync(2_100);
   });
 }
 
@@ -312,10 +313,10 @@ describe("the list by project, on a hub with the catalog", () => {
     // a row is told the group it is under: the sidebar names the computer on a row of a project that has several
     expect([...app.querySelectorAll<HTMLElement>("[data-row]")].map((el) => `${el.dataset.within}:${el.dataset.group}`)).toEqual(["project:app", "project:app", "project:app"]);
     // its remote, then each directory with its computer and how many of the sessions are there
-    const where = [...app.querySelectorAll(`[aria-label="${t("paged-agents.places")}"] li`)]
+    const where = [...app.querySelectorAll(`[aria-label="${t("agents-groupedsessions.places")}"] li`)]
       .map((li) => [li.querySelector("span[title]")!.textContent, li.querySelector("span[aria-hidden]")?.textContent].filter(Boolean).join(" = "));
     expect(where).toEqual(["git.example.com/team/app", "MacBook · ~/code/app = 2", "Windows PC · C:\\code\\App = 1"]);
-    expect(app.querySelector(`[aria-label="${t("paged-agents.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
+    expect(app.querySelector(`[aria-label="${t("agents-groupedsessions.places")}"] span[title="MacBook · /Users/me/code/app"]`)).not.toBeNull(); // the whole path on hover
     const read = reads("page").find((path) => params(path).getAll("place").length === 2)!;
     expect(params(read).getAll("place")).toEqual([listPair("mac", "/Users/me/code/app"), listPair("pc", "C:\\code\\App")]);
     expect(params(read).has("project")).toBe(false);
@@ -354,20 +355,26 @@ describe("the list by project, on a hub with the catalog", () => {
       .toEqual([`${t("lib-state-labels.needs_you")} 1`, `${t("lib-state-labels.idle")} 2`]);
   });
 
-  it("reads the groups once for a burst of hints, while the open sections follow every one", async () => {
+  it("reads the groups once per hint window, and the open sections' rows follow every one of them", async () => {
     await show();
     await browseBy("project");
     const groupReads = () => reads("catalog").length;
     const rowReads = () => reads("page").filter((path) => params(path).getAll("place").includes(listPair("pc", "C:\\code\\App"))).length;
     vi.mocked(api).mockClear();
-    for (let i = 0; i < 5; i++) await hint();
-    expect(groupReads()).toBe(0); // within the refresh gap of the first read: held for its end
-    expect(rowReads()).toBe(5);
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A burst of hints within one window (the fleet broadcasts one per working-agent update) reads the section's
+    // rows once, not once per hint; the groups refresh (their own 1.5 s gap) ride that same window.
+    await act(async () => {
+      for (let i = 0; i < 5; i++) {
+        for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
+      }
+      await list.load();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    expect(rowReads()).toBe(1);
     expect(groupReads()).toBe(1);
-    // a hint after a quiet stretch is read at once
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A hint after a quiet stretch is read at once
     await hint();
+    expect(rowReads()).toBe(2);
     expect(groupReads()).toBe(2);
   });
 
@@ -468,5 +475,35 @@ describe("the chosen Browse by", () => {
     localStorage.setItem("persona.agentBrowseBy", "repo");
     await show();
     expect(chosen()).toBe(t("paged-agents.recent"));
+  });
+});
+
+describe("a section passes over hints about other sessions (#9176)", () => {
+  const sectionReads = () => calls().filter((path) => { const q = params(path); return q.has("machine_id") && !q.has("counts") && !q.has("catalog"); }).length;
+  async function changeHint(since: string, revision: string, changed: string[][]) {
+    await act(async () => {
+      for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") (entry.fn as (msg: unknown) => void)({ since, revision, changed });
+      await list.load(); // the root list reads on every hint (the store's), and with it the groups' numbers
+      await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh + 2_100);
+    });
+  }
+
+  it("reads an open section only for a hint that can concern its sessions, or when its heading's numbers change", async () => {
+    await show();
+    await browseBy("machine");
+    const mac = sections().find((s) => summary(s).startsWith("MacBook"))!;
+    expect(rowsIn(mac)).toEqual(["a1", "a2", "a3"]);
+    const before = sectionReads();
+    await changeHint("r", "r2", [["elsewhere", "zz"]]);
+    expect(sectionReads()).toBe(before);
+    // a session joins the section: no hint it could check names it, the heading's count does
+    ROWS.push(row("a4", "mac", "/Users/me/notes"));
+    try {
+      await changeHint("r2", "r3", [["mac", "a4"]]);
+      expect(sectionReads()).toBeGreaterThan(before);
+      expect(rowsIn(sections().find((s) => summary(s).startsWith("MacBook"))!)).toEqual(["a1", "a2", "a3", "a4"]);
+    } finally {
+      ROWS.pop();
+    }
   });
 });

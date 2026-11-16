@@ -56,6 +56,8 @@ nonisolated enum ScreenVideoFallback: Equatable, Sendable {
     case locked
     /// The Mac hasn't allowed Persona Screen to record its screen.
     case notAllowed
+    /// The Mac already sends video to two devices (the hub refused this one as busy, #8320); tried again as `lost` is.
+    case busy
 
     /// The helper's `paused` reason as a fallback.
     static func paused(_ reason: String) -> ScreenVideoFallback {
@@ -71,6 +73,7 @@ nonisolated enum ScreenVideoFallback: Equatable, Sendable {
         case .lost: String(localized: "Video stopped. Showing VNC for now.")
         case .locked: String(localized: "The Mac is locked. Showing VNC until it’s unlocked.")
         case .notAllowed: String(localized: "This Mac hasn’t allowed video yet. Showing VNC.")
+        case .busy: String(localized: "Two devices are already watching this Mac’s video. Showing VNC for now.")
         }
     }
 
@@ -125,6 +128,13 @@ import UIKit
     private(set) var reading = ScreenVideoReading()
     private(set) var codec: String?
     private(set) var size: CGSize?
+    /// "x264" while the user's own ffmpeg encodes the stream (#8859, `hello.encoder`); nil for the Mac's built-in encoder.
+    private(set) var encoder: String?
+    /// Why x264, on for that Mac, doesn't encode now, in plain words (`hello.fallback`); nil when it isn't on.
+    private(set) var encoderNote: String?
+    /// The route `start` named (#8859); nil when the stream opened before its route was known, so the route's first
+    /// reading goes to the helper as an `update` (x264 runs only on a direct LAN route).
+    private var startedOn: UpdateMessage.Path?
     /// The helper said it has quality tiers (#6396, `hello.features`): only then does ⋯ › Quality do anything, so only
     /// then is it offered. Kept once heard, for this session.
     private(set) var tiers = false
@@ -153,6 +163,8 @@ import UIKit
     private(set) var link: LinkStats?
     /// The node said why it has no direct routes (`firewall`).
     private(set) var directUnavailable: String?
+    /// The UDP flow carrying the video, about once a second (#7873); nil when none does. The overlay shows its numbers.
+    private(set) var udp: ScreenUDPStatus?
 
     @ObservationIgnored private var want: Want?
     @ObservationIgnored private var ready: Ready?
@@ -174,6 +186,11 @@ import UIKit
     @ObservationIgnored private var net: (expensive: Bool, constrained: Bool, cellular: Bool) = (false, false, false)
     /// ⋯ › Quality for this computer (#6396).
     @ObservationIgnored private var bias: TierLadder.Bias = .auto
+    /// The UDP flow's parity and resends per byte of video (#7873), in 5 % steps: on mobile data the cap leaves room
+    /// for them, so the bytes on the wire stay within it.
+    @ObservationIgnored private var udpOverhead = 0.0
+    /// The share of the cap the flow lets the video use while it loses packets to congestion (#7873), in 5 % steps.
+    @ObservationIgnored private var udpScale = 1.0
     /// The tier each computer last settled on, by computer and kind of route, for this app run: the next stream starts
     /// there (`TierPolicy`'s `remembered`).
     @ObservationIgnored private static var settled: [String: Int] = [:]
@@ -201,10 +218,22 @@ import UIKit
         if unavailable != directUnavailable { directUnavailable = unavailable }
     }
 
+    /// The UDP flow carrying the video (#7873), about once a second; nil when none does.
+    func flowChanged(_ status: ScreenUDPStatus?) {
+        if status != udp { udp = status }
+        let o = ((status?.overhead ?? 0) * 20).rounded(.up) / 20
+        let sc = ((status?.scale ?? 1) * 20).rounded(.down) / 20
+        guard o != udpOverhead || sc != udpScale else { return }
+        let budgetMoves = sc != udpScale || net.expensive
+        udpOverhead = o
+        udpScale = sc
+        if budgetMoves { rebudget() }
+    }
+
     func routeChanged(_ change: PathChange) {
         route = change
         link = change.to
-        if change.reason != .start { stream?.send(UpdateMessage(path: .init(change.to))) }
+        if change.reason != .start || startedOn == nil { stream?.send(UpdateMessage(path: .init(change.to))) }
         stream?.tierPath(change) // the tiers look again (#6396)
         onPathChange(change)
     }
@@ -279,8 +308,10 @@ import UIKit
         opened = target
         rect = target.0.rect
         tally = ScreenVideoTally()
+        // The route it starts on (#8859): the helper uses x264, when on for that Mac, only on a direct LAN route.
+        startedOn = route.map { UpdateMessage.Path($0.to) }
         let start = StartMessage(display: target.0.display, maxSize: Self.maxSize, fps: budget.fps, maxKbps: budget.maxKbps,
-                                 codecs: ["hevc", "h264"])
+                                 codecs: ["hevc", "h264"], path: startedOn)
         let mailbox = mailbox
         // The tiers (#6396), when this app has them: they start once the helper's hello says it has them too.
         let tiers = ScreenTiers.appSupported
@@ -329,6 +360,8 @@ import UIKit
     private func hello(_ h: HelloMessage) {
         codec = h.codec == "h264" ? "H.264" : "HEVC"
         size = CGSize(width: h.width, height: h.height)
+        encoder = h.encoder == "x264" ? "x264" : nil // i18n-ignore: a program's name
+        encoderNote = h.encoder == "x264" ? nil : h.fallback.map(ScreenStats.x264Note)
         if h.features?.contains("tiers") == true {
             tiers = true
             // On mobile data, the picture starts on Data Saver; until the user chooses, ask (twice at most).
@@ -393,7 +426,7 @@ import UIKit
         opened = nil
         show(false)
         guard want != nil, ready != nil else { return }
-        say(.lost)
+        say(why == .busy ? .busy : .lost) // busy: tried again as a lost stream is, and video comes once one leaves
         let wait = backoff.take()
         retryAt = Date.now.addingTimeInterval(Double(wait.components.seconds) + Double(wait.components.attoseconds) / 1e18)
         onRetry(wait)
@@ -451,7 +484,7 @@ import UIKit
             stream?.tierBudget(tieredBudget)
             return
         }
-        let b = Self.currentBudget(path: (net.expensive, net.constrained))
+        let b = onWire(Self.currentBudget(path: (net.expensive, net.constrained)))
         guard b != budget else { return }
         budget = b
         stream?.send(UpdateMessage(fps: b.fps, maxKbps: b.maxKbps))
@@ -459,7 +492,17 @@ import UIKit
 
     /// The caps with tiers (#6396): mobile data as the user chose (`ScreenMobileData`).
     private var tieredBudget: ScreenVideoBudget {
-        Self.currentBudget(path: (net.expensive, net.constrained), mobileData: ScreenMobileData.current)
+        onWire(Self.currentBudget(path: (net.expensive, net.constrained), mobileData: ScreenMobileData.current))
+    }
+
+    /// The cap with the UDP flow in mind (#7873): its congestion scale on any network, and on mobile data room for its
+    /// parity and resends, so video × (1 + overhead) stays within Data Saver's 1.5 Mbit/s and the card's figures hold.
+    private func onWire(_ b: ScreenVideoBudget) -> ScreenVideoBudget {
+        let divisor = net.expensive ? 1 + udpOverhead : 1
+        guard udpScale < 1 || divisor > 1 else { return b }
+        var out = b
+        out.maxKbps = max(300, Int(Double(b.maxKbps) * udpScale / divisor))
+        return out
     }
 
     private static func currentBudget(path: (expensive: Bool, constrained: Bool)?, mobileData: ScreenMobileData? = nil)
@@ -488,7 +531,7 @@ import UIKit
         // The live screen's session (#6398): the video joins it as a channel when the RFB stream opened one.
         if ScreenRoutes.enabled, let session = ScreenLinkRegistry.shared.session(for: r.pair) {
             let ws = RFBWebSocket(api: api, path: path, pair: r.pair, protocols: [ScreenLinkWire.subprotocol, "binary"])
-            return ScreenLinkRFBTransport(ScreenLinkVideoStream(socket: ScreenLinkRelaySocket(ws), session: session))
+            return ScreenLinkRFBTransport(ScreenLinkVideoStream(socket: ScreenLinkRelaySocket(ws), session: session), relay: ws)
         }
         return RFBWebSocket(api: api, path: path, pair: r.pair)
     }
