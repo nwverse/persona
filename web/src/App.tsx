@@ -58,6 +58,7 @@ import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
+import { openStartPage } from "./lib/start-page";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
@@ -107,6 +108,9 @@ if (carried) {
   acceptHubs(carried.hubs, carried.removed);
   window.history.replaceState(window.history.state, "", carried.rest);
 }
+
+// An opening at the root address shows the start page the user chose (lib/start-page.ts), before the first paint.
+if (typeof window !== "undefined") openStartPage();
 
 // A provider import link (`/settings?tab=models#import=…`, #5420) left the address bar before anything loaded (main.tsx,
 // lib/import-link.ts says why). Pasted into the address bar of a page already open, only the fragment changes and

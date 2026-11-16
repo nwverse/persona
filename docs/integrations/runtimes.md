@@ -505,6 +505,13 @@ last second bypass the cache because rapid same-size writes can share a filesyst
 
 ### Shared runtime behavior
 
+Antigravity item identities include native creation time and the replacement branch's generation (#9410). Native
+step indices remain pagination sequences, not globally reusable item or tool-call IDs: after rewind a repeated input
+must not inherit the abandoned branch's pending-send binding or reply cache. Retained prefix records and same-step
+completion updates keep their identities. The history scope includes `:step-ids-v2` to discard older numeric-only
+item caches; full-item lookup resolves only the current branch's exact ID. Identity metadata is computed with parsed
+records, kept outside native JSON and reused by list, push, page and full-item reads.
+
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".
 

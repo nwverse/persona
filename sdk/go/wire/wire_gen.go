@@ -1942,6 +1942,20 @@ type Tile struct {
 	Control *RowControl `json:"control,omitempty"`
 	Actions []RowAction `json:"actions,omitempty"`
 	Action  *Action     `json:"action,omitempty"`
+	// Draws the tile as a ring (UI version 9): never with an image or a spark.
+	Gauge *Gauge `json:"gauge,omitempty"`
+}
+
+// Gauge: A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in
+// its centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+// app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+// color as the tile's.
+type Gauge struct {
+	// How full the ring is, 0 to 1.
+	Ratio *float64 `json:"ratio"`
+	// A short word under the value (USD, GB, h), as a control's unit.
+	Unit  string `json:"unit,omitempty"`
+	Color string `json:"color,omitempty"`
 }
 
 // Layout: stack: sections one under another. split: on a wide screen the side pane's sections in a column at the
@@ -6230,6 +6244,7 @@ var newDef = map[string]func() any{
 	"RowAction":                     func() any { return new(RowAction) },
 	"Spark":                         func() any { return new(Spark) },
 	"Tile":                          func() any { return new(Tile) },
+	"Gauge":                         func() any { return new(Gauge) },
 	"SectionLink":                   func() any { return new(SectionLink) },
 	"Tabs":                          func() any { return new(Tabs) },
 	"Tab":                           func() any { return new(Tab) },
