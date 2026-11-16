@@ -94,15 +94,17 @@ export function rehypeLinkedCode() {
   return (tree: HNode) => mark(tree, false, false);
 }
 
-/** A kana, Han or Hangul letter (iOS: PersonaKit `CJKEmphasis.isCJKLetter`). */
-const CJK_LETTER = /[\u3041-\u30fa\u3400-\u9fff\uac00-\ud7af]/;
+/** Words that end, or start, with a kana or Han letter, about (iOS reads Hangul and bopomofo too, PersonaKit
+ *  `CJKEmphasis.isCJKLetter`; one range here for the first screen's bytes). CJK punctuation (U+3000–303F, the
+ *  full-width forms) is outside it. Read from an element or nothing, `undefined` is no letter. */
+const CJK_END = /[\u3041-\u9fff]$/, CJK_START = /^[\u3041-\u9fff]/;
 
 function mark(node: HNode, inLink: boolean, inCell: boolean) {
   const kids = node.children ?? [];
   kids.forEach((c, i) => {
     if (c.type !== "element") return;
     if (c.tagName === "code") {
-      const gap = (CJK_LETTER.test((kids[i - 1]?.value ?? "").slice(-1)) ? "s" : "") + (CJK_LETTER.test((kids[i + 1]?.value ?? "")[0]) ? "e" : "");
+      const gap = (CJK_END.test(kids[i - 1]?.value!) ? "s" : "") + (CJK_START.test(kids[i + 1]?.value!) ? "e" : "");
       c.properties = { ...c.properties, ...(inLink && { dataLinked: true }), ...(inCell && c.children?.length === 1 && c.children[0].value!.length <= 24 && { dataChip: true }), ...(gap && { dataGap: gap }) };
     }
     mark(c, inLink || c.tagName === "a", inCell || c.tagName === "td");
