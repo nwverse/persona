@@ -26,7 +26,9 @@ import (
 
 // sessionsUp is a live service that keeps each session's frames apart, in the order the sessions began; with hand, its
 // model hands every line the user types over as a client delegation (dlg1, dlg2…). refuse says whether session n
-// (from 0) is refused: closed before it starts; drops (set before the call) whether it is closed as soon as it started.
+// (from 0) is refused: closed before it starts; drops (set before the call) whether it is closed as soon as it started;
+// slow (set before the call) how long session n takes to start. It starts a realtime dialect's session too (its
+// session.update), as an otherwise silent service.
 type sessionsUp struct {
 	*fakeUpstream
 	mu       sync.Mutex
@@ -34,6 +36,7 @@ type sessionsUp struct {
 	conns    []*websocket.Conn
 	ids      map[*websocket.Conn]int
 	drops    func(n int) bool
+	slow     func(n int) time.Duration
 }
 
 func newSessionsUp(t *testing.T, hand bool, refuse func(n int) bool) *sessionsUp {
@@ -50,10 +53,13 @@ func newSessionsUp(t *testing.T, hand bool, refuse func(n int) bool) *sessionsUp
 		s.sessions[n] = append(s.sessions[n], f)
 		s.mu.Unlock()
 		switch f["type"] {
-		case "session.start":
+		case "session.start", "session.update":
 			if refuse != nil && refuse(n) {
 				_ = c.Close(websocket.StatusGoingAway, "not now")
 				return
+			}
+			if s.slow != nil {
+				time.Sleep(s.slow(n))
 			}
 			u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
 			if s.drops != nil && s.drops(n) {
@@ -112,6 +118,13 @@ func (s *sessionsUp) audio(n int) (amps []int16, bytes []int) {
 		amps, bytes = append(amps, int16(uint16(b[0])|uint16(b[1])<<8)), append(bytes, len(b))
 	}
 	return amps, bytes
+}
+
+// conn is session n's socket, for the test to send its events on.
+func (s *sessionsUp) conn(n int) *websocket.Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns[n]
 }
 
 // drop closes session n's socket, as a service that restarts does.
