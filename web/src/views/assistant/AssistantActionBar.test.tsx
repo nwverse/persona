@@ -114,7 +114,10 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(entry("parked").textContent).toBe(`${label.parked}2`);
     expect(entry("running").textContent).toBe(`${label.running}1`);
     expect(entry("pr")).toBeNull();
+    const reveal = vi.fn();
+    entry("parked").scrollIntoView = reveal;
     act(() => entry("parked").click());
+    expect(reveal).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
     const rows = [...host.querySelectorAll<HTMLElement>("[data-parked-task-row]")];
     expect(rows.map((row) => row.dataset.parkedTaskRow).sort()).toEqual(["merge-wait", "supplier-wait"]);
     expect(rows.every((row) => row.dataset.countsOpen === "true")).toBe(true);

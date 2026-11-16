@@ -1127,6 +1127,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     setTrayNow(next);
     setExpanded(false);
     setOpenRows(new Set());
+    if (next) entryButtons.current[next]?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   };
   const toggleRow = (key: string) => setOpenRows((rows) => {
     const next = new Set(rows);

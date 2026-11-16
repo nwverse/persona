@@ -123,6 +123,10 @@ async function run(browser, size, theme, language, textSize = "standard") {
     await rows.first().waitFor();
     assert.equal(await rows.count(), 2, "one parked task and one multi-PR task");
     assert.equal(await page.locator('[data-tray-entry="parked"]').textContent(), `${group[language]}2`);
+    assert(await page.locator('[data-tray-entry="parked"]').evaluate((entry) => {
+      const row = entry.getBoundingClientRect(), scroller = entry.parentElement.getBoundingClientRect();
+      return row.left >= scroller.left - 1 && row.right <= scroller.right + 1;
+    }), "the selected wait group and its count stay fully visible, including at large text size");
     const readyMs = await page.evaluate((start) => performance.now() - start, feedback.start);
     const groupApiReads = apiReads.length - beforeReads;
     assert.equal(groupApiReads, 0, "opening the group uses local state, not a new API read");
