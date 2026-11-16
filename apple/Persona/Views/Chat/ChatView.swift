@@ -6959,12 +6959,13 @@ struct SessionInfoSheet: View {
                     let started = info.startedAt.flatMap { $0.isMeaningful ? $0 : nil }
                     if counted || usage != nil || started != nil {
                         Section("Usage") {
-                            if counted { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens") }
+                            // The context is left out while unknown: 0 before the first reply and right after a compaction (#9207).
+                            if counted, info.contextTokens > 0 { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens)) }
                             if let usage { ContextUsageRow(usage: usage) }
                             if counted, info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
                             if counted {
                                 row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
-                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens) + " tokens")
+                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens))
                             }
                             if let started {
                                 row(Theme.Icon.time, String(localized: "Started"), started.formatted(date: .abbreviated, time: .shortened))
@@ -7102,13 +7103,8 @@ struct SessionInfoSheet: View {
     /// The coding agent in the pane: Claude Code unless the session names another agent.
     private var agent: String { session.map { $0.isClaude ? "Claude Code" : $0.agentLabel } ?? "Claude Code" }
 
-    static func tokens(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...: String(format: "%.2fM", Double(n) / 1_000_000)
-        case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
-        default: "\(n)"
-        }
-    }
+    /// "1.25K tokens": the count as the Machines page and the web write it (TokenFormat), with a localized unit (#9205).
+    static func tokens(_ n: Int) -> String { String(localized: "\(TokenFormat.count(n)) tokens") }
 }
 
 /// A finished exchange: messages, the folded process, the answer.
