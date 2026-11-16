@@ -70,9 +70,10 @@ The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JN
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
 fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
 visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
-The fence-only StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
-stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation, partial markers
-and malformed/wrong-expected controls. Tables, inline markup, math and `plainOpenFence` are not implemented.
+The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
+partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
+`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure

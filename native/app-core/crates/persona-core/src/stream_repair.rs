@@ -1,4 +1,4 @@
-//! Fence-only projection of Apple's `StreamRepair.repair` and `StreamRepair.end`.
+//! Fence and final-block-marker projection of Apple's `StreamRepair.repair` and its code/text end state.
 //!
 //! This deliberately does not implement tables, inline markup, math blocks, rendering or `plainOpenFence`.
 
@@ -52,6 +52,65 @@ fn without_indent_so_far(text: &str) -> Option<&str> {
     }
 }
 
+/// Apple `Scan.markersOnly`: the unfinished line can still become a list item, heading, quote or rule. A marker
+/// followed by real text is not held back, and a line that already ended never reaches this predicate.
+fn markers_only(line: &str) -> bool {
+    let scalars = line.chars().collect::<Vec<_>>();
+    let Some(first) = scalars
+        .iter()
+        .position(|character| !matches!(character, ' ' | '\t' | '\r'))
+    else {
+        return false;
+    };
+    let mut saw = false;
+    let mut index = 0;
+    while index < scalars.len() {
+        let character = scalars[index];
+        if matches!(character, ' ' | '\t' | '\r') {
+            index += 1;
+        } else if "#-=*+_>|`~:[]".contains(character) {
+            saw = true;
+            index += 1;
+        } else if matches!(character, 'x' | 'X') && index > 0 && scalars[index - 1] == '[' {
+            index += 1;
+        } else if character.is_ascii_digit() {
+            let mut end = index;
+            while end < scalars.len() && scalars[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end - index > 9 {
+                return false;
+            }
+            if end == scalars.len() {
+                if index != first {
+                    return false;
+                }
+            } else if !matches!(scalars[end], '.' | ')') {
+                return false;
+            }
+            saw = true;
+            index = (end + 1).min(scalars.len());
+        } else {
+            return false;
+        }
+    }
+    saw
+}
+
+fn hold_markers(text: &str) -> Option<String> {
+    if text.ends_with('\n') {
+        return None;
+    }
+    let (prefix, last) = text.rsplit_once('\n').unwrap_or(("", text));
+    markers_only(last).then(|| {
+        if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{prefix}\n")
+        }
+    })
+}
+
 fn project_repair(text: &str) -> String {
     if text.is_empty() {
         return String::new();
@@ -61,11 +120,13 @@ fn project_repair(text: &str) -> String {
     }
     let lines = text.split('\n').collect::<Vec<_>>();
     let mut fence: Option<Fence> = None;
+    let mut closed_last = false;
     for (index, line) in lines.iter().enumerate() {
         let trimmed = trimmed(line);
         if let Some(open) = &fence {
             if closes(open, trimmed) {
                 fence = None;
+                closed_last = index + 1 == lines.len();
             }
             continue;
         }
@@ -78,7 +139,10 @@ fn project_repair(text: &str) -> String {
         }
     }
     let Some(open) = fence else {
-        return text.to_owned();
+        if closed_last {
+            return text.to_owned();
+        }
+        return hold_markers(text).unwrap_or_else(|| text.to_owned());
     };
     let indent = lines[open.line]
         .chars()
