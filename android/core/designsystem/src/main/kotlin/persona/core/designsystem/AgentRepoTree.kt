@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +36,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
@@ -237,6 +240,73 @@ fun AgentIdleRepoRow(
             Text(detail, style = type.micro, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         time?.takeIf { it.isNotEmpty() }?.let { Text(it, style = type.micro, color = palette.ink2, maxLines = 1) }
+        FoldChevron(folded)
+    }
+}
+
+/**
+ * A project's fold row inside a By App section (#9199, iOS `AppProjectRow`): folder (or the agents mark for Other), its
+ * [title] in the secondary weight and color, optional [machine] in caption/tertiary when the section mixes computers, an
+ * idle-toned [count] capsule, and the fold chevron. Not a section heading: it sits under the app's header with no rule
+ * above it; its sessions are one level in. [compact] uses the denser type (iOS `CompactList`).
+ *
+ * Leading matches iOS `listRowInsets(… rowInsets(level: 0) …)`: the folder at the list's level-0 leading (same inset as
+ * the app section's FoldButton), so it sits left of the heading's app mark — deliberate on iOS, not a bug. Trailing
+ * mirrors iOS (`title; machine; Spacer; count; chevron`): one weighted lead for title+machine, then count and chevron
+ * with no extra Spacer (several `weight(1f, fill = false)` siblings would split the remaining width and leave the badge mid-row).
+ */
+@Composable
+fun AgentAppProjectRow(
+    title: String,
+    count: Int,
+    folded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    other: Boolean = false,
+    machine: String? = null,
+    compact: Boolean = false,
+) {
+    val palette = PersonaTheme.palette
+    val type = PersonaTheme.type
+    val foldState = stringResource(if (folded) R.string.designsystem_folded else R.string.designsystem_expanded)
+    val separator = stringResource(R.string.designsystem_separator)
+    val agentsLabel = pluralStringResource(R.plurals.designsystem_tab_agents, count, count)
+    val markSize = if (compact) Tokens.Space.Standard.m else Tokens.Space.l
+    val titleStyle = if (compact) type.caption.copy(fontWeight = FontWeight.SemiBold) else type.labelSmall
+    val metaStyle = if (compact) type.micro else type.caption
+    val tone = palette.status(Status.Idle)
+    RepoTreeLine(
+        level = 0, onClick = onToggle, modifier = modifier,
+        spoken = {
+            contentDescription = listOfNotNull(title, machine?.takeIf { it.isNotEmpty() }, foldState, agentsLabel)
+                .joinToString(separator)
+            stateDescription = foldState
+        },
+        mark = { JIcon(if (other) PersonaIcons.agents else PersonaIcons.folder, null, size = markSize, tint = palette.ink2) },
+    ) {
+        // One weight for the lead (iOS Spacer after title/machine); title shrinks first, machine capped.
+        Row(
+            Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+        ) {
+            Text(
+                title, style = titleStyle, color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            machine?.takeIf { it.isNotEmpty() }?.let {
+                Text(
+                    it, style = metaStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = Tokens.Size.box120),
+                )
+            }
+        }
+        Text(
+            "$count", style = type.micro.copy(fontWeight = FontWeight.SemiBold),
+            color = tone.text, maxLines = 1,
+            modifier = Modifier.clip(CircleShape).background(tone.tint)
+                .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical),
+        )
         FoldChevron(folded)
     }
 }

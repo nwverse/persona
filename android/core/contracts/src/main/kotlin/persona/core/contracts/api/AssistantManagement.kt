@@ -136,6 +136,20 @@ interface AssistantManagement {
      */
     suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String): Boolean =
         throw UnsupportedOperationException("Always-allowed permissions unavailable")
+
+    /**
+     * The current assistant's standing authorizations (GET /api/v1/assistant/standing-authorizations).
+     * A device without the full-access role is answered 403. Missing fields default; a row without an id is left out.
+     */
+    suspend fun standingAuthorizations(): persona.core.contracts.StandingAuthorizationList =
+        throw UnsupportedOperationException("Standing authorizations unavailable")
+
+    /**
+     * Revokes one (DELETE …/standing-authorizations/{id}). The hub answers ok when it is already gone.
+     * There is no route that puts a grant back.
+     */
+    suspend fun revokeStandingAuthorization(id: String): Unit =
+        throw UnsupportedOperationException("Standing authorizations unavailable")
 }
 
 /** One message a chat was found by (`docs/protocol/protocol.md` "Assistant chat search"). `ranges` are UTF-16 `[start, end)` in [snippet]. */

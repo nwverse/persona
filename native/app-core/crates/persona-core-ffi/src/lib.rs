@@ -3,6 +3,8 @@
 //! (`jni`). Both carry bincode-encoded wire types. A panic never crosses the boundary: each entry point catches it and
 //! returns its failure value.
 
+#[cfg(not(feature = "release-android"))]
+mod answer_shadow;
 mod jni;
 
 use std::collections::HashMap;
