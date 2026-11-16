@@ -15,12 +15,12 @@ public enum ContinuityJSON: Equatable, Sendable {
             if let left = ExactJSONNumbers.normalizedInteger(left),
                let right = ExactJSONNumbers.normalizedInteger(right) { return left == right }
             return left == right
-        case (.null, .null): true
-        case (.bool(let left), .bool(let right)): left == right
-        case (.string(let left), .string(let right)): left == right
-        case (.array(let left), .array(let right)): left == right
-        case (.object(let left), .object(let right)): left == right
-        default: false
+        case (.null, .null): return true
+        case (.bool(let left), .bool(let right)): return left == right
+        case (.string(let left), .string(let right)): return left == right
+        case (.array(let left), .array(let right)): return left == right
+        case (.object(let left), .object(let right)): return left == right
+        default: return false
         }
     }
     case string(String)
