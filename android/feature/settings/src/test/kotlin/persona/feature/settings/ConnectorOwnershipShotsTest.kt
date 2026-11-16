@@ -61,6 +61,18 @@ class ConnectorOwnershipShotsTest {
             return rows.first { it.id == id && it.manager == owner }.copy(enabled = enabled)
         }
         override suspend fun connectorLogout(id: String) { note("logout:$id") }
+        override suspend fun gitHubAuth(): GitHubAuth {
+            note("auth")
+            return GitHubAuth(source = "device", machines = listOf(GitHubMachine(id = "studio", name = "Studio", state = "signed_in")))
+        }
+        override suspend fun setGitHubAuth(machine: String?): GitHubAuth {
+            note("set-auth:${machine ?: "device"}")
+            return GitHubAuth(
+                source = if (machine == null) "device" else "machine",
+                machine = machine,
+                machines = listOf(GitHubMachine(id = "studio", name = "Studio", state = "signed_in")),
+            )
+        }
     }
 
     @Test fun zeroSingleAndMultipleAccountsKeepTheirIdentities() {
@@ -134,7 +146,9 @@ class ConnectorOwnershipShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("personal-example").assertDoesNotExist()
         val res = ApplicationProvider.getApplicationContext<Context>().resources
-        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_in, "GitHub")).performClick()
+        val signIn = res.getString(R.string.settings_src_connector_sign_in, "GitHub")
+        rule.waitUntil { rule.onAllNodesWithText(signIn).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(signIn).performClick()
         rule.waitForIdle()
         assertTrue(api.calls.contains("login:github" to "work"))
         rule.onNode(hasSetTextAction()).performTextInput("example-token")
@@ -145,12 +159,14 @@ class ConnectorOwnershipShotsTest {
         rule.waitForIdle()
         assertTrue(api.calls.contains("enable:github" to "work"))
         owner = "assistant"
+        rule.waitUntil { rule.onAllNodesWithText("personal-example").fetchSemanticsNodes().isNotEmpty() }
+        // Signed in on GitHub: the account is the status line. Choosing a computer is what stays with this assistant;
+        // there is no Sign out, because switching source signs out of the previous method.
+        rule.onAllNodesWithText("personal-example").assertCountEquals(1)
+        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_out)).assertDoesNotExist()
+        rule.onNodeWithText("Studio").performClick()
         rule.waitForIdle()
-        rule.onAllNodesWithText("personal-example").assertCountEquals(2)
-        rule.onNodeWithText(res.getString(R.string.settings_src_connector_sign_out)).performClick()
-        rule.onAllNodesWithText(res.getString(R.string.settings_src_connector_sign_out)).onLast().performClick()
-        rule.waitForIdle()
-        assertTrue(api.calls.contains("logout:github" to "assistant"))
+        assertTrue(api.calls.contains("set-auth:studio" to "assistant"))
         assertEquals(listOf("work", "assistant"), api.calls.filter { it.first == "list" }.map { it.second }.distinct())
     }
 
