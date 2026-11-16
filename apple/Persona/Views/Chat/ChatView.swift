@@ -822,6 +822,7 @@ struct ChatView: View {
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
+        .stackSegment()
         .sheet(item: $file) { ref in
             FileViewer(ref: ref, key: key)
                 .environment(\.showInFiles, (session?.cwd ?? "").isEmpty ? nil : { target in
@@ -830,6 +831,7 @@ struct ChatView: View {
                     withAnimation(Theme.Motion.standard) { pane = .files }
                 })
         }
+        .stackSegment()
         .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
@@ -2184,7 +2186,8 @@ struct ChatView: View {
                         guard let mark = navigationJump else { return }
                         await jumpToInput(mark)
                     }
-                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under) }
+                    // Left of the open Duo's floating tabs' switch, which stands up past the footer there (#4231).
+                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under).tabSwitchRoom() }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
@@ -2208,6 +2211,8 @@ struct ChatView: View {
             // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
             // has measured itself.
             ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { pickOrFooter } }
+                // Room beside the open Duo's floating tabs' switch while it shows (#4231): the composer and what is over it.
+                .tabSwitchRoom()
                 .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
@@ -2249,6 +2254,7 @@ struct ChatView: View {
                 guard let api = model.api(shownKey.group) else { throw CancellationError() }
                 return try await api.catalogPrices(ids)
             }))
+        .stackSegment()
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
@@ -2258,6 +2264,7 @@ struct ChatView: View {
             guard let sid = model.revealChild?.sessionID, let group = ChildSessionLines.group(of: sid, in: currentLines()) else { return }
             openWork.insert(group)
         }
+        .stackSegment()
         .environment(\.workflowChat, key)
         .environment(\.chatActions, actions)
         .environment(\.subagentParent, key)
@@ -6979,7 +6986,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }.overTabSwitch()
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)

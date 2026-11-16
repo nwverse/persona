@@ -107,6 +107,7 @@ internal class PaneSplitter(
     val split: PaneSplit get() = paneSplit(width, hinges, share)
     val canCollapse: Boolean get() = collapseEnabled && detailOpen
     private val shownCollapsed: Boolean get() = collapsed && canCollapse
+    val listHidden: Boolean get() = !split.fixed && shownCollapsed
 
     val look: PaneDividerState get() = when {
         moving && canCollapse && closesList(at) -> PaneDividerState.Closing
@@ -219,6 +220,16 @@ internal class PaneSplitter(
     }
 }
 
+@Stable
+internal class ShellListDetail(
+    val strategy: ListDetailSceneStrategy<NavKey>,
+    private val splitter: PaneSplitter,
+    private val state: PaneExpansionState,
+) {
+    val listHidden: Boolean get() = splitter.listHidden
+    fun expand() = splitter.expand(state)
+}
+
 /**
  * The list-detail scene of one tab with its divider: dragged by the finger (the list follows), settling on a flat fold
  * nearby, kept per tab as a share of the width, and (where [collapsible], with something open beside it) dragged far
@@ -238,7 +249,7 @@ internal fun rememberShellListDetail(
     keepScaffoldWhenSingle: Boolean = false,
     initialCollapsed: Boolean = false,
     onCollapsedChange: ((Boolean) -> Unit)? = null,
-): ListDetailSceneStrategy<NavKey> {
+): ShellListDetail {
     val density = LocalDensity.current.density
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
@@ -272,11 +283,12 @@ internal fun rememberShellListDetail(
             )
         }
     }
-    return rememberListDetailSceneStrategy<NavKey>(
+    val strategy = rememberListDetailSceneStrategy<NavKey>(
         shouldHandleSinglePaneLayout = keepScaffoldWhenSingle,
         backNavigationBehavior = BackNavigationBehavior.PopUntilContentChange,
         directive = directive,
         paneExpansionDragHandle = if (fixed) null else handle,
         paneExpansionState = state,
     )
+    return remember(strategy, splitter, state) { ShellListDetail(strategy, splitter, state) }
 }
