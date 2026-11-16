@@ -178,6 +178,56 @@ fn agents_list_projection_replays_every_fixture() {
 }
 
 #[test]
+fn multi_hub_preferences_scoped_pin_mute_and_order_match_ios() {
+    let input: Input = serde_json::from_value(serde_json::json!({
+        "sessions": [
+            {"machine_id": "shared", "session_id": "second", "app_hub_group": "hub-a", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "first", "app_hub_group": "hub-a", "title": "needle", "state": "unread"},
+            {"machine_id": "shared", "session_id": "first", "app_hub_group": "hub-b", "title": "needle", "state": "idle"},
+        ],
+        "machines": [
+            {"id": "shared", "name": "Fixture", "group": "hub-a"},
+            {"id": "shared", "name": "Fixture", "group": "hub-b"},
+        ],
+        "pins": {}, "mutes": {},
+        "hub_preferences": {
+            "hub-a": {"pins": {"sessions": ["shared/first", "shared/second"]}, "mutes": {"sessions": ["shared/first"]}},
+            "hub-b": {"pins": {"sessions": ["shared/second"]}, "mutes": {"sessions": ["shared/first"], "allowed": ["shared/first"]}},
+        },
+        "settings": {"grouping": "state", "quick": "all"},
+    }))
+    .expect("multi-hub input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["rows"],
+        serde_json::json!(["hub-a|shared/first", "hub-a|shared/second"]),
+        "the hub's own pin order is retained even though its first row is also muted"
+    );
+    assert_eq!(actual["groups"][0]["id"], "pinned");
+    assert_eq!(actual["groups"][1]["id"], "state/idle");
+    assert_eq!(actual["groups"][1]["rows"], serde_json::json!(["hub-b|shared/first"]));
+    assert_eq!(actual["unread_shown"], serde_json::json!(["hub-a|shared/first"]));
+
+    let mut legacy = serde_json::json!({
+        "sessions": [
+            {"machine_id": "shared", "session_id": "first", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "second", "title": "needle", "state": "idle"},
+            {"machine_id": "shared", "session_id": "third", "title": "needle", "state": "idle"},
+        ],
+        "machines": [{"id": "shared", "name": "Fixture"}],
+        "pins": {"sessions": ["shared/first", "shared/second"]}, "mutes": {},
+        "settings": {"grouping": "state", "quick": "all"},
+    });
+    let input: Input = serde_json::from_value(legacy.take()).expect("legacy input");
+    let actual = serde_json::to_value(persona_core::sort::project(&input)).expect("projection");
+    assert_eq!(
+        actual["groups"][0]["rows"],
+        serde_json::json!(["shared/first", "shared/second"]),
+        "legacy preferences retain their old semantics"
+    );
+}
+
+#[test]
 fn awaiting_reply_is_not_folded_like_plain_idle() {
     let document: Value =
         serde_json::from_str(&fs::read_to_string(fixture_dir().join("folding.json")).expect("folding")).expect("JSON");
