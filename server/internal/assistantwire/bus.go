@@ -57,6 +57,11 @@ const (
 	// revs and parts; docs/assistant/meeting-minutes.md "Phase 2b: highlights"). The hub lists meeting_highlights only
 	// while the default manager names it beside CapabilityMeetingLiveView.
 	CapabilityMeetingHighlights = "meeting_highlights"
+	// CapabilityMeetingNotes: the manager takes a room meeting's notes role (#8851: room.attendance and the timeline's
+	// roles may be notes, a room that keeps the topics and highlights while Persona answers nothing, …/ask refused
+	// with not_attending; docs/assistant/meeting-minutes.md "The notes role (#8851)"). The hub lists meeting_notes
+	// only while the default manager names it beside CapabilityMeetingLiveView.
+	CapabilityMeetingNotes = "meeting_notes"
 	// CapabilityMeetingEcho: the manager takes Persona's echo marked on a meeting's upload (#5905: the segments' echo
 	// and the spoken spans, its own copy of the rule, echo lines kept but left out of the minutes, the summary and the
 	// follow-up; docs/assistant/meeting-minutes.md "Persona's echo"). The hub lists meeting_echo only while the default

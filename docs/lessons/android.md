@@ -1,5 +1,32 @@
 # Lessons: Android
 
+## Rust continuity frames are not input acknowledgements (#7448)
+
+A worker can emit a fetch before it publishes a patch. Use #7554's `Ack`/`acked` to distinguish an applied no-op from
+queued work, and read `ChatPatch.verified` rather than deriving coverage uncertainty in Kotlin. Submit each input and
+Ack adjacently; state wakes are chat-targeted and the Ack's ordered global wake closes that input's effect batch.
+Collect effects and drain the patch in the same driver critical section, or an Ack can overtake its effect handoff.
+
+Give every asynchronous older/fold input its own bounded completion slot, remove it on timeout/cancellation, and carry `fold_id`
+through range responses and failures. Never let a late effect use a newer call's slot. Compare a response's history
+generation against submitted inputs under the same input mutex, not against the still-old displayed frame. Start
+fold cleanup protection before any suspension after reserving its ID, and bind initialization waiters to the driver
+scope so closing before the first frame cancels them. A queued async fill belongs
+to its applied callback chain. Before successful response queueing, its request owner must release the gate on failure
+or cancellation, including cancellation after HTTP returns. Queue acknowledgement is neither successful content nor
+completion of a later reconciliation: preserve errors across ordinary Acks and give each reconciliation a receipt.
+A content Ack can also be older than a transport failure: record the error's input boundary and clear it only for a
+later successful content input. Check whether a fill response settled before scanning coverage on an Ack-only frame.
+Bound overtaken-After follow-ups by progress and a request budget. Keep synchronous repository methods separate:
+retain their original state-lock sections, requests mutex, return values and error publication. Do not send Kotlin
+through asynchronous receipt timeouts, operation slots or history generations. Finish older's gate and clear its
+loading flag in the same state-lock section; a failed read receipt restores the snapshot it took under that lock.
+Fold expansion returns the downloaded items, not a filter of the current reducer, since a push can remove its fold.
+Keep synchronous coverage checks at their original repository call sites, using one captured adapter state.
+The adapter must not repeat those scans or scan history for controls and intermediate range pages.
+Rejected effects have no owner; record and broadcast diagnostics without cancelling another chat. Immediate test-only flush/drain schedulers do not prove
+these races: use real JNI with independently controlled worker completion, frames and transport.
+
 ## Verify intermittent test failures with the whole module
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
