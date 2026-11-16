@@ -1366,8 +1366,9 @@ in `lib/chat-export.ts`, checked against `spec/fixtures/chat-export`).
   the dialog saying how many items are in. Each message the pages carry cut (`full_size`) is read whole
   (`…/items/{id}/full`, three at a time, at most 200; one that fails stays cut and the file says how much is left out).
   A history rewritten while reading (the pages' `history` changes: a rewind, a compaction) starts over once, then says
-  the conversation changed. It stops at 20,000 items or 400 pages; the file then begins with where it starts. Closing
-  the dialog stops it.
+  the conversation changed. It stops at 20,000 items or 400 pages; it also stops if a promised older page cannot move
+  the cursor. The dialog and file say when history is incomplete, with its first readable timestamp when available;
+  rows outside the requested older range do not replace already read messages. Closing the dialog stops it.
 - **The file**: the title, the agent, the computer, the folder and when it was exported; then each part under
   `## <who> · <time>` (local time): You, the assistant's name for a message Persona typed in, another session by its
   name, the agent (or, in a Persona conversation, the assistant) for its replies, replies in a row under one heading. A
