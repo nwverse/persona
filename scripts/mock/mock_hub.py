@@ -9361,6 +9361,25 @@ if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
         copy.deepcopy(ix) for ix in INTERACTIONS
         if ix["id"] in ("ix_tests", "ix_ask_long") and ix["id"] not in ask_long_ids
     ]
+# Urgent calls (docs/assistant/urgent-call.md): the settings Settings › Urgent Calls reads, and with MOCK_URGENT_CALL=1
+# urgent calls on and the call `call_mock` about a pending card in Persona's main conversation, for the call page's
+# screenshots (`-showUrgentCallSample YES`).
+URGENT = {"settings": {"enabled": os.environ.get("MOCK_URGENT_CALL") == "1", "rules": [
+    {"id": "money_loss", "builtin": True}, {"id": "harm", "builtin": True}, {"id": "agent_disaster", "builtin": True},
+    {"id": "r_kids", "text": "接孩子相关的事"}], "daily_cap": 3, "quiet": None, "retry_minutes": 3}, "today": 1}
+URGENT_CALL = {"id": "call_mock", "title": "云账单扣费失控", "body": "要不要现在停掉这批实例？", "why": "rule",
+               "happening": "训练任务起的 8 台 GPU 实例近 1 小时扣了 2300 元，还在涨",
+               "rule": {"id": "money_loss", "text": "资金或资源正在损失：扣费失控还在涨、云资源被删、账号被盗刷或出现陌生扣款。"},
+               "machine_id": "server", "conversation_id": ASK1, "interaction_id": "", "state": "answered", "attempt": 1,
+               "seconds": 0, "outcome": "", "transcript": ""}
+if os.environ.get("MOCK_URGENT_CALL") == "1":
+    INTERACTIONS.append({
+        "id": "ix_urgent", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": [{"question": "要不要现在停掉这批 GPU 实例？", "header": "云账单", "multi_select": False, "options": [
+            {"label": "现在停掉 (Recommended)"}, {"label": "再等 10 分钟"}, {"label": "我自己处理"}]}]})
+    URGENT_CALL["interaction_id"] = "ix_urgent"
+
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -11412,6 +11431,53 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
     ]
 
 
+# A scheduled task's briefing (#9041): its text is Markdown. The hub keeps it as written in `body` and says it as plain
+# words in summary, preview and the chain's received message; mode `before` is the same row as hubs before #9041 kept
+# it: no body, the Markdown run into one line and cut. GET /mock/assistant_inbox?mode=before|1 switches it. Made-up content.
+BRIEF_MD = ("**早报 · 周一**\n结论：上午有一节辅导课，下午没课。邮件和课程公告都**没有新消息**。\n\n"
+            "**今天的课**\n- **数据结构辅导课：10:30–12:20，教学楼 B201**\n- 课上有 3–5 道选择题小测，不补考\n\n"
+            "**本周要交**\n1. 周三 23:59 前交实验报告（第 4 章）\n2. 周五前在选课系统确认下学期课程\n\n"
+            "**提醒**\n- 周四图书馆下午闭馆\n- 校园卡余额 23 元，建议这周充值\n\n"
+            "> 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没课。邮件和课程公告都没有新消息。 今天的课 数据结构辅导课：10:30–12:20，教学楼 B201 "
+               "课上有 3–5 道选择题小测，不补考 本周要交 周三 23:59 前交实验报告（第 4 章） 周五前在选课系统确认下学期课程 提醒 周四图书馆下午闭馆 "
+               "校园卡余额 23 元，建议这周充值 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+
+
+def assistant_brief(mode):
+    base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
+    url = base + "/s/macbook/" + BLOG
+    if mode == "before":
+        one = " ".join(BRIEF_MD.split())
+        summary, preview, body = one[:200] + "…", one[:120] + "…", None
+        said = preview
+    else:
+        summary, preview, body = BRIEF_PLAIN, BRIEF_PLAIN[:120] + "…", BRIEF_MD
+        said = BRIEF_PLAIN[:200] + "…"
+    row = {"id": "assistant:s3", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "助手",
+           "title": "每日早报", "preview": preview, "count": 1, "started_at": ago(minutes=12), "updated_at": ago(minutes=12),
+           "tier": "fyi", "status": "fyi", "summary": summary, "reason": "定时任务设成每次都放进收件箱", "read": False,
+           "triaged_by": "rules", "context": "每日早报\n" + (body or summary),
+           "chain": [{"id": "c1", "at": ago(minutes=12), "kind": "received", "text": "收到 1 条新消息", "count": 1, "via": "assistant",
+                      "link": {"type": "source", "url": url}, "messages": [{"text": said}]},
+                     {"id": "c2", "at": ago(minutes=12), "kind": "triaged", "text": "分拣：知悉即可", "detail": "fyi", "via": "assistant"}],
+           "connector": {"thread": "assistant:macbook/" + BLOG, "label": "助手", "url": url}}
+    if body:
+        row["body"] = body
+    return row
+
+
+def assistant_inbox_area(h, method, p):
+    """/mock/assistant_inbox?mode=before|1 (MOCK_ASSISTANT_INBOX): the briefing row as hubs before #9041 kept it, or now."""
+    if not os.environ.get("MOCK_ASSISTANT_INBOX") or method != "GET" or p != "/mock/assistant_inbox":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for i, x in enumerate(INBOX):
+        if x["id"] == "assistant:s3":
+            INBOX[i] = assistant_brief(mode)
+    return h.send_json({"mode": mode}) or True
+
+
 # MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
 # `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
 if os.environ.get("MOCK_ASSISTANT_INBOX"):
@@ -11430,6 +11496,7 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
          "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
+    INBOX.insert(1, assistant_brief(os.environ.get("MOCK_ASSISTANT_INBOX", "1")))
 
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
@@ -12853,6 +12920,69 @@ if MOCK_INBOX_SHOWCASE:
                         _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
         _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
         SESSIONS.append(_session)
+
+
+# MOCK_INBOX_MANY=<n> (n per section) or action:30,working:6,fyi:40,noise:20,done:25: many more made-up items per section,
+# for the section bar (#9053), long-list screenshots and perf runs. Every item carries `status` (so In progress shows),
+# sources rotate over Lark, the mail account and GitHub (three source groups), and update times spread over 40 days (every
+# time group); done items fall in the list's last 3 days. Added after MOCK_INBOX_EVENTS / MOCK_INBOX_SHOWCASE, so it
+# combines with either.
+def _many_counts(spec):
+    keys = ("action", "working", "fyi", "noise", "done")
+    if not spec: return {}
+    if spec.isdigit(): return {k: int(spec) for k in keys}
+    out = {}
+    for part in spec.split(","):
+        k, _, v = part.partition(":")
+        if k.strip() in keys and v.strip().isdigit(): out[k.strip()] = int(v)
+    return out
+
+
+_MANY_TOPICS = [  # i18n-ignore: made-up mock content in the mock's language
+    ("周会时间调整", "问周三的周会能不能改到下午"),
+    ("合同条款确认", "对方法务改了付款条款，等你确认第 4 条和第 7 条能不能接受，周五前要回复"),
+    ("报销单待审批", "上个月的差旅报销等你审批"),
+    ("新版设计稿", "设计组放了新版首页设计稿，想在评审前听听你的意见，重点是导航和空状态"),
+    ("服务器告警", "示例服务的磁盘用量超过 85%"),
+    ("客户回访", "示例客户想约下周回访，问你哪天方便"),
+    ("发布计划", "下个版本的发布计划更新了，候选包推迟一天"),
+    ("数据看板更新", "周报数据看板刷新了，转化率比上周低 2%，附了原因分析的链接"),
+]
+
+
+def _many_item(section, i, n):
+    title, summary = _MANY_TOPICS[i % len(_MANY_TOPICS)]
+    if section == "done":
+        at = ago(minutes=5 + (i * (3 * 24 * 60 - 120)) // max(n, 1))
+    else:
+        at = ago(days=(i * 41) // max(n, 1), minutes=7 * (i % 9))
+    k = i % 3
+    base = {"id": "many:%s:%d" % (section, i), "count": 1 + i % 4, "started_at": at, "updated_at": at,
+            "title": "%s %d" % (title, i + 1), "summary": summary, "preview": summary, "read": i % 3 == 0}
+    if k == 0:
+        base.update(source="lark", kind="group" if i % 2 else "dm", account="lark", account_name="飞书", sender="示例同事 %d" % (i % 7 + 1),
+                    lark={"feed_id": "many-%s-%d" % (section, i), "is_group": bool(i % 2), "start_position": "1"})
+    elif k == 1:
+        base.update(source="mail", kind="mail", account="acc1", account_name="个人邮箱", sender="示例联系人 %d" % (i % 5 + 1),
+                    mail={"account_id": "acc1", "mailbox": "INBOX", "uids": [20000 + 1000 * len(section) + i],
+                          "from": {"name": "示例联系人 %d" % (i % 5 + 1), "email": "contact%d@example.com" % (i % 5 + 1)}})
+    else:
+        base.update(source="github", kind="review_requested", account="github", account_name="GitHub", sender="example-bot",
+                    connector={"thread": "example-org/example-repo#%d" % (100 + i), "label": "GitHub",
+                               "url": "https://github.com/example-org/example-repo/pull/%d" % (100 + i)})
+    if section == "done":
+        base.update(tier="fyi" if i % 2 else "action", done_at=at, done_by="user", read=True)
+    elif section == "working":
+        base.update(tier="action", status="working", reason="AI 正在处理",
+                    handling={"owner": "manager", "state": ("looking", "agent", "waiting")[i % 3], "since": at})
+    else:
+        base.update(tier=section, status=section, reason={"action": "等你回复", "fyi": "知会你", "noise": "自动通知"}[section])
+    return base
+
+
+MOCK_INBOX_MANY = _many_counts(os.environ.get("MOCK_INBOX_MANY", "").strip())
+for _section, _n in MOCK_INBOX_MANY.items():
+    INBOX.extend(_many_item(_section, _i, _n) for _i in range(_n))
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -24776,6 +24906,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
+    "MOCK_URGENT_CALL=1  Urgent calls on, and the call call_mock (GET /api/v1/assistant/calls/call_mock) about a pending ask_user card in Persona's main conversation, for the call page (-showUrgentCallSample YES; docs/assistant/urgent-call.md)",
     "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
@@ -25239,6 +25370,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/ln":
             if "on" in q: LN["on"] = q["on"][0] == "1"
             return self.send_json(LN)
+        if p == "/api/v1/assistant/urgent-call":  # Settings › Urgent Calls (docs/assistant/urgent-call.md)
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/calls":
+            return self.send_json({"calls": []})
+        if p.startswith("/api/v1/assistant/calls/"):
+            return self.send_json(URGENT_CALL)
         if p == "/api/v1/push/ln-mode":
             return self.send_json({"enabled": LN["on"]})
         if p == "/api/v1/push/intercepts":  # kept whether the mode is on or off, as the hub keeps them
@@ -25961,6 +26098,7 @@ class H(BaseHTTPRequestHandler):
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if subscription_thread_area(self, "GET", p): return
+        if assistant_inbox_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
@@ -27956,6 +28094,13 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/assistant/urgent-call" and self.command == "PUT":
+            URGENT["settings"] = json.loads(self.last_body or b"{}")
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/urgent-call/test" and self.command == "POST":
+            return self.send_json({"devices": 1, "call": URGENT_CALL})
+        if p.startswith("/api/v1/assistant/calls/") and p.endswith("/state") and self.command == "POST":
+            return self.send_json(dict(URGENT_CALL, state=json.loads(self.last_body or b"{}").get("state", "")))
         if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
             LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
             return self.send_json({"enabled": LN["on"]})
@@ -28768,6 +28913,7 @@ MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a 
 MOCK_HELP.append("MOCK_REWIND=1|safeguards|codex|agy  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
+MOCK_HELP.append("MOCK_INBOX_MANY=<n>|action:30,working:6,fyi:40,noise:20,done:25  Inbox: n made-up items per section (or per section:count), with status so In progress shows, over Lark, mail and GitHub and 40 days of updates; done ones in the last 3 days. For the section bar (#9053) and long-list runs")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")

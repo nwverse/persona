@@ -165,11 +165,13 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
 		nestedUnsure := false
+		// fileReads: every substitution that is no filter only reads files (larkFileReadSubstitution).
+		fileReads := true
 		for _, nested := range s.Nested {
 			if inner, ok := larkArithmetic(nested); ok {
 				// $((…)) is arithmetic, not a subshell: it runs only its own $(…). It stays unsure (a variable's
 				// value is evaluated as an expression, which may hold a substitution of its own).
-				nestedUnsure = true
+				nestedUnsure, fileReads = true, false
 				for _, c := range inner {
 					child := classifyLarkDepth(c, gates, cwd, risk, depth+1)
 					if len(child.calls) > 0 || child.unknown || child.unparsed {
@@ -184,11 +186,17 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				v.other = true
 			}
 			nestedUnsure = nestedUnsure || !larkFilterSubstitution(nested) || child.unknown || child.unparsed || child.unsure
+			fileReads = fileReads && (larkFilterSubstitution(nested) || larkFileReadSubstitution(nested)) &&
+				len(child.calls) == 0 && !child.unknown && !child.unparsed && !child.unsure
 			merge(child)
 		}
 		// Output filters in a substitution do not make the enclosing command
-		// opaque. Gated calls and unresolved execution inside it still do.
-		if s.ArgSubst && nestedUnsure {
+		// opaque. Gated calls and unresolved execution inside it still do. A lark-cli command's argument may also come
+		// from a file (`$(cat ids.txt)`, `$(< ids.txt)`, #9101), as from $(head …): a write with it stays unknown by
+		// the dynamic-argument rule below. In any other command's argument (curl's) a file read stays unsure: it could
+		// carry the file elsewhere.
+		cliFileRead := s.ArgSubst && nestedUnsure && fileReads && larkSegmentCLI(s.Words)
+		if s.ArgSubst && nestedUnsure && !cliFileRead {
 			v.unsure, v.other = true, true
 		}
 		if v.deny != "" {
@@ -402,6 +410,43 @@ func larkFilterSubstitution(cmd string) bool {
 		}
 	}
 	return true
+}
+
+// larkFileReadSubstitution: a command substitution that only reads files, `cat <file>…` with plain file words or
+// `< file` (#9101). Kept only in a lark-cli read's argument (larkSegmentCLI), as $(head …) is anywhere.
+func larkFileReadSubstitution(cmd string) bool {
+	segs, ok := shellcmd.Split(cmd)
+	if !ok || len(segs) != 1 || segs[0].Subst {
+		return false
+	}
+	s := segs[0]
+	if len(s.Words) == 0 {
+		return larkReadsFileOnly(s.Redirect)
+	}
+	if s.Redirect != "" || s.Words[0] != "cat" || len(s.Words) < 2 {
+		return false
+	}
+	for _, w := range s.Words[1:] {
+		if strings.HasPrefix(w, "-") || strings.ContainsAny(w, "$`") {
+			return false
+		}
+	}
+	return true
+}
+
+// larkReadsFileOnly: redirect is one input redirection from a file ("<ids.txt"), nothing written, no descriptor moved.
+func larkReadsFileOnly(redirect string) bool {
+	file, ok := strings.CutPrefix(redirect, "<")
+	return ok && file != "" && !strings.ContainsAny(file, "<>&| ")
+}
+
+// larkSegmentCLI: a segment's command, past loop keywords, assignments and wrappers (timeout N…), is lark-cli.
+func larkSegmentCLI(words []string) bool {
+	for len(words) > 0 && (words[0] == "do" || words[0] == "then" || words[0] == "else" || isAssignment(words[0])) {
+		words = words[1:]
+	}
+	words, ok := unwrapCommand(words)
+	return ok && len(words) > 0 && isLarkCLI(words[0])
 }
 
 func isAssignment(w string) bool {
