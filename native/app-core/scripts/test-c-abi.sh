@@ -27,10 +27,12 @@ python3 -I -c 'import pathlib,re,sys
 header=pathlib.Path(sys.argv[1]).read_text()
 exports=pathlib.Path(sys.argv[2]).read_text().splitlines()
 required=sorted(set(re.findall(r"\b(persona_core_[A-Za-z0-9_]+)\s*\(",header)))
-actual={line.split()[-1] for line in exports if line.split()}
+# A defined data object with the same name is not a callable function export.
+actual={fields[2] for fields in (line.split() for line in exports)
+        if len(fields) == 3 and fields[1] in {"T", "W"}}
 missing=[name for name in required if name not in actual]
 if not required or missing:
-    raise SystemExit("test-c-abi: FAIL missing dynamic C exports: "+", ".join(missing))
+    raise SystemExit("test-c-abi: FAIL missing or non-function dynamic C exports: "+", ".join(missing))
 print("test-c-abi: ok independently compiled C client and",len(required),"required dynamic exports")' \
   "$WORK/crates/persona-core-ffi/include/persona_core.h" "$OUT/exports.txt"
 printf 'test-c-abi: ok %s\n' "$OUT"
