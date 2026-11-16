@@ -32,6 +32,21 @@ enum RecordingSamples {
         return id
     }
 
+    #if os(iOS)
+    /// `-showUpcomingSample YES` (#8731): today's calendar meetings on the Meetings home without a calendar (screenshots,
+    /// UI tests): one on now, two later.
+    static func upcomingIfAsked(at date: Date) -> [MeetingCalendar.Candidate]? {
+        guard UserDefaults.standard.bool(forKey: "showUpcomingSample") else { return nil }
+        let hour = 3600.0
+        return [
+            MeetingCalendar.Candidate(id: "sample-1", title: "产品周会", start: date.addingTimeInterval(-0.5 * hour), end: date.addingTimeInterval(0.5 * hour),
+                                      location: "飞书会议", attendees: ["Ada", "Bo", "Cy", "Di", "Ed", "Flo", "Gus", "Hal"]),
+            MeetingCalendar.Candidate(id: "sample-2", title: "设计评审", start: date.addingTimeInterval(3.5 * hour), end: date.addingTimeInterval(4 * hour),
+                                      location: "3 楼会议室", attendees: ["Ada", "Bo", "Cy", "Di"]),
+        ]
+    }
+    #endif
+
     /// The meeting being recorded (`-showMeetingSample recording|paused|interrupted`).
     static let liveMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     /// A finished meeting, transcribed (`-showMeetingSample minutes|pending` opens it).
