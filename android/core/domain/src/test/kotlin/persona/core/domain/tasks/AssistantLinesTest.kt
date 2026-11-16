@@ -81,9 +81,14 @@ class AssistantLinesTest {
     @Test fun quickResultKeepsTheCreatedItemsIdForUndo() {
         // The phone's calendar ids are numbers: only those name something Undo can take back (iOS QuickResult.itemID).
         assertEquals(42L, QuickResult.of(call("phone_calendar_create_event", """{"id":"42","title":"Dentist"}"""))!!.itemId)
-        // A missing or unreadable id still draws the card; it just offers no Undo (an old message, another phone's write).
-        for (raw in listOf("""{"title":"Dentist"}""", """{"id":"","title":"Dentist"}""", """{"id":"E1","title":"Dentist"}""",
-            """{"id":0,"title":"Dentist"}""", """{"id":"  "}""")) {
+        // A result with no id says nothing, so it draws no card at all, as on iOS.
+        for (raw in listOf("""{"title":"Dentist"}""", """{"id":"","title":"Dentist"}""", """{"id":"  "}""",
+            """{"id":null,"title":"Dentist"}""", """{"id":0,"title":"Dentist"}""")) {
+            assertNull(raw, QuickResult.of(call("phone_calendar_create_event", raw)))
+        }
+        // An id that is not a positive number (an iPhone's event or reminder) still draws the card, without Undo.
+        for (raw in listOf("""{"id":"E1","title":"Dentist"}""", """{"id":"0","title":"Dentist"}""",
+            """{"id":"-3","title":"Dentist"}""", """{"id":"1.5","title":"Dentist"}""")) {
             val result = QuickResult.of(call("phone_calendar_create_event", raw))
             assertNotNull(raw, result)
             assertNull(raw, result!!.itemId)

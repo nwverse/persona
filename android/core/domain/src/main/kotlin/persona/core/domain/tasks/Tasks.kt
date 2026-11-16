@@ -116,10 +116,11 @@ sealed interface TaskNow {
 }
 
 /**
- * A reminder or an event the assistant added on the phone, read from its tool call (iOS `QuickResult`).
+ * A reminder or an event the assistant added on the phone, read from its tool call (iOS `QuickResult`): a result whose
+ * `id` is missing or empty draws no card at all, as on iOS.
  *
  * [itemId] is the id of the item the phone made, which Undo deletes. The phone's calendar ids are numbers, so a result
- * without a readable one (an old message, another phone's write) still draws its card, without an Undo button.
+ * whose id is not one (an iPhone's event or reminder) still draws its card, without an Undo button.
  */
 data class QuickResult(
     val reminder: Boolean, val callId: String, val itemId: Long?, val title: String, val time: String?, val place: String?,
@@ -136,7 +137,9 @@ data class QuickResult(
             if (result.isError == true) return null
             val o = runCatching { JsonCodec.parseToJsonElement(result.text.orEmpty()) as? JsonObject }.getOrNull() ?: return null
             fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-            return QuickResult(reminder, call.use.id, s("id")?.trim()?.toLongOrNull()?.takeIf { it > 0 },
+            // No card without an id (iOS QuickResult.init), so an old or broken result says nothing it cannot back.
+            val id = s("id")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return QuickResult(reminder, call.use.id, id.toLongOrNull()?.takeIf { it > 0 },
                 s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
         }
     }
