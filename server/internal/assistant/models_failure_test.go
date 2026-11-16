@@ -74,6 +74,20 @@ func TestProviderTestClassifiesSyntheticGatewayFailures(t *testing.T) {
 			wantDetail: "knows no model synthetic-model",
 		},
 		{
+			name: "selected model unavailable to the API key", status: http.StatusNotFound,
+			body:       `{"type":"error","error":{"type":"not_found_error","message":"The selected model is unavailable to this API key"}}`,
+			wantCode:   "model_not_found",
+			wantHead:   "The gateway is reachable",
+			wantDetail: "The selected model is unavailable to this API key",
+		},
+		{
+			name: "model service unavailable is not a missing model", status: http.StatusNotFound,
+			body:       `{"type":"error","error":{"type":"api_error","message":"model service unavailable"}}`,
+			wantCode:   "not_found",
+			wantHead:   "Not found (404): check the Base URL, model and configured protocol",
+			wantDetail: "model service unavailable",
+		},
+		{
 			name: "ordinary unsupported endpoint", status: http.StatusNotFound,
 			body:       `{"error":{"code":"unsupported_endpoint","message":"unsupported endpoint: POST /v1/messages"}}`,
 			wantCode:   "not_found",
