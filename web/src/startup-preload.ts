@@ -361,11 +361,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
 // environment against main 96a337b73: ja 480,986 B to 481,164 B (en 477,857 B to 478,035 B, zh-Hans 478,676 B to
 // 478,854 B). The page's last view is drawn from a chunk of its own (lib/extension-view-cache.ts, with ExtensionView).
-// #9337 (UI version 9) adds 54 B in each language, measured in one environment against main e3f3b8018 (ja 480,986 B to
-// 481,040 B; en 477,857 B to 477,911 B, zh-Hans 478,676 B to 478,730 B): readView keeps a tile's gauge when its ratio is
-// a finite number (lib/extension-ui-v6.ts readTile), as the assistant's cards read views on the first screen too; the
-// ratio's bounds, its unit and the label are checked where the ring is drawn, a chunk loaded on intent (ViewBody9.tsx).
-export const FIRST_SCREEN_BUDGET = 9_999_999; // TEMP-MEASURE
+// #9337 (UI version 9) takes 99 B of that room in each language, measured in one environment against main 2491fb513 (ja
+// 480,827 B to 480,926 B; en 477,709 B to 477,808 B, zh-Hans 478,522 B to 478,621 B): readView keeps a tile's gauge when
+// its ratio is a finite number (lib/extension-ui-v6.ts readTile), as the assistant's cards read views on the first screen
+// too; the ratio's bounds, its unit and the label are checked where the ring is drawn, a chunk loaded on intent
+// (ViewBody9.tsx). The budget stays.
+export const FIRST_SCREEN_BUDGET = 481_164;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -586,11 +587,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // environment. The idle renderer (ViewBody.tsx) gains a section's rows side by side in Run, the head hook and the
 // lazy registration of ViewBody8.tsx; the columns grid and the section heads themselves (1.2 KB) load on intent with
 // the first view that has them. Main's 47 B of room is kept on top.
-// And 237 B for UI version 9 (#9337): main e3f3b8018 sends 45,770 B at idle, the same tree with #9337 46,007 B, in one
+// And 241 B for UI version 9 (#9337): main 2491fb513 sends 45,762 B at idle, the same tree with #9337 46,003 B, in one
 // environment. The idle renderer (ViewBody6.tsx's TileView) gains a gauge tile's label and meter role, the ring's
 // space while it loads and the lazy registration of ViewBody9.tsx; the ring itself (about 1 KB) loads on intent with
-// the first tile that has a gauge. Main's 52 B of room is kept on top.
-export const IDLE_TIER_BUDGET = 46_059;
+// the first tile that has a gauge. Main's 60 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 46_063;
 
 const gzip = promisify(gzipCompress);
 
