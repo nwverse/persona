@@ -358,14 +358,11 @@ func errorOf(raw json.RawMessage) (kind, code, msg string, ok bool) {
 	if json.Unmarshal(raw, &msg) == nil {
 		return "error", "", msg, true
 	}
-	var o struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(raw, &o) != nil {
+	code, msg, kind, ok = gatewayErrorDetailsWithType(raw)
+	if !ok {
 		return "", "", "", false
 	}
-	code, msg = gatewayErrorDetails(raw)
-	return cmp.Or(o.Type, code, "error"), code, msg, true
+	return cmp.Or(kind, code, "error"), code, msg, true
 }
 
 // messageFailure is the error a Messages error reported after the 200 stands for, and whether it counts as an
@@ -390,7 +387,7 @@ func messageFailure(kind, code, msg string) (bool, error) {
 		}
 	}
 	failure := &streamFailure{status: status, kind: kind, code: code, msg: msg}
-	return true, withFailureKind(failure, failureKindFor(failureStatus, code, msg))
+	return true, withFailureKind(failure, failureKindFor(failureStatus, code, msg, kind))
 }
 
 // streamCut is the error of a stream that ended before its end event: the connection was cut, and whatever text
@@ -409,10 +406,10 @@ func readMessage(body io.Reader) (Reply, bool, error) {
 		return Reply{}, true, fmt.Errorf("ai: read response: %w", err)
 	}
 	var out struct {
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
-		Model   string `json:"model"`
+		Type    json.RawMessage `json:"type"`
+		Code    json.RawMessage `json:"code"`
+		Message json.RawMessage `json:"message"`
+		Model   string          `json:"model"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
@@ -425,8 +422,9 @@ func readMessage(body io.Reader) (Reply, bool, error) {
 		return Reply{}, true, fmt.Errorf("ai: decode: %w", err)
 	}
 	// An error body sent with 200 (a gateway that ignored "stream" and failed) is the failure it reports.
-	if kind, code, msg, ok := errorOf(out.Error); out.Type == "error" || (out.Type == "" && ok && len(out.Content) == 0) {
-		answered, err := messageFailure(kind, cmp.Or(code, out.Code), cmp.Or(msg, out.Message))
+	typ := decodeErrorString(out.Type)
+	if kind, code, msg, ok := errorOf(out.Error); typ == "error" || (typ == "" && ok && len(out.Content) == 0) {
+		answered, err := messageFailure(kind, cmp.Or(code, decodeErrorCode(out.Code)), cmp.Or(msg, decodeErrorString(out.Message)))
 		return Reply{}, answered, err
 	}
 	var b strings.Builder
@@ -463,8 +461,8 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 	)
 	err := SSEEvents(body, func(data string) bool {
 		var ev struct {
-			Type string `json:"type"`
-			Code string `json:"code"`
+			Type json.RawMessage `json:"type"`
+			Code json.RawMessage `json:"code"`
 			// Message is message_start's message, or an error's text where a relay puts it at the top.
 			Message      json.RawMessage `json:"message"`
 			ContentBlock struct {
@@ -483,11 +481,12 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 			return false
 		}
 		kind, code, msg, isError := errorOf(ev.Error)
-		code = cmp.Or(code, ev.Code)
-		if ev.Type == "" && isError { // an error event without its type: the error is what it carries
-			ev.Type = "error"
+		code = cmp.Or(code, decodeErrorCode(ev.Code))
+		eventType := decodeErrorString(ev.Type)
+		if eventType == "" && isError { // an error event without its type: the error is what it carries
+			eventType = "error"
 		}
-		switch ev.Type {
+		switch eventType {
 		case "message_start":
 			var m struct {
 				Model string        `json:"model"`
@@ -626,21 +625,18 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	event := func(data string) (reply Reply, done bool, err error) {
 		var ev struct {
-			Type    string          `json:"type"`
+			Type    json.RawMessage `json:"type"`
 			Delta   string          `json:"delta"`
-			Message string          `json:"message"`
-			Code    string          `json:"code"` // an error event's
+			Message json.RawMessage `json:"message"`
+			Code    json.RawMessage `json:"code"` // an error event's
 			Error   json.RawMessage `json:"error"`
 			// Part is the content part of response.content_part.added/done: type output_text or refusal.
 			Part struct {
 				Type string `json:"type"`
 			} `json:"part"`
 			Response struct {
-				Model string `json:"model"`
-				Error *struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				} `json:"error"`
+				Model             string          `json:"model"`
+				Error             json.RawMessage `json:"error"`
 				IncompleteDetails *struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
@@ -665,16 +661,17 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 			return r
 		}
 		failureDetails := func() (code, msg string) {
-			code, msg = ev.Code, ev.Message
+			code, msg = decodeErrorCode(ev.Code), decodeErrorString(ev.Message)
 			if _, nestedCode, nestedMsg, ok := errorOf(ev.Error); ok {
 				code, msg = cmp.Or(nestedCode, code), cmp.Or(nestedMsg, msg)
 			}
-			if e := ev.Response.Error; e != nil { // response.error is more specific than the event's own error
-				msg, code = e.Message, cmp.Or(e.Code, code)
+			if _, responseCode, responseMsg, ok := errorOf(ev.Response.Error); ok { // response.error is most specific
+				code, msg = cmp.Or(responseCode, code), cmp.Or(responseMsg, msg)
 			}
 			return code, msg
 		}
-		switch ev.Type {
+		eventType := decodeErrorString(ev.Type)
+		switch eventType {
 		case "response.output_text.delta":
 			b.WriteString(ev.Delta)
 		case "response.refusal.delta", "response.refusal.done":
@@ -702,10 +699,10 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				return Reply{Model: reply.Model, Usage: reply.Usage}, true, &RefusalError{StopReason: reason}
 			}
 			code, msg := failureDetails()
-			return reply, true, streamFailureError(ev.Type, code, msg)
+			return reply, true, streamFailureError(eventType, code, msg)
 		case "response.failed", "error":
 			code, msg := failureDetails()
-			return reply, true, streamFailureError(ev.Type, code, msg)
+			return reply, true, streamFailureError(eventType, code, msg)
 		}
 		return reply, false, nil
 	}

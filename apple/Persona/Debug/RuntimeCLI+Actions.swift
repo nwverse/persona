@@ -32,7 +32,7 @@ extension RuntimeCLI {
         return ["changeCount": UIPasteboard.general.changeCount, "hasImages": UIPasteboard.general.hasImages]
     }
 
-    /// The system's share sheet for `text` (and `url`, `images` solid pictures and `files` small PDFs, when given), from
+    /// The system's share sheet for `text` (and `url`, `images` solid pictures and `files` PDFs, small or `fileMB` each, when given), from
     /// the key window: where Share › Persona (`PersonaShare`) is listed, without a share button to find on the page.
     private static func share(_ a: Args) -> Reply {
         var items: [Any] = [a["text"] as? String ?? "Persona"]
@@ -47,9 +47,15 @@ extension RuntimeCLI {
                 ctx.fill(CGRect(origin: .zero, size: size))
             })
         }
+        // `fileMB`: each file that large (sparse, written in no time), for the sheet's size footer (#2282).
+        let padded = UInt64(max(0, a["fileMB"] as? Int ?? 0)) << 20
         for i in 0..<min(4, max(0, a["files"] as? Int ?? 0)) {
             let url = FileManager.default.temporaryDirectory.appending(path: i == 0 ? "Quarterly report.pdf" : "Notes \(i + 1).pdf")
             try? Data("%PDF-1.4\n%Persona share test\n%%EOF\n".utf8).write(to: url)
+            if padded > 0, let handle = try? FileHandle(forWritingTo: url) {
+                try? handle.truncate(atOffset: padded)
+                try? handle.close()
+            }
             items.append(url)
         }
         guard var top = windows.first(where: \.isKeyWindow)?.rootViewController ?? windows.first?.rootViewController else {

@@ -147,3 +147,58 @@ describe("the scheduled task editor", () => {
     expect(document.body.textContent).toContain("任务状态笔记已更新。请重新打开编辑器后再试。");
   });
 });
+
+// A scheduled task's own start grant (#8045): the editor lists the kinds its runs start without asking, each removable
+// (DELETE …/start-grant with that kind, the task as the hub then has it), and shows nothing while there are none.
+describe("the scheduled task editor's start grant", () => {
+  const machinesBefore = getState().machines;
+  const granted = (kinds: string[]): Task => ({
+    ...withRepeat(blankTask(), "daily", new Date(2026, 0, 2, 8)),
+    id: "t1",
+    title: "每周周报",
+    prompt: "整理这周的笔记",
+    time: "09:00",
+    start_grant: { kinds, granted_at: "2026-11-01T09:00:00Z" },
+  });
+  const rows = () => [...dialog().querySelectorAll<HTMLElement>("[data-start-grant-kind]")];
+  afterEach(() => Object.assign(getState(), { machines: machinesBefore }));
+
+  it("shows nothing for a task without one", async () => {
+    await open(granted([]));
+    expect(dialog().querySelector("[data-start-grant]")).toBeNull();
+    expect(dialog().textContent).not.toContain("无需确认即可开始");
+  });
+
+  it("lists each kind by computer, folder and access, and Remove takes out only that one", async () => {
+    Object.assign(getState(), { machines: [{ id: "m1", name: "工作机" }] });
+    const deletes: { url: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE") {
+        deletes.push({ url, body: JSON.parse(String(init.body)) });
+        return json({ task: granted(["m1|/home/me/notes|read"]) });
+      }
+      return json({ error: "not found" }, 404);
+    }));
+
+    await open(granted(["m1|/home/me/notes|edit", "m1|/home/me/notes|read"]));
+    expect(dialog().textContent).toContain("无需确认即可开始");
+    expect(dialog().textContent).toContain("修改它的指令或运行位置会清空这个列表");
+    expect(rows().map((r) => r.textContent)).toEqual(["工作机 · /home/me/notes可编辑文件移除", "工作机 · /home/me/notes只读移除"]);
+
+    const remove = rows()[0].querySelector("button")!;
+    expect(remove.getAttribute("aria-label")).toBe("移除 工作机 · /home/me/notes");
+    await act(async () => remove.click());
+    for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); });
+
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].url).toContain("/assistant/tasks/t1/start-grant");
+    expect(deletes[0].body).toEqual({ kind: "m1|/home/me/notes|edit" });
+    expect(rows().map((r) => r.textContent)).toEqual(["工作机 · /home/me/notes只读移除"]);
+  });
+
+  it("names a kind whose computer and folder can't be told apart by the whole place", async () => {
+    await open(granted(["old|id|/srv/app|edit"]));
+    expect(rows().map((r) => r.textContent)).toEqual(["old|id|/srv/app可编辑文件移除"]);
+  });
+});

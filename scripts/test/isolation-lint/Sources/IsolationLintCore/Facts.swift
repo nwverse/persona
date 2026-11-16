@@ -184,6 +184,8 @@ struct TypeInfo: Sendable {
     /// An actor that names its own executor may run on the main thread.
     var declaresExecutor: Bool
     var isLocal: Bool
+    /// An enum's cases, by name: `Failure.read(errno)` makes one, it calls nothing (#8994).
+    var cases: Set<String> = []
 }
 
 struct ExtensionInfo: Sendable {
@@ -553,9 +555,13 @@ private final class Collector: SyntaxVisitor {
     func enterType(_ kind: TypeInfo.Kind, name: TokenSyntax, attributes: AttributeListSyntax, modifiers: DeclModifierListSyntax,
                    inheritance: InheritanceClauseSyntax?, members: MemberBlockSyntax, node: some SyntaxProtocol) {
         var requirements = Set<String>()
+        var cases = Set<String>()
         var declaresExecutor = false
         for member in members.members {
             let decl = member.decl
+            if kind == .enum, let declared = decl.as(EnumCaseDeclSyntax.self) {
+                for element in declared.elements { cases.insert(element.name.text) }
+            }
             if let function = decl.as(FunctionDeclSyntax.self) { requirements.insert(function.name.text) }
             if decl.is(InitializerDeclSyntax.self) { requirements.insert("init") }
             if decl.is(SubscriptDeclSyntax.self) { requirements.insert("subscript") }
@@ -571,7 +577,7 @@ private final class Collector: SyntaxVisitor {
         types.append(TypeInfo(kind: kind, name: name.text, qualified: qualified, attributes: names(attributes),
                               modifiers: names(modifiers), inherits: inherited(inheritance), frame: frames.count,
                               requirements: kind == .protocol ? requirements : [], declaresExecutor: declaresExecutor,
-                              isLocal: bodyDepth > 0))
+                              isLocal: bodyDepth > 0, cases: cases))
         push(.type(types.count - 1), at: node)
         typeNames.append(name.text)
     }

@@ -2217,6 +2217,8 @@ struct ChatView: View {
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
         .frame(minHeight: .zero, maxHeight: .infinity)
+        // A floating keyboard floats over the page: the composer stays at the bottom, the list keeps its height (#2565).
+        .keepsHeightUnderUndockedKeyboard()
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
@@ -3290,9 +3292,12 @@ struct ChatView: View {
 
     // Out of the modifier chain: inline, Swift 6.3 timed out type-checking the Release build.
     private var prewarmSource: String { "\(shownKey.machineID)/\(shownKey.sessionID)|\(store.resets)" }
-    private var prewarmKey: String { "\(prewarmSource)|\(store.version)" }
+    /// In the background it changes too, so leaving cancels a prewarm between rows and coming back runs it again.
+    private var prewarmKey: String { "\(prewarmSource)|\(store.version)|\(RowMemo.prewarms(in: scenePhase))" }
 
     private func prewarmRows() async {
+        // Not while the app is in the background (#9108): a recording may be keeping it running, under iOS's CPU limit.
+        guard RowMemo.prewarms(in: scenePhase) else { return }
         let source = prewarmSource
         if scratch.prewarmSource != source {
             scratch.prewarmSource = source
@@ -3383,6 +3388,7 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
+            .modifier(SidebarButtonID(active: backShowsList))
             .noBackWhen(hidesBack)
             Spacer(minLength: 0)
             Button { Haptics.tap(); showChrome() } label: {
@@ -4093,8 +4099,16 @@ struct ChatView: View {
     }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
-    private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
-    private var backLabel: String { pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]") }
+    /// A root picked in the list, with the list closed (#8603): the sidebar's button, as on the main conversation, not a ‹
+    /// that opened the sidebar. Only a page pushed from inside another has ‹.
+    private var backSymbol: String {
+        if backShowsList { return split?.drawer == true ? Theme.Icon.sidebarMenu : Theme.Icon.sidebar }
+        return pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back
+    }
+    private var backLabel: String {
+        if backShowsList { return String(localized: "Show Sidebar") }
+        return pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]")
+    }
 
     /// The open header's ‹. Inside the row's glass container `noBackWhen` does not hide it: the container draws the
     /// button's glass and symbol itself, so a disabled ‹ that did nothing showed on every chat that is a split's first
@@ -4113,6 +4127,12 @@ struct ChatView: View {
             #else
             headerBackButton
             #endif
+        } else if backShowsList {
+            // A root picked in the list, with the list closed (#8603): the sidebar's button (`backSymbol`) with how many
+            // Agents need the user, as on the main conversation.
+            headerBackButton
+                .modifier(SidebarButtonID(active: true))
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
         } else {
             headerBackButton
         }
@@ -6468,8 +6488,8 @@ nonisolated enum QueueOrder {
 /// Input typed while Claude works and not yet taken, shown above the composer instead of in the chat.
 /// Folded to its one-line summary by default; opened, it shows about three rows and scrolls past them.
 /// Editing pulls it back (like ↑ in the terminal); the other queued messages are re-queued in order.
-/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, after a confirmation that says
-/// what happens to what it is doing), and each moves up or down.
+/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, at one tap since #7169; its
+/// VoiceOver hint says what happens to what it is doing), and each moves up or down.
 struct QueueStrip: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
@@ -6491,7 +6511,6 @@ struct QueueStrip: View {
     private var agent: String { persona ?? agentName }
     @State private var busy = false
     @State private var expanded = false
-    @State private var confirmSend = false
     /// Messages from other conversations collapse into one line until the owner opens them (#6394).
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
@@ -6536,15 +6555,6 @@ struct QueueStrip: View {
             .contentShape(.rect)
         }
         .tint(.secondary)
-        .confirmationDialog(String(localized: "Send the queued messages now? [Queue Strip]"), isPresented: $confirmSend, titleVisibility: .visible) {
-            Button("Send Now [Queue Strip]") { sendNow() }.accessibilityIdentifier("queue-send-now-confirm")
-        } message: {
-            if let persona {
-                Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
-            } else {
-                Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
-            }
-        }
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -6565,18 +6575,28 @@ struct QueueStrip: View {
     }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
-    /// handed over.
+    /// handed over. It sends at one tap, as on the web (#7169, #7154): nothing is lost, the messages only go now rather
+    /// than at the next step, and Delete and Stop act at one tap too (`docs/design/DESIGN_SYSTEM.md` 4.4).
     @ViewBuilder private var sendNowButton: some View {
         if busy {
             ProgressView().controlSize(.mini)
         } else if steers, own > 0 {
-            Button { confirmSend = true } label: {
+            Button(action: sendNow) {
                 Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
+            .accessibilityHint(sendNowHint)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// What sending now does to the step under way, which a confirmation used to say before #7169.
+    private var sendNowHint: Text {
+        if let persona {
+            return Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
+        }
+        return Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
     }
 
     /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.
@@ -7931,7 +7951,7 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
                 .offset(y: -c)
                 .opacity(Double(1 - min(1, p * 1.5)))
                 .allowsHitTesting(p < 0.5)
-                .modifier(GoneWhen(gone: p * 1.5 >= 1))
+                .modifier(GoneWhen(gone: p * 1.5 >= 1, height: chrome.height))
             // Not there at all until it starts to show (it is clear below half way).
             if p > 0.5 {
                 ChatRegion(name: "ChromeCompact.body", content: compact)
@@ -7945,20 +7965,25 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     }
 }
 
-/// The open header once it has faded out: still laid out (its height is what folding measures) but hidden, so its
-/// buttons leave VoiceOver and XCUITest. `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit):
-/// slid up under the clip, its Back sat in the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// The open header once it has faded out: gone from the tree, so its buttons leave VoiceOver and XCUITest.
+/// `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit): slid up under the clip, its Back sat in
+/// the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// On iOS a clear placeholder of its last measured height takes its place (folding reads that height). It was a
+/// `.hidden()` copy of the header: another identity, so every fold built the whole header again, its glass and the
+/// agents' tabs, and every unfold once more (#9103). Now folding only drops it and unfolding builds it once. While
+/// folded its height is not measured; it is again as soon as it opens.
 /// On the Mac it only leaves VoiceOver: it is already clear and takes no clicks there (`allowsHitTesting`), and
-/// swapping it for a hidden copy built the whole header again, its glass and the agents' tabs, at every fold and
-/// unfold: 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
+/// swapping it for a hidden copy cost 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
 private struct GoneWhen: ViewModifier {
     var gone: Bool
+    /// The open header's measured height (`ChatChrome.height`).
+    var height: CGFloat
 
     func body(content: Content) -> some View {
         #if os(macOS)
         content.accessibilityHidden(gone)
         #else
-        if gone { content.hidden() } else { content }
+        if gone { Color.clear.frame(height: height) } else { content }
         #endif
     }
 }
@@ -8192,5 +8217,14 @@ struct DismissReader: View {
         Color.clear
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The identifier of a chat's leading button while it opens the sidebar (#8603): not the symbol's, so a test tells it
+/// from a ‹.
+private struct SidebarButtonID: ViewModifier {
+    var active: Bool
+    func body(content: Content) -> some View {
+        if active { content.accessibilityIdentifier("chat-sidebar-button") } else { content }
     }
 }

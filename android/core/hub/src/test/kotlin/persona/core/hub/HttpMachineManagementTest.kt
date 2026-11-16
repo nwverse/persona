@@ -118,6 +118,34 @@ class HttpMachineManagementTest {
         assertEquals(HubError.Protocol, (runCatching { machines.botmux("desk") }.exceptionOrNull() as HubFailure).kind)
     }
 
+    /** #9178: Settings › Claude Code › Live Replies reads/writes `/claude-live-replies` and hides on 404. */
+    @Test fun claudeLiveRepliesReadsSavesAndHidesOnOlderHub() = withHub { server, machines ->
+        server.enqueue(MockResponse().setBody("""{"on":true}"""))
+        assertEquals(true, machines.claudeLiveReplies("desk/name"))
+        server.takeRequest().let {
+            assertEquals("GET", it.method)
+            assertEquals("/api/v1/machines/desk%2Fname/claude-live-replies", it.path)
+        }
+        server.enqueue(MockResponse().setBody("""{"on":false}"""))
+        assertEquals(false, machines.setClaudeLiveReplies("desk", false))
+        server.takeRequest().let {
+            assertEquals("PUT", it.method)
+            assertEquals("/api/v1/machines/desk/claude-live-replies", it.path)
+            assertEquals("""{"on":false}""", it.body.readUtf8())
+        }
+        // Older hub without the route: null (hidden).
+        server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+        assertNull(machines.claudeLiveReplies("desk"))
+        // Other failures stay errors for Retry.
+        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"machine is offline"}"""))
+        assertEquals(503, (runCatching { machines.claudeLiveReplies("desk") }.exceptionOrNull() as HubFailure).status)
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"database is down"}"""))
+        assertEquals(500, (runCatching { machines.setClaudeLiveReplies("desk", true) }.exceptionOrNull() as HubFailure).status)
+        // Missing "on" is a protocol failure.
+        server.enqueue(MockResponse().setBody("""{}"""))
+        assertEquals(HubError.Protocol, (runCatching { machines.claudeLiveReplies("desk") }.exceptionOrNull() as HubFailure).kind)
+    }
+
     @Test fun launchersReconnectAndDeployGoToTheMachine() = withHub { server, machines ->
         server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude","model":"opus"},{"name":"codex","agent_type":"codex"}]}"""))
         val launchers = machines.launchers("mac/one")

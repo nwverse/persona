@@ -294,7 +294,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", serviceTierRefusal(ctx, "assistant_service_tier_start_only")
 		}
 	}
-	if err := validModesFor(launcherOr(launcher, st.Launcher), mode, effort); err != nil {
+	if err := n.validAssistantModes(ctx, launcherOr(launcher, st.Launcher), mode, effort); err != nil {
 		return "", err
 	}
 	isMain := executionOption(options).IsMain
@@ -388,7 +388,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if effort != "" {
 		execution.Effort = effort
 	}
-	if err := execution.check(rl); err != nil {
+	if err := execution.checkModel(); err != nil {
+		return "", err
+	}
+	if err := n.validAssistantModes(ctx, rl, "", execution.Effort); err != nil {
 		return "", err
 	}
 	if launcher == "" && id != "" {

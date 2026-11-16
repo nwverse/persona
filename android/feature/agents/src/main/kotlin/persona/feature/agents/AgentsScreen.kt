@@ -313,7 +313,7 @@ internal fun AgentsScreen(
     val hideIdle = PersonaTheme.style == AppStyle.Glass && page.preferences.grouping == AgentGrouping.MachineSpace
     val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks, repoTree, hideIdle) {
         agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
-            showAll = page.settings.expandedIdle.takeIf {
+            showAll = page.settings.expandedAll.takeIf {
                 page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
             }, idleRepos = repoTree, hideIdle = hideIdle)
     }
@@ -325,7 +325,7 @@ internal fun AgentsScreen(
     KeepAgentReadingPosition(listState, tree, paginationFooter,
         scope = listOf(group?.namespace, assistant.id, assistant.group, controls.grouping, controls.sort,
             controls.quick, controls.machineFilter, controls.query, controls.hideBotmux,
-            controls.folded, controls.expandedIdle, controls.expandedQuiet, page.preferences.foldedTabs, expandedTasks,
+            controls.folded, controls.expandedIdle, controls.expandedQuiet, controls.expandedAll, page.preferences.foldedTabs, expandedTasks,
             page.preferences.range, page.preferences.display, PersonaTheme.style),
         restoring = restoring)
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes

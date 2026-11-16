@@ -205,6 +205,12 @@ nonisolated extension ShareTargets {
     /// The most files one share takes, and the largest each may be (the composer's `FileUploads.limit`).
     static let maxFiles = 10
     static let fileLimit: Int64 = 200 << 20
+    /// From this total on, the sheet says the upload will take a while and to keep it open (#2282): 50 MB is about
+    /// 40 seconds at 10 Mbit/s up, a common phone uplink, and the upload runs only while the sheet is open (it goes away with the app it was shared from).
+    static let slowUpload: Int64 = 50 << 20
+
+    /// Whether files of `total` bytes take long enough to upload that the sheet should say so before Send.
+    static func takesAWhile(_ total: Int64) -> Bool { total >= slowUpload }
 
     /// The computer a target's files go to: the agent's own, the assistant's for Persona's conversations and a new chat.
     static func machine(for target: ShareTarget, assistantMachine: String?) -> String? {

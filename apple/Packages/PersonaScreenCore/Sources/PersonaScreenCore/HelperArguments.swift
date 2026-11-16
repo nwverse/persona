@@ -18,10 +18,14 @@ public struct HelperArguments: Equatable {
     public var mode: Mode
     /// The display to capture, or nil for the main display (the `start` message may override it).
     public var display: Int?
+    /// `--x264 <ffmpeg>` (#8859): x264 is on for this Mac and the node found this ffmpeg with libx264, so on a direct LAN
+    /// route the stream may be encoded by it (`X264Plan`). Nil: VideoToolbox only.
+    public var x264: String?
 
-    public init(mode: Mode, display: Int? = nil) {
+    public init(mode: Mode, display: Int? = nil, x264: String? = nil) {
         self.mode = mode
         self.display = display
+        self.x264 = x264
     }
 
     public enum ParseError: Error, Equatable {
@@ -40,6 +44,7 @@ public struct HelperArguments: Equatable {
         var requestPermission = false
         var preflight = false
         var display: Int?
+        var x264: String?
 
         var i = 0
         func value(for flag: String) throws -> String {
@@ -59,6 +64,10 @@ public struct HelperArguments: Equatable {
                 let raw = try value(for: arg)
                 guard let n = Int(raw) else { throw ParseError.badValue(arg) }
                 display = n
+            case "--x264":
+                let raw = try value(for: arg)
+                guard raw.hasPrefix("/") else { throw ParseError.badValue(arg) } // an absolute path, never looked up
+                x264 = raw
             default:
                 break // unknown flags are ignored, so an older node can pass newer switches
             }
@@ -72,7 +81,7 @@ public struct HelperArguments: Equatable {
             return HelperArguments(mode: .preflight, display: display)
         }
         if let socket, let token {
-            return HelperArguments(mode: .stream(socket: socket, token: token), display: display)
+            return HelperArguments(mode: .stream(socket: socket, token: token), display: display, x264: x264)
         }
         throw ParseError.noMode
     }

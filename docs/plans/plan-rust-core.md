@@ -278,7 +278,7 @@ What never crosses the boundary:
 | 1 | Workspace, toolchain, runtime thread, codec generator, the three bindings, CI lane, and `continuity` (decision 3) end to end on all three clients | Every client replays the continuity fixtures through its binding; the go / no-go table is filled in |
 | 2 | The chat's item list driven by `continuity` patches, raw transport bytes decoded in Rust, then `sync`; iOS's native adapter and shadow run come first | Patches drive the real chat list on each client within the performance budgets, with the same iOS behavior and measured reference on each |
 | 3 | The domains with the most drift, one issue each: `needs-you` / `attention` / `entries` once #5974 settles the definition, `lines` and `answer` (turn folding, the answer across wakes), `sort` / `recents`, `wire` (tolerant decoding, D5), streaming assembly (#4044) | Each domain: shadow run, then old code deleted |
-| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4) | Cold launch draws from the snapshot before any sync |
+| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4). Design: `docs/plans/plan-rust-core-phase4-storage.md` (#9085) | Cold launch draws from the snapshot before any sync |
 
 Every phase after 0 opens its own issue under #6793. Markdown parsing is not on the list: iOS renders markdown text with
 MarkdownUI, and moving a syntax tree across FFI for every streamed chunk is a cost to measure before proposing it.
@@ -338,6 +338,30 @@ Phase 1 (#6871) lands in several PRs.
     benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
     the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
     not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
+  - **Lock-free dispatch and zero-copy JNI hand-off (#9048).** The previous dispatch path held `queue: Mutex<Queue>`
+    on the caller only to do `pending += 1` and check `stopping`, and `Runtime::dispatch(&[u8])` always copied the
+    action bytes a second time even when the caller already owned them. `Shared.pending` and `Shared.stopping` are
+    now an `AtomicU64` and an `AtomicBool`; the worker decrements with `fetch_sub` and only takes a mutex when the
+    queue becomes empty and a `flush` waiter needs waking. The stop flag's Acquire/Release pairs with the channel
+    send so an action accepted before shutdown still precedes Stop. A new `Runtime::dispatch_owned(Vec<u8>)` moves
+    the encoded bytes straight into the worker's channel; the JNI `NativeBridge.dispatch` uses it so the
+    `convert_byte_array` `Vec<u8>` is no longer cloned into a second buffer. The C ABI `persona_core_dispatch` keeps
+    its borrowed-slice signature and routes through `dispatch(&[u8])` (one copy, same as before). The diagnostics
+    `pending_lock*` counters stay at zero and only the patch-lock span is measured. Same host, same protocol (100
+    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), `:core:rustcore:boundaryCostTest`
+    on `47d9e8468d` base versus the optimized branch:
+    - dispatch p50 across 4 base runs 1.63–2.85 µs (mean 2.27) and 6 optimized runs 1.84–2.97 µs (mean 2.35);
+      p99 base 3.29–5.04 µs (mean 4.37) and optimized 3.48–7.43 µs (mean 4.78); max base ≤ 14.13 µs, optimized
+      ≤ 20.22 µs. **The two distributions overlap**: this change is a structural simplification, not a measurable
+      host speedup. Both sides already sit far below the 50 µs budget on this host.
+    - drain+decode+apply p50 base 3.76–4.20 µs, optimized 3.47–4.99 µs; p99 base 16.25–32.08 µs, optimized
+      16.16–38.22 µs; max base 80.82–472.32 µs, optimized 53.25–302.50 µs. Same overlap; the 1 ms budget is met
+      on host by both.
+    All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
+    `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
+    reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
+    x86_64 emulator A/B data was not collected on this run (no KVM on the build machine; the owned software-emulator boot
+    stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
@@ -422,6 +446,41 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Nested-item Envelope fallback removal (#9187).**
+  - After #9082, an independent reviewer found that a valid `items` array could let a different bad scalar bypass the
+    shared Envelope gate and become `Frame::Other`. Production now refuses the shared error before Other routing;
+    there is no `NestedItems` shortcut and no additional full `ServerEvent` implementation.
+  - Mixed bad-scalar / malformed-history inputs assert the source-required refusal, with the exact Foundation error
+    priority marked `source-undetermined`. Isolated `rows` has `wrong_type: rows` from `Envelope.rows: Int?`;
+    `args:1e999` is `malformed_json` from `JSONValue` / swift-foundation's non-finite-number rejection, never a
+    payload-bearing error string. Expectations come from Swift sources, not from Rust output.
+  - Existing 17 accepted wire cases, 38 / 94 continuity steps, #8955's 64 source-derived cases, real host JNI,
+    ArkTS and independent C ABI replay all pass. This is host evidence only, not Swift/iOS or production-client proof.
+
+- **Production shared-envelope scalar checks (#8995).**
+  - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
+    raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
+    event types remain `Frame::Other`, and accepted items keep their original JSON and exact `bad_item` locations.
+  - The unchanged #8955 source-derived fixture drives the production replay. Full Item, Machine, Session, interaction
+    and Fleet nested models, number-spelling / encoding migration and non-items event routing are outside this slice.
+  - The 17 accepted wire cases and the continuity corpus's 38 cases / 94 steps pass unchanged. Real host Kotlin/JNI,
+    ArkTS and an independently compiled C11 client replay shared-scalar refusals and Other routing through the real
+    production decoder / runtime. This is host evidence only, not Swift, device or production-client migration proof.
+  - Android's current #7448 adapter maps its existing inputs to `Action.Chat`; it does not dispatch raw `WirePayload`
+    frames in production, so this decoder change does not alter its default inputs or the debug shadow's comparison.
+
+- **Source-derived WebSocket envelope tolerance (#8955).**
+  - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
+    wrong-typed known keys, extra and duplicate keys, raw JSON fields, `mesh` / `fleet` leniency and the routing
+    requirements of six event types. Every case cites its Swift source; none was generated from Rust or run on iOS.
+  - `persona_core::wire_envelope` is a separate pure diagnostic projection, not the continuity `decode_frame` path:
+    it returns accepted / ignored / dropped (or out-of-scope for unprojected event payloads) without routing an event.
+    The existing continuity behavior and 17 wire cases remain unchanged.
+  - Rust and real host Kotlin/JNI replay compare every complete expected object against the same fixture, preserving
+    duplicate-key input bytes and checking malformed input and wrong expectations. This is host evidence only; no
+    Swift, production adapter, simulator or physical-device claim is made. Full nested models, numeric literal
+    compatibility, subscription pre-routing and C/NAPI/Swift bindings stay out of this slice.
+
 - **Agents list sort, recents and state decoding (#7579).**
   - `persona_core::sort` projects the Agents list from a JSON input: rank, grouping (state / machine / space),
     quick filters (all, needsYou, unread, working, backgroundWaiting), search with caller-supplied `now` for
@@ -438,8 +497,12 @@ Phase 3 lands in several PRs.
     (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
-  - Not done: no production client calls these functions yet; Swift codec generation is typegen-only; device-side
-    NAPI linking and ArkTS runtime behavior remain blocked: no physical device.
+  - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966), with iOS
+    state/machine/space groups, pinned/quiet/folded rows, filters and ranks. The temporary native sorter and debug
+    shadow are deleted after the unchanged fixture corpus matches 30/30. `spec/README.md` names the core as this
+    domain's reference. A native failure retains the last usable projection and exposes failure; there is no second
+    release sorter. Device-side NAPI linking, HAP and physical-device execution remain blocked: no physical device.
+  - Swift codec generation is typegen-only; other clients have not switched this domain to core production.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
@@ -459,16 +522,43 @@ Phase 3 lands in several PRs.
     burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
     and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
     incremental ChatStore rebuild algorithm or its timing evidence.
-  - The two source-order layout cases, rendered lines, task indexes, incremental rebuilds, production adapters and
-    turn C/NAPI/Swift boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
+  - `persona_core::task_index` covers the fixture-facing `TaskIndex.build` fields (#8842): started calls, notice/call
+    association, descriptions, UTC start times and per-call status sequences. Real Kotlin/JNI replay compares all five
+    existing task-index expected objects, plus a background receipt whose notices/statuses are empty but whose original
+    description is retained. Offset timestamps are normalized to whole-second UTC. Malformed input and a wrong expected
+    object are rejected. This is not rendered `ChatLine`, complete TaskIndex consumer state, UI badges, actual
+    background execution or timing evidence.
+  - `persona_core::viewed_images` covers the viewed-image leaf (#8860, #8943). Real Kotlin/JNI compares the
+    complete post-overlay `vi-2#0` line for `tool_images_belong_to_call`, including `d:` identity from the original
+    image payload and its owning image turn, plus duplicate/running/error/Read-extension and wrong-expected negatives.
+    The owner comes from the existing turn projection and tool-step id, not from confusing `tool_use_id` with the use
+    item id. Folded-work replay follows `ViewedImagesTests.aFoldGivesTheSameStripAsItsWork` with complete
+    source-derived expected lines: path/size/`i:` identity, order and deduplication across ordinary and folded steps.
+    The first segment stops at the next queued user; the last agent result independently owns running/error status.
+    Optional fold payloads do not reject ordinary or queued text+image items (#9024); real fold counts/through fields
+    retain their existing semantics. Inline data with width/height and no explicit size uses its
+    extended-grapheme-count-derived size. `FoldImage.ref`
+    synthesis is outside the pure leaf. This is not full `ChatLine`, multiple viewed lines, UI loading, actual tool
+    execution or performance evidence.
+  - The C ABI `persona_core_project_viewed_images` follows the same JSON/buffer ownership contract (#9017). The
+    independently compiled C11 client compares the complete post-overlay ordinary viewed object and a complete
+    source-derived folded object, including path/size identities and array order. It rejects malformed input, no-image
+    no-line and deliberately wrong expected objects, and the header/export check covers the new function. This is
+    Linux C ABI evidence, not Swift, Apple ABI, NAPI or device acceptance.
+  - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
+    boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
     `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
     labels, with 15 + 8 complete fixture comparisons and Apple/CoreFoundation-derived whitespace boundaries.
-  - The current SwiftUI multi-question review confirmation remains separately #8483. No UI timing, transport,
-    production adapter or new answer FFI/JNI/NAPI boundary is included.
+  - `AnswerBindingFixtureTest` drives `projectAnswer` and `displayAnswer` through real host-JNI string boundaries
+    (#8838). All 15 + 8 cases compare complete expected objects from the unchanged fixtures, including conditional
+    next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
+    expectation are rejected, and the U+200B boundary is exercised. This is synchronous host-JNI evidence, not UI
+    timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
+    remains separately #8483; C/NAPI/Swift bindings, transport and physical-device evidence are not included.
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
@@ -478,8 +568,68 @@ Phase 3 lands in several PRs.
     boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
     malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
     the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
-  - `StreamRepair`, visual gaps, timing, rendering, C/NAPI/Swift bindings, production adapters and the #4044
-    performance goal remain open.
+  - `persona_core::stream_repair` adds the open-fence repair and code/text end projection (#9051), with real
+    Kotlin/JNI replay of 21 complete source-derived repaired strings and six explicit code/text end cases from
+    `StreamRepairTests`. It preserves
+    opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
+    The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
+    with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
+    are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
+    math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the
+    #4044 performance goal remain open.
+
+- **Answer, stream chunks and task index through the ArkTS host (#8937).**
+  - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
+    `core_project_task_index` beside its sort projection. The four pure functions have the existing JSON string
+    contract; `core_display_answer` accepts a bare label rather than a JSON-encoded string. Their generated ArkTS
+    declaration and exact export drift checks are committed. These declarations compile with the `ohos` feature, but
+    no Linux addon is loaded and no real NAPI argument conversion is claimed.
+  - `harmony/tests/core-host/projections.test.mjs` calls the real Rust functions through the existing host helper and
+    compares all 15 + 8 answer/display, 21 stream-chunk and five complete task-index expectations from unchanged
+    fixtures, plus the background receipt. It pins exact case names and rejects malformed input and deliberately wrong
+    expected objects for each projection. The core lane includes this replay; a missing helper fails rather than skips.
+  - This is ArkTS host evidence only, not a HAP or physical-device result. No production adapter, turns, StreamRepair,
+    UI timing, hub delivery or background execution is exercised. #8808 retains the separate turn NAPI loader work.
+
+- **The four pure projections reach the C ABI (#8912).**
+  - `persona-core-ffi` gains `persona_core_project_answer`, `persona_core_display_answer`,
+    `persona_core_project_stream_chunks`, `persona_core_project_turns` and `persona_core_project_task_index`, sharing
+    `persona_core_project_sort`'s contract: one UTF-8 JSON document in, one JSON document out, no core handle, the
+    caller frees the result with `persona_core_bytes_free`, and any decode/projection/encode failure returns an empty
+    buffer. `display_answer` takes a bare JSON string (the option label), as its JNI counterpart does. The checked-in
+    `include/persona_core.h` declares all five; the existing dynamic-export drift check covers them (13 exports).
+  - The #8560 independently compiled C11 client now replays the unchanged fixtures through the real release library on
+    Linux: answer 15 question + 8 recommendation cases (complete conditional expected objects, invalid page/option,
+    the U+200B trim boundaries), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
+    the checked-in `spec/fixtures/lines/ios/differences.json` overlay applied by the client (54 cases hold 62 complete
+    turn objects; three compare empty arrays only), and task_index all five complete expected objects plus the
+    background receipt boundary. Both sides are parsed and compared canonically (sorted object keys, exact array order
+    and scalars), so no comparison depends on Rust's serialization key order. Exact-name manifests fail on an added,
+    dropped or renamed case; malformed input returns an empty buffer per domain and a deliberately wrong expected
+    object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
+    client source or release library fails rather than skips.
+  - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
+    performance claim. The Swift adapters and their real-C replay are covered by #8952; the
+    turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
+
+- **The six pure projections reach the Swift C binding (#8952).**
+  - `PersonaCoreProjections` calls `persona_core_project_sort`, `persona_core_project_answer`,
+    `persona_core_display_answer`, `persona_core_project_stream_chunks`, `persona_core_project_turns` and
+    `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
+    every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
+    production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
+    applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
+    complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact
+    scalar types; exact-name manifests, malformed inputs and deliberately wrong expectations are checked per domain.
+  - Fixture reads and the overlay live in `PersonaCoreTestSupport`, not the shipped library. This is **macOS-host
+    SwiftPM evidence, not iOS simulator or physical-device evidence**. It does not establish production adapters,
+    rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
+    projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
+    **26.0 not verified**.
 
 ### Migration rules (each domain)
 
@@ -500,17 +650,81 @@ The slice measures these against the limits of decision 6. If any limit is excee
 slice, the plan stops: D1 stays, and the result is recorded here. Numbers say whether they come from a device or a
 simulator, and from which build (`docs/apple/performance.md`, "Measuring").
 
-| Measure | Limit |
-| --- | --- |
-| Download size added, per platform (per ABI on Android) | ≤ 1 MB for phase 1; every later phase reports its own increment |
-| Launch to first frame | no change beyond run-to-run noise; the core is not created before the first frame (`docs/apple/performance.md`, "Budgets") |
-| `dispatch` called on the main thread | p99 ≤ 50 µs, encoding included |
-| `drain` + decode + apply, once per frame, on the slice's data | p99 ≤ 1 ms; nothing on the main thread over 16 ms while scrolling or streaming (8 ms is the goal on 120 Hz screens) |
-| A hub frame to the screen | no later than today on each client |
-| Memory | resident memory the core adds is reported; opening and closing the same chat 10 times ends within 5 MB of the start |
-| Incremental app build with the core unchanged | no Rust rebuild |
-| Clean build time added | reported per platform; no fixed limit |
-| Contributor setup | `scripts/app/sim.sh`, `scripts/app/android.sh` and HarmonyOS's build still need one command after installing rustup |
+| Measure | Limit | iOS | Android | HarmonyOS |
+| --- | --- | --- | --- | --- |
+| Download size added, per platform (per ABI on Android) | ≤ 1 MB for phase 1; every later phase reports its own increment | **Measured, macOS host / unsigned generic-iOS build:** local payload proxy +763,346 B and local ZIP +355,744 B, both below 1,000,000 B; **download-size limit: not measured / open**. Physical-device evidence: **blocked: no physical device**. [1][2] | **Measured, host-built packages:** arm64-v8a package proxy +651,600 B and x86_64 +713,952 B, both below 1,000,000 B (gzip 323,071 / 343,371 B); **download-size limit: not measured / open**. [3] | **Not measured:** no linked API 26 library or HAP increment; **download-size limit: open**. Physical-device evidence: **blocked: no physical device**. [4] |
+| Launch to first frame | no change beyond run-to-run noise; the core is not created before the first frame (`docs/apple/performance.md`, "Budgets") | **Not measured as a comparison:** the retained native simulator run is an incomplete historical observation, not a with/without-core baseline. Physical-device evidence: **blocked: no physical device**. [1][2] | **Not measured.** The packaged app does not construct the core on launch; that is not a timing comparison. [3] | **Not measured**; physical-device evidence: **blocked: no physical device**. [4] |
+| `dispatch` called on the main thread | p99 ≤ 50 µs, encoding included | **Measured, simulator:** 6.750 µs p99, **within the fixed budget** (optimized binding harness, 100 warm-ups + 1,000 samples; physical: **blocked: no physical device**). [1][2] | **Exceeds, unresolved:** original software-emulator p99 13,100.597 µs; final retained repeat 883.312 µs, both over 50 µs. Physical arm64 / 4 KiB runs varied 22.578–135.626 µs: **not the required 16 KiB acceptance or a stable fixed-budget pass**; 16 KiB device: **blocked: no physical device**. [3][5][6] | **Not measured:** host registry tests are not timing evidence; physical NAPI: **blocked: no physical device**. [4] |
+| `drain` + decode + apply, once per frame, on the slice's data | p99 ≤ 1 ms; nothing on the main thread over 16 ms while scrolling or streaming (8 ms is the goal on 120 Hz screens) | **Measured, simulator:** one-item 6.958 µs and 100-item 183.667 µs p99, **within 1 ms**; these are synthetic binding/string-list workloads. The 16 ms / 8 ms production scrolling-streaming limits are **not measured**. Physical-device and equivalent production-frame evidence: **blocked: no physical device / not measured**. [1][2] | **Exceeds, unresolved:** original software-emulator p99 17,271.624 µs; final retained repeat 3,414.419 µs, both over 1 ms. Physical arm64 / 4 KiB runs varied 50.963–312.906 µs: **not a 16 KiB or equivalent-workload pass**; 16 KiB device: **blocked: no physical device**. The 16 ms / 8 ms production scrolling-streaming limits are **not measured**. [3][5][6] | **Not measured:** host replay is not timing evidence; physical NAPI: **blocked: no physical device**. [4] |
+| A hub frame to the screen | no later than today on each client | **Not measured:** no equivalent native/core production-screen comparison; physical: **blocked: no physical device**. [1][2] | **Not measured:** no production screen or hub-frame comparison; iOS baseline: **not measured**. [3][5] | **Not measured:** no NAPI/HAP production screen comparison; physical: **blocked: no physical device**. [4] |
+| Memory | resident memory the core adds is reported; opening and closing the same chat 10 times ends within 5 MB of the start | **Measured, simulator:** ten binding create/open/drain/close cycles changed `phys_footprint` by +16,384 B, **within 5 MB**; native chat/list round trips changed resident size by +4,128,768 B, also within 5 MB, but that run is a legacy non-acceptance observation. Total resident memory added by the core in production: **not measured**. Physical: **blocked: no physical device**. [1][2] | **Not measured:** no ten-open/close or resident-memory report; physical: **blocked: no physical device**. [3] | **Not measured:** host tests do not report device memory; physical: **blocked: no physical device**. [4] |
+| Incremental app build with the core unchanged | no Rust rebuild | **Measured, macOS host:** second unchanged-input XCFramework build reported `cached XCFramework is current`, **within limit**; full incremental app-build time not measured. [7] | **Measured, Linux host:** repeated unchanged-core Gradle build was `UP-TO-DATE`, **within limit**. [3] | **Not measured:** no actual API 26 HAP incremental build. [4] |
+| Clean build time added | reported per platform; no fixed limit | **Not measured:** no matched clean with/without-core app build. | **Not measured:** no matched clean with/without-core app build. | **Not measured:** no actual API 26 clean HAP build. A hosted Ubuntu core-lane compile took 11.48 s for the release FFI step, not an app-build increment ([run 43564606776](https://github.com/nwverse/persona/actions/runs/43564606776)). |
+| Contributor setup | `scripts/app/sim.sh`, `scripts/app/android.sh` and HarmonyOS's build still need one command after installing rustup | **Not measured as a complete fresh-contributor run:** `scripts/app/sim.sh` invokes the XCFramework builder before the app build, and the builder installs the pinned toolchain/targets through rustup; the binding PR verified the framework-first build path, not a clean one-command `sim.sh` run. **Setup limit: unverified**; Xcode 26.0 also remains not verified. [7] | **Measured, Linux host:** the Gradle app build invokes `buildAndroidCore`, which installs missing pinned Rust targets. **`scripts/app/android.sh` / one-command contributor setup: not measured / unverified**; SDK, JDK 21 and NDK are prerequisites, and the reviewed Gradle script used Linux NDK host tools. [3][6] | **Not measured:** no actual DevEco/API 26 one-command build was run; **setup limit: unverified**. The API 26 SDK and physical device remain **blocked: no physical device**. [4] |
+
+**Reading the table.** "Measured" records an existing observation, not physical-device or production acceptance;
+host, emulator and simulator values stay in their own categories. Android's package increments are APK/native-library
+bytes, not store downloads. The physical-arm64 measurements in [6] came from a contributor's Pixel 11 Pro XL,
+Android 17 / API 37, 4 KiB kernel, main `564904f816`, Rust 1.98.0 / NDK 29.0.14206865; the six R8 release-test runs
+were not independently rerun by the reviewer and do not establish the required 16 KiB-kernel result. The maintainer's
+2026-11-14 decision leaves the specified physical-device cells **blocked: no physical device**, never passed by
+substituting a simulator or host (#6871, [decision comment](https://github.com/nwverse/persona/issues/6871#issuecomment-6869406664)).
+An **exceeds, unresolved** cell follows the rule above: if the limit cannot be fixed within the slice, the plan stops
+and D1 stays. Filling in this table does not itself close #6871 or approve production migration.
+
+**Sources and exact workloads.**
+
+1. **[iOS reference-measurement PR #7639](https://github.com/nwverse/persona/pull/7639)** — **unmerged and closed**;
+   its final PR head retains the raw reports, while `main` does not contain its harness or artifacts. It was closed
+   after a retained build log was found to contain registered app identities; the cited final head removes that
+   attachment, while earlier PR refs remain historical ([disposition](https://github.com/nwverse/persona/pull/7639#issuecomment-6876490516)).
+   Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
+   All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
+   Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in docs/archive/apple/reference-measurements-6871/ at the head commit
+   [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
+   exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
+   uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
+   Dispatch raw report (`raw/core-boundary.json`)
+   includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
+   100-item drain report (`raw/core-large-page.json`)
+   covers drain/bincode decode/string-list apply, not a presented frame. Lifecycle report (`raw/core-lifecycle.json`)
+   has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
+   `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
+   are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`
+   on a recorded dirty measurement tree: `.app` 127,081,693 → 127,845,039 B; local ZIP 60,500,929 → 60,856,673 B.
+   No App Store processing, thinning, physical artifact or equivalent production-core UI run was performed.
+3. **[Android packaging and benchmark PR #7128](https://github.com/nwverse/persona/pull/7128)** — merged as
+   `eeac9a5794`; Rust 1.98.0, NDK 29.0.14206865, JDK 21 on x86_64 Linux. Package report: arm64-v8a raw symbols
+   6,998,464 B, stripped/package 651,600 B, gzip 323,071 B; x86_64 7,007,880 / 713,952 / 343,371 B. The benchmark
+   used the non-debuggable R8 release androidTest APK on an owned software x86_64 Android 15 / API 35 emulator,
+   build `AE3A.240806.043`, 4 KiB kernel, 100 warm-ups + 1,000 samples. Original p50/p99/max: dispatch
+   155.520 / 13,100.597 / 61,333.795 µs; frame 745.018 / 17,271.624 / 56,622.362 µs. The same PR reports the
+   unchanged-core `UP-TO-DATE` build and Gradle app build, not clean-build, store-download or one-command
+   `scripts/app/android.sh` evidence. Its Gradle build selected the Linux NDK host tools. The separate macOS
+   physical-device report in [6] used a local NDK host-directory symlink, so it does not establish a general
+   fresh-contributor setup.
+4. **[HarmonyOS NAPI binding PR #7174](https://github.com/nwverse/persona/pull/7174)** — merged as `8827b3f885`;
+   host-only macro/codec/runtime checks passed, but the API 26 `.so` link, HAP build/install, real NAPI replay,
+   size and timing were not run. **[Callback follow-up #7713](https://github.com/nwverse/persona/pull/7713)** and
+   its [final Node 24 check](https://github.com/nwverse/persona/pull/7713#issuecomment-6878001978) remain host
+   evidence only, not a device build or performance result.
+5. **[Android retained benchmark PR #7224](https://github.com/nwverse/persona/pull/7224)** — merged as `1c0229e078`;
+   same software emulator, API 35 / build `AE3A.240806.043`, 4 KiB kernel, no `/dev/kvm`, optimized R8 release test,
+   100 warm-ups + 1,000 samples. Final original-span dispatch p50/p99/max 126.169 / 883.312 / 2,768.431 µs; frame
+   761.306 / 3,414.419 / 6,189.888 µs. Earlier raw p99 16,400.210 / 8,534.626 µs is retained, not selectively
+   replaced. Attribution and a low-overhead control identify instrumentation/scheduling as contributors but do not
+   waive either failure or demonstrate a physical-device result.
+6. **[Physical-arm64 report in #6871](https://github.com/nwverse/persona/issues/6871#issuecomment-6866766583)** —
+   contributor-reported, not independently rerun. Unmodified runs 1–3: dispatch p99 135.626 / 32.786 / 93.047 µs,
+   frame p99 152.385 / 50.963 / 124.297 µs. Runs 4–6 added only a local p90 reporting field: dispatch p99
+   22.578 / 103.411 / 108.880 µs, frame p99 52.708 / 312.906 / 292.187 µs. Large run-to-run variation, a 4 KiB
+   kernel and no iOS physical baseline mean these are not accepted as full-budget, 16 KiB or comparative passes.
+7. **[Apple binding PR #7160](https://github.com/nwverse/persona/pull/7160)** — merged as `5f1920294a`; Xcode 27.2 /
+   Swift 6.4.2, Rust 1.98.0. It reports the cached unchanged-input XCFramework build, real-C and native-store replay,
+   and `scripts/app/sim.sh`'s framework-first path. Xcode 26.0 is not verified; no launch, memory, actual app-size
+   or timing acceptance is claimed there. **[Targeted-wake follow-up #7401](https://github.com/nwverse/persona/pull/7401)**
+   likewise leaves physical performance and production migration unaccepted.
 
 ## Decisions
 

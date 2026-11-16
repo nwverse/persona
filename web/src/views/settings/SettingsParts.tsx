@@ -22,10 +22,11 @@ export function Group({ title, footer, children, right, anchor }: { title?: Reac
 }
 
 /** A host-owned settings area containing several cards (extension configuration, for example). */
-export function SettingsSection({ name, title, children }: { name: string; title: string; children: React.ReactNode }) {
+/** A section of an extension's page; `showTitle` false keeps its name for assistive technology only (#8853). */
+export function SettingsSection({ name, title, showTitle = true, children }: { name: string; title: string; showTitle?: boolean; children: React.ReactNode }) {
   return (
     <section data-extension-section={name} aria-label={title}>
-      <h2 className="mb-1.5 px-1 text-[12px] font-medium text-ink-3">{title}</h2>
+      {showTitle && <h2 className="mb-1.5 px-1 text-label font-medium text-ink-3">{title}</h2>}
       {children}
     </section>
   );

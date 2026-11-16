@@ -50,6 +50,8 @@ const say = (id: string, below: boolean, title = true) => act(() => {
     { target: head, isIntersecting: title, intersectionRatio: title ? 1 : 0, boundingClientRect: { top: 200 }, rootBounds: { bottom: 700 } },
   ]);
 });
+/** Opens every waiting card, as a tap on the first one's "2 / 6" does (the stack folds to that first card otherwise). */
+const openAll = () => act(() => host.querySelector<HTMLButtonElement>("[data-chat-cards-position]")!.click());
 const draw = (cards: Interaction[], narrow = false) => act(() => root.render(<PendingCards interactions={cards} answered={[]} narrow={narrow} keyboard={false} onDismissKeyboard={() => {}} />));
 
 beforeEach(() => {
@@ -76,6 +78,7 @@ describe("a waiting card cut off below the dock's box", () => {
 
   it("says in its answer row what the row answers, its title and command, and nothing while it is in view", () => {
     draw([question, permission]);
+    openAll();
     expect(host.querySelector("[data-card-answers]")).toBeNull();
     say("p_1", true);
     const line = card("p_1").querySelector<HTMLButtonElement>("[data-card-answers]")!;
@@ -93,6 +96,7 @@ describe("a waiting card cut off below the dock's box", () => {
 
   it("brings the whole card into view on a click on that line, with the focus on the card", () => {
     draw([question, permission]);
+    openAll();
     say("p_1", true);
     const scrolled = vi.fn();
     const whole = card("p_1").querySelector<HTMLElement>("[data-pending-card]")!;
@@ -102,8 +106,15 @@ describe("a waiting card cut off below the dock's box", () => {
     expect(document.activeElement).toBe(whole);
   });
 
-  it("has the stack's first card say how many the stack holds while any is cut off, and only then", () => {
+  it("has the stack's first card say how many the stack holds while any is cut off once all are opened, and only then", () => {
     draw([question, permission]);
+    // folded to the first card, it says where it stands instead; opened, the same chip folds them back
+    say("q_1", true);
+    expect(host.querySelector("[data-chat-cards-count]")).toBeNull();
+    expect(card("q_1").querySelector("[data-chat-cards-position]")?.getAttribute("aria-expanded")).toBe("false");
+    openAll();
+    expect(card("q_1").querySelector("[data-chat-cards-position]")?.textContent).toBe(t("chat-interactions.first_only"));
+    say("q_1", false);
     expect(host.querySelector("[data-chat-cards-count]")).toBeNull();
     say("p_1", true);
     const count = host.querySelector("[data-chat-cards-count]")!;
@@ -131,6 +142,7 @@ describe("a waiting card cut off below the dock's box", () => {
 
   it("does not repeat a question whose title is in view: only once the question is out of view as well", () => {
     draw([question, permission]);
+    openAll();
     say("q_1", true);
     expect(card("q_1").querySelector("[data-card-answers]")).toBeNull();
     // the stack still says it goes on below
@@ -144,6 +156,7 @@ describe("a waiting card cut off below the dock's box", () => {
 
   it("keeps the next card mounted, with what was typed in it, when the card above it goes", () => {
     draw([permission, question]);
+    openAll();
     const next = card("q_1");
     const field = next.querySelector<HTMLInputElement>(`input[aria-label="${t("chat-interactions.custom_answer")}"]`)!;
     act(() => {
@@ -157,13 +170,14 @@ describe("a waiting card cut off below the dock's box", () => {
     expect(document.activeElement).toBe(field);
   });
 
-  it("says how many a narrow stack holds once it is opened in full, and leaves a folded one to its N more row", () => {
+  it("says how many a narrow stack holds once it is opened in full, and where it stands while folded to the first", () => {
     draw([question, permission], true);
-    say("p_1", true);
-    // folded: the first card only, the rest in the row under the box
+    say("q_1", true);
+    // folded: the first card only, with its place in the run instead of the count
     expect(host.querySelector("[data-chat-cards-count]")).toBeNull();
-    expect(host.querySelector("[data-chat-cards-fold]")).not.toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>("[data-chat-cards-fold]")!.click());
+    expect(card("q_1").querySelector("[data-chat-cards-position]")).not.toBeNull();
+    openAll();
+    say("p_1", true);
     expect(host.querySelector("[data-chat-cards-count]")?.textContent).toBe(t("chat-interactions.pending", { count: 2 }));
     expect(card("q_1").contains(host.querySelector("[data-chat-cards-count]"))).toBe(true);
   });

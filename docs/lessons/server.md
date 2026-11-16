@@ -1,5 +1,17 @@
 # Lessons: hub / node and networking
 
+## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
+
+The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
+`127.0.0.1:<listen port>`. A hub whose `listen` names one address (`<LAN address>:18660`) does not answer there, so each of
+them said the hub was not running while it served the LAN. Dialling the LAN address instead is only half the fix: the
+connection then comes from that address, and the hub's checks for the master token over loopback (pairing codes, admin,
+peers, extension installs) refuse it with 403. `managerconf.CLIHubURL` picks the address (listen's only when it is loopback
+or one of this machine's, never a name or an address the machine no longer has, so the token stays on the machine) and
+`managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
+A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
+the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
@@ -1250,7 +1262,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Gateways return `HTTP 429 account_quota_exhausted` for exhausted quota and `HTTP 503 account_concurrency_full` for full concurrency. Previously each caller treated these as ordinary failures: knowledge processing and Inbox sorting retried item by item, producing 429 requests and log lines in 15 minutes; Inbox items were marked sorted "by rules" and weren't reprocessed after quota recovery.
   Handle rate limits per connection in the shared client (`ai/limit.go`, `docs/assistant/model-config.md` ("Upstream rate limits")): while paused, return `ai.PausedError` without sending; callers seeing `ai.IsPaused` stop the round, don't log, and don't mark items processed. New model-calling loops must do the same.
-- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`; a recognized code wins over wording, while an unknown code must retain the previous fallback. `X-Should-Retry: false` overrides status-based transience. A 429 carrying it together with `Retry-After` is a quota pause until the reset, not busy backoff; HTTP 402 and explicit budget-exhaustion codes are quota pauses too. Keep model-unavailable, missing-endpoint and excess-context classifications separate, and never infer an automatic model switch from any of them (#8776).
+- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`, as a string or number; decode fields independently so a malformed field cannot erase a valid message or type. A recognized code wins over wording, while an unknown code keeps the previous fallback. `X-Should-Retry: false` makes the original response non-transient, not the gate: only a 429 with a positive, valid `Retry-After` is the quota-reset exception. Zero, malformed or absent cooldown keeps the existing busy gate. A bounded compatibility request with a rejected field changed is not a same-request retry and remains allowed. Keep model-unavailable, missing-endpoint and excess-context classifications separate: Anthropic's 404 `not_found_error` with a `model:` message is a missing model, but overload wording such as `model service unavailable` is not. `model_unavailable` on model.complete means no configured/callable model, never an upstream model failure; use `model_failed` for the latter (#8833).
 - Thinking models (e.g. `claude-haiku-5-5` thinks by default) count thinking tokens toward `max_tokens` too (2026-11-03, #1000): a project profile of about 2000 Chinese characters needs 3.7–4.7K,
   so `kb.project`'s old 4000 cap often truncated into thinking plus half a JSON object, reported as "unterminated JSON object", retrying every 2 minutes.
   Inspect Messages `stop_reason`: if `ai.JSONMax` lacks a complete object and stopped on `max_tokens`, double the cap and retry once; if still truncated, return `ai.ErrTruncated`.
@@ -2509,3 +2521,22 @@ nothing ran the old build after the new one.
   has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
+
+## On a Mac with a resident node, the hub's node deploy doesn't reach it (2026-11-16, #8859)
+
+- On a computer where Persona Link installed the resident node (`com.persona.node` → `~/.persona/bin/persona-node node
+  --attach`), the `personad node --stdio` the hub starts over ssh only relays to it. A hub deploy replaces `personad`
+  on that computer, but the program that answers is still the resident one. `scripts/app/mac-link.sh install` installs
+  that resident node once (a Mac without one gets it: "Installed and started the resident node service") and leaves it
+  alone after that ("already installed … leaving it unchanged", `docs/operations/node-update.md`).
+- So a node change can look deployed and still not run. The live screen's x264 probe (#8883) never reported on such a
+  Mac: its resident node predated the probe. A first guess blamed a cached failed probe and changed the probe (#8989:
+  its own deadline, a failure retried after a minute, each outcome logged), which is sound but wasn't the cause.
+- Before debugging a node's behaviour, read the version the hub has for it: `node_version` / `node_mismatch` in `GET
+  /api/v1/machines`, or the hub's connect line "[<machine>] node <version> is not build <hub's>: an update is offered".
+- **Redeploy** (`POST /api/v1/machines/{mid}/deploy`) and automatic node updates send the hub's own node packages,
+  `$PERSONA_HOME/bin/nodes` on the hub machine. `scripts/deploy/deploy.sh`'s hub step refreshes them (`personad-<plat>`,
+  `persona-node-<plat>` and its `.version`). A deploy that skips that step leaves them at an older build, and Redeploy
+  then installs that older build: here it moved a resident node back five days, to a build without the live screen's
+  video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
+  `node_mismatch`.

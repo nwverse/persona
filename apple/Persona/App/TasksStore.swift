@@ -563,12 +563,12 @@ final class TasksStore {
         return model.api?.manager(model.feedManager(of: plan.conversation, group: model.hub?.group ?? ""))
     }
 
-    func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false) async {
+    func start(_ plan: TaskPlan, edits: [PlanTask]? = nil, remember: Bool = false, scheduleGrant: Bool = false) async {
         guard let api = client(for: plan), !busyPlans.contains(plan.id) else { return }
         busyPlans.insert(plan.id)
         defer { busyPlans.remove(plan.id) }
         do {
-            received(try await api.startPlan(plan.id, edits: edits, remember: remember))
+            received(try await api.startPlan(plan.id, edits: edits, remember: remember, scheduleGrant: scheduleGrant))
             reloadTodos()
             Haptics.success()
         } catch {

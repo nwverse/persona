@@ -371,7 +371,8 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("-timeout=10m", command)
         self.assertEqual(command[-1], "./internal/agents")
         cleanup.assert_called_once()
-        self.assertEqual(cleanup.call_args.args[0][:3], ["docker", "rm", "-f"])
+        container = calls[0][0][calls[0][0].index("--name") + 1]
+        self.assertEqual(cleanup.call_args.args[0], ["docker", "rm", "-fv", container])
 
         calls.clear()
         with tempfile.TemporaryDirectory() as directory, \
@@ -386,6 +387,28 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(len(runs), 2)
         self.assertEqual([run[-1] for run in runs], ["./internal/node", "./internal/node"])
         self.assertTrue(all("-timeout=10m" in run for run in runs))
+
+    def test_go_test_runner_removes_postgres_volume_on_failure(self):
+        import pr_watch_go_tests
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at):
+                calls = []
+                def fake_checked(argv, **kwargs):
+                    calls.append(argv)
+                    if len(calls) == fail_at:
+                        raise pr_watch_go_tests.WatchError("fixture failure")
+                    return ""
+                with tempfile.TemporaryDirectory() as directory, \
+                        patch.object(pr_watch_go_tests, "checked", side_effect=fake_checked), \
+                        patch.object(pr_watch_go_tests.subprocess, "run") as cleanup:
+                    package = Path(directory) / "server/internal/agents"
+                    package.mkdir(parents=True)
+                    (package / "cache_test.go").write_text("package agents\n")
+                    with self.assertRaisesRegex(pr_watch_go_tests.WatchError, "fixture failure"):
+                        pr_watch_go_tests.main(["--worktree", directory, "./internal/agents"])
+                container = calls[0][calls[0].index("--name") + 1]
+                cleanup.assert_called_once()
+                self.assertEqual(cleanup.call_args.args[0], ["docker", "rm", "-fv", container])
 
     def test_argument_driven_python_verification_keeps_full_scripts_lane(self):
         names = "scripts/test/test_rolling_compatibility.py\n"

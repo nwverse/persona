@@ -510,6 +510,17 @@ func providerShaped(l proto.ManagedLauncher) bool {
 // the model variables. The Haiku tier is HaikuModel, else SmallModel (what it was), else the model. A tier, the small
 // model or the subagent model named explicitly gets [1m] by its own window (tierModel).
 func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation bool) map[string]string {
+	// The provider's own environment replaces the endpoint below: fallback policy belongs to that effective gateway,
+	// not the stored one. An empty override means the official default, not a custom gateway with no models declared.
+	effectiveBaseURL := l.LaunchBaseURL()
+	for _, kv := range launcherEnvVars(l.Env) {
+		if kv[0] == "ANTHROPIC_BASE_URL" {
+			effectiveBaseURL = kv[1]
+		}
+	}
+	if effectiveBaseURL == "" {
+		effectiveBaseURL = "https://" + proto.AnthropicAPIHost
+	}
 	// Claude Code adds /v1/messages: a provider stored with a trailing /v1, from a hub before it dropped it, would
 	// otherwise call /v1/v1/messages though Test connection passed.
 	env := map[string]string{"ANTHROPIC_BASE_URL": l.LaunchBaseURL()}
@@ -521,7 +532,7 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 		// (#7319). Off when the launcher's model list shows the gateway lacks one: the turn then ends on its refusal,
 		// which the assistant's recovery reads (assistant_recovery.go). A launcher that declares no list, or one with
 		// them all, keeps Claude Code's fallback; the launcher's own environment, applied below, wins either way.
-		if !proto.AnthropicAPI(l.BaseURL) && lacksRefusalFallback(l) {
+		if !proto.AnthropicAPI(effectiveBaseURL) && lacksRefusalFallback(l) {
 			env["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK"] = "1"
 		}
 	} else if l.TimeoutMS > 0 {

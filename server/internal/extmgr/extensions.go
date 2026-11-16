@@ -396,6 +396,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	}
 	if ps.h != nil {
 		ps.voiceView(ctx, p, &v)    // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.volcView(ctx, p, &v)     // runs, but nothing transcribes or reads aloud without a key (volc_extension.go)
 		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
 	if ps.h != nil {
@@ -501,6 +502,7 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 		h.logf("plugin imessage: %v", err)
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
+	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}

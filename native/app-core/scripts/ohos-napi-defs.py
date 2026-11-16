@@ -46,6 +46,10 @@ SIGNATURES = {
     "coreClose": [("handle", "number")],
     "coreConfig": [],
     "coreProjectSort": [("input", "string")],
+    "coreProjectAnswer": [("input", "string")],
+    "coreDisplayAnswer": [("label", "string")],
+    "coreProjectStreamChunks": [("input", "string")],
+    "coreProjectTaskIndex": [("input", "string")],
 }
 
 
@@ -143,9 +147,9 @@ def generate(records):
     names = [name for name, _, _ in definitions]
     if len(names) != len(set(names)):
         raise DefinitionError("napi-derive must emit each function once")
-    if sorted(names) != ["coreClose", "coreConfig", "coreCreate", "coreCreateWithChat", "coreDispatch", "coreDrain", "coreFlush", "coreProjectSort"]:
+    if sorted(names) != sorted(SIGNATURES):
         raise DefinitionError(f"unexpected NAPI function set: {', '.join(names)}")
-    order = ["coreCreate", "coreCreateWithChat", "coreDispatch", "coreDrain", "coreFlush", "coreClose", "coreConfig", "coreProjectSort"]
+    order = list(SIGNATURES)
     lines = []
     for name, parameters, return_type in sorted(definitions, key=lambda definition: order.index(definition[0])):
         arguments = []
@@ -155,7 +159,7 @@ def generate(records):
             arguments.append((parameter, kind))
         if arguments != SIGNATURES[name]:
             raise DefinitionError(f"{name} has an incomplete or changed positional parameter contract")
-        if return_type != ("void" if name == "coreClose" else "string" if name == "coreProjectSort"
+        if return_type != ("void" if name == "coreClose" else "string" if name.startswith(("coreProject", "coreDisplay"))
                            else "Buffer" if name in ("coreDrain", "coreConfig")
                            else "number" if name.startswith("coreCreate") else "boolean"):
             raise DefinitionError(f"{name} has the wrong return type")

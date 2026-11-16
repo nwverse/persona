@@ -74,6 +74,20 @@ func TestProviderTestClassifiesSyntheticGatewayFailures(t *testing.T) {
 			wantDetail: "knows no model synthetic-model",
 		},
 		{
+			name: "selected model unavailable to the API key", status: http.StatusNotFound,
+			body:       `{"type":"error","error":{"type":"not_found_error","message":"The selected model is unavailable to this API key"}}`,
+			wantCode:   "model_not_found",
+			wantHead:   "The gateway is reachable",
+			wantDetail: "The selected model is unavailable to this API key",
+		},
+		{
+			name: "model service unavailable is not a missing model", status: http.StatusNotFound,
+			body:       `{"type":"error","error":{"type":"api_error","message":"model service unavailable"}}`,
+			wantCode:   "not_found",
+			wantHead:   "Not found (404): check the Base URL, model and configured protocol",
+			wantDetail: "model service unavailable",
+		},
+		{
 			name: "ordinary unsupported endpoint", status: http.StatusNotFound,
 			body:       `{"error":{"code":"unsupported_endpoint","message":"unsupported endpoint: POST /v1/messages"}}`,
 			wantCode:   "not_found",
@@ -162,7 +176,7 @@ func TestManagerDirectCallClassifiesSyntheticFailures(t *testing.T) {
 		{
 			name: "model unavailable", status: http.StatusNotFound,
 			body:            `{"error":{"code":"model_not_found","message":"synthetic direct model detail"}}`,
-			wantCode:        assistantwire.CodeModelUnavailable,
+			wantCode:        assistantwire.CodeModelFailed,
 			wantExplanation: "The gateway is reachable",
 			wantDetail:      "synthetic direct model detail",
 		},
@@ -306,7 +320,7 @@ func TestSavedDirectAPICheckExplainsClassifiedFailure(t *testing.T) {
 	}
 }
 
-func TestChatProbeCompatibilityRetryHonorsNoRetryHeader(t *testing.T) {
+func TestChatProbeTokenCompatibilityRequestAllowedWithNoRetryHeader(t *testing.T) {
 	calls := 0
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -314,37 +328,56 @@ func TestChatProbeCompatibilityRetryHonorsNoRetryHeader(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["max_tokens"] != float64(256) || body["max_completion_tokens"] != nil {
-			t.Errorf("request %d has an unexpected compatibility payload: %v", calls, body)
+		if calls == 1 {
+			if body["max_tokens"] != float64(256) || body["max_completion_tokens"] != nil {
+				t.Errorf("initial payload: %v", body)
+			}
+			w.Header().Set("X-Should-Retry", "false")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is not supported; use max_completion_tokens"}}`))
+			return
 		}
-		w.Header().Set("X-Should-Retry", "false")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"max_tokens is not supported; use max_completion_tokens"}}`))
+		if body["max_completion_tokens"] != float64(256) || body["max_tokens"] != nil {
+			t.Errorf("corrected payload: %v", body)
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}]}\n\n"))
 	}))
 	t.Cleanup(gw.Close)
 	s, _ := launcherTestService(t)
 	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "synthetic-model", API: "chat"})
-	msg, _ := out["error"].(string)
-	if calls != 1 || out["ok"] != false || !strings.Contains(msg, "max_tokens is not supported; use max_completion_tokens") {
-		t.Fatalf("calls = %d, providerTest() = %v, want one non-retried failure with the upstream detail", calls, out)
+	if calls != 2 || out["ok"] != true || out["error"] != nil {
+		t.Fatalf("calls = %d, providerTest() = %v, want the corrected second request to succeed", calls, out)
 	}
 }
 
-func TestChatProbeReasoningRetryHonorsNoRetryHeader(t *testing.T) {
+func TestChatProbeReasoningCompatibilityRequestAllowedWithNoRetryHeader(t *testing.T) {
 	calls := 0
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		w.Header().Set("X-Should-Retry", "false")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`))
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if calls == 1 {
+			if body["reasoning_effort"] != "high" {
+				t.Errorf("initial payload: %v", body)
+			}
+			w.Header().Set("X-Should-Retry", "false")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`))
+			return
+		}
+		if _, present := body["reasoning_effort"]; present {
+			t.Errorf("corrected payload kept the rejected field: %v", body)
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}]}\n\n"))
 	}))
 	t.Cleanup(gw.Close)
 	s, _ := launcherTestService(t)
 	effort := "high"
 	out := s.providerTest(i18n.With(context.Background(), i18n.En), probeInput{BaseURL: gw.URL, Model: "synthetic-model", API: "chat", Effort: &effort})
-	msg, _ := out["error"].(string)
-	if calls != 1 || out["ok"] != false || !strings.Contains(msg, "'reasoning_effort' is not supported") {
-		t.Fatalf("calls = %d, providerTest() = %v, want one non-retried effort failure", calls, out)
+	if calls != 2 || out["ok"] != true || out["error"] != nil || out["effort"] != "" {
+		t.Fatalf("calls = %d, providerTest() = %v, want a successful degraded second request", calls, out)
 	}
 }
 

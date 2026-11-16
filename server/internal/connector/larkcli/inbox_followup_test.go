@@ -136,6 +136,38 @@ func TestInboxSweepReachesEleventhDirectChat(t *testing.T) {
 	}
 }
 
+// lark-cli lists only people in a message's mentions: an @all is in the content alone, as "@_all" in a text message
+// and as <at user_id="all"> in a post.
+func TestInboxKeepsAtAllWrittenOnlyInContent(t *testing.T) {
+	for name, content := range map[string]string{
+		"text": `"@_all Please update your weekly notes"`,
+		"post": `"<at user_id=\"all\"></at> Service is degraded"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			message := adapter.Message{MessageID: "om_all", MessagePosition: "10", ChatID: "oc_example",
+				ChatType: "group", CreateTime: "2030-01-01T00:00:00Z",
+				Sender: adapter.Sender{ID: "ou_example_peer"}, Content: json.RawMessage(content)}
+			c := followupConnector(t, []adapter.Message{message}, []adapter.Message{message})
+			if _, err := c.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := inboxThings(t, c)["larkcli:chat:oc_example"]; got.Kind != "mention" || got.Last != message.MessageID {
+				t.Fatalf("an @all in the content was not kept as a mention: %+v", got)
+			}
+		})
+	}
+	for name, content := range map[string]string{
+		"address": `"mail me@_allhands.example"`,
+		"other":   `"<at user_id=\"ou_example_other\"></at> hi"`,
+	} {
+		t.Run("not/"+name, func(t *testing.T) {
+			if messageMentions(adapter.Message{Content: json.RawMessage(content)}, "ou_example_user") {
+				t.Fatalf("%s read as an @all", content)
+			}
+		})
+	}
+}
+
 func followupConnector(t *testing.T, search, history []adapter.Message) *Connector {
 	t.Helper()
 	c := inboxTestConnector(t, "inbox_followup")

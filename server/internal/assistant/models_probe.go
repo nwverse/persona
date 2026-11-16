@@ -538,6 +538,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	auto := t.auth == probeAuthAuto
 	var res *http.Response
 	renamedTokens, droppedEffort := false, false
+	// A compatibility attempt changes the rejected request; X-Should-Retry: false only suppresses resending it unchanged.
 	for {
 		body, _ := json.Marshal(payload)
 		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
@@ -546,10 +547,14 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		noRetry := ai.NoRetry(res.Header)
+		// Recognized machine codes win over compatibility wording and keep their original response for failure().
+		if ai.HasRecognizedErrorCode(raw) {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
 		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
 		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
-		if readErr == nil && !noRetry && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
 			ai.RememberChatEffortRejection(t.base, t.key, t.model, t.via, offValueRejected)
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
@@ -557,7 +562,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
 			continue
 		}
-		if readErr == nil && !noRetry && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
 			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256

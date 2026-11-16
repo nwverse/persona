@@ -146,8 +146,9 @@ class AgentCreationModelTest {
             server.enqueue(MockResponse().setBody("""{"worktree":true,"ours":false,"path":"/wt/x","dirty":0,"unmerged":0}"""))
             service.worktreeStatus("mac", "/wt/x", "paseo")
             assertEquals(buildJsonObject { put("cwd", "/wt/x"); put("kind", "paseo") }, JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
-            server.enqueue(MockResponse().setBody("""{"path":"/p/persona-fix","branch":"persona/fix","root":"/code"}"""))
-            service.addWorktree("mac", "/code", "Fix it", "", "paseo")
+            // Paseo makes it as a workspace of its own, which the start goes into (#8856)
+            server.enqueue(MockResponse().setBody("""{"path":"/p/persona-fix","branch":"persona/fix","root":"/code","workspace_id":"ws-made"}"""))
+            assertEquals(WorktreeAdded("/p/persona-fix", "persona/fix", "/code", "ws-made"), service.addWorktree("mac", "/code", "Fix it", "", "paseo"))
             assertEquals(buildJsonObject { put("cwd", "/code"); put("name_hint", "Fix it"); put("kind", "paseo") },
                 JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()))
             server.enqueue(MockResponse().setBody("""{"removed":true,"branch_deleted":false}"""))

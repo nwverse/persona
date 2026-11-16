@@ -108,6 +108,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `connectors` (version 2) | `connector.` | The manifest fields of the connector protocol: `id` (`^[a-z][a-z0-9]*$`), `name`, `capabilities`, `hosts`, `agent_tools`, `unlisted`, `confirm_always?` (globs of write-operation names; `connector_gate`'s `allow` is also always clamped to confirm-on-phone, `deny` unchanged), `poll_seconds`, `kinds`, plus `kind_descriptions?` (kind → one line "Type: …" shown to the model, used by Inbox triage, drafting and the AI twin), `archive_sources?` (other names the archive may also go under), `cli?` (a command line on the assistant's PATH, see `docs/protocol/connector-protocol.md` ("Command line")), `sends_as_user?` (the connector sends messages in the user's name by itself, outside the write gate; see "Sent as the user: `sent.record`" below) | Process speaks the protocol | The connector registry (**Settings › Connectors**, Inbox, knowledge base, the assistant's tools); methods in `docs/protocol/connector-protocol.md`, including optional `catalog` source discovery/read calls and recipes (`docs/extensions/subscriptions.md`) |
 | `voice` (version 1) | — | `id`, `name?` | `runtime.http` | The App's voice chat; contract under "Voice" below |
 | `transcription` (version 1) | — | `id`, `name?` | `runtime.http` | Meeting transcription on the hub, for the manager only (#3862 phase 5); contract under "Transcription" below |
+| `speech` (version 1) | — | `id`, `name?` | `runtime.http` | A text read aloud for the apps (#8712): a meeting answer the iPhone says when Persona takes part; contract under "Speech" below |
 | `computer` (version 1) | — | `id`, `name?` | — | The assistant's computer-control tools and the toggle on the machine page (only the built-in `cua`), see [computer-use.md](computer-use.md) |
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
 | `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
@@ -234,8 +235,10 @@ would make the extension uninstallable on older hubs, while files they do not re
 - **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
   marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
   description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
-  permission digest and the official-provenance check do not change with the language. Contribution titles (pages, navigation entries,
-  shortcuts, themes) and built-in extensions have one language for now.
+  permission digest and the official-provenance check do not change with the language. `ui.<contribution id>` (#8712) translates a page's
+  title (and the extension's name beside it) in `GET /api/v1/extensions/-/ui` and the details' `ui`; other contribution titles (navigation
+  entries' badges, shortcuts, themes) have one language for now. A built-in extension written in English carries its translations itself
+  (`Registry.AddBuiltinTranslated`: the iPhone and Volcengine speech extensions).
 - **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
   wrong type, too long, a link) is left out with a warning on the preview and on the installed extension; it never blocks an install. Files
   of languages the hub does not have are not read.
@@ -582,8 +585,8 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 - **No budget and no cap** (the user's decision): there is no daily limit and no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
-- **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension, or the selected model is missing / unavailable to this key: the user repairs it in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`.
+- **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, a selected model that is missing / unavailable to this key, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`.
 - **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
   the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
   a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`
@@ -609,7 +612,8 @@ gets anyone else's audio: this is the other direction from meetings, its audio h
   `transcription.cancel {job}`. Unknown fields are `invalid_params`.
 - **How it runs**: a job on the contribution's `replay` mode (speed 4), as a meeting's final pass but with no transcript of record to check against: the built-in
   adapter runs three sessions a window and takes a window's text only when two agree. A window where they do not (noise, music, crosstalk) comes back in
-  `gaps`, never as a guess; its upstream bills about three times the audio's length. `transcription.audio` returns once its audio is sent and no more than
+  `gaps`, never as a guess; its upstream bills about three times the audio's length. The built-in Volcengine speech returns a window that
+  failed three times as a gap too, and goes on ([volcengine-speech.md](volcengine-speech.md) "Recognition", #8887). `transcription.audio` returns once its audio is sent and no more than
   60 seconds wait past the contribution's last `ack`, so calling it again as soon as it returns paces the job. `finish` waits for the contribution's `done`,
   up to 5 minutes without a frame.
 - **Limits**: one job per extension and two across extensions at a time (`busy`), meetings' jobs not counted and not held up; at most 15 minutes of audio a
@@ -1205,6 +1209,8 @@ install, upgrade and uninstall its extensions. Only one official marketplace is 
 
 https and GitHub marketplaces accept https only. A private https / GitHub marketplace takes a **token** (for GitHub, a read-only fine-grained token: Contents read permission on this repo). It is stored encrypted with the manager's `secret.key`,
 sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitHub marketplace, the API origin), except for the explicitly derived GHCR binding described under "OCI packages and mirrors". It is never sent to external redirects or echoed back. Token reuse and address moves retain the original HTTPS origin or GitHub owner binding.
+
+**Upstream proxy**: manager.json's `extension_market.proxy` accepts `http://[user:password@]host:port` or `socks5://[user:password@]host:port` for catalog reads, package downloads and HTTPS git clones. The explicit proxy covers GitHub and its CDNs, ordinary HTTPS markets, OCI registries and mirrors, overrides `github.proxy` and the process proxy environment, and does not honor `NO_PROXY` or fall back to a direct connection when invalid. SSH clones do not use it. With no marketplace proxy, the existing routing is unchanged: GitHub hosts use `github.proxy` when configured, and other requests follow the manager's `HTTPS_PROXY` / `NO_PROXY`. Restart the manager after changing this advanced setting (`docs/operations/config.md`, "manager.json").
 
 **GitHub rate limits**: without a token the GitHub API gives each egress address only 60 requests per hour. All devices at home share one public address, and once it is used up you get 403. So:
 
@@ -3642,10 +3648,34 @@ the program stores nothing. The contract (the job's frames both ways, which cont
 - **Which one transcribes**: the built-in voice extension's `gpt-live`, unless the owner names another in the assistant's `meeting_transcription_extension`
   (`"<extension id>/<contribution id>"`): installing an extension never sends it meeting audio. A contribution is used only while its extension is enabled and running and
   the contribution is not switched off ("Turning contributions on and off"); an extension started by requests is started for `/info`, as for any relayed request.
+  The built-in Volcengine speech extension's **Use for Meeting Transcription** names its `volc/volc` in one step, with the owner's confirmation
+  ([volcengine-speech.md](volcengine-speech.md) "One switch").
 - **Extensions' own audio**: besides meetings, the manager runs jobs for extensions granted `transcription` on the same chosen contribution, in `replay`
   mode ("Transcription for extensions"); the contribution sees a job like any other, and gets no meeting audio through it.
 - **A job is a request**: it holds the program's open request (`host.Proc.BeginHTTP`) until it ends, so an extension started by requests is not stopped mid-meeting.
   The phone's audio socket to the manager, by contrast, does not count in the manager's open requests (`Manager.Serving`): a meeting never holds a redeploy, and the phone sends again from where the hub's audio ends.
+
+## Speech
+
+The `speech` point (#8712) reads a text aloud for the apps, one way: no conversation, no model. Its first user is the iPhone saying a
+meeting answer when Persona takes part in a meeting ([meeting-minutes.md](../assistant/meeting-minutes.md) "What the phone does (#3375)"),
+in place of the voice extension's realtime voice or the phone's own. The built-in Volcengine speech extension contributes one
+([volcengine-speech.md](volcengine-speech.md)).
+
+- **Endpoints**, on the program's own socket under the contribution's id, reached through the apps' forward to the extension
+  (`/api/v1/extensions/<id>/speech/<cid>/…`); only a full device (or a caller with no `X-Persona-Role`) gets past them, else `403 forbidden`.
+  A `cid` the program does not contribute, or one switched off ("Turning contributions on and off"), is `404 not_found`.
+  - `GET /speech/{cid}/info` → `{"protocol": 1, "rate": 24000, "setup"?: …}`: `rate` is the audio's sample rate; `setup` says why it reads
+    nothing now (the built-in's `key` before a key is saved, `off` while its settings turn reading answers off). An app uses the contribution
+    only with protocol 1 and no `setup`.
+  - `POST /speech/{cid}/speak` takes and answers what the voice extension's read-aloud does (`docs/assistant/voice.md` "4.15 Reading a text
+    aloud (#5004)"): `{"text", "voice"?, "lang"?}` (1 to 1000 characters); nothing is written before the first audio, then `200` with
+    `Content-Type: audio/pcm`, `X-Persona-Audio-Rate` and `Cache-Control: no-store`, the audio (mono PCM16, little-endian) flushed as it
+    comes. Errors before any audio, as `{"error", "code"}`: `400 bad_request`, `403 forbidden`, `503 no_upstream` (not set up), `503 off`,
+    `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed`, `504 no_audio`. A `voice` that is not one of the
+    contribution's own is ignored (the device's pick for another extension's voice).
+- **Which one**: an app reads the extensions list's `contributes.speech` and uses a running extension's contribution while its `/info` allows,
+  before anything else; any failure falls back to what the app did before.
 
 ## Built-in voice extension (`personad voice`)
 
