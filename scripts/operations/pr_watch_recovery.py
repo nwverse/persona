@@ -70,7 +70,12 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
             try:
                 existed = path.exists()
                 remove_worktree(checkout, state_file, path)
-                removed += int(existed and not path.exists())
+                if existed and not path.exists():
+                    leases.pop(str(path), None)
+                    leases.pop(str(path) + "-base-check", None)
+                    if state is not None:
+                        atomic_leases(state_file, current)
+                    removed += 1
             except (WatchError, OSError):
                 continue
         run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)

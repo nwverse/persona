@@ -380,8 +380,8 @@ class Watcher:
         state_root = pr_watch_recovery.owned_root(self.config["state"])
         state_root.mkdir(parents=True, exist_ok=True)
         worktree = Path(tempfile.mkdtemp(prefix="%s-%s-" % (repo.split("/")[1], number), dir=state_root))
-        self.lease_worktree(worktree, repo, number, pr["headRefOid"])
         try:
+            self.lease_worktree(worktree, repo, number, pr["headRefOid"])
             with self.git_lock:
                 identity = checked(["gh", "repo", "view", repo, "--json", "nameWithOwner", "--jq", ".nameWithOwner"], cwd=root)
                 if identity.strip() != repo:
@@ -443,6 +443,9 @@ class Watcher:
                 if alias:
                     alias["active"] = False
                     alias["released_at"] = lease["released_at"]
+                if not path.exists():
+                    leases.pop(str(path), None)
+                    leases.pop(str(path) + "-base-check", None)
                 pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
 
     def active_worktrees(self):
