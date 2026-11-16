@@ -348,13 +348,20 @@ Phase 1 (#6871) lands in several PRs.
     `convert_byte_array` `Vec<u8>` is no longer cloned into a second buffer. The C ABI `persona_core_dispatch` keeps
     its borrowed-slice signature and routes through `dispatch(&[u8])` (one copy, same as before). The diagnostics
     `pending_lock*` counters stay at zero and only the patch-lock span is measured. Same host, same protocol (100
-    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), four optimized runs of
-    `:core:rustcore:boundaryCostTest` against main: dispatch p50 1.87–2.75 µs / p99 3.72–7.43 µs / max 11.37–20.22 µs;
-    drain+decode+apply p50 3.60–4.73 µs / p99 16.16–38.22 µs / max 53.25–302.50 µs; raw reports retained per run.
+    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), `:core:rustcore:boundaryCostTest`
+    on `47d9e8468d` base versus the optimized branch:
+    - dispatch p50 across 4 base runs 1.63–2.85 µs (mean 2.27) and 6 optimized runs 1.84–2.97 µs (mean 2.35);
+      p99 base 3.29–5.04 µs (mean 4.37) and optimized 3.48–7.43 µs (mean 4.78); max base ≤ 14.13 µs, optimized
+      ≤ 20.22 µs. **The two distributions overlap**: this change is a structural simplification, not a measurable
+      host speedup. Both sides already sit far below the 50 µs budget on this host.
+    - drain+decode+apply p50 base 3.76–4.20 µs, optimized 3.47–4.99 µs; p99 base 16.25–32.08 µs, optimized
+      16.16–38.22 µs; max base 80.82–472.32 µs, optimized 53.25–302.50 µs. Same overlap; the 1 ms budget is met
+      on host by both.
     All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
     `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
     reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
-    x86_64 emulator A/B data, if a same-machine emulator run completes, is recorded beside the host data.
+    x86_64 emulator A/B data was not collected on this run (no KVM on the devbox; the owned software-emulator boot
+    stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
