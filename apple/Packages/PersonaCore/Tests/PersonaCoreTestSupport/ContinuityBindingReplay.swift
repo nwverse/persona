@@ -137,7 +137,7 @@ public struct ContinuityBindingReplay: Sendable {
         if firstSequence != watermark {
             // The fixture's cache watermark, not the recorded request, determines the opening catch-up. An empty
             // snapshot at zero has no fetch. A snapshot that starts away from its watermark requests that exact point.
-            expected["covered"] = .number(String(firstSequence))
+            expected["covered"] = .number(String(max(watermark, firstSequence)))
             expected["actions"] = .array([.object([
                 "kind": .string("fetch_after"), "after_seq": .number(String(watermark)),
             ])])
