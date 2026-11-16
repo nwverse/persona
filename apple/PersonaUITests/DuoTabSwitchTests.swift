@@ -81,14 +81,13 @@ final class DuoTabSwitchTests: XCTestCase {
             let systemTab = app.buttons.matching(NSPredicate(format: "label == %@", "Persona")).matching(narrow).firstMatch
             XCTAssertFalse(systemTab.exists, "the system's tab bar is still there:\n\(app.debugDescription)")
         }
-        // The Agents count hangs off its segment toward the page: left of and above its middle.
-        let agents = segments[1]
-        let counts = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS[c] %@", "需要你", "need you"))
-            .allElementsBoundByIndex.filter { $0.exists && abs($0.frame.midX - agents.frame.minX) < 30 && abs($0.frame.midY - agents.frame.minY) < 30 }
-        if let count = counts.first {
-            XCTAssertLessThan(count.frame.midX, agents.frame.midX, "the count is not toward the page: \(count.frame) vs \(agents.frame)")
-            XCTAssertLessThan(count.frame.midY, agents.frame.midY, "the count is not at the top: \(count.frame) vs \(agents.frame)")
-        }
+        // The Agents count (the mock hub has Agents waiting) hangs off its segment's corner toward the page: on its top
+        // leading corner, out past the capsule's edge, above the segment's middle.
+        let agents = segments[1], count = element("shell-agents-count")
+        XCTAssertTrue(count.waitForExistence(timeout: 10), "no Agents count on the switch:\n\(app.debugDescription)")
+        XCTAssertTrue(count.frame.intersects(agents.frame.insetBy(dx: -12, dy: -12)), "the count is not on its segment: \(count.frame) vs \(agents.frame)")
+        XCTAssertLessThan(count.frame.midX, agents.frame.minX + 8, "the count is not toward the page: \(count.frame) vs \(agents.frame)")
+        XCTAssertLessThan(count.frame.midY, agents.frame.midY, "the count is not at the top: \(count.frame) vs \(agents.frame)")
         shot("switch")
     }
 

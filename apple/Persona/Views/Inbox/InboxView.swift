@@ -156,7 +156,8 @@ struct InboxPage: View {
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
                 .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
-                .tabSwitchBottomBarRoom() // the selection's actions clear of the open Duo's floating tabs' switch (#4231)
+                // The selection's actions clear of the open Duo's floating tabs' switch (#4231); no bar of its own otherwise.
+                .tabSwitchBottomBarRoom(shown: picked != nil)
                 .sheet(item: $composing) { d in ComposeView(draft: d, accounts: d.accounts ?? accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }

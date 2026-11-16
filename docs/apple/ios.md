@@ -852,8 +852,9 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   bottom-trailing corner, 12 pt from the edge and its foot level with the composer's. Where the bars are is read in the same update
   as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture. Upright, what sits at the page's foot leaves it room
   (`tabSwitchRoom`: the chats' footer and Jump to Latest, a new conversation's composer and Needs You, `floatingFooter`, the Inbox
-  hand-off bar, the Lark, connector and Personal Agent composers, Health's, the Recordings and meeting bars, Git's commit bar and Files'
-  bar; `tabSwitchBottomBarRoom` for the Inbox selection's and a mail's bottom toolbar), and the main lists keep room past their last
+  hand-off bar, the Lark, connector and Personal Agent composers, Health's, the Recordings and meeting bars and a meeting's Jump to
+  Latest, Git's commit bar and Files' bar; `tabSwitchBottomBarRoom` for a mail's bottom toolbar and, only while selecting, the Inbox's
+  and Browser Sign-ins'), and the main lists keep room past their last
   row (`tabSwitchListRoom`); a sheet over the tabs leaves none (`overTabSwitch`). While the keyboard is up the switch fades away
   (on the outer display too) and the composer takes the whole width back. The counts hang off a segment's corner toward the page:
   Agents' Needs You, and Persona's as its system tab showed it (`TabBadges.assistant`). Merged (the default where the Duo is open) is

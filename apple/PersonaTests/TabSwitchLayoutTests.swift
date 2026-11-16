@@ -93,11 +93,13 @@ struct TabSwitchLayoutTests {
     /// Done or a list's last row.
     @Test(arguments: [
         ("Persona/Views/Chat/ChatView.swift", ".tabSwitchRoom()"), // the chats' footer and Jump to Latest
-        ("Persona/Views/Shell/ShellHome.swift", ".tabSwitchRoom()"), // a new conversation's composer and Needs You
+        ("Persona/Views/Shell/ShellHome.swift", ".tabSwitchRoom(padding:"), // a new conversation's composer and Needs You
         ("Persona/DesignSystem/FloatingPill.swift", ".tabSwitchRoom()"), // the to-do page's buttons
         ("Persona/Views/Inbox/Lark/LarkChatView.swift", ".tabSwitchRoom()"),
         ("Persona/Views/Inbox/InboxHandOffBar.swift", ".tabSwitchRoom()"),
         ("Persona/Views/Inbox/ConnectorThread/ThreadComposer.swift", ".tabSwitchRoom()"),
+        ("Persona/Recording/MeetingPage.swift", ".tabSwitchRoom()"), // a meeting's bars and Jump to Latest
+        ("Persona/Views/Machines/BrowserLoginsListView.swift", ".tabSwitchBottomBarRoom(shown: selecting)"),
         ("Persona/Views/Inbox/InboxView.swift", ".tabSwitchListRoom()"),
         ("Persona/Views/Todos/TodosView.swift", ".tabSwitchListRoom()"),
         ("Persona/Views/Inbox/Lark/LarkConversationsView.swift", ".tabSwitchListRoom()"),

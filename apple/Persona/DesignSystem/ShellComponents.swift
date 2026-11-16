@@ -45,14 +45,12 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                 .padding(Theme.Space.xs)
                 .background(theme.colors.field, in: .capsule)
                 .overlay(Capsule().strokeBorder(theme.colors.line, lineWidth: Theme.Size.hairline))
-                .animation(Theme.Motion.state, value: chosen)
-                .modifier(UprightSwitch(on: axis == .vertical))
+                .modifier(SwitchMotion(chosen: chosen, upright: axis == .vertical))
         } else {
             row
                 .padding(Theme.Space.xs)
                 .surface(interactive: true, in: .capsule)
-                .animation(Theme.Motion.state, value: chosen)
-                .modifier(UprightSwitch(on: axis == .vertical))
+                .modifier(SwitchMotion(chosen: chosen, upright: axis == .vertical))
         }
     }
 
@@ -92,9 +90,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                         .menuStyle(.button)
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("shell-assistant")
-                        .accessibilityHint("Chat menu")
-                        .accessibilityAddTraits(.isSelected)
-                        .modifier(SegmentLargeContent(on: axis == .vertical, title: String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), symbol: Self.symbol(.assistant)))
+                        .modifier(MenuSegmentAccess(hint: "Chat menu", upright: axis == .vertical, title: String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), symbol: Self.symbol(.assistant)))
                 } else {
                     button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
                 }
@@ -107,9 +103,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                         .menuStyle(.button)
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("shell-agents")
-                        .accessibilityHint("List options")
-                        .accessibilityAddTraits(.isSelected)
-                        .modifier(SegmentLargeContent(on: axis == .vertical, title: "Agents", symbol: Self.symbol(.chats)))
+                        .modifier(MenuSegmentAccess(hint: "List options", upright: axis == .vertical, title: "Agents", symbol: Self.symbol(.chats)))
                 } else {
                     button("Agents", .chats, id: "shell-agents")
                 }
@@ -149,8 +143,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
-        .accessibilityAddTraits(chosen == value ? .isSelected : [])
-        .modifier(SegmentLargeContent(on: axis == .vertical, title: title, symbol: Self.symbol(value)))
+        .modifier(ButtonSegmentAccess(selected: chosen == value, upright: axis == .vertical, title: title, symbol: Self.symbol(value)))
     }
 
     @ViewBuilder private func segment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
@@ -173,7 +166,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
 
     /// A segment of the upright switch (iPhone Duo's side rail and tabs, #4231): the page's symbol alone in a tap target,
     /// as a tab bar's item down the side; its name is what VoiceOver reads and what a long press shows large
-    /// (`SegmentLargeContent`). Under the chosen one the pill: the strip's (`PagerPill`) in the shell, its own round one
+    /// (`ButtonSegmentAccess`, `MenuSegmentAccess`). Under the chosen one the pill: the strip's (`PagerPill`) in the shell, its own round one
     /// over the tabs, where there is no strip.
     private func railSegment(_ title: String, symbol: String, selected: Bool) -> some View {
         ThemedIcon(symbol).font(Theme.Font.heading)
@@ -285,26 +278,31 @@ private struct WaitingBadge: View {
                 .offset(offset)
                 .allowsHitTesting(false)
                 .accessibilityLabel(StateName.count(.needsYou, waiting))
+                .modifier(UprightCountID(axis: axis, tab: tab))
         } else if waiting > 0 {
             CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
                 .offset(offset)
                 .allowsHitTesting(false)
+                .modifier(UprightCountID(axis: axis, tab: tab))
         }
     }
 }
 
-/// The upright switch (iPhone Duo's side rail and tabs, #4231): a bar of fixed items at the default text size
-/// (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, and away while the keyboard is up, as
-/// the tab bar it stands for goes under the keyboard: faded and out of reach, never taken out of the tree (a segment's
-/// menu may be open as the keyboard goes, docs/lessons/ios.md).
-private struct UprightSwitch: ViewModifier {
-    let on: Bool
+/// The switch's motion, in the one step of its chain where the pill's glide always was (the switch across the top as it
+/// was, #6735's stack). Upright (iPhone Duo's side rail and tabs, #4231) also: a bar of fixed items at the default text
+/// size (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, the pill moving at once with Reduce
+/// Motion on, and away while the keyboard is up, as the tab bar it stands for goes under the keyboard: faded and out of
+/// reach, never taken out of the tree (a segment's menu may be open as the keyboard goes, docs/lessons/ios.md).
+private struct SwitchMotion: ViewModifier {
+    let chosen: AppTab
+    let upright: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        if on {
+        if upright {
             let up = KeyboardState.shared.isUp
             content
+                .animation(reduceMotion ? nil : Theme.Motion.state, value: chosen)
                 .dynamicTypeSize(...Theme.Shell.switchTypeSize)
                 .accessibilityElement(children: .contain)
                 .accessibilityAddTraits(.isTabBar)
@@ -315,21 +313,57 @@ private struct UprightSwitch: ViewModifier {
                 .allowsHitTesting(!up)
                 .accessibilityHidden(up)
         } else {
-            content
+            content.animation(Theme.Motion.state, value: chosen)
         }
     }
 }
 
-/// An upright segment's name and symbol shown large on a long press, as a tab bar's item shows them (DESIGN_SYSTEM.md
-/// 6.2): the segment draws its symbol alone at the default text size.
-private struct SegmentLargeContent: ViewModifier {
-    let on: Bool
+/// A chosen segment that opens its menu: its hint, in the one step where it always was. Upright (#4231) also selected,
+/// and its name and symbol shown large on a long press, as a tab bar's item shows them (DESIGN_SYSTEM.md 6.2): the
+/// segment draws its symbol alone at the default text size.
+private struct MenuSegmentAccess: ViewModifier {
+    let hint: LocalizedStringKey
+    let upright: Bool
     let title: String
     let symbol: String
 
     func body(content: Content) -> some View {
-        if on {
-            content.accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        if upright {
+            content.accessibilityHint(hint).accessibilityAddTraits(.isSelected)
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityHint(hint)
+        }
+    }
+}
+
+/// A segment's button: selected when chosen, in the one step where that always was. Upright (#4231) also its name and
+/// symbol shown large on a long press.
+private struct ButtonSegmentAccess: ViewModifier {
+    let selected: Bool
+    let upright: Bool
+    let title: String
+    let symbol: String
+
+    func body(content: Content) -> some View {
+        if upright {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
+        }
+    }
+}
+
+/// The upright switch's counts by name (`shell-agents-count`, `shell-assistant-count`), for the UI tests; the switch across
+/// the top is as it was.
+private struct UprightCountID: ViewModifier {
+    let axis: Axis
+    let tab: AppTab
+
+    func body(content: Content) -> some View {
+        if axis == .vertical {
+            content.accessibilityIdentifier(tab == .assistant ? "shell-assistant-count" : "shell-agents-count")
         } else {
             content
         }

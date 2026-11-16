@@ -80,7 +80,8 @@ extension View {
 
     /// Room at the trailing end of the system's bottom toolbar beside the floating tabs' switch: an empty item after the
     /// page's own `.bottomBar` items, only while the switch floats (none anywhere else, so those bars are as they were).
-    func tabSwitchBottomBarRoom() -> some View { modifier(TabSwitchBottomBarRoom()) }
+    /// `shown`: the page's own bottom bar is up (selecting); an item alone would bring up an empty bar.
+    func tabSwitchBottomBarRoom(shown: Bool = true) -> some View { modifier(TabSwitchBottomBarRoom(shown: shown)) }
 
     /// Presented over the tabs (a sheet): the tabs' switch is under it, so nothing in it leaves the switch room. A sheet
     /// takes the environment of the page it rises from; one that can hold a page with room (`tabSwitchRoom`) sets this.
@@ -104,12 +105,13 @@ private struct TabSwitchRoom: ViewModifier {
 }
 
 private struct TabSwitchBottomBarRoom: ViewModifier {
+    let shown: Bool
     @Environment(\.tabSwitchFloats) private var floats
 
     func body(content: Content) -> some View {
         #if os(iOS)
         content.toolbar {
-            if floats {
+            if floats && shown {
                 ToolbarItem(placement: .bottomBar) {
                     Color.clear.frame(width: TabSwitchLayout.width, height: Theme.Size.tapTarget).accessibilityHidden(true)
                 }
