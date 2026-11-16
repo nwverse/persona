@@ -7,7 +7,6 @@
 /build/
 /build-release/
 /apple/*.xcodeproj
-!/apple/Persona.xcodeproj
 /apple/IslandPeer/*.xcodeproj
 /apple/build/
 *.xcuserstate

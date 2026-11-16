@@ -24,8 +24,10 @@ public nonisolated struct PathRef: Hashable, Sendable {
 ///   in, spaces too; the paths in a span are candidates too (「/a.md 和 /b.md」): what is there decides.
 /// - Not inside a URL or a longer word.
 public nonisolated enum PathRefs {
-    /// A name: ASCII, or a letter or digit of any script not right after an extension.
-    private static let seg = #"(?:[A-Za-z0-9_.@+\-]|(?<!\.[A-Za-z][A-Za-z0-9]{0,7})[\p{L}\p{M}\p{N}])+"#
+    /// A name: ASCII, or a letter or digit of any other script not right after an extension. The two never take the
+    /// same character: an ASCII letter or digit could otherwise go either way, and a long run of them that ends in no
+    /// match (a hash with no extension) is tried every way, which hangs the chat (#8903, the web's #8894).
+    private static let seg = #"(?:[A-Za-z0-9_.@+\-]|(?<!\.[A-Za-z][A-Za-z0-9]{0,7})(?![A-Za-z0-9])[\p{L}\p{M}\p{N}])+"#
     private static let line = #"(?::(\d{1,7})(?::(\d{1,5}))?(?:[-–]\d{1,7})?|#L(\d{1,7})(?:-L?\d{1,7})?)?"#
     /// A relative path starts with an ASCII folder, so the Chinese words before it stay out.
     private static let text = try! NSRegularExpression(pattern:
