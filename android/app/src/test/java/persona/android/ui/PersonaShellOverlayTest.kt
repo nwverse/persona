@@ -20,6 +20,8 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -248,6 +250,51 @@ class PersonaShellOverlayTest {
         awaitSavedAgent(agent.sessionId)
     }
 
+    @Test fun switchingTabsClosesTheOverlayEvenWhenTheSameAgentsDetailReturns() {
+        val navigation = mutableStateOf<((Router) -> ResolvedRoute?)?>({ ResolvedRoute(AppTab.Agents, route) })
+        shell(openNavigation = navigation) {
+            awaitText("The trip outline is ready.")
+            sidebar()
+            close().assertExists()
+            clickText("Assistant")
+            awaitText("The trip outline is ready.")
+            awaitSavedTab(AppTab.Persona)
+            // Return without changing the retained detail key: its scene's detail-change effect cannot close the list.
+            rule.runOnIdle { navigation.value = { ResolvedRoute(AppTab.Agents, route) } }
+            frames()
+            awaitText("The trip outline is ready.")
+            awaitSavedTab(AppTab.Agents)
+            close().assertDoesNotExist()
+            sidebar()
+            close().assertExists()
+        }
+    }
+
+    @Test fun aSharedTodoEntryUsesTheOrdinaryNavigatorEvenWithAnOpenAgentsOverlay() {
+        val agents = mutableListOf<NavKey>(AgentsRoute, route)
+        val persona = mutableListOf<NavKey>(AssistantRoute, TodoDetailRoute("trip"))
+        var selected = AppTab.Persona
+        val navigator = AppNavigator(mapOf(AppTab.Agents to agents, AppTab.Persona to persona), { selected }, { selected = it },
+            chatTab = { AppTab.Agents })
+        val shown = mutableStateOf(true)
+        val listNavigator = object : Navigator by navigator {
+            override fun navigate(key: NavKey) { pickAgentsList(navigator, agents, shown, key) }
+        }
+        // Keep the modal flag true deliberately: tab-change clearing must not mask a shared-entry wiring regression.
+        shell(withTodos = true, content = { session ->
+            val provider = entryProvider<NavKey> { agentsEntries(navigator, session.agents, listNavigator = listNavigator) }
+            provider(TodoDetailRoute("trip")).Content()
+        }) {
+            awaitText(otherAgent.displayTitle)
+            clickText(otherAgent.displayTitle)
+            assertEquals(AppTab.Agents, selected)
+            assertTrue(shown.value)
+            assertEquals(listOf(AgentsRoute, route, ChatRoute(otherAgent.machineId, otherAgent.sessionId)), agents)
+            navigator.back()
+            assertEquals(listOf(AgentsRoute, route), agents)
+        }
+    }
+
     @Test fun aNonDetailActionFromTheOverlaidListReturnsToThePreviousChat() = shell(agents = true, withTodos = true,
         groupByTodo = true) { scenario ->
         awaitText("The trip outline is ready.")
@@ -264,6 +311,8 @@ class PersonaShellOverlayTest {
 
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
         withTodos: Boolean = false, groupByTodo: Boolean = false,
+        openNavigation: MutableState<((Router) -> ResolvedRoute?)?>? = null,
+        content: (@Composable (ShellSession) -> Unit)? = null,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
@@ -369,7 +418,7 @@ class PersonaShellOverlayTest {
             override fun groupTerminal(key: SessionKey): TerminalTransport? = null
             override fun exitDemo() = Unit
         }
-        val navigation = mutableStateOf<((Router) -> ResolvedRoute?)?>(if (agents) ({ ResolvedRoute(AppTab.Agents, route) }) else null)
+        val navigation = openNavigation ?: mutableStateOf<((Router) -> ResolvedRoute?)?>(if (agents) ({ ResolvedRoute(AppTab.Agents, route) }) else null)
         rule.mainClock.autoAdvance = false
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
@@ -391,7 +440,8 @@ class PersonaShellOverlayTest {
                         CompositionLocalProvider(LocalWindowInfo provides window, LocalAssistantHost provides assistantHost) {
                             Box(Modifier.then(if (width == null) Modifier.fillMaxSize() else
                                 Modifier.width(width.value.dp).fillMaxHeight())) {
-                                PersonaShell(session, navigation, demoSettingsServices(app.resources), host)
+                                if (content != null) content(session)
+                                else PersonaShell(session, navigation, demoSettingsServices(app.resources), host)
                             }
                         }
                     }
@@ -424,6 +474,11 @@ class PersonaShellOverlayTest {
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
         val store = ShellPositionStore(app, HubScope("overlay-test", "fixture").path)
         rule.waitUntil(10_000) { store.load().chats[AppTab.Agents]?.sessionId == sessionId }
+    }
+    private fun awaitSavedTab(tab: AppTab) {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val store = ShellPositionStore(app, HubScope("overlay-test", "fixture").path)
+        rule.waitUntil(10_000) { store.load().tab == tab }
     }
     private fun back(scenario: ActivityScenario<ComponentActivity>) {
         scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }

@@ -675,6 +675,10 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                             HomeLinkPill(currentConnection.value, barHeight.intValue)
                         } else entry.Content()
                     }
+                    // Register after the root page's own Back handler, even when NavDisplay composes it later.
+                    BackHandler(assistantRoot && selected == AppTab.Persona && currentColumnsOver.value && sidebarOverlayShown.value) {
+                        sidebarOverlayShown.value = false
+                    }
                 }
                 page()
             }
@@ -839,7 +843,6 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                         modifier = if (shown) Modifier else Modifier.unplaced(),
                                         sidebar = { sharedSidebar("shared-sidebar-column") }, hinges = paneHinges,
                                         overlay = columnsOver, onDismiss = { sidebarOverlayShown.value = false }, content = display)
-                                    BackHandler(shown && columnsOver && sidebarOverlayShown.value) { sidebarOverlayShown.value = false }
                                 } else display()
                             }
                         }

@@ -19,6 +19,7 @@ import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
 import persona.android.navigation.PaneSplits
+import persona.android.navigation.AppNavigator
 import persona.android.navigation.isDetailDestination
 import persona.core.designsystem.JSidebarColumn
 import persona.core.designsystem.LocalPaneListToggle
@@ -28,14 +29,13 @@ import persona.core.designsystem.JPage
 import persona.core.designsystem.icons.PersonaIcons
 import persona.android.R
 import persona.core.navigation.AgentsRoute
-import persona.core.navigation.Navigator
+import persona.core.navigation.AppTab
 
 /** Detail picks replace the overlaid root detail; other actions push over it and retain its Back navigation. */
-internal fun pickAgentsList(navigator: Navigator, stack: MutableList<NavKey>, shown: MutableState<Boolean>, key: NavKey) {
+internal fun pickAgentsList(navigator: AppNavigator, stack: MutableList<NavKey>, shown: MutableState<Boolean>, key: NavKey) {
     val replacing = shown.value
     shown.value = false
-    if (replacing && isDetailDestination(key) && stack.lastOrNull() != key) while (stack.size > 1) stack.removeAt(stack.lastIndex)
-    navigator.navigate(key)
+    navigator.navigate(key, replacingDetailIn = AppTab.Agents.takeIf { replacing && isDetailDestination(key) && stack.lastOrNull() != key })
 }
 
 /** A narrow regular window uses the same decorated list and detail entries, with the list over the full-width page. */
