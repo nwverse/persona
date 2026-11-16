@@ -33,6 +33,9 @@ struct CapsuleFilterBar<Trailing: View>: View {
     var showsTrailing = true
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Revealing: where the strip is scrolled to, and what it measured (not observed: scrolling redraws nothing).
+    @State private var position = ScrollPosition()
+    @State private var geometry = CapsuleStripGeometry()
 
     var body: some View {
         HStack(spacing: Theme.Space.flush) {
@@ -49,16 +52,11 @@ struct CapsuleFilterBar<Trailing: View>: View {
                                 }
                             }
                             .id(item.id)
-                            // What a reveal scrolls to: the chip and a fade's width either side, so the edge's fade
-                            // never covers the chosen chip.
-                            .background {
-                                if revealsSelection {
-                                    Color.clear.padding(.horizontal, -Theme.Size.fadeEdge).id(Self.revealID(item.id))
-                                }
-                            }
+                            .modifier(CapsuleStripFrame(on: revealsSelection, id: item.id, geometry: geometry))
                         }
                     }
                     .padding(.horizontal, Theme.Space.xs)
+                    .coordinateSpace(.named(CapsuleStripGeometry.space))
                 }
                 // A horizontal strip must never inherit the navigation bar's vertical content inset.
                 .contentMargins(.vertical, 0, for: .scrollContent)
@@ -68,9 +66,10 @@ struct CapsuleFilterBar<Trailing: View>: View {
                 .accessibilityIdentifier(scrollID)
                 // The trailing edge fades while more lies past it, the leading edge once the strip has left its start.
                 .edgeFade()
-                .onAppear { if revealsSelection { reveal(selection, proxy, animated: false) } }
+                .modifier(CapsuleStripScroll(on: revealsSelection, position: $position, geometry: geometry))
+                .onAppear { if revealsSelection { reveal(selection, animated: false) } }
                 .onChange(of: selection) { _, chosen in
-                    if revealsSelection { reveal(chosen, proxy, animated: true) }
+                    if revealsSelection { reveal(chosen, animated: true) }
                 }
             }
             if showsTrailing {
@@ -86,13 +85,91 @@ struct CapsuleFilterBar<Trailing: View>: View {
         .clipShape(Capsule())
     }
 
-    private static func revealID(_ id: String) -> String { "reveal." + id }
-
-    /// Scrolls to `id` once this update is laid out: on the strip's first appearance, or a choice the page made as it
-    /// appeared, its items have no frames yet and an immediate scroll does nothing.
-    private func reveal(_ id: String, _ proxy: ScrollViewProxy, animated: Bool) {
+    /// Scrolls `id` wholly into view, clear of the edges' fade, by the least it can. After this update is laid out: on
+    /// the strip's first appearance, or a choice the page made as it appeared, nothing is measured yet.
+    private func reveal(_ id: String, animated: Bool) {
         Task { @MainActor in
-            withAnimation(animated && !reduceMotion ? Theme.Motion.standard : nil) { proxy.scrollTo(Self.revealID(id)) }
+            for _ in 0..<5 where !geometry.measured(id) { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let x = geometry.offset(revealing: id) else { return }
+            withAnimation(animated && !reduceMotion ? Theme.Motion.standard : nil) { position.scrollTo(x: x) }
+        }
+    }
+}
+
+/// What a revealing strip measured: its chips' frames in its content and the part of the content in view. Not
+/// observable, so neither a scroll nor a chip's layout redraws the page around the strip (P7).
+final class CapsuleStripGeometry {
+    static let space = "capsuleStrip"
+    var frames: [String: CGRect] = [:]
+    var visible: CapsuleReveal.Visible?
+    init() {}
+
+    func measured(_ id: String) -> Bool { frames[id] != nil && visible != nil }
+
+    func offset(revealing id: String) -> CGFloat? {
+        guard let frame = frames[id], let visible else { return nil }
+        return CapsuleReveal.offset(revealing: frame.minX...frame.maxX, in: visible, fade: Theme.Size.fadeEdge)
+    }
+}
+
+/// Where a strip scrolls so a chip is wholly in view and clear of the edges' fade (`.edgeFade()`), by the least it can.
+nonisolated enum CapsuleReveal {
+    /// The content in view: its offset, the width shown, and how far the content scrolls.
+    struct Visible: Equatable {
+        var offset: CGFloat
+        var width: CGFloat
+        var minOffset: CGFloat
+        var maxOffset: CGFloat
+    }
+
+    /// The offset that shows `chip` (its span in the content) clear of the fade at both edges, held to the content's
+    /// ends (an end has no fade); nil when it already is.
+    static func offset(revealing chip: ClosedRange<CGFloat>, in visible: Visible, fade: CGFloat) -> CGFloat? {
+        guard visible.width > 0 else { return nil }
+        // as `.edgeFade()` draws it: never more than a quarter of a narrow strip
+        let margin = min(fade, visible.width / 4)
+        var x = visible.offset
+        if chip.upperBound + margin > x + visible.width { x = chip.upperBound + margin - visible.width }
+        if chip.lowerBound - margin < x { x = chip.lowerBound - margin }
+        x = min(max(x, visible.minOffset), max(visible.minOffset, visible.maxOffset))
+        return abs(x - visible.offset) < 0.5 ? nil : x
+    }
+}
+
+/// A revealing strip's chip records its frame in the strip's content; others do nothing.
+private struct CapsuleStripFrame: ViewModifier {
+    var on: Bool
+    var id: String
+    var geometry: CapsuleStripGeometry
+
+    func body(content: Content) -> some View {
+        if on {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(CapsuleStripGeometry.space)) } action: {
+                geometry.frames[id] = $0
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// A revealing strip takes its scroll position from `position` and records what is in view; others are left as they are.
+private struct CapsuleStripScroll: ViewModifier {
+    var on: Bool
+    @Binding var position: ScrollPosition
+    var geometry: CapsuleStripGeometry
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .scrollPosition($position)
+                .onScrollGeometryChange(for: CapsuleReveal.Visible.self) { g in
+                    CapsuleReveal.Visible(offset: g.contentOffset.x, width: g.containerSize.width,
+                                          minOffset: -g.contentInsets.leading,
+                                          maxOffset: g.contentSize.width + g.contentInsets.trailing - g.containerSize.width)
+                } action: { _, visible in geometry.visible = visible }
+        } else {
+            content
         }
     }
 }

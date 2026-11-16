@@ -134,6 +134,23 @@ struct InboxBarTests {
         }
     }
 
+    /// A choice landed on or tapped scrolls wholly into view, clear of the 24 pt fade at a cut edge, by the least it can;
+    /// at the content's ends there is no fade to clear (docs/assistant/inbox.md "Section bar", `.edgeFade()`).
+    @Test func aChosenChipScrollsClearOfTheFade() {
+        // 300 pt in view of 500 pt of content, at its start
+        let start = CapsuleReveal.Visible(offset: 0, width: 300, minOffset: 0, maxOffset: 200)
+        #expect(CapsuleReveal.offset(revealing: 100...160, in: start, fade: 24) == nil, "already clear")
+        #expect(CapsuleReveal.offset(revealing: 250...320, in: start, fade: 24) == 44, "past the end: clear of the trailing fade")
+        #expect(CapsuleReveal.offset(revealing: 4...60, in: start, fade: 24) == nil, "the first chip at rest: no leading fade")
+        let middle = CapsuleReveal.Visible(offset: 120, width: 300, minOffset: 0, maxOffset: 200)
+        #expect(CapsuleReveal.offset(revealing: 110...170, in: middle, fade: 24) == 86, "under the leading fade")
+        #expect(CapsuleReveal.offset(revealing: 430...496, in: middle, fade: 24) == 200, "the last chip: to the content's end")
+        #expect(CapsuleReveal.offset(revealing: 4...60, in: middle, fade: 24) == 0, "the first chip: to the content's start")
+        // a narrow strip fades a quarter of its width at most
+        let narrow = CapsuleReveal.Visible(offset: 0, width: 80, minOffset: 0, maxOffset: 400)
+        #expect(CapsuleReveal.offset(revealing: 100...140, in: narrow, fade: 24) == 80)
+    }
+
     @Test func theLandingRecordFollowsTheItemInFront() {
         let landing = InboxBarLanding()
         let a = item("a", tier: "fyi")
