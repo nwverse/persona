@@ -93,9 +93,10 @@ public enum ProjectionBindingReplay {
         var expectedOther = originalOther
         // The checked-in expected object intentionally selects only some Transition fields. Assert the remainder from
         // the fixture's own input and documented cases, never from the Rust output, so state outside that object is
-        // still covered: single-select replaces one question's picks and clears its free text; multi-select toggles
-        // one option; other actions preserve both. Other questions' state is never discarded.
-        if operation.text("action") == "pick_option" {
+        // still covered: an accepted single-select replaces one question's picks and clears its free text; an accepted
+        // multi-select toggles one option. Sending-disabled picks and all other actions preserve both. Other
+        // questions' state is never discarded.
+        if operation.text("action") == "pick_option", operation.flag("sending") == false {
             let key = try ProjectionFixture.require(question.text("question"), "question")
             let optionIndex = try ProjectionFixture.require(operation.number("option_index"), "option_index")
             let options = try ProjectionFixture.require(question["options"]?.array, "options")
