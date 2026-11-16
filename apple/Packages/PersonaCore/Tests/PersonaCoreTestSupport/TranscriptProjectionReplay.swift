@@ -30,7 +30,7 @@ extension ProjectionBindingReplay {
             let actual = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.turns)
             let expected = try expectedTurns(fixture, overlay: overlay, applyCasePatch: true)
             try ProjectionFixture.assertEqual(actual, expected, "turns/\(fixture.name)")
-            if try overlay["cases"]?.array?.contains(where: { $0.text("name") == fixture.name }) == true {
+            if overlay["cases"]?.array?.contains(where: { $0.text("name") == fixture.name }) == true {
                 let withoutCasePatch = try expectedTurns(fixture, overlay: overlay, applyCasePatch: false)
                 guard withoutCasePatch != actual else {
                     throw ProjectionFixtureError.invalidFixture("\(fixture.name): overlay no longer changes its expectation")
@@ -176,7 +176,7 @@ extension ProjectionBindingReplay {
             guard patchNames.insert(name).inserted else {
                 throw ProjectionFixtureError.invalidFixture("duplicate overlay case \(name)")
             }
-            guard Set(entry.object?.keys ?? Dictionary.Keys()).isSubset(of: allowedKeys),
+            guard Set(entry.object?.keys.map { $0 } ?? []).isSubset(of: allowedKeys),
                   entry.text("why")?.isEmpty == false, entry["source"]?.array?.isEmpty == false else {
                 throw ProjectionFixtureError.invalidFixture("\(name): malformed overlay rationale")
             }
