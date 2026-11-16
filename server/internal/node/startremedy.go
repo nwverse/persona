@@ -1,10 +1,14 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/host"
 )
 
 // A start that ended with shell_waiting or agent_start_stalled keeps its tab (keepStartTab, #2570). Whoever remedies it
@@ -79,26 +83,55 @@ func (n *Node) startKeys(ctx context.Context, pane, text string, keys []string) 
 // reusedTabKey carries the kept tab a start runs in instead of a new one (withKeptTab), for newTab.
 type reusedTabKey struct{}
 
+// replacedTabKey carries the pane of a kept Orca tab the start cannot run in, for newTab to close before it opens a
+// new one (replaceKeptTab).
+type replacedTabKey struct{}
+
 // reusingKeptTab is ctx for a start in pane, the kept tab of an earlier failed start, when it still is one: the start
 // takes it over (it is no longer kept; this start keeps or closes it as its own, startTabFailed). Else ctx as it is,
 // and the start opens a new tab. An Orca terminal takes one launch (orcaHost.Run): a kept tab whose start already typed
-// its line there (agent_start_stalled) is closed instead, and the start opens a new tab rather than fail (#9534); one
-// where nothing was typed (shell_waiting, answered with start.keys) is still started in.
+// its line there (agent_start_stalled) is replaced instead, once the start is checked and about to open its new tab
+// (replaceKeptTab, #9534); one where nothing was typed (shell_waiting, answered with start.keys) is still started in.
 func (n *Node) reusingKeptTab(ctx context.Context, pane string) context.Context {
 	if pane == "" {
 		return ctx
 	}
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	k, ok := n.keptStartTabLocked(pane)
 	if !ok {
-		n.mu.Unlock()
 		return ctx
+	}
+	if o, isOrca := k.launch.(*orcaHost); isOrca && !o.launchable(k.created.Pane) {
+		return context.WithValue(ctx, replacedTabKey{}, pane)
 	}
 	delete(n.keptStarts, pane)
-	n.mu.Unlock()
-	if o, isOrca := k.launch.(*orcaHost); isOrca && !o.launchable(k.created.Pane) {
-		n.closeNewTab(ctx, k.launch, k.created, k.ws)
-		return ctx
-	}
 	return context.WithValue(ctx, reusedTabKey{}, k.created)
+}
+
+// replaceKeptTab closes the kept tab on pane before a start opens the new tab that replaces it. newTab calls it after
+// the start's checks, so a refused start leaves the tab kept. A tab that will not close fails the start and stays kept
+// (its expiry still closes it): its stalled agent may still run, and a second one beside it would not be noticed.
+func (n *Node) replaceKeptTab(ctx context.Context, pane string) error {
+	n.mu.Lock()
+	k, ok := n.keptStartTabLocked(pane)
+	if ok {
+		delete(n.keptStarts, pane)
+	}
+	n.mu.Unlock()
+	org, closes := k.launch.(host.Organizer)
+	if !ok || !closes { // expired or taken meanwhile: a new tab, as for a pane not kept
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := org.Close(cctx, k.created.Pane, cmp.Or(k.ws, k.created.SpaceID), k.created.SlotID); err != nil {
+		n.mu.Lock()
+		n.keptStarts[pane] = k
+		n.mu.Unlock()
+		// Its own timer may have fired while it was taken; expireKeptStart acts once for this until.
+		time.AfterFunc(time.Until(k.until), func() { n.expireKeptStart(pane, k.until) })
+		return fmt.Errorf("the stalled start's tab did not close, so no new one was opened: %w", err)
+	}
+	return nil
 }

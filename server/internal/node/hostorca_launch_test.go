@@ -577,3 +577,99 @@ func TestOrcaRetryAfterAStalledStartOpensANewTab(t *testing.T) {
 		t.Error("the stalled tab is still kept")
 	}
 }
+
+// keptOrcaStart is n with an Orca tab kept by a failed start in a worktree at root; used: the start typed its line
+// there, so the tab's one launch is gone (agent_start_stalled).
+func keptOrcaStart(t *testing.T, used bool) (*Node, *orcaHost, *orcarttest.Fake, *host.Created, string) {
+	t.Helper()
+	withPaneShell(t, "/bin/bash")
+	n, _, o, _, home := orcaNode(t)
+	root := mkdir(t, filepath.Join(home, "proj"))
+	o.SetWorktrees(orcarttest.Worktree("wt-proj", root, "refs/heads/main"))
+	h := n.hosts.Get(host.Orca).(*orcaHost)
+	c, err := h.CreateSpace(context.Background(), root, "kept")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used {
+		if err := h.Run(context.Background(), c.Pane, "claude"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.keepStartTab(h, c, "", "")
+	withStartWaits(n, 100*time.Millisecond, 100*time.Millisecond)
+	return n, h, o, c, root
+}
+
+// A retry the node refuses before it would open a tab (a bad effort, a directory that is gone) leaves the stalled
+// start's kept tab as it was: nothing replaced it (#9534).
+func TestOrcaRefusedRetryKeepsTheStalledTab(t *testing.T) {
+	for name, params := range map[string]map[string]any{
+		"bad effort":  {"effort": "not-an-effort"},
+		"missing dir": {"cwd": "removed-workspace"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			n, _, o, c, root := keptOrcaStart(t, true)
+			req := map[string]any{"session_id": startID, "cwd": root, "in_pane": c.Pane.String()}
+			for k, v := range params {
+				req[k] = v
+			}
+			if dir, ok := params["cwd"].(string); ok {
+				req["cwd"] = filepath.Join(root, dir)
+			}
+			if _, err := request(t, n, "session.start", req); err == nil {
+				t.Fatal("the retry was accepted")
+			}
+			if got := o.Count("terminal.close"); got != 0 {
+				t.Errorf("a refused retry closed the kept tab (%d closes)", got)
+			}
+			n.mu.Lock()
+			_, kept := n.keptStarts[c.Pane.String()]
+			n.mu.Unlock()
+			if !kept {
+				t.Error("a refused retry took the kept tab")
+			}
+		})
+	}
+}
+
+// When Orca will not close the stalled start's tab, the retry fails with why and opens no second tab beside a claude
+// that may still run there; the tab stays kept, so it is still closed when it expires (#9534).
+func TestOrcaRetryStopsWhenTheStalledTabWillNotClose(t *testing.T) {
+	n, _, o, c, root := keptOrcaStart(t, true)
+	o.Handle("terminal.close", func(map[string]any) any { return orcarttest.Fail{Code: "permission_denied"} })
+	_, err := request(t, n, "session.start", map[string]any{"session_id": startID, "cwd": root, "in_pane": c.Pane.String()})
+	if err == nil || !strings.Contains(err.Error(), "permission_denied") {
+		t.Errorf("retry error: %v", err)
+	}
+	if got := o.Count("terminal.create"); got != 1 {
+		t.Errorf("terminals created: %d, want only the kept one", got)
+	}
+	n.mu.Lock()
+	_, kept := n.keptStarts[c.Pane.String()]
+	n.mu.Unlock()
+	if !kept {
+		t.Error("the tab that did not close is no longer kept")
+	}
+}
+
+// Concurrent retries close the stalled start's tab once.
+func TestOrcaConcurrentRetriesCloseTheStalledTabOnce(t *testing.T) {
+	n, h, o, c, root := keptOrcaStart(t, true)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			ctx := n.reusingKeptTab(context.Background(), c.Pane.String())
+			if ctx.Value(reusedTabKey{}) != nil {
+				t.Error("a used tab was reused")
+			}
+			if _, err := n.newTab(ctx, h, root, "", "retry", startID); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := o.Count("terminal.close"); got != 1 {
+		t.Errorf("the stalled tab was closed %d times", got)
+	}
+}
