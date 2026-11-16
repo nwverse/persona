@@ -73226,6 +73226,28 @@
         }
       }
     },
+    "In a Meeting… Open" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In a Meeting… Open"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議中…開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议中…打开"
+          }
+        }
+      }
+    },
     "In Container" : {
       "localizations" : {
         "en" : {
@@ -90684,6 +90706,28 @@
       },
       "extractionState" : "manual"
     },
+    "Name After Calendar Meetings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name After Calendar Meetings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カレンダーの会議名で名前を付ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用日历里的会议命名"
+          }
+        }
+      }
+    },
     "Name Changes per Session" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -102173,6 +102217,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Note · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note · %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メモ · %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "笔记 · %1$@"
+          }
+        }
+      }
     },
     "Notebooks in nbformat %lld aren't supported, so this one is shown as source" : {
       "comment" : "Why the file viewer shows a .ipynb notebook as its source text; %lld is the notebook's format version (PersonaKit, #5758)",
@@ -142930,6 +142996,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Start Meeting" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Meeting"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議を始める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始会议"
+          }
+        }
+      }
+    },
+    "Start Note" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start Note"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メモを始める"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始笔记"
+          }
+        }
+      }
     },
     "Start Over" : {
       "localizations" : {

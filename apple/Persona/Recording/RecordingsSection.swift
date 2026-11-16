@@ -456,7 +456,7 @@ struct RecordingCaptureControls: View {
             Text("English").tag("en-US")
             Text("Japanese").tag("ja-JP")
         } label: {
-            Label { Text("Recording Language") } icon: { ThemedIcon(Theme.Icon.language) }
+            Label { Text("Language") } icon: { ThemedIcon(Theme.Icon.language) } // the meeting's (#8731: no "Recording")
         }.font(Theme.Font.body).disabled(busy)
         if form.hasBluetooth {
             Picker(selection: $inputRaw) {
@@ -475,7 +475,7 @@ struct RecordingCaptureControls: View {
             Button { record() } label: {
                 HStack(spacing: Theme.Space.s) {
                     // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
-                    Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
+                    Label(MeetingWords.start(form.pickedKind), systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
                     if busy { ProgressView() }
                 }
                 .font(Theme.Font.bodyStrong)
@@ -508,7 +508,7 @@ struct RecordingCaptureControls: View {
                     form.meetingNow = await MeetingCalendar.meetingOffMain()
                 }
             } label: {
-                Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
+                Label("Name After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
                     .lineLimit(1).multilineTextAlignment(.leading)
             }
             .buttonStyle(.borderless)
@@ -814,7 +814,7 @@ struct RecordingsPage: View {
     var body: some View {
         page
             .themedPage()
-            .navigationTitle(String(localized: "Recordings"))
+            .navigationTitle(MeetingWords.place)
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             .recordingLiveSheet()

@@ -465,11 +465,16 @@ Phase 3 lands in several PRs.
     description is retained. Offset timestamps are normalized to whole-second UTC. Malformed input and a wrong expected
     object are rejected. This is not rendered `ChatLine`, complete TaskIndex consumer state, UI badges, actual
     background execution or timing evidence.
-  - `persona_core::viewed_images` covers the tool-call viewed-image leaf (#8860). Real Kotlin/JNI compares the
+  - `persona_core::viewed_images` covers the viewed-image leaf (#8860, #8943). Real Kotlin/JNI compares the
     complete post-overlay `vi-2#0` line for `tool_images_belong_to_call`, including `d:` identity from the original
     image payload and its owning image turn, plus duplicate/running/error/Read-extension and wrong-expected negatives.
     The owner comes from the existing turn projection and tool-step id, not from confusing `tool_use_id` with the use
-    item id. This is not full `ChatLine`, folded-image, UI loading, actual tool execution or performance evidence.
+    item id. Folded-work replay follows `ViewedImagesTests.aFoldGivesTheSameStripAsItsWork` with complete
+    source-derived expected lines: path/size/`i:` identity, order and deduplication across ordinary and folded steps.
+    The first segment stops at the next queued user; the last agent result independently owns running/error status.
+    Inline data with width/height and no explicit size uses its extended-grapheme-count-derived size. `FoldImage.ref`
+    synthesis is outside the pure leaf. This is not full `ChatLine`, multiple viewed lines, UI loading, actual tool
+    execution or performance evidence.
   - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
     boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
@@ -549,17 +554,80 @@ The slice measures these against the limits of decision 6. If any limit is excee
 slice, the plan stops: D1 stays, and the result is recorded here. Numbers say whether they come from a device or a
 simulator, and from which build (`docs/apple/performance.md`, "Measuring").
 
-| Measure | Limit |
-| --- | --- |
-| Download size added, per platform (per ABI on Android) | ≤ 1 MB for phase 1; every later phase reports its own increment |
-| Launch to first frame | no change beyond run-to-run noise; the core is not created before the first frame (`docs/apple/performance.md`, "Budgets") |
-| `dispatch` called on the main thread | p99 ≤ 50 µs, encoding included |
-| `drain` + decode + apply, once per frame, on the slice's data | p99 ≤ 1 ms; nothing on the main thread over 16 ms while scrolling or streaming (8 ms is the goal on 120 Hz screens) |
-| A hub frame to the screen | no later than today on each client |
-| Memory | resident memory the core adds is reported; opening and closing the same chat 10 times ends within 5 MB of the start |
-| Incremental app build with the core unchanged | no Rust rebuild |
-| Clean build time added | reported per platform; no fixed limit |
-| Contributor setup | `scripts/app/sim.sh`, `scripts/app/android.sh` and HarmonyOS's build still need one command after installing rustup |
+| Measure | Limit | iOS | Android | HarmonyOS |
+| --- | --- | --- | --- | --- |
+| Download size added, per platform (per ABI on Android) | ≤ 1 MB for phase 1; every later phase reports its own increment | **Measured, macOS host / unsigned generic-iOS build:** local payload proxy +763,346 B and local ZIP +355,744 B, both below 1,000,000 B; **download-size limit: not measured / open**. Physical-device evidence: **blocked: no physical device**. [1][2] | **Measured, host-built packages:** arm64-v8a package proxy +651,600 B and x86_64 +713,952 B, both below 1,000,000 B (gzip 323,071 / 343,371 B); **download-size limit: not measured / open**. [3] | **Not measured:** no linked API 26 library or HAP increment; **download-size limit: open**. Physical-device evidence: **blocked: no physical device**. [4] |
+| Launch to first frame | no change beyond run-to-run noise; the core is not created before the first frame (`docs/apple/performance.md`, "Budgets") | **Not measured as a comparison:** the retained native simulator run is an incomplete historical observation, not a with/without-core baseline. Physical-device evidence: **blocked: no physical device**. [1][2] | **Not measured.** The packaged app does not construct the core on launch; that is not a timing comparison. [3] | **Not measured**; physical-device evidence: **blocked: no physical device**. [4] |
+| `dispatch` called on the main thread | p99 ≤ 50 µs, encoding included | **Measured, simulator:** 6.750 µs p99, **within the fixed budget** (optimized binding harness, 100 warm-ups + 1,000 samples; physical: **blocked: no physical device**). [1][2] | **Exceeds, unresolved:** original software-emulator p99 13,100.597 µs; final retained repeat 883.312 µs, both over 50 µs. Physical arm64 / 4 KiB runs varied 22.578–135.626 µs: **not the required 16 KiB acceptance or a stable fixed-budget pass**; 16 KiB device: **blocked: no physical device**. [3][5][6] | **Not measured:** host registry tests are not timing evidence; physical NAPI: **blocked: no physical device**. [4] |
+| `drain` + decode + apply, once per frame, on the slice's data | p99 ≤ 1 ms; nothing on the main thread over 16 ms while scrolling or streaming (8 ms is the goal on 120 Hz screens) | **Measured, simulator:** one-item 6.958 µs and 100-item 183.667 µs p99, **within 1 ms**; these are synthetic binding/string-list workloads. The 16 ms / 8 ms production scrolling-streaming limits are **not measured**. Physical-device and equivalent production-frame evidence: **blocked: no physical device / not measured**. [1][2] | **Exceeds, unresolved:** original software-emulator p99 17,271.624 µs; final retained repeat 3,414.419 µs, both over 1 ms. Physical arm64 / 4 KiB runs varied 50.963–312.906 µs: **not a 16 KiB or equivalent-workload pass**; 16 KiB device: **blocked: no physical device**. The 16 ms / 8 ms production scrolling-streaming limits are **not measured**. [3][5][6] | **Not measured:** host replay is not timing evidence; physical NAPI: **blocked: no physical device**. [4] |
+| A hub frame to the screen | no later than today on each client | **Not measured:** no equivalent native/core production-screen comparison; physical: **blocked: no physical device**. [1][2] | **Not measured:** no production screen or hub-frame comparison; iOS baseline: **not measured**. [3][5] | **Not measured:** no NAPI/HAP production screen comparison; physical: **blocked: no physical device**. [4] |
+| Memory | resident memory the core adds is reported; opening and closing the same chat 10 times ends within 5 MB of the start | **Measured, simulator:** ten binding create/open/drain/close cycles changed `phys_footprint` by +16,384 B, **within 5 MB**; native chat/list round trips changed resident size by +4,128,768 B, also within 5 MB, but that run is a legacy non-acceptance observation. Total resident memory added by the core in production: **not measured**. Physical: **blocked: no physical device**. [1][2] | **Not measured:** no ten-open/close or resident-memory report; physical: **blocked: no physical device**. [3] | **Not measured:** host tests do not report device memory; physical: **blocked: no physical device**. [4] |
+| Incremental app build with the core unchanged | no Rust rebuild | **Measured, macOS host:** second unchanged-input XCFramework build reported `cached XCFramework is current`, **within limit**; full incremental app-build time not measured. [7] | **Measured, Linux host:** repeated unchanged-core Gradle build was `UP-TO-DATE`, **within limit**. [3] | **Not measured:** no actual API 26 HAP incremental build. [4] |
+| Clean build time added | reported per platform; no fixed limit | **Not measured:** no matched clean with/without-core app build. | **Not measured:** no matched clean with/without-core app build. | **Not measured:** no actual API 26 clean HAP build. A hosted Ubuntu core-lane compile took 11.48 s for the release FFI step, not an app-build increment ([run 43564606776](https://github.com/nwverse/persona/actions/runs/43564606776)). |
+| Contributor setup | `scripts/app/sim.sh`, `scripts/app/android.sh` and HarmonyOS's build still need one command after installing rustup | **Not measured as a complete fresh-contributor run:** `scripts/app/sim.sh` invokes the XCFramework builder before the app build, and the builder installs the pinned toolchain/targets through rustup; the binding PR verified the framework-first build path, not a clean one-command `sim.sh` run. **Setup limit: unverified**; Xcode 26.0 also remains not verified. [7] | **Measured, Linux host:** the Gradle app build invokes `buildAndroidCore`, which installs missing pinned Rust targets. **`scripts/app/android.sh` / one-command contributor setup: not measured / unverified**; SDK, JDK 21 and NDK are prerequisites, and the reviewed Gradle script used Linux NDK host tools. [3][6] | **Not measured:** no actual DevEco/API 26 one-command build was run; **setup limit: unverified**. The API 26 SDK and physical device remain **blocked: no physical device**. [4] |
+
+**Reading the table.** "Measured" records an existing observation, not physical-device or production acceptance;
+host, emulator and simulator values stay in their own categories. Android's package increments are APK/native-library
+bytes, not store downloads. The physical-arm64 measurements in [6] came from a contributor's Pixel 11 Pro XL,
+Android 17 / API 37, 4 KiB kernel, main `564904f816`, Rust 1.98.0 / NDK 29.0.14206865; the six R8 release-test runs
+were not independently rerun by the reviewer and do not establish the required 16 KiB-kernel result. The maintainer's
+2026-11-14 decision leaves the specified physical-device cells **blocked: no physical device**, never passed by
+substituting a simulator or host (#6871, [decision comment](https://github.com/nwverse/persona/issues/6871#issuecomment-6869406664)).
+An **exceeds, unresolved** cell follows the rule above: if the limit cannot be fixed within the slice, the plan stops
+and D1 stays. Filling in this table does not itself close #6871 or approve production migration.
+
+**Sources and exact workloads.**
+
+1. **[iOS reference-measurement PR #7639](https://github.com/nwverse/persona/pull/7639)** — **unmerged and closed**;
+   its final PR head retains the raw reports, while `main` does not contain its harness or artifacts. It was closed
+   after a retained build log was found to contain registered app identities; the cited final head removes that
+   attachment, while earlier PR refs remain historical ([disposition](https://github.com/nwverse/persona/pull/7639#issuecomment-6876490516)).
+   Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
+   All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
+   Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
+2. **[Retained iOS evidence readme, PR #7639 head](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/README.md)** —
+   exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
+   uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
+   [Dispatch raw report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-boundary.json)
+   includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
+   [100-item drain report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-large-page.json)
+   covers drain/bincode decode/string-list apply, not a presented frame. [Lifecycle report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-lifecycle.json)
+   has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
+   `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
+   are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`
+   on a recorded dirty measurement tree: `.app` 127,081,693 → 127,845,039 B; local ZIP 60,500,929 → 60,856,673 B.
+   No App Store processing, thinning, physical artifact or equivalent production-core UI run was performed.
+3. **[Android packaging and benchmark PR #7128](https://github.com/nwverse/persona/pull/7128)** — merged as
+   `eeac9a5794`; Rust 1.98.0, NDK 29.0.14206865, JDK 21 on x86_64 Linux. Package report: arm64-v8a raw symbols
+   6,998,464 B, stripped/package 651,600 B, gzip 323,071 B; x86_64 7,007,880 / 713,952 / 343,371 B. The benchmark
+   used the non-debuggable R8 release androidTest APK on an owned software x86_64 Android 15 / API 35 emulator,
+   build `AE3A.240806.043`, 4 KiB kernel, 100 warm-ups + 1,000 samples. Original p50/p99/max: dispatch
+   155.520 / 13,100.597 / 61,333.795 µs; frame 745.018 / 17,271.624 / 56,622.362 µs. The same PR reports the
+   unchanged-core `UP-TO-DATE` build and Gradle app build, not clean-build, store-download or one-command
+   `scripts/app/android.sh` evidence. Its Gradle build selected the Linux NDK host tools. The separate macOS
+   physical-device report in [6] used a local NDK host-directory symlink, so it does not establish a general
+   fresh-contributor setup.
+4. **[HarmonyOS NAPI binding PR #7174](https://github.com/nwverse/persona/pull/7174)** — merged as `8827b3f885`;
+   host-only macro/codec/runtime checks passed, but the API 26 `.so` link, HAP build/install, real NAPI replay,
+   size and timing were not run. **[Callback follow-up #7713](https://github.com/nwverse/persona/pull/7713)** and
+   its [final Node 24 check](https://github.com/nwverse/persona/pull/7713#issuecomment-6878001978) remain host
+   evidence only, not a device build or performance result.
+5. **[Android retained benchmark PR #7224](https://github.com/nwverse/persona/pull/7224)** — merged as `1c0229e078`;
+   same software emulator, API 35 / build `AE3A.240806.043`, 4 KiB kernel, no `/dev/kvm`, optimized R8 release test,
+   100 warm-ups + 1,000 samples. Final original-span dispatch p50/p99/max 126.169 / 883.312 / 2,768.431 µs; frame
+   761.306 / 3,414.419 / 6,189.888 µs. Earlier raw p99 16,400.210 / 8,534.626 µs is retained, not selectively
+   replaced. Attribution and a low-overhead control identify instrumentation/scheduling as contributors but do not
+   waive either failure or demonstrate a physical-device result.
+6. **[Physical-arm64 report in #6871](https://github.com/nwverse/persona/issues/6871#issuecomment-6866766583)** —
+   contributor-reported, not independently rerun. Unmodified runs 1–3: dispatch p99 135.626 / 32.786 / 93.047 µs,
+   frame p99 152.385 / 50.963 / 124.297 µs. Runs 4–6 added only a local p90 reporting field: dispatch p99
+   22.578 / 103.411 / 108.880 µs, frame p99 52.708 / 312.906 / 292.187 µs. Large run-to-run variation, a 4 KiB
+   kernel and no iOS physical baseline mean these are not accepted as full-budget, 16 KiB or comparative passes.
+7. **[Apple binding PR #7160](https://github.com/nwverse/persona/pull/7160)** — merged as `5f1920294a`; Xcode 27.2 /
+   Swift 6.4.2, Rust 1.98.0. It reports the cached unchanged-input XCFramework build, real-C and native-store replay,
+   and `scripts/app/sim.sh`'s framework-first path. Xcode 26.0 is not verified; no launch, memory, actual app-size
+   or timing acceptance is claimed there. **[Targeted-wake follow-up #7401](https://github.com/nwverse/persona/pull/7401)**
+   likewise leaves physical performance and production migration unaccepted.
 
 ## Decisions
 

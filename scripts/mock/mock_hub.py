@@ -3681,6 +3681,9 @@ RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 # characters. The answer to its uploads, GET /api/v1/recordings and its detail then carry name and name_source. Off by
 # default, so recordings keep the names other tests expect.
 RECORDING_TITLES = [os.environ.get("MOCK_RECORDING_TITLES") == "1"]
+# Names given on the web (#8877): PUT /api/v1/recordings/{id}/title keeps one per recording ("" clears it), first in the
+# name until an upload changes the recording's title, as the hub's rule.
+RECORDING_RENAMED = {}
 RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
@@ -4668,9 +4671,10 @@ def meeting_live(rid):
                                          "asks": [], "sent": {}, "due": {}, "asks_rev": 0})
 
 
-def recording_title(body):
-    """What the hub calls an upload (its title, its calendar's, a made-up live title) and where that comes from (#8873);
-    (None, None) while it is named only by when it started."""
+def recording_title(body, rid=None):
+    """What the hub calls an upload (a name given on the web, its title, its calendar's, a made-up live title) and where
+    that comes from (#8873, #8877); (None, None) while it is named only by when it started."""
+    if rid and RECORDING_RENAMED.get(rid): return RECORDING_RENAMED[rid], "renamed"
     title = (body.get("title") or "").strip()
     cal = ((body.get("calendar") or {}).get("title") or "").strip()
     if title: return title, ("calendar" if title == cal else "title")
@@ -4683,9 +4687,9 @@ def recording_title(body):
     return next((x for x in lines if x), "")[:15], "model"
 
 
-def recording_named(out, body):
+def recording_named(out, body, rid=None):
     """out with the name and name_source of upload body, when it has a name."""
-    name, source = recording_title(body)
+    name, source = recording_title(body, rid)
     if name: out.update(name=name, name_source=source)
     return out
 
@@ -7268,7 +7272,7 @@ def recordings_route_locked(h, method, p):
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
                                                if v.get("kind") == "day" else {}),
                                             **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {}),
-                                            **recording_named({}, v)}
+                                            **recording_named({}, v, k)}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
     if p.endswith("/segments"):
@@ -7313,12 +7317,30 @@ def recordings_route_locked(h, method, p):
             threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
+    if p.endswith("/title") and method == "PUT":  # the owner's name from the web (#8877)
+        if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+        if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音", "code": "recording_not_found"}, 404) or True
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(title, str) or "\n" in title or "\r" in title or len(title.strip()) > 200:
+            return h.send_json({"error": "A title must be one line of at most 200 characters."}, 400) or True
+        RECORDING_RENAMED[rid] = title.strip()
+        name, source = recording_title(RECORDINGS[rid], rid)
+        for e in kb:
+            if e["id"] == rid: e["name"] = name or "录音"
+        meta = (KB_DETAIL.get(("recordings", rid)) or {}).get("meta")
+        if meta is not None:
+            for k in ("name", "name_source", "renamed"): meta.pop(k, None)
+            if name: meta.update(name=name, name_source=source)
+            if RECORDING_RENAMED[rid]: meta["renamed"] = RECORDING_RENAMED[rid]
+        return h.send_json({"name": name, "name_source": source} if name else {}) or True
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         if (t := TRANSCRIPTIONS.pop(rid, None)) and t.get("socket"): t["socket"]["fail"]("recording_deleted")
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDING_RENAMED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -7347,18 +7369,20 @@ def recordings_route_locked(h, method, p):
     if have and have["revision"] > body["revision"]:
         # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
         # stored one) and what was wrong with this upload's attendance fields, whatever the status.
-        out = recording_named({"id": rid, "revision": body["revision"], "status": "stale"}, have)
+        out = recording_named({"id": rid, "revision": body["revision"], "status": "stale"}, have, rid)
         if MEETING_ATTENDANCE:
             out["attendance"] = meeting_live(rid)["role"]
             if room_of(rid) is None and (problem := meeting_attendance(body)[2]): out["attendance_problem"] = problem
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
         return h.send_json(transcription_upload_result(rid, body, out)) or True
     for seg in body.get("segments", []): seg.pop("source", None)
+    if have and RECORDING_RENAMED.get(rid) and (body.get("title") or "") != (have.get("title") or ""):
+        RECORDING_RENAMED.pop(rid)  # renamed on the phone since: the newer name wins (#8877)
     transcription_put(rid, body)
     RECORDINGS[rid] = {k: v for k, v in body.items() if k not in ("transcription", "timeline")}
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
-    name, name_source = recording_title(body)
+    name, name_source = recording_title(body, rid)
     entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
              "recording_kind": kind}  # #8870
@@ -7375,7 +7399,7 @@ def recordings_route_locked(h, method, p):
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = None  # made from the photos as they are when the detail is stored, below
-    out = recording_named({"id": rid, "revision": body["revision"], "status": "stored"}, body)
+    out = recording_named({"id": rid, "revision": body["revision"], "status": "stored"}, body, rid)
     room = None
     if MEETING_ATTENDANCE:
         role, session, problem = meeting_attendance(body)
@@ -9279,6 +9303,14 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+# MOCK_EDITABLE=1: a Claude Code Lark approval whose outgoing text may be edited before Allow, plus a deny note.
+if os.environ.get("MOCK_EDITABLE") == "1":
+    INTERACTIONS.append({
+        "id": "ix_editable_lark", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+        "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+        "tool_name": "Bash", "summary": "回复发布群：测试已经通过，准备发版",
+        "tool_input": {"command": "lark api POST /conversations/oc_example/messages --body '{\"text\":\"测试已经通过，准备发版\"}'"},
+        "editable_text": "测试已经通过，准备发版"})
 
 # MOCK_ASK_LONG=1: Persona's main conversation waits on an ask_user card taller than a phone's dock (#3112): two
 # questions, the first with eight options that have descriptions, so the card has to scroll for the last ones.
