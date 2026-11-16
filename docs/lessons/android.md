@@ -835,6 +835,13 @@ state machine locally. Rejection is driver-level and uncorrelated: signal it wit
 multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
 may stop on that signal without affecting Kotlin or another chat's work.
 
+A strict comparison of a retained draft also flags a difference that is only representation, and neither side is the
+reference until the iOS oracle says so (#9238). Android's answer builder removes a question's Other entry on a single
+choice; iOS's `QuestionForm.pick` and the core keep it as an empty string. Answers, pages and resolutions agree, and iOS
+reads both alike, but Android draws its Other field while the key exists, so the core's draft can't be stored as it is.
+Changing the core to match Android would have moved it away from iOS. The shared `expected` objects carry answers, not
+the draft, so nothing could decide this until `TestResolutionFixturesIOS` began reporting the draft each click leaves.
+
 ## An offline computer can still have a readable workspace catalog (#9317)
 
 The workspace catalog is read from the hub, which persists its last successful node inventory. Skipping the hub read
@@ -845,3 +852,7 @@ An HTTP success may still carry per-machine discovery errors alongside useful ca
 status through service wrappers: merge returned rows into the prior list by machine/source/source ID, keeping missing
 prior rows until a complete refresh. Translate the identities in partial results just as in successful ones. A malformed
 or missing workspace list is a failure, not evidence that every workspace disappeared.
+
+## The NDK prebuilt host directory follows the OS (#9327)
+
+Choose `darwin-x86_64` on macOS and `linux-x86_64` on Linux for the release `llvm-readelf` check and the Gradle `ndkHost` / `ndkTools` inputs; NDK 29 has no `linux-x86_64` tree on a Mac, so a hard-coded path fails that check after the libraries build.

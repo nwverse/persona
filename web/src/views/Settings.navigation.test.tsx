@@ -126,7 +126,6 @@ describe("Settings category navigation", () => {
       ["text-size", t("ui-look.text_size_hint")],
       ["reply-motion", t("settings.reply_motion_hint")],
       ["agent-details", t("context.details_hint")],
-      ["context-as-used", t("context.as_used_hint")],
       ["install-app", t("settings.install_installed")],
     ];
     for (const [anchor, text] of hints) {

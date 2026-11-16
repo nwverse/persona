@@ -52,7 +52,6 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.agent_preferences"), hint: words(t("terminal-full.mode_group"), t("settings.sidebar_terminals")), anchor: "agent-preferences" },
   { tab: "general", group: t("settings-agentopen.label"), hint: words(t("settings-agentopen.panel"), t("settings-agentopen.page")), anchor: "agent-open" },
   { tab: "general", group: t("context.details"), anchor: "agent-details" },
-  { tab: "general", group: t("context.as_used"), anchor: "context-as-used" },
   // General › hubs, this browser, about
   { tab: "general", group: t("hubs.group_title"), hint: t("hubs.add_hub"), anchor: "hubs" },
   { tab: "general", group: t("settings.this_browser"), hint: words(t("settings.hub"), t("settings.linked_hubs")), anchor: "this-browser" },
