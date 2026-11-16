@@ -288,6 +288,9 @@ final class AppModel {
     @ObservationIgnored private(set) var agentsNavigationRevision = 0
     /// An explicit Agents-tab selection returns to its list; targeted opens do not change this request.
     var agentsListReveal = 0
+    /// Bumped each time the Inbox is entered at its root (the sidebar, a widget, a quick action, its tab on visionOS),
+    /// also while its page stays up: the section bar opens on Needs You on every entry (#9053, `InboxPage`).
+    var inboxEntries = 0
 
     /// User navigation, unlike `open` (notifications / links): choosing Agents discards its retained detail.
     func selectHomeTab(_ tab: AppTab) {
@@ -329,6 +332,10 @@ final class AppModel {
             #endif
             // The shell routes it now, not when a view is next drawn (docs/apple/shell.md).
             if selectedTab != oldValue { tabRouter?.route(selectedTab, in: self) }
+            #if os(visionOS)
+            // The Inbox's own tab, which the TabView keeps up: picked, or routed to again while in front (a widget).
+            if selectedTab == .mail { inboxEntries += 1 }
+            #endif
             #if PERF_SIGNPOST
             PerfTrace.event("Tab selection", selectedTab.rawValue)
             #endif

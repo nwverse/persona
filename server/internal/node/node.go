@@ -397,6 +397,7 @@ func New(version string) (*Node, error) {
 		n.screenStart = n.startScreenHelper                                                                   // Persona Screen, the live screen's video helper (#3954)
 		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn}                           // Persona Input (#7775)
 		n.phones = &phoneScreens{logf: n.logger.Printf, signed: n.screens.signedIn, attach: n.screens.attach} // Phone Screen (#9314)
+		go n.phones.restoreLeftovers(context.Background())                                                    // what a helper that died left (#9500)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
