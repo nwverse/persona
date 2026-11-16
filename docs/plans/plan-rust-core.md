@@ -444,6 +444,14 @@ Phase 2 lands in several PRs.
     JNI and ArkTS host replays cover the new fields.
   - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
+- **The `sync` domain's survey and fixtures-first design (#9230), documentation only.**
+  - `docs/plans/plan-rust-core-sync.md` surveys iOS's chat-sync layer with file/line citations (socket lifecycle,
+    reconnect/backoff, the event-resume cursor, per-chat subscription, gap-to-request, stalled catch-up, background
+    prefetch, the catch-up barrier and foreground/background), defines the `spec/fixtures/sync-driver` fixture
+    inventory with explicit clock/network injection, and carves out the first pure `SyncDriver` state-machine slice
+    (lifecycle/network results in → request/reconnect/backoff/catch-up effects out, no real socket or persistence).
+  - Nothing is implemented; no production network, client or core behavior changed, and no device claim is made.
+
 Phase 3 lands in several PRs.
 
 - **Nested-item Envelope fallback removal (#9187).**
@@ -522,6 +530,16 @@ Phase 3 lands in several PRs.
     burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
     and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
     incremental ChatStore rebuild algorithm or its timing evidence.
+  - ArkTS host replay (#9235) adds `coreProjectTurns` and a pure `turns` JSON entry to the existing
+    `persona-core-ohos` host helper, with generated declaration drift coverage. `turns.test.mjs` compares all 57
+    unchanged static cases (62 complete post-overlay turn objects and three empty arrays), and uses the generated
+    ArkTS codec plus existing dispatch/flush/drain commands for all 10 operation checkpoints (13 complete turn
+    objects) and the standalone replacement. The real runtime requests the original fold range before the helper
+    supplies it. Exact manifests, malformed/wrong-shaped input and deliberately wrong expectations are checked;
+    fixture expectations and turn semantics remain unchanged.
+  - This is ArkTS host helper evidence only. It does not execute the NAPI export or load a Linux NAPI addon, and
+    does not replace #8808's separate real loader work. No HAP/HDC, physical-device, production adapter, rendered
+    ChatLine/layout, incremental ChatStore rebuild or performance result is established.
   - `persona_core::task_index` covers the fixture-facing `TaskIndex.build` fields (#8842): started calls, notice/call
     association, descriptions, UTC start times and per-call status sequences. Real Kotlin/JNI replay compares all five
     existing task-index expected objects, plus a background receipt whose notices/statuses are empty but whose original
