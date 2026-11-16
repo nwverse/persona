@@ -32,7 +32,8 @@ fun JSettingsSheet(onDismiss: () -> Unit, content: @Composable () -> Unit) {
         movableContentOf {
             settingsState.SaveableStateProvider("settings-sheet-content") {
                 CompositionLocalProvider(LocalPalette provides currentGrouped, LocalFlatPageSurface provides true,
-                    LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null) {
+                    LocalHomeChrome provides null, LocalRootBack provides null, LocalRootLeading provides null,
+                    LocalSplitDetail provides null) {
                     Box(Modifier.fillMaxSize()) { currentContent() }
                 }
             }

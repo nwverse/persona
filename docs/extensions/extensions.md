@@ -2077,7 +2077,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `8`; the web sends `8` (its native stream `7`), Android sends `8` (its native stream too), iOS sends `6` (its native stream `7`) until it draws all of UI version 8; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `8`; the web sends `8` (its native stream `7`), Android and iOS send `8` (their native streams too); **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2619,7 +2619,7 @@ is lost but the arrangement:
 
 The view the extension drew is checked first, whatever the app's version; then what the app gets is checked again (as for every version).
 Extensions may still draw an older app differently (`ui_version`). `UIStreamSection` takes the new section fields, so a native stream's source
-may draw them; the stream's clients send 7 and get the table above.
+may draw them; the web's stream client sends 7 and gets the table above, Android's and iOS's send 8 and get them as they are.
 
 **The web** (#9158) draws all of it and sends `8` (`web/src/views/extensions/ViewBody8.tsx`, a chunk loaded with the first view that has
 version 8 in it; the rows side by side in `ViewBody.tsx`'s `Run`). A columns view takes the page's whole width, as a split view does. The
@@ -2640,8 +2640,25 @@ read out as its words), every card in a row as tall as the tallest. A section's 
 a hairline between lines and none between the rows of a line. Cards (`compact`), sections on a machine's or a launcher's page and an inbox
 item's body are drawn as the stack, with icons, links and rows side by side.
 
-**iOS** has the fields in its generated types and still sends 6 (its native stream 7): the hub draws it a stack until it draws version 8
-(its own change, after #9158).
+**iOS** draws all of it and sends `8`: whole pages, the native stream and the app's own cards and sections (`ExtensionUIContext.pageVersion`,
+`ExtensionPageStream.uiVersion`, `ExtensionUIContext.cardVersion`); widgets, the watch and the system extensions keep 3. The drawing is
+`apple/Persona/Views/Settings/ExtensionColumns.swift`. A columns view on a page (`ExtensionPageView`, `ExtensionWidthPage`) is the page's
+list, exactly a stack, until the page's own width (never the kind of device) holds two columns of `Theme.Size.cardColumn` (330 pt at the
+default text size, larger with the text, as every `Theme.Size`) with `Space.m` between them inside the page's margins; then its sections
+are cards in lines of two, or three when three fit (`ExtensionColumnsGrid`): an iPhone upright and an iPad's narrow window are one column,
+an iPad's detail column on its side two, a 13-inch iPad's whole width three; with larger text a column needs more (about 446 pt at the
+interface's largest size, xxxLarge), so a window that just holds two at the default size holds one. Each
+line is one row of a lazy stack and as tall as its tallest card (`ExtensionColumnsLayout` offers every card the line's height); a section
+that spans takes a line of its own. A card is a `.card()` with its head inside: the icon in its named color, the title in the card grids'
+`Theme.Font.heading`, the link at the end. Elsewhere (a list's section header, a card's or a machine page's section title) the icon and the
+link sit where the title is; a section with neither keeps the title it always had. The link is the accent's words and ›, a spinner in place
+of › while its action runs, pressed through `ExtensionActionButton` as a row is, at least 44 × 44 pt and spoken as its words.
+`Section.columns` lays a section's runs of rows side by side, as many as keep `cardColumn` each in the width the run is given, and stacks
+them below that; in a page's list a run side by side is one list row (no hairline between its rows, each row's own button, their swipe
+actions only in their menu), measured from the page's width; a launcher's page and an Inbox item, whose width nobody measures, keep a row to
+a line. In the native stream a link press goes back as its section's key, as the section's other controls do. Unit tests
+`ExtensionColumnsTests`, UI test `ExtensionColumnsUITests` against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`).
+
 
 ## System-level placements (#1858)
 
@@ -3043,7 +3060,7 @@ UI placements `extension` / `extension_name` and `plugin` / `plugin_name`, marke
 Features accept new and old names (`hasExtensionFeature("ui_slots")` means `extension_ui_slots` or `plugin_ui_slots`, likewise `"manager"`); both `extension_ui` and `plugin_ui` events
 are accepted (new hubs send both; badges are set values, so receiving twice is harmless); channel `settings_url` accepts `settings/extensions/<id>` and `settings/plugins/<id>`.
 Views, components, actions, responses, placements and context all use schema-generated types (`apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift`, #1860); the app only adds decoding helpers alongside them
-(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`, the Shared version widgets and the watch send; every page or card the app draws sends 6, #827).
+(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`, the Shared version widgets and the watch send; every page or card the app draws sends 8, #827, #9158).
 
 - List: each extension's name and status (**On** / **Starting** / **Needs Setup** / **Off** / **Not available on this hub** / **Something Went Wrong**; both `running` and `stopped` are **On**), opening details on tap; footer explains installation via the hub's admin UI (`/admin`) or on the hub machine (`personad extension`).
 - Details: status, version, source, description, small running-state text ("Running" / "Not running; starts when needed"), "Missing: …" and errors; **Enabled** switch; **Settings** form drawn from `form.fields` (text, numbers, toggles, choices, text lists / multiselect,
@@ -3146,6 +3163,10 @@ Views, components, actions, responses, placements and context all use schema-gen
   value with the error as a toast, a redraw meanwhile keeps the user's value, a spinner after a second. A disabled control, or one on a card without a model, is dimmed. Mock: `showcase › controls`
   (`-openExtension showcase -openExtensionPage controls`) keeps what its controls are changed to, answers with the row (`items`), fails `fails` with 502, and asks first for two switches
   (`GET /mock/controls/reset` forgets); unit tests `ExtensionControlsTests`, UI test `ExtensionControlsUITests`.
+- UI version 8 (#9158, "UI version 8"): pages, the native stream and the app's cards and sections send 8. A columns view is the page's list
+  until the page's width holds two columns of cards, then a grid of them, each line as tall as its tallest card; a section's icon and link
+  beside its title; its rows side by side where there is room (`ExtensionColumns.swift`). Mock: `MOCK_EXTENSION_COLUMNS=1`'s Today page
+  (the navigation's Today); unit tests `ExtensionColumnsTests`, UI test `ExtensionColumnsUITests`.
 - Inbox-item body (#1682, `inbox_item`, see "Inbox items" above): when the hub has `extension_ui_slots` (also query immediately after app startup before hello arrives: an item opened at launch must not be permanently assigned the original body because of that;
   hubs not knowing this slot simply return an empty list), query each hub once via `GET /api/v1/extensions/-/ui?placement=inbox_item` (again on pairing / hub switch or opening Inbox),
   recording connectors with extension rendering (`InboxItemSlots`, `connector` matched to item `source`). Opening such items calls `POST …/-/ui/{ui}` with the item id in `context.item`,

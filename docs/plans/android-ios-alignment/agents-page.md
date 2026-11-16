@@ -22,7 +22,7 @@ The Agents page on Android shows the same sessions as on iOS, in the same groupi
 
 **A5. Groupings with the iOS shapes.**
 
-- Android's "By computer and space" is iOS's By Project (computer, space, tab, agent) under another name: rename it. iOS's flat By Machine, one section per computer, is missing on Android (phase 3 F7 now lists it).
+- Android's "By computer and space" is iOS's By Project (computer, space, tab, agent) under another name: rename it. iOS's flat By Machine, one section per computer, landed in #9319 (below).
 - By To-do: iOS is flat, one section per to-do with its status-tinted count and a › to its detail, then Started Manually and Unassigned, and it is offered only when the hub has to-dos. Android nests project, to-do and agent, splits "Opened by hand" and "No to-do" by project, and always offers it.
 - By Status: iOS has eight sections, "Waiting in the background" included, each header with a count in its state's color; Seen starts folded and opens from its header; rows drop the state word. Android has seven sections, counts on three of them only, and Seen behind "N more idle".
 
@@ -70,12 +70,16 @@ Every change above is done on Glass, Brief and Board keep working (decision 8), 
 
 - With #5185, which folds a tab's workers under their lead: iOS's one-line row for a tab of several agents in every row style (`TabGroupRow`), and iOS's names for a tab's agents ("Claude 2", the starter marked) (A9).
 - Deferred on 2026-11-12: the Personal Agents pill and its page, since few people use personal agents (A11).
-- With phase 3 F7: the flat By Machine grouping, the git and worktree actions Android lacks, and the workspace catalog iOS reads a worktree's branch, Detached HEAD and offline state from (A7). By App and Recently Used landed in #9199 (below).
+- With phase 3 F7: the git and worktree actions Android lacks, and the workspace catalog iOS reads a worktree's branch, Detached HEAD and offline state from (A7). By App and Recently Used landed in #9199; flat By Machine in #9319 (below).
 - Kept as they are: the "N more idle" row puts its caret after the words, where iOS puts its icon first (A8); By Status's pill draws a board of columns, since no generated glyph draws iOS's two dots (A4); iOS's search scopes and evidence snippets are not ported (A10); the computer's projects page draws the sessions the phone has loaded, where iOS reads every session it has (A11).
 
 ### By App and Recently Used (#9199, 2026-11-16)
 
 Done: Android's Agents grouping menu offers **By App** and **Recently Used** with iOS's sections, order and titles (`AgentAppGroups` / `recentAgentOrder` in core/domain; `AgentGrouping.App` / `Recent` in `selectable` and `fromPreference`; default still By repository). By App: desktop apps (Claude, Codex, then others by name), then herdr / Herdr App / Orca / Tern, then Other; the app is the section heading, each project a smaller fold row (`AgentAppProjectRow`, iOS `AppProjectRow`: folder or agents mark for Other, secondary title, machine caption when the section mixes computers, idle-toned count, chevron), sessions one level in; Sort hidden. Recently Used: one flat latest-first list (offline included); no section when empty; never folds; Sort and Collapse / Expand All hidden. Strings en / zh-Hans / ja. Domain tests port iOS `AppGroupsTests` and recent `AgentListOrderTests`; menu-rule tests in `AgentsHomeAffordancesTest`; JVM shots `ByAppShotsTest` and `RecentlyUsedShotsTest` in Glass / Brief / Board, light and dark.
+
+### By Machine (#9319, 2026-11-16)
+
+Done: Android's Agents grouping menu offers **By Machine** (iOS `DevGrouping.machine`) after By to-do and before By App, with the machine icon (`PersonaIcons.machine`). One foldable section per computer that has live agents (hub order; under Recently Updated the computer with the latest agent first); flat rows in the list's sort order, no project or engine-tab sub-groups; idle agents behind "N more idle" / "Hide N Idle" (`idleFold`, key `machine-<id>`); section headers use the computer's device mark and online state (`MachineSectionHeader`). A stored `Machine` preference opens By Machine (no longer migrated to By project). Rows omit the computer name (the section is the computer). Strings en / zh-Hans / ja. Domain tests in `ByMachineTest`; menu and preference tests; JVM shots `ByMachineShotsTest` (two computers, idle folded, grouping menu open; Glass / Brief / Board; light and dark; en and zh).
 
 ### Already decided by the spec: which assistant's computers show
 

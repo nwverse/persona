@@ -394,6 +394,55 @@ class PersonaShellOverlayTest {
         }
     }
 
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsHidesBackBesideListAndHeaderButtonRestoresCollapsedList() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val resize = app.getString(persona.core.designsystem.R.string.designsystem_pane_resize)
+        val collapsedState = app.getString(persona.core.designsystem.R.string.designsystem_pane_collapsed)
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            clickText("Agents")
+            awaitText(otherAgent.displayTitle)
+            clickText(otherAgent.displayTitle)
+            awaitText("The packing list is ready.")
+            assertTrue(isTextDisplayed(agent.displayTitle))
+            // First page beside the Agents list: no Back button in the header.
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            rule.onNodeWithContentDescription(resize).assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription, collapsedState))
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = false)
+
+            // With the list collapsed, the header's sidebar button brings it back and records the kept choice.
+            sidebar()
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = true)
+
+            // Collapse again before restart to verify the restored collapsed state exposes the header button too.
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            awaitSavedColumns(agents = false)
+        }
+        shell(automation = false) {
+            awaitText("The packing list is ready.")
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            sidebar()
+            awaitText(agent.displayTitle)
+            awaitSavedColumns(agents = true)
+        }
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
         withTodos: Boolean = false, groupByTodo: Boolean = false,
         automation: Boolean = true,
@@ -577,6 +626,10 @@ class PersonaShellOverlayTest {
     }
     private fun isTextDisplayed(text: String): Boolean {
         val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true)
+        return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
+    }
+    private fun hasDisplayedContentDescription(description: String): Boolean {
+        val nodes = rule.onAllNodesWithContentDescription(description, useUnmergedTree = true)
         return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
     }
     private fun back(scenario: ActivityScenario<ComponentActivity>) {
