@@ -20,6 +20,10 @@ struct CapsuleFilterBar<Trailing: View>: View {
     /// The strip's identifier and its choices' prefix (`<prefix><id>`): the Agents list's by default.
     var scrollID = "agents.filters.scroll"
     var itemIDPrefix = "agents.filter."
+    /// The strip scrolls the chosen item into sight whenever the choice changes, by a tap or by the page (a search
+    /// showing All, a landing), and when it appears; by the least it can, so the first items stay in sight as far as
+    /// they fit (the Inbox's section bar, #9053). Off: a tap centres its item, as the Agents filters do.
+    var revealsSelection = false
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var focused: String?
@@ -34,6 +38,8 @@ struct CapsuleFilterBar<Trailing: View>: View {
                             CapsuleFilterItem(item: item, selected: item.id == selection,
                                               expanded: item.id == selection || item.id == focused, idPrefix: itemIDPrefix) {
                                 choose(item.id)
+                                // revealing, the choice's change scrolls (below), from the layout it makes
+                                guard !revealsSelection else { return }
                                 withAnimation(reduceMotion ? nil : Theme.Motion.standard) {
                                     proxy.scrollTo(item.id, anchor: .center)
                                 }
@@ -67,6 +73,10 @@ struct CapsuleFilterBar<Trailing: View>: View {
                     }
                 }
                 .accessibilityIdentifier(scrollID)
+                .onAppear { if revealsSelection { reveal(selection, proxy, animated: false) } }
+                .onChange(of: selection) { _, chosen in
+                    if revealsSelection { reveal(chosen, proxy, animated: true) }
+                }
             }
             Rectangle().fill(Theme.cardStroke)
                 .frame(width: Theme.Size.hairline)
@@ -77,6 +87,14 @@ struct CapsuleFilterBar<Trailing: View>: View {
         .background(Theme.card, in: Capsule())
         .overlay(Capsule().strokeBorder(Theme.cardStroke, lineWidth: Theme.Size.hairline))
         .clipShape(Capsule())
+    }
+
+    /// Scrolls to `id` once this update is laid out: on the strip's first appearance, or a choice the page made as it
+    /// appeared, its items have no frames yet and an immediate scroll does nothing.
+    private func reveal(_ id: String, _ proxy: ScrollViewProxy, animated: Bool) {
+        Task { @MainActor in
+            withAnimation(animated && !reduceMotion ? Theme.Motion.standard : nil) { proxy.scrollTo(id) }
+        }
     }
 }
 

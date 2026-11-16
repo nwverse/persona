@@ -189878,6 +189878,29 @@
         }
       }
     },
+    "Items you mark as done show up here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Items you mark as done show up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応済みにした項目はここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你标记为已处理的条目会显示在这里。"
+          }
+        }
+      }
+    },
     "its content" : {
       "localizations" : {
         "en" : {

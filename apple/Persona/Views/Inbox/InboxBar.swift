@@ -54,8 +54,8 @@ nonisolated enum InboxBar {
         /// Done rows the filters let through: the list's own, or 1 while only the history's loaded pages have one (the
         /// bar asks only whether Done has a row, so the history is not counted).
         var done = 0
-        /// The hub's day counts added up (#2967; 0 from a hub without them).
-        var doneDays = 0
+        /// The hub's day counts name a done item on a day Done can list (#2967; false from a hub without them).
+        var doneDays = false
         /// A source, a kind or a search is on: the hub's day counts don't apply then.
         var filtered = false
 
@@ -71,7 +71,7 @@ nonisolated enum InboxBar {
         }
 
         /// Done has something to show: a row, or (nothing filtered) a day the hub counts.
-        var hasDone: Bool { done > 0 || !filtered && doneDays > 0 }
+        var hasDone: Bool { done > 0 || !filtered && doneDays }
     }
 
     /// The choices on the bar, in order: Needs You and All always; In Progress and FYI while they have a row or are
@@ -94,10 +94,18 @@ nonisolated enum InboxBar {
     /// Whether the list draws Done.
     static func drawsDone(chosen: InboxChoice) -> Bool { chosen == .all || chosen == .done }
 
-    /// The sections drawn, by the ids the shared cases use: the chosen one when it has rows, under All every one with rows.
+    /// Whether the list shows an open section: drawn for the choice, with a row. The page asks this, as the shared cases do.
+    static func shows(_ tier: InboxItem.Tier, _ rows: Rows, chosen: InboxChoice) -> Bool {
+        draws(tier, chosen: chosen) && rows.count(tier) > 0
+    }
+
+    /// Whether the list shows Done: drawn for the choice, with something to show.
+    static func showsDone(_ rows: Rows, chosen: InboxChoice) -> Bool { drawsDone(chosen: chosen) && rows.hasDone }
+
+    /// The sections shown, by the ids the shared cases use: the chosen one when it has rows, under All every one with rows.
     static func shown(_ rows: Rows, chosen: InboxChoice) -> [String] {
-        let open = InboxItem.Tier.allCases.filter { draws($0, chosen: chosen) && rows.count($0) > 0 }.map(\.rawValue)
-        return open + (drawsDone(chosen: chosen) && rows.hasDone ? ["done"] : [])
+        let open = InboxItem.Tier.allCases.filter { shows($0, rows, chosen: chosen) }.map(\.rawValue)
+        return open + (showsDone(rows, chosen: chosen) ? ["done"] : [])
     }
 
     /// What the list says with nothing to show (nil: it has rows). All Caught Up only when nothing is open anywhere; a
@@ -150,7 +158,9 @@ extension InboxBar.Rows {
         fyi = tiers[.fyi]?.count ?? 0
         noise = tiers[.noise]?.count ?? 0
         done = projection.doneItems.isEmpty ? (history.contains { $0.isDone && filter.matches($0) } ? 1 : 0) : projection.doneItems.count
-        self.doneDays = doneDays?.values.reduce(0, +) ?? 0
+        // only a day Done's groups can place counts (`InboxGroups.dayCounts`), so Done is on the bar only when it lists
+        // a group; the first such day answers, not a pass over the whole history
+        self.doneDays = doneDays?.contains { $0.value > 0 && InboxGroups.isDay($0.key) } ?? false
         filtered = !filter.source.isEmpty || !filter.kind.isEmpty || !filter.query.isEmpty
     }
 }

@@ -87,8 +87,9 @@ struct InboxPage: View {
     }
     /// Sections shown open under All: tiers (action, working, fyi, noise) and "done". Collapsed and Done start closed.
     @State private var folds = InboxFolds()
-    /// The section bar's choice (#9053): Needs You each time the Inbox is entered, kept while the page is up (an item
-    /// opened and closed, a refresh, a filter), never stored; a search shows All and gives the choice back when cleared.
+    /// The section bar's choice (#9053): Needs You each time the Inbox is entered (a new page, or `inboxEntries` while
+    /// this one stays up), kept while you are in it (an item opened and closed, a refresh, a filter), never stored; a
+    /// search shows All and gives the choice back when cleared.
     @State private var bar = InboxBarState()
     /// The page has been in front: only its first appearance lands on an item a kept path put above it.
     @State private var appeared = false
@@ -190,9 +191,15 @@ struct InboxPage: View {
                     ruling = nil
                     editingDraft = nil
                     if !embedded, !path.isEmpty { path = NavigationPath() }
+                    // its Inbox opens on Needs You, as any Inbox entered (#9053)
+                    bar.enter(query)
                 }
                 // The section bar (#9053): text in the search shows All, clearing it brings the choice back.
                 .onChange(of: query) { _, text in bar.search(text) }
+                // The Inbox entered again while this page stayed up (the place in front chosen again, a widget, a quick
+                // action, its tab on visionOS): Needs You, as every entry opens, so a choice left on FYI or Done
+                // can't hide new requests.
+                .onChange(of: model.inboxEntries) { bar.enter(query) }
                 // Entered for the first time beneath an item (a place's kept path brought back): the list opens on the
                 // item's choice, so Back lands where the item is. Later appearances keep the choice as it was.
                 .onAppear {
@@ -728,8 +735,11 @@ struct InboxPage: View {
     @ViewBuilder private func emptyState(_ empty: EmptyKind) -> some View {
         switch empty {
         case .section:
+            // An open section is empty only while another has rows (`InboxBar.empty`); Done also when nothing is open
+            // anywhere, so it says what fills it instead of pointing at sections that may be empty too.
             EmptyStateView(symbol: Theme.Icon.inbox, title: Self.emptyTitle(bar.chosen),
-                           message: String(localized: "Pick another section above."), tint: .secondary)
+                           message: bar.chosen == .done ? String(localized: "Items you mark as done show up here.")
+                                                        : String(localized: "Pick another section above."), tint: .secondary)
         case .caughtUp:
             EmptyStateView(symbol: "checkmark.seal", title: String(localized: "All Caught Up"),
                            message: String(localized: "New Lark messages and emails show up here."))
@@ -805,90 +815,87 @@ struct InboxPage: View {
             }
             // The AI's triage: Needs You (and what it has not looked at yet), FYI, Collapsed (noise); each by source or
             // by time (#2059): a group is its own section, so its title sticks while its rows scroll by. The bar's
-            // choice alone, or under All every one, as the page always was.
-            ForEach(InboxItem.Tier.allCases.filter { InboxBar.draws($0, chosen: chosen) }, id: \.self) { tier in
+            // choice alone, or under All every one with a row, as the page always was (`InboxBar.shows`, as the
+            // shared cases ask it).
+            ForEach(InboxItem.Tier.allCases.filter { InboxBar.shows($0, rows, chosen: chosen) }, id: \.self) { tier in
                 let items = share.byTier[tier] ?? []
                 let agents = tier == .action ? share.agents : []
-                if !items.isEmpty || !agents.isEmpty {
-                    let groups = tier == .working ? [] : groupsOf(items)
-                    // Under All a section folds from its title; chosen alone, its title is a heading that keeps its actions.
-                    let folding = chosen == .all && tier.folds
-                    let open = !folding || folds.isOpen(tier.rawValue)
-                    let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue, folding: folding,
-                                               clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
-                    if titled(tier, groups: groups, agents: agents.count) {
-                        Section { EmptyView() } header: { header }
-                        if open {
-                            if !agents.isEmpty {
-                                let g = InboxGroups.Group(key: "agents", title: String(localized: "Agents Waiting on You"), items: [])
-                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(agents) { agentRow($0) } } } header: {
-                                    groupHeader(tier.rawValue, g, count: agents.count, pickable: false)
-                                }
-                            }
-                            ForEach(groups) { g in
-                                Section { if groupOpen(tier.rawValue, g.key) { ForEach(g.items, id: \.key) { row($0) } } } header: {
-                                    groupHeader(tier.rawValue, g, count: g.items.count, pickable: true)
-                                }
+                let groups = tier == .working ? [] : groupsOf(items)
+                // Under All a section folds from its title; chosen alone, its title is a heading that keeps its actions.
+                let folding = chosen == .all && tier.folds
+                let open = !folding || folds.isOpen(tier.rawValue)
+                let header = sectionHeader(tier.title, count: items.count + agents.count, key: tier.rawValue, folding: folding,
+                                           clear: picked == nil ? InboxPage.clearTitle(tier).map { ($0, { store.setDone(items, true) }) } : nil)
+                if titled(tier, groups: groups, agents: agents.count) {
+                    Section { EmptyView() } header: { header }
+                    if open {
+                        if !agents.isEmpty {
+                            let g = InboxGroups.Group(key: "agents", title: String(localized: "Agents Waiting on You"), items: [])
+                            Section { if groupOpen(tier.rawValue, g.key) { ForEach(agents) { agentRow($0) } } } header: {
+                                groupHeader(tier.rawValue, g, count: agents.count, pickable: false)
                             }
                         }
-                    } else {
-                        Section {
-                            if open {
-                                ForEach(agents) { agentRow($0) }
-                                ForEach(items, id: \.key) { row($0) }
+                        ForEach(groups) { g in
+                            Section { if groupOpen(tier.rawValue, g.key) { ForEach(g.items, id: \.key) { row($0) } } } header: {
+                                groupHeader(tier.rawValue, g, count: g.items.count, pickable: true)
                             }
-                        } header: { header }
+                        }
                     }
+                } else {
+                    Section {
+                        if open {
+                            ForEach(agents) { agentRow($0) }
+                            ForEach(items, id: \.key) { row($0) }
+                        }
+                    } header: { header }
                 }
             }
             // Done, by when it was done, with the hub's history after the list's few days: chosen alone or under All.
-            if InboxBar.drawsDone(chosen: chosen) {
+            if InboxBar.showsDone(rows, chosen: chosen) {
                 let done = doneAll(projection.sortedDoneItems)
                 let days = store.doneDays
                 let (dg, nextGroup) = doneGroups(done, days: days)
                 let doneCount = days == nil ? done.count : dg.reduce(0) { $0 + $1.count }
-                if doneCount > 0 {
-                    let more = days == nil ? store.historyMore && !store.history.isEmpty : nextGroup != nil || dg.contains { $0.plus }
-                    let count = more ? "\(doneCount)+" : "\(doneCount)"
-                    let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
-                    let folding = chosen == .all
-                    let open = !folding || folds.isOpen("done")
-                    if dg.count > 1 {
-                        // Its title as a row, not as the header of a section with nothing in it: as that header (with its
-                        // Jump To menu, #2979) its text came out washed like a stuck title's wherever it was, and on an
-                        // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
-                        Section {
-                            doneHeader(count: count, groups: dg, folding: folding, proxy: proxy)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(Color.clear)
-                                .accessibilityAddTraits(.isHeader)
-                        }
-                        if open {
-                            ForEach(dg) { g in
-                                Section {
-                                    if groupOpen("done", g.id) {
-                                        ForEach(g.group.items, id: \.key) { row($0) }
-                                        if days != nil && g.more && !filtered {
-                                            olderRow(loading: store.groupLoading.contains(g.id), auto: g.id) { store.loadDoneGroup(g.id, range: g.range) }
-                                        }
+                let more = days == nil ? store.historyMore && !store.history.isEmpty : nextGroup != nil || dg.contains { $0.plus }
+                let count = more ? "\(doneCount)+" : "\(doneCount)"
+                let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
+                let folding = chosen == .all
+                let open = !folding || folds.isOpen("done")
+                if dg.count > 1 {
+                    // Its title as a row, not as the header of a section with nothing in it: as that header (with its
+                    // Jump To menu, #2979) its text came out washed like a stuck title's wherever it was, and on an
+                    // iPhone the scroll edge reached from the top down to it, over every row between (#4218).
+                    Section {
+                        doneHeader(count: count, groups: dg, folding: folding, proxy: proxy)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    if open {
+                        ForEach(dg) { g in
+                            Section {
+                                if groupOpen("done", g.id) {
+                                    ForEach(g.group.items, id: \.key) { row($0) }
+                                    if days != nil && g.more && !filtered {
+                                        olderRow(loading: store.groupLoading.contains(g.id), auto: g.id) { store.loadDoneGroup(g.id, range: g.range) }
                                     }
-                                } header: {
-                                    groupHeader("done", g.group, count: g.count, more: g.plus, pickable: false)
                                 }
-                            }
-                            if days == nil && store.historyMore && !store.history.isEmpty {
-                                olderRow(loading: store.historyLoading) { store.loadOlderDone() }
-                            }
-                            if let nextGroup {
-                                olderRow(loading: store.groupLoading.contains(nextGroup.id)) { store.loadDoneGroup(nextGroup.id, range: nextGroup.range) }
+                            } header: {
+                                groupHeader("done", g.group, count: g.count, more: g.plus, pickable: false)
                             }
                         }
-                    } else {
-                        Section {
-                            if open { ForEach(done, id: \.key) { row($0) } }
-                        } header: {
-                            doneHeader(count: count, groups: [], folding: folding, proxy: proxy)
+                        if days == nil && store.historyMore && !store.history.isEmpty {
+                            olderRow(loading: store.historyLoading) { store.loadOlderDone() }
                         }
+                        if let nextGroup {
+                            olderRow(loading: store.groupLoading.contains(nextGroup.id)) { store.loadDoneGroup(nextGroup.id, range: nextGroup.range) }
+                        }
+                    }
+                } else {
+                    Section {
+                        if open { ForEach(done, id: \.key) { row($0) } }
+                    } header: {
+                        doneHeader(count: count, groups: [], folding: folding, proxy: proxy)
                     }
                 }
             }
@@ -911,29 +918,26 @@ struct InboxPage: View {
     // MARK: Section bar (#9053)
 
     /// Needs You · In Progress · FYI · Done · All with their counts, the grouping at its end: the Agents list's capsule
-    /// on iOS (#7033); elsewhere (visionOS) the page's own chips.
+    /// on iOS (#7033); elsewhere (visionOS) the source and kind filters' own chips below it, the chosen one filled.
     @ViewBuilder private func sectionBar(_ entries: [InboxBar.Entry]) -> some View {
         #if os(iOS)
         CapsuleFilterBar(items: entries.map { e in
             CapsuleFilterItemData(id: e.id, title: e.choice.title, count: e.count, countLook: e.look.map(Self.badgeLook))
         }, selection: bar.chosen.rawValue, choose: { id in
             if let choice = InboxChoice(rawValue: id) { choose(choice) }
-        }, scrollID: "inbox.bar", itemIDPrefix: "inbox.bar.") {
+        }, scrollID: "inbox.bar", itemIDPrefix: "inbox.bar.", revealsSelection: true) {
             groupingMenu
         }
         #else
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Space.s) {
                 ForEach(entries) { e in
-                    Button { choose(e.choice) } label: {
-                        HStack(spacing: Theme.Space.xs) {
-                            Text(e.choice.title).lineLimit(1)
-                            if let count = e.count, let look = e.look { CountBadge(count: count, look: Self.badgeLook(look)) }
-                        }
-                        .font(e.choice == bar.chosen ? Theme.Font.secondaryStrong : Theme.Font.secondary)
-                    }
-                    .accessibilityAddTraits(e.choice == bar.chosen ? .isSelected : [])
-                    .accessibilityIdentifier("inbox.bar." + e.id)
+                    let on = e.choice == bar.chosen
+                    let badge = e.count.flatMap { n in e.look.map { (count: n, look: Self.badgeLook($0)) } }
+                    // the chip taps itself; a choice tapped again changes nothing
+                    chip(e.choice.title, badge: badge, on: on, tinted: true, animated: false) { bar.pick(e.choice) }
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                        .accessibilityIdentifier("inbox.bar." + e.id)
                 }
                 groupingMenu
             }
@@ -1261,21 +1265,27 @@ struct InboxPage: View {
         }
     }
 
-    private func chip(_ title: String, symbol: String? = nil, on: Bool, action: @escaping () -> Void) -> some View {
+    /// A filter chip. The section bar on visionOS adds a count after the title (`badge`) and tints the chosen chip
+    /// as the iOS capsule marks its choice (`tinted`), so the badge's colors read on it; `animated: false` leaves the
+    /// change to the caller (a section switch swaps hundreds of rows, which don't animate well).
+    private func chip(_ title: String, symbol: String? = nil, badge: (count: Int, look: CountBadge.Look)? = nil, on: Bool,
+                      tinted: Bool = false, animated: Bool = true, action: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(Theme.Motion.standard) { action() }
+            if animated { withAnimation(Theme.Motion.standard) { action() } } else { action() }
             Haptics.tap()
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 if let symbol { ThemedIcon(symbol).font(Theme.Font.label) }
                 Text(title)
+                if let badge { CountBadge(count: badge.count, look: badge.look) }
             }
             .font(on ? Theme.Font.secondaryStrong : Theme.Font.secondary)
             .lineLimit(1)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.sm)
-            .foregroundStyle(on ? Color.white : Color.primary)
-            .background(on ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: .capsule)
+            .foregroundStyle(on ? (tinted ? Theme.accent : Color.white) : Color.primary)
+            .background(on ? (tinted ? AnyShapeStyle(Theme.FilterCapsule.selection) : AnyShapeStyle(Theme.accent))
+                           : AnyShapeStyle(Color.secondary.opacity(0.12)), in: .capsule)
         }
         .buttonStyle(.plain)
     }

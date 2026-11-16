@@ -57,6 +57,35 @@ struct InboxBarTests {
         #expect(!filtered.hasDone)
     }
 
+    @Test func theHubsDaysPutDoneOnTheBarOnlyWhenDoneCanListThem() {
+        let filter = InboxProjection.Filter()
+        let projection = InboxProjection(items: [item("a", tier: "action")], filter: filter)
+        func rows(_ days: [String: Int]) -> InboxBar.Rows {
+            InboxBar.Rows(projection, agents: 0, filter: filter, history: [], doneDays: days)
+        }
+        #expect(rows(["2026-01-01": 2]).hasDone)
+        #expect(rows(["junk": 2, "2026-01-01": 0]).hasDone == false, "a day Done can't place, or none done that day")
+        // the list asks the same question (`showsDone`) as the shared cases (`shown`)
+        for days in [["2026-01-01": 2], ["junk": 2]] {
+            let r = rows(days)
+            #expect(InboxBar.showsDone(r, chosen: .done) == r.hasDone)
+            #expect(InboxBar.shown(r, chosen: .done) == (r.hasDone ? ["done"] : []))
+            #expect(InboxBar.entries(r, chosen: .action).contains { $0.choice == .done } == r.hasDone)
+        }
+        // the day groups the list draws from the same counts
+        #expect(InboxGroups.dayCounts(["junk": 2], now: Date()).isEmpty)
+    }
+
+    @Test func aSectionShowsWhenItsCountHasARowAgentsIncluded() {
+        var rows = InboxBar.Rows()
+        rows.action = 2 // two waiting agents, no item
+        #expect(InboxBar.shows(.action, rows, chosen: .action))
+        #expect(InboxBar.shows(.action, rows, chosen: .all))
+        #expect(!InboxBar.shows(.action, rows, chosen: .fyi))
+        #expect(!InboxBar.shows(.fyi, rows, chosen: .all), "an empty section isn't drawn under All")
+        #expect(InboxBar.shown(rows, chosen: .all) == ["action"])
+    }
+
     @Test func theAgentKindCountsOnlyTheWaitingAgents() {
         let filter = InboxProjection.Filter(kind: "agent")
         let projection = InboxProjection(items: [item("a", tier: "action", kind: "agent"), item("f", tier: "fyi", kind: "agent")], filter: filter)

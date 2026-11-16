@@ -2791,3 +2791,14 @@ page's `onDisappear`. So the item page records itself on appear and clears itsel
 the list reads the record on its first appearance only, landing on the item's section; later appearances (an item it
 pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
 walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.
+
+## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
+
+`AssistantView.show` returns the place in front to its root by `backToRoot()` then appending the place's route again, in
+one update: the path goes `[inbox]` → `[]` → `[inbox]`, SwiftUI sees the same root, and keeps the same page with its
+`@State` (scroll offset, the section bar's choice). Its `onAppear` doesn't run again either. A page that must start over
+on every entry (the Inbox opens on Needs you) can't rely on being built anew: `show(.inbox)` bumps
+`AppModel.inboxEntries` when it goes to the root, and visionOS's tab, which the `TabView` keeps up, bumps it when the tab
+is picked or routed to; the page resets on `.onChange(of:)`. A kept path (`ShellPlaces`) puts a different root first,
+so that page is new and lands by itself. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
+(`personactl navigate inbox --keep`, the widget's and the quick action's way in); `InboxSectionBarUITests` now walks it.

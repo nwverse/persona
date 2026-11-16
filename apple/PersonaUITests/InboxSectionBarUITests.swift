@@ -3,8 +3,9 @@ import XCTest
 /// The Inbox's section bar (#9053, docs/assistant/inbox.md "Section bar"): it opens on Needs You and shows that section
 /// alone; a choice shows its own section with its title as a heading that keeps its action and doesn't fold; the choice
 /// stays across an item opened and closed; All is the stacked page, folding as before; Done shows its history with Jump
-/// To and no grouping; a search shows All and clearing it brings the choice back. Against scripts/mock/mock_hub.py with
-/// MOCK_MANAGERS=0 (one assistant, so the FYI group chat 「周末徒步群」 is in its Inbox):
+/// To and no grouping; a search shows All and clearing it brings the choice back; the Inbox entered again opens on Needs
+/// You. Against scripts/mock/mock_hub.py with MOCK_MANAGERS=0 (one assistant, so the FYI group chat 「周末徒步群」 is
+/// in its Inbox):
 ///   PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps the screens; TEST_RUNNER_PERSONA_UI_SCHEME=dark runs it dark.
@@ -96,6 +97,31 @@ final class InboxSectionBarUITests: XCTestCase {
         search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2))
         XCTAssertTrue(wait(5) { self.choice("action").isSelected }, "clearing the search did not bring Needs You back:\n\(app.debugDescription)")
         XCTAssertTrue(wait(5) { !self.row(Self.fyi).exists }, "the FYI row stayed on Needs You")
+    }
+
+    /// The Inbox chosen again while it is in front (its sidebar row; a widget and a quick action route the same way)
+    /// opens on Needs You, though its page stays up (`AppModel.inboxEntries`): a choice left on FYI never hides new
+    /// requests.
+    @MainActor func testEnteringTheInboxAgainOpensOnNeedsYou() throws {
+        launch()
+        XCTAssertTrue(row(Self.needsYou).waitForExistence(timeout: 15), "no Needs You row:\n\(app.debugDescription)")
+        tap(choice("fyi"))
+        XCTAssertTrue(row(Self.fyi).waitForExistence(timeout: 5), "FYI's rows did not show:\n\(app.debugDescription)")
+        XCTAssertTrue(choice("fyi").isSelected, "FYI is not the choice")
+
+        let inbox = element("sidebar-inbox")
+        if !(inbox.exists && inbox.isHittable) {
+            // a phone: the drawer over the place
+            let drawer = app.buttons["shell-place-sidebar"].firstMatch
+            XCTAssertTrue(drawer.waitForExistence(timeout: 5), "no drawer button on the Inbox:\n\(app.debugDescription)")
+            drawer.tap()
+        }
+        XCTAssertTrue(inbox.waitForExistence(timeout: 5), "no Inbox in the sidebar:\n\(app.debugDescription)")
+        inbox.tap()
+        XCTAssertTrue(wait(5) { self.choice("action").isSelected }, "the Inbox entered again kept FYI:\n\(app.debugDescription)")
+        XCTAssertTrue(row(Self.needsYou).waitForExistence(timeout: 5), "no Needs You row after entering again")
+        XCTAssertFalse(row(Self.fyi).exists, "an FYI row after entering again")
+        shot("entered-again")
     }
 
     /// An item the Inbox place kept open (#6599) comes back over a list beneath it; Back lands on the item's choice, not

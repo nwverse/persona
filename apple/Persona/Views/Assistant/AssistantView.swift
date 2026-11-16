@@ -535,6 +535,9 @@ struct AssistantView: View {
         #if DEBUG
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
+        // The Inbox at its root: chosen again while in front, its page stays up and is told (#9053). A kept path puts
+        // a new page beneath its item, which lands on that item's choice by itself.
+        if page == .inbox && kept == nil { model.inboxEntries += 1 }
         underDrawer {
             backToRoot()
             if let kept {
