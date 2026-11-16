@@ -77,7 +77,7 @@
 - 文档写有「最近（未运行）」；当前 ChatsView 普通分组过滤 offline，没有最近段，置顶 offline 则仍显示。
 - 已看文档按严格时间比较，hub 实现带 2 秒容差；这是状态规则常量，不是性能实测值。
 - 快速筛选保留的是成员资格，没有冻结原位置；状态分组仍按当前 rank 分段，状态或时间变化仍可能移动行；这里不补造冻结位置功能。
-- 当前 ordered 的最后一项比较是 session_id；跨机器复用相同 session_id 且前面的排序键全相等时，iOS 没有完整 id 比较；`cross_machine_same_session_id` 及其反向输入用例因此标记 `compatibility: "id_tiebreak_extension"`，expected 在原排序键之后追加完整 id 比较，ios_expected 保留当前实现对给定输入的结果；这项补充需要以后 iOS 跟进。
+- ordered 在 session_id 之后再比完整 id（hub 分组、机器、会话）：跨机器复用相同 session_id 且前面的排序键全相等时，次序由完整 id 决定，与输入次序无关。`cross_machine_same_session_id` 及其反向输入用例按这条规则写 expected；iOS（`AgentListOrder.ordered`）与 Rust core 都已这样比较，原先的 `compatibility: "id_tiebreak_extension"` 和 ios_expected 已随 iOS 跟进删除（#9064）。
 
 以上冲突集中记录在本领域 README，未改设计总纲或 iOS。
 
@@ -108,7 +108,7 @@ SPEC_SORT_FIXTURES="$PWD/spec/fixtures" go -C server test \
 | Go 状态 | 在 `/tmp` 建 `package hub` 的 `TestSpecSortFixtures`，循环读取 hub_state.json，把 session 解码为 proto.Session，seen_at 缺失时使用 time.Time 零值，直接断言 `agentState(session, seen) == expected.state`。 |
 | Go 虚拟测试文件 | overlay.json 的 Replace 将仓库中不存在的 `server/internal/hub/spec_sort_fixture_test.go` 绝对路径映射到 `/tmp` 的测试源码，真实目录不写文件。 |
 
-编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例对照 ios_expected，并另外核对 expected 的完整 id 排序和反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
+编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例与其他用例一样对照 expected，并另外核对反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
 
 本次 Swift 编译和客户端对照通过；Go overlay 直接调用真实 hub 实现，全部通过。仓库服务端的 build、vet、全量 test 也通过；沙箱中默认 build 无法读取 VCS 状态，因此复跑使用 `GOFLAGS=-buildvcs=false`，未改仓库构建设置。
 
