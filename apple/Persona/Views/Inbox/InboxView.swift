@@ -934,7 +934,7 @@ struct InboxPage: View {
             CapsuleFilterItemData(id: e.id, title: e.choice.title, count: e.count, countLook: e.look.map(Self.badgeLook))
         }, selection: bar.chosen.rawValue, choose: { id in
             if let choice = InboxChoice(rawValue: id) { choose(choice) }
-        }, scrollID: "inbox.bar", itemIDPrefix: "inbox.bar.", revealsSelection: true) {
+        }, scrollID: "inbox.bar", itemIDPrefix: "inbox.bar.", revealsSelection: true, showsTrailing: bar.chosen.groups) {
             groupingMenu
         }
         #else
@@ -948,7 +948,7 @@ struct InboxPage: View {
                         .accessibilityAddTraits(on ? .isSelected : [])
                         .accessibilityIdentifier("inbox.bar." + e.id)
                 }
-                groupingMenu
+                if bar.chosen.groups { groupingMenu }
             }
         }
         .accessibilityIdentifier("inbox.bar")
@@ -991,7 +991,7 @@ struct InboxPage: View {
     #endif
 
     /// By Source / By Time (#2059) at the bar's end, as the Agents list's grouping (#7033); kept on this device. Done is
-    /// always by when it was done and In Progress is never grouped, so it rests there.
+    /// always by when it was done and In Progress is never grouped, so the bar hides it under those two.
     private var groupingMenu: some View {
         let byTime = grouping == InboxGroups.Grouping.time.rawValue
         return Menu {
@@ -1011,8 +1011,6 @@ struct InboxPage: View {
         }
         .labelOnlyMenu()
         .buttonStyle(.plain)
-        .disabled(!bar.chosen.groups)
-        .opacity(bar.chosen.groups ? 1 : Theme.Fade.unavailable)
         .accessibilityIdentifier("inbox.grouping")
         .accessibilityLabel(String(localized: "Grouping: \(byTime ? String(localized: "By Time") : String(localized: "By Source"))"))
     }

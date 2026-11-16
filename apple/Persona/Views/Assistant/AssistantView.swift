@@ -282,7 +282,7 @@ struct AssistantView: View {
                 // A phone's page at regular width too (iPhone Duo open, either layout; #3680, #3641): the iPhone's new
                 // conversation, with what needs the user over the composer. The iPad keeps `AssistantHome`.
                 ShellHome(pending: shownStart, error: shownFailure?.reason, cleared: showsClearedMain, launcher: $starterLauncher, mode: $starterMode,
-                          effort: $starterEffort, openInbox: { navPath.wrappedValue.append($0) }, resend: resend, delete: deleteFailed) { text, images in
+                          effort: $starterEffort, openInbox: openFromOutside, resend: resend, delete: deleteFailed) { text, images in
                     Task { await start(text, images) }
                 }
                 .onAppear {
@@ -576,6 +576,27 @@ struct AssistantView: View {
             }
         }
         if let shell, shell.drawer.isOut { shell.drawer.close() }
+    }
+
+    /// An Inbox item opened from outside the Inbox (a Needs-you line over the composer): pushed over the Inbox, the list
+    /// landed on the item's choice, so closing the item shows the list where the item lives (#9053, docs/assistant/inbox.md
+    /// "Section bar"). What the Inbox kept open gives way to it. A page without places pushes the item alone, as before.
+    private func openFromOutside(_ item: InboxItem) {
+        guard placesByValue else { return navPath.wrappedValue.append(item) }
+        // the item in front before the list beneath first appears, whichever of the two appears first
+        InboxBarLanding.shared.appeared(item)
+        #if os(iOS)
+        if embedded, let unified {
+            traceRoot(.inbox, unified.select(.page(ShellRoute.inbox), path: navPath))
+            navPath.wrappedValue = NavigationPath([item])
+            return
+        }
+        #endif
+        _ = places.enter(.inbox, from: navPath.wrappedValue)
+        var path = NavigationPath()
+        path.append(ShellRoute.inbox)
+        path.append(item)
+        navPath.wrappedValue = path
     }
 
     #if os(iOS)

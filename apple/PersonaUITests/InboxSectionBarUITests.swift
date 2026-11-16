@@ -4,8 +4,9 @@ import XCTest
 /// alone; a choice shows its own section with its title as a heading that keeps its action and doesn't fold; the choice
 /// stays across an item opened and closed; All is the stacked page, folding as before; Done shows its history with Jump
 /// To and no grouping; a search shows All and clearing it brings the choice back; the Inbox entered again opens on Needs
-/// You. Against scripts/mock/mock_hub.py with MOCK_MANAGERS=0 (one assistant, so the FYI group chat 「周末徒步群」 is
-/// in its Inbox):
+/// You; an item opened from outside closes onto the list; a landed-on choice comes wholly into view at the largest text.
+/// Against scripts/mock/mock_hub.py with MOCK_MANAGERS=0 (one assistant, so the FYI group chat 「周末徒步群」 is in its
+/// Inbox; `testAnItemOpenedFromOutsideClosesOntoTheList` also MOCK_MACHINES_KEEP=none):
 ///   PORT=<port> MOCK_MANAGERS=0 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps the screens; TEST_RUNNER_PERSONA_UI_SCHEME=dark runs it dark.
@@ -74,7 +75,7 @@ final class InboxSectionBarUITests: XCTestCase {
         XCTAssertTrue(element("inbox.doneHeading").waitForExistence(timeout: 10), "Done's heading did not show:\n\(app.debugDescription)")
         XCTAssertFalse(row(Self.needsYou).exists, "a Needs You row under Done")
         XCTAssertTrue(app.buttons["inbox.jumpTo"].firstMatch.waitForExistence(timeout: 5), "Done lists no Jump To")
-        XCTAssertFalse(app.buttons["inbox.grouping"].firstMatch.isEnabled, "the grouping is offered under Done")
+        XCTAssertFalse(app.buttons["inbox.grouping"].firstMatch.exists, "the grouping shows under Done")
         shot("done")
     }
 
@@ -155,13 +156,62 @@ final class InboxSectionBarUITests: XCTestCase {
         shot("kept-item-back")
     }
 
+    /// An item opened from outside the Inbox (a Needs-you line over the iPhone's composer) is pushed over the Inbox, the
+    /// list landed on the item's choice: closing the item shows the list where the item lives, and Back again the
+    /// conversation (docs/assistant/inbox.md "Section bar"). Needs the Inbox's lines over the composer, so no agent
+    /// waiting ahead of them: the mock with MOCK_MACHINES_KEEP=none.
+    @MainActor func testAnItemOpenedFromOutsideClosesOntoTheList() throws {
+        launch(onInbox: false)
+        guard app.windows.firstMatch.frame.width <= 600 else { throw XCTSkip("phone only: the iPad's home lists no Inbox lines") }
+        let line = app.buttons["shell-needs-inbox"].firstMatch
+        guard line.waitForExistence(timeout: 20) else {
+            throw XCTSkip("no Inbox line over the composer (agents ahead of it): run the mock with MOCK_MACHINES_KEEP=none")
+        }
+        line.tap()
+        XCTAssertTrue(app.buttons["inbox.detail.more"].firstMatch.waitForExistence(timeout: 15), "the item did not open")
+        XCTAssertFalse(choice("action").exists, "the list shows over the item")
+        back()
+        XCTAssertTrue(choice("action").waitForExistence(timeout: 10), "closing the item did not show the Inbox:\n\(app.debugDescription)")
+        XCTAssertTrue(wait(5) { self.choice("action").isSelected }, "the list is not on the item's choice (Needs You)")
+        shot("outside-closed")
+        back()
+        XCTAssertTrue(line.waitForExistence(timeout: 10), "Back from the Inbox did not return to the conversation:\n\(app.debugDescription)")
+    }
+
+    /// Choices that don't fit (the largest text) scroll with a fade at the cut edge, and the choice the list lands on comes
+    /// wholly into view, clear of that fade; the last one, tapped, wholly too (docs/assistant/inbox.md "Section bar").
+    @MainActor func testAChosenChoiceComesWhollyIntoViewAtTheLargestText() throws {
+        launch(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL", "-showInboxSection", "done"])
+        let strip = element("inbox.bar"), done = choice("done"), all = choice("all")
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "no Done on the bar:\n\(app.debugDescription)")
+        XCTAssertTrue(wait(5) { done.isSelected }, "the list did not open on Done")
+        guard strip.frame.width < all.frame.maxX - choice("action").frame.minX else {
+            throw XCTSkip("the choices fit at this size: nothing to scroll")
+        }
+        // Done is not the last choice, so the edge past it fades: Done stands clear of the fade (24 pt).
+        XCTAssertTrue(wait(5) { done.frame.minX >= strip.frame.minX && done.frame.maxX <= strip.frame.maxX - 20 },
+                      "Done is not wholly in view, clear of the fade: \(done.frame) in \(strip.frame)")
+        shot("largest-done")
+        tap(all)
+        XCTAssertTrue(wait(5) { all.isSelected }, "All was not chosen")
+        XCTAssertTrue(wait(5) { all.frame.minX >= strip.frame.minX && all.frame.maxX <= strip.frame.maxX },
+                      "All is not wholly in view: \(all.frame) in \(strip.frame)")
+    }
+
     // MARK: -
 
-    @MainActor private func launch() {
+    /// The app on the Inbox (`extra` adds to it), or with `onInbox` off on the Assistant's empty conversation.
+    @MainActor private func launch(_ extra: [String] = [], onInbox: Bool = true) {
         app = XCUIApplication()
         let env = ProcessInfo.processInfo.environment
-        app.launchArguments = ["-pairURL", pair, "-ui.scheme", env["PERSONA_UI_SCHEME"] ?? "light", "-tab", "mail",
+        app.launchArguments = ["-pairURL", pair, "-ui.scheme", env["PERSONA_UI_SCHEME"] ?? "light",
                                "-inbox.kind", "", "-inbox.source", "", "-inbox.grouping", ""]
+            + (onInbox ? ["-tab", "mail"] : ["-dev.openChat", "", "-newAssistant", "YES"]) + extra
+        guard onInbox else {
+            app.launchPinned()
+            acceptIconAlert(timeout: 2)
+            return
+        }
         // the first launch after pairing may open on the Assistant instead: once more, paired
         for attempt in 0..<2 {
             if attempt > 0 { app.terminate() }

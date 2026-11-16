@@ -198,10 +198,10 @@ nonisolated struct InboxBarState: Equatable, Sendable {
     }
 }
 
-/// The item page in front over the Inbox's stack, so a list put beneath it (a place's kept path brought back, #6599)
-/// opens on that item's choice and Back lands where the item is (docs/assistant/inbox.md "Section bar": opening an item
-/// from outside the list). Only the list's first appearance reads it: pages pushed from the list itself (its rows, an
-/// item's chain) leave the choice as it was. Not observed: nothing draws it.
+/// The item page in front over the Inbox's stack, so a list put beneath it (an item opened from outside the Inbox, a
+/// place's kept path brought back, #6599) opens on that item's choice and closing the item lands where the item is
+/// (docs/assistant/inbox.md "Section bar"). Only the list's first appearance reads it: pages pushed from the list itself
+/// (its rows, an item's chain) leave the choice as it was. Not observed: nothing draws it.
 @MainActor final class InboxBarLanding {
     static let shared = InboxBarLanding()
     private(set) var shown: InboxItem?
