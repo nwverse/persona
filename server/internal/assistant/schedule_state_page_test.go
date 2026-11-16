@@ -112,9 +112,9 @@ func (c *transcriptChat) page(turns int) []proto.Item {
 	return items
 }
 
-// scheduledPrompt is a run's prompt as the node sees it: the header prompts.ParseInjected takes for Persona's own, then the
+// scheduledPromptText is a run's prompt as the node sees it: the header prompts.ParseInjected takes for Persona's own, then the
 // task's text with its run key.
-func scheduledPrompt(task Task) string {
+func scheduledPromptText(task Task) string {
 	return "⏰ patrol（定时任务，每 30 分钟）\n\nReport only new issues" + taskStatePrompt(task)
 }
 
@@ -208,7 +208,7 @@ func TestReusedChatEveryRunSavesItsOwnState(t *testing.T) {
 // called the tool) and is not saved when another run's scheduled prompt came after the run's, or when what carries
 // the run's key is not a prompt (a tool result, the assistant's words).
 func TestWatcherSavesStateOnlyWhenTheRunsPromptIsTheLatestScheduledOne(t *testing.T) {
-	scheduled := scheduledPrompt
+	scheduled := scheduledPromptText
 	type scenario struct {
 		name  string
 		build func(c *transcriptChat, own, other string) // what the chat holds when the watcher reads the ended turn
@@ -315,7 +315,7 @@ func TestWatcherSavesStateOnlyWhenTheRunsPromptIsTheLatestScheduledOne(t *testin
 // turns, which what the user wrote after it, in its turn or a later one, does not end; the next scheduled prompt does.
 // Text the run read or wrote itself (a tool result, the assistant's own words) is no prompt.
 func TestScheduleStateSetOnTheRealPage(t *testing.T) {
-	scheduled := scheduledPrompt
+	scheduled := scheduledPromptText
 	for _, sc := range []struct {
 		name   string
 		claude bool // only Claude's transcript has it
@@ -458,7 +458,7 @@ func TestScheduleStateSetWindowBoundaryDocumentsTheKnownGap(t *testing.T) {
 				s := newStorelessService(t, node)
 				task := Task{ID: "patrol", Repeat: repeatInterval, EveryMinutes: 30}
 				task.stateRunKey = s.openTaskStateDraft()
-				chat.user(scheduledPrompt(task))
+				chat.user(scheduledPromptText(task))
 				chat.assistant("done")
 				for i := 1; i <= after; i++ {
 					chat.user(fmt.Sprintf("message %d", i))

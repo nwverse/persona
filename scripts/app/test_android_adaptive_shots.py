@@ -2,6 +2,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -586,6 +587,34 @@ cleanup_shots
             self.assertIn(["wm", "density", "reset"], adb.commands)
             self.assertIn(["emu", "posture", "3"], adb.commands)
 
+    def test_text_preserves_literal_percent_s_after_android_decoding(self):
+        for text in ("%s", "100%sure", "%s%s", "%%s", "%ss", "literal %s and spaces",
+                     " %s  %s ", "'%s'; $(echo unsafe) & `echo unsafe` \\\"",
+                     "hello world", "100% safe", "".join(chr(code) for code in range(32, 127))):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                runner.text({"text": text})
+                commands = [command for command in adb.commands if command[:2] == ["input", "text"]]
+                arguments = [shlex.split(command[2]) for command in commands]
+                self.assertTrue(all(len(argument) == 1 for argument in arguments))
+                # Android InputShellCommand.sendText decodes %s after the remote shell removes quotes.
+                received = "".join(argument[0].replace("%s", " ") for argument in arguments)
+                self.assertEqual(text, received)
+                if "%s" not in text:
+                    self.assertEqual(1, len(commands))
+                self.assertEqual([{"type": "text", "length": len(text), "ascii": True}],
+                                 [action for action in runner.action_log if action["type"] == "text"])
+
+    def test_text_rejects_invalid_input_before_any_text_command(self):
+        for text in (None, 17, "", "中文", "valid%s\ninvalid", "valid%s\tinvalid", "\x7f"):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as output:
+                adb = FakeAdb()
+                runner = make_runner(adb, output)
+                with self.assertRaises(shots.AdaptiveFailure):
+                    runner.text({"text": text})
+                self.assertFalse(any(command[:2] == ["input", "text"] for command in adb.commands))
+
     def test_scenario_validation_and_ascii_input_boundaries(self):
         document = scenario()
         document["manifestId"] = "r1-adaptive-window"
@@ -593,10 +622,10 @@ cleanup_shots
         invalid = scenario([{"step": "launch", "tab": "Agents"}, {"step": "rotate"}, {"step": "open", "tab": "Agents"}])
         with self.assertRaisesRegex(shots.AdaptiveFailure, "cannot restore"):
             shots.validate_scenario(invalid)
-        self.assertEqual("hello%sworld", shots.ascii_input_argument("hello world"))
+        self.assertEqual(["hello%sworld"], shots.ascii_input_arguments("hello world"))
         for text in ("中文", "line\nfeed", ""):
             with self.subTest(text=text), self.assertRaises(shots.AdaptiveFailure):
-                shots.ascii_input_argument(text)
+                shots.ascii_input_arguments(text)
 
 
 if __name__ == "__main__":

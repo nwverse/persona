@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## A refused credential-mirror write must not erase the readable legacy login (#9023)
+
+Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
+
 ## Compact buttons need their touch targets when moved into a dialog (#7446)
 
 The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing

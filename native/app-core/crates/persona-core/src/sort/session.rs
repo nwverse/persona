@@ -84,6 +84,15 @@ pub struct Session {
 }
 
 impl Session {
+    /// A hub-local `machine/session`, or iOS's `group|machine/session`. An unqualified id belongs only to its own hub.
+    pub fn matches_preference(&self, id: &str) -> bool {
+        let group = self.app_hub_group.as_deref().unwrap_or("");
+        if let Some((owner, rest)) = id.split_once('|') {
+            return owner == group && rest == format!("{}/{}", self.machine_id, self.session_id);
+        }
+        id == format!("{}/{}", self.machine_id, self.session_id)
+    }
+
     pub fn is_waiting(&self) -> bool {
         let detailed = self.loop_info.is_some()
             || self.background.as_ref().is_some_and(|tasks| !tasks.is_empty())

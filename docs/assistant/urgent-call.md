@@ -2,7 +2,7 @@
 
 When something can't wait, the assistant rings the owner's iPhone like a phone call (#8734). Answering starts a voice conversation with Persona about that matter: what happened, what it needs, and the owner answers or decides by voice. Audience: everyone using Assistant; the settings are plain words and the feature is off until the owner turns it on.
 
-Status (#8734): built so far are the relay's `voip` push (`../operations/push-relay.md` "VoIP pushes"), the hub's `call.ring` and phone registration, and the manager's side: the settings, the gates, the calls and their retries and reminders. The voice call and the app follow.
+Status (#8734): built so far are the relay's `voip` push (`../operations/push-relay.md` "VoIP pushes"), the hub's `call.ring` and phone registration, the manager's side: the settings, the gates, the calls and their retries and reminders, and the iPhone app: PushKit and LiveCommunicationKit, the companion notification, the call page one turn at a time (the speech extension's voice or the phone's, the phone's own recognition) and Settings › Notifications › Urgent Calls. The web shows each call as a row in its conversation at the time it rang (`GET /api/v1/assistant/calls?conversation=`, read again on the `urgent_call` message): how it went, opening to why Persona called, what came of it and what was said. A realtime voice call (the voice extension's `mode: "call"`) follows.
 
 An urgent call is the top step of the existing escalation (P0 push + Needs you, `../design/proposals/main-chat-availability.md`), never a parallel channel: whenever a call is not allowed or cannot reach the phone, the matter goes out exactly as a P0 push and stays in Needs you.
 
@@ -17,7 +17,7 @@ Off by default (`assistant.urgent_call.enabled`). When on, only two kinds of mat
   - `harm`: personal harm or safety: smoke, gas or water alarms, a call for help, a fall alert;
   - `agent_disaster`: a catastrophic agent error: data deleted for good, a production incident, an irreversible outbound send (keys pushed to a public repository, a mass email to customers).
 
-  The owner adds rules in free text, in Settings or by telling Persona ("from now on, call me about anything to do with picking up the kids"). Persona reads the rule back and adds it with `persona_settings` (`urgent_call.rules`: get, add, update, remove); like every setting the assistant changes, it takes effect only once the owner approves the card on the phone. Every rule goes into the assistant's instructions with its id. An unedited default uses the fuller definition in the prompt (`prompts/assistant/urgent_rule_<id>.md`).
+  The owner adds rules in free text, in Settings or by telling Persona ("from now on, call me about anything to do with picking up the kids"). Persona reads the rule back and adds it with `persona_settings` (`urgent_call.rules`: get, add, update, remove); like every setting the assistant changes, it takes effect only once the owner approves the card on the phone. Every rule goes into the assistant's instructions with its id. An unedited default uses the fuller definition in the prompt (`prompts/assistant/urgent_rule_<id>.md`), in the owner's language (Chinese, English or Japanese, as the assistant answers), as is the rule text a call keeps.
 
 While urgent calls are off the assistant sees nothing of them: the `urgent_call` tool is listed and the instructions' "加急来电" section written only while they are on (the manager tells the hub with `assistant.tools_changed`, and the node starts the conversation again with the new instructions on its next idle message).
 
@@ -115,6 +115,6 @@ Every call is a work event (`urgent_call`, `urgent_call_skipped`, `urgent_call_e
 ## Privacy
 
 - The VoIP push is sealed like every other push; the relay and Apple see only that one went.
-- The lock screen shows the title only when the owner's "show details on the lock screen" is on, else "Persona urgent call".
+- The incoming call follows "Show Details on Lock Screen" (Settings › Notifications), as notifications do: on, it shows "Urgent: <title>", a few words the assistant writes for the lock screen (at most 30 characters); off (and before the app has read the setting), only "Persona Urgent Call". The companion notification shows the title only when details are on. What happened and the card show only on the call page, after answering.
 - No audio is recorded. The transcript lives with the conversation in the manager's database and goes when the conversation is deleted. Logs keep counts and states, never content.
 - Without realtime voice, the owner's words are recognized on the phone; the speech extension, when the owner set one up, receives only what Persona says.
