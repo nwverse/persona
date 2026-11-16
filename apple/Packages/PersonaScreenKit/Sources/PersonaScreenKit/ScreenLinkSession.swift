@@ -105,6 +105,8 @@ public actor ScreenLinkSession {
         var unansweredPings = 0
         /// A relay to replace (#8709): it left on an interface the phone no longer uses, or it went silent.
         var stale: Stale?
+        /// When it was added (direct ones: an attach unanswered by `attachWithin` is lost, #9218).
+        var added = -Double.infinity
     }
 
     /// Why a relay is being replaced: a silent one that speaks again is kept; one on the old interface is not.
@@ -112,6 +114,11 @@ public actor ScreenLinkSession {
 
     /// A direct route with a ping out this long and nothing heard is lost (the design's "1.5 s silent").
     public static let silentAfter = 1.5
+    /// A direct connection whose attach isn't answered this long after it was added is lost (#9218). It is never pinged
+    /// before it attaches, so without this it stayed forever: a redial whose answer went missing (a network that drops
+    /// packets for a moment) left the route counted as open, it was never dialed again, and the stream stayed on the
+    /// hub's relay.
+    public static let attachWithin = 3.0
     /// A relay is taken as stuck when its oldest unanswered ping is this old, or four of its round trips if longer, and
     /// at least two pings went unanswered (#8709). It is longer than a direct route's limit because a relay's round
     /// trip goes through the hub and a cellular one jitters. A stuck relay is replaced, not dropped: the channel
@@ -328,6 +335,7 @@ public actor ScreenLinkSession {
     public func addDirect(_ t: ScreenLinkTransport, route: String, kind: LinkStats.Kind, via: LinkStats.Via) {
         guard !ended, let token = paths?.token else { t.close(); return }
         let id = register(t, relayFor: nil, route: route, kind: kind, via: via)
+        links[id]?.added = now()
         out(id, .attach(token: token))
     }
 
@@ -686,6 +694,7 @@ public actor ScreenLinkSession {
         let t = now()
         for (id, l) in links where l.route != nil {
             if let since = l.unanswered, t - since >= Self.silentAfter { lose(id) }
+            else if !l.attached, t - l.added >= Self.attachWithin { lose(id) } // its attach went unanswered (#9218)
         }
         // A relay gone quiet (#8709): Wi-Fi without a way out, or a network that left without a word. It stays
         // until a new one attaches; a cellular hiccup that ends in time costs nothing.

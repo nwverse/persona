@@ -60,7 +60,11 @@ object AnswerBuilder {
     fun display(label: String): OptionDisplay {
         val suffix = listOf("(Recommended)", "（推荐）", "(推荐)").firstOrNull(label::endsWith) // i18n-ignore: marks the agent writes on its options
         return if (suffix == null) OptionDisplay(label, false)
-        else OptionDisplay(label.dropLast(suffix.length).trim(), true)
+        // QuestionOption.display uses CoreFoundation .whitespaces, including U+200B but not newlines.
+        else OptionDisplay(label.dropLast(suffix.length).trim {
+            it == ' ' || it == '\t' || it == '\u00a0' || it == '\u1680' ||
+                it in '\u2000'..'\u200b' || it == '\u202f' || it == '\u205f' || it == '\u3000'
+        }, true)
     }
 
     /** Both entry policy and form validation must pass before a Resolution is produced. */
