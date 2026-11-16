@@ -1464,6 +1464,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		ctx, queued := withSendQueued(ctx)  // codex_desktop_queue.go: it waits behind the turn under way
 		var owner *ownerDelivery
 		if opts.OwnerInput {
 			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
@@ -1487,6 +1488,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		res := map[string]any{"ok": true}
 		if *waits {
 			res["waits_on_computer"] = true
+		}
+		if *queued {
+			res["queued"] = true
 		}
 		if owner != nil && owner.as != "" {
 			res["delivered_as"] = owner.as
