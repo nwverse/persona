@@ -406,13 +406,17 @@ def inventory(request):
     if manager_root.exists():
         for file in sorted(manager_root.glob("*/manager.json")):
             manager = json.loads(file.read_text())
-            if file.parent.name == "assistant" and not manager.get("moved_to_own_database", {}).get("at"):
-                pass  # Its live tables are still in the Hub database until the move commits.
-            elif manager.get("database_url"):
-                databases.append(manager["database_url"])
-            elif manager.get("database_name"):
-                url = urlsplit(databases[0])
-                databases.append(urlunsplit(url._replace(path="/" + manager["database_name"])))
+            database = manager.get("database_url")
+            if file.parent.name == "assistant":
+                if not manager.get("moved_to_own_database", {}).get("at"):
+                    database = None  # Its live tables are still in the Hub database.
+                elif manager.get("database_name"):
+                    # Match provisionOwn: a named database on the effective Hub
+                    # server takes precedence over a previously saved URL.
+                    url = urlsplit(databases[0])
+                    database = urlunsplit(url._replace(path="/" + manager["database_name"]))
+            if database:
+                databases.append(database)
             kb = manager.get("kb_dir")
             if kb:
                 kb = Path(kb).expanduser()

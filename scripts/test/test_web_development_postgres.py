@@ -167,5 +167,40 @@ class PostgreSQLBackup(unittest.TestCase):
     def test_uri_query_credentials_and_real_dump_restore(self): self.exercise()
     def test_keyword_parameters_and_real_dump_restore(self): self.exercise(keywords=True)
 
+    def test_named_assistant_database_takes_precedence_over_saved_url(self):
+        self.sql('CREATE DATABASE manager_source', 'postgres')
+        self.sql('CREATE DATABASE restored_manager', 'postgres')
+        self.sql("CREATE TABLE history(body text); INSERT INTO history VALUES ('synthetic manager history')", 'manager_source')
+        dsn = 'postgresql://fixture:'+quote(self.password, safe='')+'@localhost/source?'+urlencode({
+            'host':str(self.socket), 'port':'54327', 'sslmode':'disable'}, quote_via=quote)
+        runtime = self.root / 'manager-inventory'
+        manager = runtime / 'managers/assistant'
+        manager.mkdir(parents=True)
+        (runtime/'hub.json').write_text(json.dumps({'database_url':dsn}))
+        # The built-in manager provisions database_name on the effective Hub
+        # server before considering a previously saved database_url/container.
+        (manager/'manager.json').write_text(json.dumps({
+            'database_name':'manager_source', 'database_url':dsn,
+            'moved_to_own_database':{'at':'2026-11-16T00:00:00Z'}}))
+        program = runtime/'personad'; program.write_bytes(b'synthetic installed program')
+        request = {'operation':'backup', 'runtime':str(runtime), 'hub_database':dsn,
+                   'executables':{'personad':str(program)}, 'candidate':{'commit':'a'*40},
+                   'result':str(runtime/'result.json'), 'config':{'backup':{
+                       'quiesce':[sys.executable,'-c','pass'], 'resume':[sys.executable,'-c','pass']}}}
+        result = subprocess.run([sys.executable,str(ROOT/'server/internal/update/webdev.py')],
+                                env=self.env, input=json.dumps(request), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, 'real manager backup failed (private output withheld)')
+        self.assertNotIn(self.password, result.stdout+result.stderr)
+        receipt = json.loads((runtime/'result.json').read_text())
+        snapshot = runtime/'update/development-backups'/receipt['id']
+        self.assertEqual(json.loads((snapshot/'manifest.json').read_text())['databases'], 2,
+                         'backup omitted the live named manager database')
+        restored = subprocess.run([str(Path(BIN)/'pg_restore'), '--exit-on-error', '--no-owner', '--no-acl',
+                                   '--dbname=restored_manager', str(snapshot/'database-1.dump')],
+                                  env=self.env, capture_output=True, timeout=20)
+        self.assertEqual(restored.returncode, 0, 'manager dump could not be restored')
+        self.assertEqual(self.sql('SELECT body FROM history', 'restored_manager'), 'synthetic manager history')
+        self.assertEqual(self.sql('SELECT body FROM history', 'manager_source'), 'synthetic manager history')
+
 
 if __name__ == '__main__': unittest.main()

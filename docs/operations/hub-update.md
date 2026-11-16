@@ -101,6 +101,8 @@ Source settings accept only the exact values `release` and `web-dev`; invalid su
 are rejected before changing any preference or selection. A manual request overtaken while
 probing services is rejected without transferring its interruption consent to the accepted
 operation. Explicit Update now for an already accepted waiting attempt still requires confirmation.
+The install script's independent release-checksum refresh loads the saved source first;
+a late release response cannot overwrite a development selection or active install progress.
 
 Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
 working turns, conversations awaiting blocking user input, and active redeploys can hold the update.
@@ -155,6 +157,9 @@ then configured extra databases, with identical URLs deduplicated. The archived 
 preserves that mapping. `effective-databases.json` privately retains the effective DSNs,
 including `PERSONA_DATABASE_URL` overrides; no DSN is written into the manifest or API.
 The built-in manager's shared database remains included until its own-database move commits.
+After that move, `database_name` selects a database on the effective Hub server before a
+saved `database_url`, matching the built-in manager's startup selection. Other managers use
+their own configured URLs. A stale URL cannot replace the named manager database in a snapshot.
 Protect these snapshots like the original data.
 
 Only verified directories with this helper's exact name and ownership manifest are rotated,
@@ -237,7 +242,9 @@ before replacement (`recovery_ready: true`). The Web rename intent is synced the
 the override. Startup of the previous or attempted build restores this journal when `pending.json`
 is absent; recovery can repeat after a partial restore. Failed recovery retains the journal,
 pending marker when present, and independent staged programs/Node packages across startup cleanup.
-Only a complete restore permits cleanup. An incomplete reservation (including a crash while
+Only a complete restore permits cleanup; the standalone watchdog also retains the development
+journal until restarting the restored program succeeds. A failed restart leaves the journal
+and staged packages available to the next startup. An incomplete reservation (including a crash while
 preparing preimages), unreadable journal or older fence remains blocked for manual inspection;
 no live replacement occurs before the new journal is ready. Inspect the installed binaries,
 `.prev`, Web recovery directory and backup, complete rollback

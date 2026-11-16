@@ -240,7 +240,10 @@ func (u *updater) setCheckState(state, errText string) {
 // most once every releaseRefreshEvery across requests; when it fails the release the hub had stays. Nothing for a
 // Docker hub or a build with nowhere to look.
 func (u *updater) freshRelease(ctx context.Context) {
-	if u == nil || u.h.build.Channel == update.Docker || u.selectedDevelopment() {
+	if u == nil || u.h.build.Channel == update.Docker {
+		return
+	}
+	if err := u.load(ctx); err != nil || u.selectedDevelopment() {
 		return
 	}
 	src := u.h.updateSource()
@@ -252,6 +255,10 @@ func (u *updater) freshRelease(ctx context.Context) {
 	defer u.refreshing.Unlock()
 	now := time.Now()
 	u.mu.Lock()
+	if u.developmentLocked() {
+		u.mu.Unlock()
+		return
+	}
 	stale := now.Sub(u.releaseRead) >= releaseFreshFor && now.Sub(u.refreshTried) >= releaseRefreshEvery
 	if stale {
 		u.refreshTried = now
@@ -269,13 +276,22 @@ func (u *updater) freshRelease(ctx context.Context) {
 	}
 	blocked := u.unreplaced(r.Manifest)
 	u.mu.Lock()
+	// An install-script request does not reserve the selected channel. Its
+	// release response must not replace a development candidate chosen meanwhile.
+	if u.developmentLocked() {
+		u.mu.Unlock()
+		return
+	}
 	u.lastCheck = time.Now()
 	u.release, u.releaseRead, u.blocked = r, u.lastCheck, blocked
-	available := u.state == "idle" && u.h.build.Newer(r.Manifest.Build)
+	available := !u.updateActiveLocked() && u.state == "idle" && u.h.build.Newer(r.Manifest.Build)
+	if available {
+		u.state, u.progress, u.errText = "available", "", ""
+	}
 	u.mu.Unlock()
 	u.noteBehind(src, r.Manifest)
 	if available {
-		u.setState("available")
+		u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 	}
 }
 

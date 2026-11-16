@@ -7,6 +7,31 @@ This is author verification, not reviewer approval or thread resolution. Scope r
 update chain, with three verified snapshots and program-only Apply backup. No native
 client adaptation, deployment or production-data restoration is included.
 
+## Upstream synchronization and full-delta review
+
+The published branch at `dbd9809511e8a59e2e42f06a46ad83cd77166c64` was unchanged remotely.
+Upstream `main` was pinned at `576970b459ee569997fbebab487cd4220dac67f8` and merged normally
+as `74c86ecb00005bd49a1f122683b3861694bc31d3`. Git reported no textual conflicts. The
+combined update paths and the complete feature delta were then reviewed, including
+the upstream stopped-release-source warning and the Hub administration route contract.
+No history was rewritten. This remains author review, not independent approval.
+
+| Finding | Evidence and correction |
+| --- | --- |
+| Late install-script release refresh changes a newer operation | A deterministic publisher callback switches to development through the real settings route before returning the old release response. The response replaced the selected development candidate. A second case reserves an install before the response and loses its progress/detail. Refresh now loads persisted source settings, checks the channel again under the write lock and changes availability only while no install/confirmation is active. `TestInstallScriptRefreshPreservesNewerOperation` failed in both cases before repair; `TestInstallScriptRefreshLoadsSelectedChannel` covers stored development selection and unreadable settings before the first refresh. |
+| Standalone watchdog loses recovery after a failed restart | Real program files and the write-ahead adoption journal show that the journal disappeared before the restart callback, including when restart returned an error. Cleanup now follows successful restart. Failure retains the exact journal and reusable preimages, keeping staged-package cleanup fenced. `TestDevelopmentWatchRetainsJournalUntilRestart` covers failure, successful cleanup and retry; the existing release watchdog cases remain unchanged. |
+| Named built-in manager database omitted from backup | In a private PostgreSQL 16.15 cluster, an assistant config containing both `database_name` and a saved URL backed up only the Hub database. The live manager's `provisionOwn` selects the name first. Inventory now mirrors that selection, deriving the named database from the effective Hub connection. The new real-database test restores the second dump into a fresh database and verifies distinct synthetic manager history, while source rows remain unchanged. |
+| New settings text exceeds the upstream font ratchet | The guard found 25 literal font sizes against the unchanged baseline of 22. The three added text sites now use `text-label`, `text-submeta` and `text-meta`. The first two retain their exact sizes; the backup explanation uses the shared 13 px text token. No baseline, assertion or budget was raised. |
+| Web startup budget exhausted after synchronization | The normal production build measured Japanese first-screen bytes at 480,845 B against the unchanged 480,666 B limit. Hub settings presentation and its Docker/channel/warning strings shared the startup module. Those helpers now load with the settings page; startup keeps notice/state/result text, including the development states. The repaired build measures Japanese at 480,098 B, leaving 568 B; 80 focused Web tests pass. Existing localization/startup guards and Hub settings/notice regressions verify the split. No performance budget or guard was changed. |
+
+The old 29-image gallery remains reachable in published commit history. Under the newly
+merged collaboration rule, its images and capture manifest are removed from the final
+tree; the PR retains their fixed-commit links. The typography correction and changed
+upstream renderer require fresh browser evidence, bound separately in the PR rather
+than relabeling the historical captures. New review captures follow the add-then-remove
+`pr-assets` workflow. The PR records the final source commit, commands, capture checksums
+and remote head after these follow-ups.
+
 | Finding | Reproduction | Repair and regression |
 | --- | --- | --- |
 | [Omitted platform package](https://github.com/nwverse/persona/pull/6923#discussion_r4580152346) | The full saved-version installer/confirmation test lost the unstaged second platform's normal package path when fleet automation was off. | Confirmation now passes the development candidate identity. Backup apply swaps staged platforms only; omitted regular packages stay in place with their original version identity, preserving existing labels. Fresh-build and release set-aside behavior stays separate. `TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller` verifies confirmation, and `TestDevelopmentBackupKeepsUnstagedPackageIdentity` covers explicit labels and invalid-marker failure with retained staging. |
@@ -63,7 +88,7 @@ bindings fail explicitly rather than falling back to putting secrets in argv.
 
 ```sh
 PERSONA_TEST_POSTGRES_BIN=/path/to/postgresql/bin python3 -B -m unittest -v scripts/test/test_web_development_postgres.py
-# Real PostgreSQL 16.15 / libpq 160015: 3 tests OK (URI/keyword dump-restore and invalid-parameter rejection before writer pause).
+# Real PostgreSQL 16.15 / libpq 160015: 4 tests OK (URI/keyword dump-restore, named manager inventory and invalid-parameter rejection before writer pause).
 python3 -B -m unittest -v scripts/test/test_web_development_update.py scripts/test/test_web_development_recovery.py
 # Existing cancellation/coordination/rotation/program-only fixtures plus malformed schema/archive tests.
 cd server
@@ -78,14 +103,15 @@ symlink escapes/parents/chains, duplicates and canonicalization. A staged-file f
 between compressed checksum and native verification is rejected. Hard-linked history
 fails snapshot creation without pruning the previous verified snapshot.
 
-## Final delivery evidence and boundaries
+## Earlier follow-up evidence and boundaries
 
 The PR follow-up binds the precise final head, fresh command results and remote state.
 Normal Web development compilation and tagged Linux backend compilation remain the
 build gate; targeted fault/real-database tests address these findings. The original
 crash, cancellation and partial-replacement regressions are rerun and preserved.
-Web source tree `bc453ef2d738f54b53af919951c4f3b95eceb656` is unchanged, so the public
-29-image [gallery](../pr-6923-web-update/README.md) and its image/source checksums still describe this UI.
+For that earlier follow-up, Web source tree `bc453ef2d738f54b53af919951c4f3b95eceb656`
+was unchanged, so the historical 29-image gallery and its checksums described that UI.
+The [evidence record](../pr-6923-web-update/README.md) points to the PR retaining it.
 The successful browser matrix on `e93b21c52` is reused for the unchanged renderer,
 with the new final head/source binding recorded in the PR.
 

@@ -556,6 +556,9 @@ Successful checks may refresh release metadata and failed checks may advance the
 last-check time, but neither may replace an active update's state, progress or error.
 Apply the guard in the shared check path used by manual, startup and hourly checks,
 and keep automatic installation and held-release recording out of confirmation.
+The install script's separate checksum refresh needs the same protection: load the saved
+channel before fetching, recheck it after the response, and mutate availability under the
+install-state mutex. A result from the old channel must not replace a new selection.
 Regression tests must observe the state while the request is blocked as well as
 after success or failure; checking only the final state misses a transient
 `checking` event that already hid the progress in every client.

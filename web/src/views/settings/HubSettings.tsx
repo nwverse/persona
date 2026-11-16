@@ -6,9 +6,10 @@ import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { t } from "../../i18n";
 import {
-  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdate, hubUpdateBackups, hubUpdateHistory, latestWarning, recordTitle, recordTone, setHubUpdateSettings, sourceBehindWarning, startHubUpdate,
-  updateFinished, updateStateTitle, updateView, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
+  applyHubUpdateBackup, checkHubUpdate, hubUpdate, hubUpdateBackups, hubUpdateHistory, setHubUpdateSettings, startHubUpdate,
+  updateFinished, updateStateTitle, updateWorking, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus,
 } from "../../lib/hub-update";
+import { channelTitle, dockerSteps, latestWarning, recordTitle, recordTone, sourceBehindWarning, updateView } from "../../lib/hub-update-settings";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useStore } from "../../lib/store";
@@ -220,7 +221,7 @@ function HubUpdates() {
             </select>
           </Row>
           {backupError && <div className="flex items-center gap-3 px-4 py-2.5">
-            <p role="alert" className="min-w-0 flex-1 text-[12px] break-words text-red">{t("settings-hubsettings.backup_error", { error: backupError })}</p>
+            <p role="alert" className="min-w-0 flex-1 text-label break-words text-red">{t("settings-hubsettings.backup_error", { error: backupError })}</p>
             <Button disabled={loadingBackups} onClick={() => void loadBackups()}>{t("settings-hubsettings.retry")}</Button>
           </div>}
           {selectedBackup && <>
@@ -303,7 +304,7 @@ function HubUpdates() {
                 {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{updateDate(r.ended || r.started)}</span>}
               </div>
               <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{`${r.from_version} → ${r.to_version}`}</div>
-              {r.commit && <div className="mt-0.5 font-mono text-[11.5px] text-ink-3">{datedCommit(r.commit, r.ended || r.started)}</div>}
+              {r.commit && <div className="mt-0.5 font-mono text-submeta text-ink-3">{datedCommit(r.commit, r.ended || r.started)}</div>}
               {r.reason && <p className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{r.reason}</p>}
             </div>
           ))}
@@ -315,7 +316,7 @@ function HubUpdates() {
           <Button tone="quiet" onClick={() => setConfirmBackup(false)}>{t("common.cancel")}</Button>
           <Button tone="accent" busy={starting} disabled={starting || working || !selectedBackup} onClick={() => void restore()}>{t("settings-hubsettings.apply_backup")}</Button>
         </>}>
-        <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-hubsettings.apply_backup_confirm")}</p>
+        <p className="text-meta leading-relaxed text-ink-2">{t("settings-hubsettings.apply_backup_confirm")}</p>
       </Dialog>
 
       <Dialog
