@@ -53,8 +53,9 @@ const (
 	// ccPluginStrangerRetry is how long a caller the node does not take for the session it names waits: a claude that
 	// has not written its sessions/<pid>.json yet asks again soon.
 	ccPluginStrangerRetry = 15 * time.Second
-	// ccPluginBodyMost bounds a request's body.
-	ccPluginBodyMost = 64 << 10
+	// ccPluginBodyMost bounds a request's body, and ccPluginRequestMost the whole request with its headers.
+	ccPluginBodyMost    = 64 << 10
+	ccPluginRequestMost = 256 << 10
 	// ccPluginStale is how long after its last poll a plugin still counts: an idle one polls again at once, a busy
 	// session's plugin keeps polling too (the node, not the plugin, tells whether the session rests).
 	ccPluginStale = 90 * time.Second
@@ -281,7 +282,9 @@ func isHTTPRequestLine(line []byte) bool {
 // serveCCPluginHTTP answers one HTTP request on the node socket: the plugin's. first is the request's start, already
 // read; rest the connection's reader after it.
 func (n *Node) serveCCPluginHTTP(ctx context.Context, c net.Conn, first []byte, rest *bufio.Reader) {
-	br := bufio.NewReader(io.MultiReader(bytes.NewReader(first), rest))
+	// A request is small: its line, a few headers and a body of at most ccPluginBodyMost. What is past this bound is
+	// never read, so no caller makes the node keep more.
+	br := bufio.NewReader(io.LimitReader(io.MultiReader(bytes.NewReader(first), rest), ccPluginRequestMost))
 	req, err := http.ReadRequest(br)
 	if err != nil {
 		return
