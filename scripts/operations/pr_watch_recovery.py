@@ -35,34 +35,39 @@ def atomic_leases(state_file, data):
     temporary.replace(path)
 
 
-def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400):
-    """Reclaim only registered expired leases, never unregistered directories."""
-    state = json.loads(Path(state_file).read_text(encoding="utf-8"))
-    leases = state.get("worktree_leases", {})
-    keep = {Path(path).resolve(strict=False) for path in protected}
-    candidates = []
-    for name, lease in leases.items():
-        path = owned_path(state_file, name)
-        if (path in keep or lease.get("active") or not path.exists()
-                or time.time() - float(lease.get("heartbeat", 0)) < older_than):
-            continue
-        candidates.append(path)
-    if not candidates:
-        return 0
-    removed = 0
-    latest = json.loads(Path(state_file).read_text(encoding="utf-8")).get("worktree_leases", {})
-    for path in candidates:
-        lease = latest.get(str(path), {})
-        if (path in keep or lease.get("active")
-                or time.time() - float(lease.get("heartbeat", 0)) < older_than):
-            continue
-        try:
-            remove_worktree(checkout, state_file, path)
-            removed += 1
-        except WatchError:
-            continue
-    run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
-    return removed
+def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, state=None):
+    """Reclaim expired leases using one lock-protected state snapshot."""
+    if state is not None:
+        state.lock.acquire()
+    try:
+        current = state.data if state is not None else json.loads(Path(state_file).read_text(encoding="utf-8"))
+        leases = current.get("worktree_leases", {})
+        keep = {Path(path).resolve(strict=False) for path in protected}
+        candidates = []
+        for name, lease in leases.items():
+            path = owned_path(state_file, name)
+            if (path in keep or lease.get("active") or not path.exists()
+                    or time.time() - float(lease.get("heartbeat", 0)) < older_than):
+                continue
+            candidates.append(path)
+        if not candidates:
+            return 0
+        removed = 0
+        for path in candidates:
+            lease = leases.get(str(path), {})
+            if (path in keep or lease.get("active")
+                    or time.time() - float(lease.get("heartbeat", 0)) < older_than):
+                continue
+            try:
+                remove_worktree(checkout, state_file, path)
+                removed += 1
+            except WatchError:
+                continue
+        run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
+        return removed
+    finally:
+        if state is not None:
+            state.lock.release()
 
 
 def registration_path(checkout, candidate):
@@ -139,10 +144,10 @@ def recover_object_debris(checkout):
     return removed
 
 
-def recover_worktree_failure(checkout, state_file, error, protected=()):
+def recover_worktree_failure(checkout, state_file, error, protected=(), state=None):
     """Repair a known infrastructure condition and report whether to retry once."""
     if STORAGE_ERROR.search(str(error)):
-        removed = reclaim_worktrees(checkout, state_file, protected)
+        removed = reclaim_worktrees(checkout, state_file, protected, state=state)
         if not removed:
             return False
         return True

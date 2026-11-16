@@ -109,7 +109,8 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
             # Only a refused update caused by rename detection can be checked
             # this way. Other Git failures retain their original diagnostic.
             remote_name = argv[3] if len(argv) > 3 else "origin"
-            refspecs = [refspec.split(":", 1)[0].lstrip("+") for refspec in argv[4:]]
+            original_refspecs = argv[4:]
+            refspecs = [refspec.split(":", 1)[0].lstrip("+") for refspec in original_refspecs]
             if remote_name.startswith("-") or any(refspec.startswith("-") for refspec in refspecs):
                 raise WatchError("cannot recover an unsafe fetch refspec")
             refreshed = run(["git", "ls-remote", remote_name, *refspecs], cwd=cwd,
@@ -122,7 +123,7 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
                     # refused. Re-fetch just the object without rename checks,
                     # then finish the exact ref update requested by the caller.
                     checked(["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
-                             remote_name, *refspecs], cwd=cwd, timeout=timeout, environ=environ)
+                             remote_name, *original_refspecs], cwd=cwd, timeout=timeout, environ=environ)
                     checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
                             timeout=60, environ=environ)
                     original_refspec = next(value for value in argv[4:] if value.split(":", 1)[0].lstrip("+") == entries[0][1])

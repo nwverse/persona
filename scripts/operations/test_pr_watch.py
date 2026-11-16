@@ -298,6 +298,33 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.comments, [])
         self.assertEqual(self.watcher.state.get("example/one", 7)["infrastructure_fingerprint"], failure_fingerprint)
 
+    def test_verification_infrastructure_attempts_do_not_consume_semantic_budget(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("failed")), \
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["repair_attempts"], 1)
+        self.assertEqual(state["review_attempts"], 0)
+
+    def test_post_push_comment_failure_keeps_published_head_and_repair_round(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, repair_rounds=1)
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(head=SHA_B), pr(head=SHA_B)]), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model"), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])), \
+                patch.object(self.watcher, "comment", side_effect=pr_watch_common.WatchError("comment unavailable")):
+            self.watcher.repair_findings(self.config["repositories"][0], pr(), self.root,
+                                         [{"path": "x.py", "line": 1, "severity": "P1",
+                                           "summary": "wrong", "suggestion": "fix"}])
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["head"], SHA_B)
+        self.assertEqual(state["repair_rounds"], 2)
+        self.assertIn("comment unavailable", state["comment_failure"])
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \

@@ -342,7 +342,8 @@ class Watcher:
                 if attempt or "moved while preparing" in str(error):
                     raise
                 with self.git_lock:
-                    recovered = pr_watch_recovery.recover_worktree_failure(root, self.config["state"], error)
+                    recovered = pr_watch_recovery.recover_worktree_failure(
+                        root, self.config["state"], error, state=self.state)
                 if not recovered:
                     raise
                 self.log("%s#%s repaired a watcher-owned Git failure; retrying the same head" % (repo, number))
@@ -425,7 +426,7 @@ class Watcher:
         with self.git_lock:
             return pr_watch_recovery.recover_worktree_failure(
                 self.repositories[repo]["checkout"], self.config["state"], error,
-                protected=self.active_worktrees())
+                protected=self.active_worktrees(), state=self.state)
 
     def comment_findings(self, repo, number, pr, findings):
         blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
@@ -562,10 +563,24 @@ class Watcher:
         else:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                            outcome="continuation", continuation=new_number, failure=None)
-        self.comment(repo, number, "The watcher pushed an automated repair for the P0/P1 semantic findings. The new head will receive a fresh semantic review and verification.")
+        self.publication_comment(repo, number,
+                                 published_head if new_number == number else pr["headRefOid"],
+                                 published_key if new_number == number else evidence_key,
+                                 "The watcher pushed an automated repair for the P0/P1 semantic findings. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
-            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+            self.publication_comment(repo, number, pr["headRefOid"], evidence_key,
+                                     "A continuation PR was opened for the fork branch: #%d." % new_number)
         return False
+
+    def publication_comment(self, repo, number, head, evidence_key, body):
+        """A push is already durable; a later comment outage cannot roll it back."""
+        try:
+            self.comment(repo, number, body)
+        except WatchError as error:
+            self.state.put(repo, number, head, evidence_key=evidence_key,
+                           comment_failure=str(error))
+            self.log("%s#%s publication comment failed after the state was saved: %s" % (
+                repo, number, bounded(error, 500)))
 
     def repair_verification(self, config, pr, worktree, error):
         """Attribute a failure, update a stale base, or perform one repair round."""
@@ -609,14 +624,16 @@ class Watcher:
                 new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr)
                 self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                                outcome="continuation", continuation=new_number, repair_rounds=rounds + 1)
-                self.comment(repo, number, "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
+                self.publication_comment(repo, number, pr["headRefOid"], old.get("evidence_key"),
+                                         "The stale fork PR was updated in an isolated checkout; continuation PR #%d was opened." % new_number)
             else:
                 pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                 updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
                 self.state.put(repo, number, updated_head, evidence_key=updated_key,
                                repair_rounds=rounds + 1, outcome="retry", retry_after=0,
                                failure=None, base=base)
-                self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
+                self.publication_comment(repo, number, updated_head, updated_key,
+                                         "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
         latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
@@ -972,7 +989,6 @@ class Watcher:
                 publish = latest.get("infrastructure_fingerprint") != failure_fingerprint
                 self.state.put(repo, number, head, evidence_key=evidence_key,
                                outcome="retry" if attempts < INFRASTRUCTURE_ATTEMPT_LIMIT else "failed",
-                               review_attempts=attempts,
                                repair_attempts=attempts,
                                repair_rounds=int(latest.get("repair_rounds", 0)),
                                verification=latest.get("verification"), checks=latest.get("checks", []),
@@ -985,7 +1001,7 @@ class Watcher:
                     # completed repair round. Keep its budget intact but leave
                     # a durable diagnostic and a bounded later retry.
                     self.state.put(repo, number, head, evidence_key=evidence_key,
-                                   outcome="retry", review_attempts=attempts,
+                                   outcome="retry",
                                    repair_attempts=attempts, repair_rounds=int(latest.get("repair_rounds", 0)),
                                    retry_after=time.time() + 3600, retry_reason="verification_repair",
                                    failure=str(error),

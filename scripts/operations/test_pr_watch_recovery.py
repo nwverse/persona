@@ -165,6 +165,9 @@ class RecoveryIntegrationTests(unittest.TestCase):
                 "b" * 40 + "\n")
         self.assertEqual(execute.call_args_list[1].args[0],
                          ["git", "ls-remote", "origin", "refs/pull/7/head"])
+        self.assertEqual(execute.call_args_list[2].args[0],
+                         ["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
+                          "origin", "+refs/pull/7/head:refs/pr-watch/heads/7"])
         self.assertEqual(execute.call_args_list[-1].args[0],
                          ["git", "update-ref", "refs/pr-watch/heads/7", "b" * 40])
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 128, "", "fatal: corrupt")):
