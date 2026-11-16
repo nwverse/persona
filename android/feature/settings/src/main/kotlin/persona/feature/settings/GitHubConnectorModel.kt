@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import persona.core.contracts.api.GitHubAuth
 import persona.core.contracts.api.GitHubInboxOptions
@@ -90,19 +91,27 @@ internal class GitHubAuthSession(
     var apply: (suspend (String?) -> GitHubAuth)? = null
     var onApplied: (suspend () -> Unit)? = null
 
+    private var refreshJob: Job? = null
+    /** Answers older than the last refresh or choose are ignored, including a GET that already returned. */
+    private var epoch = 0
+
     fun refresh() {
         val fetch = fetch ?: return
-        scope.launch {
+        val ticket = ++epoch
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
             loading = true
             try {
-                auth = fetch()
+                val loaded = fetch()
+                if (ticket != epoch) return@launch
+                auth = loaded
                 error = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                error = describe(e)
+                if (ticket == epoch) error = describe(e)
             } finally {
-                loading = false
+                if (ticket == epoch) loading = false
             }
         }
     }
@@ -111,6 +120,9 @@ internal class GitHubAuthSession(
     fun choose(machine: String?) {
         if (choosing != null) return
         val apply = apply ?: return
+        epoch++
+        refreshJob?.cancel()
+        loading = false
         choosing = machine ?: "device"
         scope.launch {
             try {

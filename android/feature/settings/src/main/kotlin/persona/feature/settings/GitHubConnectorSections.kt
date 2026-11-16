@@ -40,6 +40,7 @@ import persona.core.designsystem.JAction
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
+import persona.core.designsystem.JGroup
 import persona.core.designsystem.JGroupItem
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JIconButton
@@ -73,7 +74,15 @@ internal fun LazyListScope.gitHubSignIn(
     if (auth == null) {
         item("github-source-loading") {
             if (session.error != null && !session.loading) {
-                GitHubErrorText(session.error.orEmpty())
+                Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    GitHubErrorText(session.error.orEmpty())
+                    JButton(
+                        stringResource(R.string.settings_retry_read),
+                        { session.refresh() },
+                        Modifier.fillMaxWidth().padding(horizontal = rowPadding),
+                        kind = JButtonKind.Secondary,
+                    )
+                }
             } else {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.s).semantics(mergeDescendants = true) {},
@@ -94,7 +103,7 @@ internal fun LazyListScope.gitHubSignIn(
     } else {
         val count = auth.machines.size + 1
         auth.machines.forEachIndexed { index, machine ->
-            item("github-source-${machine.id}") {
+            item(githubMachineRowKey(machine.id)) {
                 GitHubSourceRow(
                     key = machine.id,
                     position = GroupPosition.of(index, count),
@@ -109,7 +118,7 @@ internal fun LazyListScope.gitHubSignIn(
                 )
             }
         }
-        item("github-source-device") {
+        item(GITHUB_DEVICE_ROW_KEY) {
             GitHubSourceRow(
                 key = "device",
                 position = GroupPosition.of(auth.machines.size, count),
@@ -134,8 +143,8 @@ internal fun LazyListScope.gitHubSignIn(
         }
     }
     if (auth?.source == "device" && connector.enabled != false && !ConnectorText.isSignedIn(connector)) {
-        item("github-device-steps") {
-            val prompt = bind.prompt
+        val prompt = bind.prompt
+        item(githubDeviceStepsKey(prompt?.step, prompt?.kind)) {
             Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 if (prompt == null) {
                     JButton(
@@ -185,17 +194,56 @@ internal fun LazyListScope.gitHubSignIn(
     }
 }
 
-/** GitHub's Inbox options at the end of the page (iOS `GitHubInboxSettings`): CI failures, then muted repositories. */
+/** GitHub's Inbox options at the end of the page (iOS `GitHubInboxSettings`): one group, then the explanation. */
 internal fun LazyListScope.gitHubInbox(editor: GitHubInboxEditor) {
     item("github-inbox-header") { JSectionHeader(stringResource(R.string.settings_gh_inbox)) }
-    item("github-inbox-ci") {
+    item("github-inbox") {
         val res = LocalResources.current
         var open by remember { mutableStateOf(false) }
+        val muted = githubMutedRepos(editor.options.mutedRepos)
         val title = GitHubConnectorText.ciTitle(res, editor.options.ci) ?: editor.options.ci
         Box {
-            JGroupItem(GroupPosition.Single) {
-                JRow(stringResource(R.string.settings_gh_ci_failures), value = title, onClick = { open = true })
-            }
+            JGroup(rows = buildList<@Composable () -> Unit> {
+                add { JRow(stringResource(R.string.settings_gh_ci_failures), value = title, onClick = { open = true }) }
+                muted.forEach { repo ->
+                    add {
+                        JRow(
+                            repo,
+                            trailing = {
+                                JIconButton(PersonaIcons.delete, stringResource(R.string.settings_gh_unmute), { editor.remove(repo) })
+                            },
+                        )
+                    }
+                }
+                add {
+                    Row(
+                        Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                    ) {
+                        JTextField(
+                            editor.draft,
+                            { editor.draft = it },
+                            Modifier.weight(1f),
+                            placeholder = stringResource(R.string.settings_gh_mute_hint),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.None,
+                                autoCorrectEnabled = false,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { editor.add() }),
+                        )
+                        JButton(
+                            stringResource(R.string.settings_gh_add),
+                            editor::add,
+                            kind = JButtonKind.Secondary,
+                            size = JButtonSize.Medium,
+                            enabled = editor.draft.contains("/"),
+                        )
+                    }
+                }
+            })
             JMenu(
                 open,
                 { open = false },
@@ -208,51 +256,24 @@ internal fun LazyListScope.gitHubInbox(editor: GitHubInboxEditor) {
             )
         }
     }
-    val muted = editor.options.mutedRepos
-    muted.forEachIndexed { index, repo ->
-        item("github-inbox-repo-$repo") {
-            JGroupItem(GroupPosition.of(index, muted.size)) {
-                JRow(
-                    repo,
-                    trailing = {
-                        JIconButton(PersonaIcons.delete, stringResource(R.string.settings_gh_unmute), { editor.remove(repo) })
-                    },
-                )
-            }
-        }
-    }
-    item("github-inbox-add") {
-        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
-            ) {
-                JTextField(
-                    editor.draft,
-                    { editor.draft = it },
-                    Modifier.weight(1f),
-                    placeholder = stringResource(R.string.settings_gh_mute_hint),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.None,
-                        autoCorrectEnabled = false,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { editor.add() }),
-                )
-                JButton(
-                    stringResource(R.string.settings_gh_add),
-                    editor::add,
-                    kind = JButtonKind.Secondary,
-                    size = JButtonSize.Medium,
-                    enabled = editor.draft.contains("/"),
-                )
-            }
+    item("github-inbox-footer") {
+        Column {
             editor.error?.let { GitHubErrorText(it) }
             SettingsCaption(GitHubConnectorText.inboxFooter(LocalResources.current, editor.options), Modifier.paddingHorizontalCaption())
         }
     }
 }
+
+/** A machine id of "device" must not share the device-code row's lazy key. */
+internal fun githubMachineRowKey(id: String): String = "github-source-m-$id"
+
+internal const val GITHUB_DEVICE_ROW_KEY = "github-source-device"
+
+/** Duplicate muted repositories from the hub are one row. */
+internal fun githubMutedRepos(repos: List<String>): List<String> = repos.distinct()
+
+/** A new device-code step gets a new lazy key, so remembered state does not leak across steps. */
+internal fun githubDeviceStepsKey(step: String?, kind: String?): String = "github-device-steps-$step-$kind"
 
 @Composable
 private fun GitHubErrorText(text: String) {

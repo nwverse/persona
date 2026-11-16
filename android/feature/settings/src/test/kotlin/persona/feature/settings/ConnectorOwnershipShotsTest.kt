@@ -170,6 +170,35 @@ class ConnectorOwnershipShotsTest {
         assertEquals(listOf("work", "assistant"), api.calls.filter { it.first == "list" }.map { it.second }.distinct())
     }
 
+    /** GitHub has no Sign out. Another connector that still does must log out of the assistant shown after the switch. */
+    @Test fun signOutAfterSwitchingOwnerGoesToTheNewManager() {
+        val slack = signedOut.copy(id = "slack", name = "Slack")
+        val api = Api(listOf(slack.copy(status = "ok", account = "personal-example"), slack.copy(manager = "work")))
+        var owner by mutableStateOf("work")
+        rule.setContent { PersonaTheme(reduceMotion = true) {
+            CompositionLocalProvider(LocalManagerRoster provides roster) {
+                HubConnectorPage(api, "slack", {}, manager = owner)
+            }
+        } }
+        rule.waitForIdle()
+        val res = ApplicationProvider.getApplicationContext<Context>().resources
+        val signIn = res.getString(R.string.settings_src_connector_sign_in, "Slack")
+        rule.waitUntil { rule.onAllNodesWithText(signIn).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(signIn).performClick()
+        rule.waitForIdle()
+        assertTrue(api.calls.contains("login:slack" to "work"))
+        owner = "assistant"
+        val signOut = res.getString(R.string.settings_src_connector_sign_out)
+        rule.waitUntil { rule.onAllNodesWithText(signOut).fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(rule.onAllNodesWithText("personal-example").fetchSemanticsNodes().isNotEmpty())
+        rule.onNodeWithText(signOut).performClick()
+        rule.waitUntil { rule.onAllNodesWithText(signOut).fetchSemanticsNodes().size >= 2 }
+        rule.onAllNodesWithText(signOut)[1].performClick()
+        rule.waitForIdle()
+        assertTrue(api.calls.contains("logout:slack" to "assistant"))
+        assertFalse(api.calls.any { it.first == "logout:slack" && it.second != "assistant" })
+    }
+
     private fun capture(name: String) {
         rule.waitForIdle()
         val dir = File("build/connector-ownership-shots").also { it.mkdirs() }
