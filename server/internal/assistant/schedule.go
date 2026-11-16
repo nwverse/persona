@@ -2014,15 +2014,11 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		}
 	}
 	if text == "" {
-		if t.stateRunKey != "" && hasSession && failedSession.State != proto.StateNeedsYou && !failedSession.Starting {
-			if items, ok := s.lastTurnItems(ctx, m.ID, run.SessionID); ok && s.stillEnded(ctx, m.ID, run.SessionID, items) {
-				if currentTurnHasTaskStateRun(items, t.stateRunKey) {
-					s.finishTaskState(ctx, t, run)
-				}
-			}
-		}
 		if t.Facts {
 			s.briefReached(run.SessionID) // the briefing is in its conversation, whether or not a push follows
+		}
+		if t.stateRunKey != "" && hasSession {
+			s.finishTaskStateRun(ctx, t, run, m.ID, failedSession) // may wait for the run's background work
 		}
 		return
 	}
