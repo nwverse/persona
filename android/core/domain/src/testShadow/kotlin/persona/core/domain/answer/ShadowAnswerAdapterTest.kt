@@ -1,12 +1,11 @@
 package persona.core.domain.answer
 
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,18 +23,27 @@ class ShadowAnswerAdapterTest {
     @Test fun kotlinReturnsBeforeNativeAndEveryReportContainsOnlyShape() {
         val caller = Thread.currentThread()
         val nativeThread = AtomicReference<Thread>()
-        val nativeCalled = AtomicBoolean()
+        val nativeStarted = CountDownLatch(1)
+        val releaseNative = CountDownLatch(1)
         val reports = CopyOnWriteArrayList<AnswerMismatch>()
         val shadow = ShadowAnswerAdapter(projectRust = {
-            nativeCalled.set(true)
             nativeThread.set(Thread.currentThread())
+            nativeStarted.countDown()
+            assertTrue(releaseNative.await(30, java.util.concurrent.TimeUnit.SECONDS))
             """{"allowed":false,"page":0,"picks":{},"other":{},"resolution":null}"""
+        }, displayRust = {
+            nativeThread.set(Thread.currentThread())
+            nativeStarted.countDown()
+            assertTrue(releaseNative.await(30, java.util.concurrent.TimeUnit.SECONDS))
+            """{"text":"different","recommended":false}"""
         }, sink = reports::add)
         val expected = shadow.build(one, AnswerAction.PickOption)
         assertTrue(expected.allowed)
-        assertFalse("No JNI call may happen on the caller's thread", nativeCalled.get())
+        val display = shadow.display("Yes (Recommended)")
+        assertEquals(OptionDisplay("Yes", true), display)
+        assertTrue(nativeStarted.await(30, java.util.concurrent.TimeUnit.SECONDS))
+        releaseNative.countDown()
         ShadowAnswerDiagnostics.awaitIdle()
-        assertTrue(nativeCalled.get())
         assertNotNull(nativeThread.get())
         assertFalse(caller == nativeThread.get())
         assertEquals("PersonaAnswerShadow", nativeThread.get().name)
@@ -48,8 +56,8 @@ class ShadowAnswerAdapterTest {
             assertFalse(json.contains("Yes"))
             assertFalse(json.contains("Recommended"))
             assertFalse(json.contains("exception", ignoreCase = true))
-            assertTrue(it.inputShape.contains("questions=1"))
-            assertTrue(it.inputShape.contains("action=pick_option"))
+            assertTrue(it.inputShape.contains("questions=1") || it.inputShape.startsWith("labelChars="))
+            assertTrue(it.inputShape.contains("action=pick_option") || it.inputShape.startsWith("labelChars="))
         }
     }
 

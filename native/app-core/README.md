@@ -193,12 +193,16 @@ recommendation text (`TodoAsk.recommend`) is not part of this question-option pr
 Kotlin path; `RustCoreAnswer`, the observer and its preferences have no Release source-set or JNI entry.
 
 The DEBUG launcher accepts `--es debug.answerShadow on` (then force-stop and relaunch; use `off` to disable it for the
-next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar. Kotlin
-returns before the observer's own FIFO worker converts the question-only operation, loads the native library or calls
-JNI. Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
-unsupported, not as parity. Exact answer/display comparisons stay in that worker; a report contains only domain, rule
-and counts/flags/operation enums, never a label, question, answer, identifier or exception message. Every 10 completed
-comparisons logs only `answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar and is
+also a dependency of the standard root `test`. Kotlin returns before the observer's own bounded FIFO worker converts
+the question-only operation, loads the native library or calls JNI. At most 32 comparisons wait in that queue, repeated
+labels are compared once per adapter, and a full queue drops only new diagnostic work. The DEBUG answer JNI itself runs
+on a bounded Rust worker with a one-second wait; a busy native projection does not queue another input.
+Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
+unsupported, not as parity. Exact answer/display comparisons stay in that worker, including picks and custom-answer
+state for all three supported operations; a report contains only domain, rule and counts/flags/operation enums, never a
+label, question, answer, identifier or exception message. Every 10 completed comparisons logs only
+`answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
 
 The replay compares all 15 `questions.json` and 8 `recommended.json` complete expected objects through both the
 current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted

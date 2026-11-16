@@ -72,6 +72,8 @@ val shadowTest = tasks.register<Test>("shadowTest") {
     }
 }
 tasks.named("check") { dependsOn(shadowTest) }
+// The repository's standard root `test` and Android CI must run the observer and its real-JNI fixture replay too.
+tasks.named("test") { dependsOn(shadowTest) }
 
 // The app's DEBUG variant uses the same observer class as host tests, without putting it in domain.jar. Kotlin's friend
 // path grants access to domain internals without making shadow or native types part of the public production contract.

@@ -1,11 +1,12 @@
 package persona.core.domain.answer
 
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -24,19 +25,43 @@ data class AnswerMismatch(
     val inputShape: String,
 )
 
-/** A private FIFO worker. The Kotlin result has already returned before conversion, native loading or JNI can begin. */
+/** A bounded FIFO worker. A full queue drops only diagnostics, never blocks or replaces the Kotlin answer. */
 object ShadowAnswerDiagnostics {
-    private val worker = Executors.newSingleThreadExecutor { Thread(it, "PersonaAnswerShadow").apply { isDaemon = true } }
+    private const val CAPACITY = 32
+    private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(CAPACITY)) { runnable ->
+        Thread(runnable, "PersonaAnswerShadow").apply { isDaemon = true }
+    }.apply {
+        rejectedExecutionHandler = ThreadPoolExecutor.DiscardPolicy()
+    }
     private val compared = AtomicInteger()
     private val mismatches = AtomicInteger()
+    private val dropped = AtomicLong()
     val comparedCount: Int get() = compared.get()
     val mismatchCount: Int get() = mismatches.get()
+    val droppedCount: Long get() = dropped.get()
+    val queuedCount: Int get() = worker.queue.size
+    @Volatile internal var testDrained: (() -> Unit)? = null
 
     fun report(mismatch: AnswerMismatch) {
         mismatches.incrementAndGet()
     }
 
-    internal fun enqueue(work: () -> Unit) { worker.execute(work) }
+    internal fun enqueue(work: () -> Unit): Boolean {
+        if (worker.queue.size >= CAPACITY) {
+            dropped.incrementAndGet()
+            return false
+        }
+        return try {
+            worker.execute {
+                work()
+                testDrained?.invoke()
+            }
+            true
+        } catch (_: Throwable) {
+            dropped.incrementAndGet()
+            false
+        }
+    }
     internal fun compared() { compared.incrementAndGet() }
 
     /** Test barrier only; a timeout is a failure, never evidence of parity. */
@@ -51,11 +76,12 @@ class ShadowAnswerAdapter(
     private val kotlin: AnswerAdapter = KotlinAnswerAdapter(),
     private val projectRust: (String) -> String = RustCoreAnswer::project,
     private val displayRust: (String) -> String = RustCoreAnswer::display,
-    private val sink: (AnswerMismatch) -> Unit = ShadowAnswerDiagnostics::report,
+    private val sink: ((AnswerMismatch) -> Unit)? = null,
     private val progress: (compared: Int, mismatches: Int) -> Unit = { _, _ -> },
 ) : AnswerAdapter {
     private val compared = AtomicInteger()
     private val mismatches = AtomicInteger()
+    private val seenDisplays = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     val mismatchCount: Int get() = mismatches.get()
 
     override fun build(interaction: Interaction, action: AnswerAction, draft: AnswerDraft, context: AnswerContext): AnswerResult {
@@ -70,6 +96,8 @@ class ShadowAnswerAdapter(
 
     override fun display(label: String): OptionDisplay {
         val result = kotlin.display(label)
+        // Recomposition repeats the same labels. Compare each label once per adapter instead of retaining duplicates.
+        if (!seenDisplays.add(label)) return result
         val shape = "labelChars=${label.length}"
         ShadowAnswerDiagnostics.enqueue {
             try { compareDisplay(label, result, shape) }
@@ -135,16 +163,12 @@ class ShadowAnswerAdapter(
         val page = expected.nextPage ?: expected.draft.page
         if (expected.allowed != actual.allowed) report("allowed", shape)
         if (page != actual.page) report("page", shape)
-        if (action == AnswerAction.PickOption) {
-            if (expected.draft.picks.mapValues { it.value.toList().sorted() } != actual.picks.mapValues { it.value.toList().sorted() }) {
-                report("picks", shape)
-            }
+        // Advance can have no resolution yet: every supported operation must protect the full selected/custom state.
+        if (expected.draft.picks.mapValues { it.value.toList().sorted() } != actual.picks.mapValues { it.value.toList().sorted() }) {
+            report("picks", shape)
         }
-        if (expected.draft.other.keys != actual.other.keys ||
-            expected.draft.other.mapValues { it.value.isNotEmpty() } != actual.other.mapValues { it.value.isNotEmpty() }
-        ) {
-            report("other-state", shape)
-        }
+        // Exact values stay in this worker. Only a shape code is ever reported, never a custom answer's text.
+        if (expected.draft.other != actual.other) report("other-state", shape)
         val expectedAnswers = expected.resolution?.answers
         val actualAnswers = actual.resolution?.answers
         if ((expectedAnswers == null) != (actualAnswers == null)) {
@@ -168,7 +192,7 @@ class ShadowAnswerAdapter(
 
     private fun report(rule: String, shape: String) {
         val report = AnswerMismatch(domain = "question-answer", rule = rule, inputShape = shape)
-        try { sink(report) } catch (_: Throwable) {}
+        try { sink?.invoke(report) } catch (_: Throwable) {}
         mismatches.incrementAndGet()
         try { ShadowAnswerDiagnostics.report(report) } catch (_: Throwable) {}
     }

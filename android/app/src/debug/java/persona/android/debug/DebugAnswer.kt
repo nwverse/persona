@@ -32,4 +32,9 @@ object DebugAnswer {
     }, progress = { compared, mismatches ->
         Log.i("PersonaCoreShadow", "answer compared=$compared mismatches=$mismatches")
     })
+
+    /** JVM test hook for a fresh process's persisted selection; production never resets this choice mid-process. */
+    internal fun resetForTest() {
+        synchronized(lock) { selected = null }
+    }
 }
