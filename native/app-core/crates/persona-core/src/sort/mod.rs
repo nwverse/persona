@@ -4,7 +4,7 @@
 //! The rules follow `AgentListOrder`, `AgentListProjection`, `SpaceGroup` and `ChatsView` on iOS.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap as StdHashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,10 @@ pub struct Input {
     pub machines: Vec<Machine>,
     pub pins: Pins,
     pub mutes: Mutes,
+    /// iOS's per-hub preferences. The legacy single-hub maps above remain the default hub's input; each entry here
+    /// replaces both for its group, so a pin on one hub cannot pin the same machine/session on another.
+    #[serde(default)]
+    pub hub_preferences: Option<StdHashMap<String, HubPreferences>>,
     pub settings: Settings,
 }
 
@@ -50,6 +54,56 @@ pub struct Pins {
     pub spaces: Vec<String>,
     #[serde(default)]
     pub sessions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HubPreferences {
+    #[serde(default)]
+    pub pins: Pins,
+    #[serde(default)]
+    pub mutes: Mutes,
+}
+
+impl Input {
+    fn preferences(&self, group: &str) -> (&Pins, &Mutes) {
+        self.hub_preferences
+            .as_ref()
+            .and_then(|preferences| preferences.get(group))
+            .map_or((&self.pins, &self.mutes), |preferences| {
+                (&preferences.pins, &preferences.mutes)
+            })
+    }
+
+    fn pinned(&self, session: &Session) -> bool {
+        let (pins, _) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        pins.sessions.iter().any(|pin| session.matches_preference(pin))
+    }
+
+    fn muted(&self, session: &Session) -> bool {
+        let (_, mutes) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        if mutes.sessions.iter().any(|id| session.matches_preference(id)) {
+            return true;
+        }
+        if mutes.allowed.iter().any(|id| session.matches_preference(id)) {
+            return false;
+        }
+        let space = format!(
+            "{}/{}",
+            session.machine_id,
+            session.space_name.clone().unwrap_or_else(|| folder_name(&session.cwd))
+        );
+        mutes.spaces.contains(&space)
+    }
+
+    fn pinned_space(&self, space: &Space<'_>) -> bool {
+        let (pins, _) = self.preferences(&space.group);
+        pins.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
+    }
+
+    fn muted_space(&self, space: &Space<'_>) -> bool {
+        let (_, mutes) = self.preferences(&space.group);
+        mutes.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -168,9 +222,11 @@ pub struct StateCounts {
 struct Row {
     id: String,
     short_id: String,
+    machine_id: String,
     session_id: String,
     /// `group|machine_id` for a non-default hub group, as iOS's `MachineRef.path`.
     machine_path: String,
+    group: String,
     state: AgentState,
     sort_date: Option<i128>,
     is_waiting: bool,
@@ -191,8 +247,8 @@ impl Row {
     fn new(session: Session, input: &Input) -> Self {
         let state = AgentState::from_client(session.state.as_deref(), session.status.as_deref());
         let short_id = format!("{}/{}", session.machine_id, session.session_id);
-        let pinned = input.pins.sessions.contains(&short_id);
-        let muted = is_muted(&session, &input.mutes);
+        let pinned = input.pinned(&session);
+        let muted = input.muted(&session);
         let space_name = session.space_name.clone().unwrap_or_else(|| folder_name(&session.cwd));
         let group = session.app_hub_group.as_deref().unwrap_or("");
         let prefix = if group.is_empty() {
@@ -210,8 +266,10 @@ impl Row {
         Self {
             id: format!("{prefix}{short_id}"),
             short_id,
+            machine_id: session.machine_id.clone(),
             session_id: session.session_id.clone(),
             machine_path,
+            group: group.to_owned(),
             state,
             sort_date: sort_date.and_then(utc_timestamp),
             is_waiting: state.is_quiet() && session.is_waiting(),
@@ -350,8 +408,7 @@ impl Query {
         {
             return false;
         }
-        let short_id = format!("{}/{}", session.machine_id, session.session_id);
-        if self.pinned_only && !input.pins.sessions.contains(&short_id) {
+        if self.pinned_only && !input.pinned(session) {
             return false;
         }
         if self.errors_only && !has_error(session) {
@@ -585,15 +642,14 @@ fn ordered_with<'a>(rows: impl IntoIterator<Item = &'a Row>, by_rank: bool, olde
 }
 
 fn pinned_sessions<'a>(rows: &[&'a Row], input: &Input) -> Vec<&'a Row> {
-    let positions: HashMap<&str, usize> = input
-        .pins
-        .sessions
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (id.as_str(), index))
-        .collect();
     let mut pinned: Vec<&Row> = rows.iter().copied().filter(|row| row.pinned).collect();
-    pinned.sort_by_key(|row| positions.get(row.short_id.as_str()).copied().unwrap_or(0));
+    pinned.sort_by_key(|row| {
+        let (pins, _) = input.preferences(&row.group);
+        pins.sessions
+            .iter()
+            .position(|id| *id == row.short_id || *id == row.id)
+            .unwrap_or(0)
+    });
     pinned
 }
 
@@ -715,6 +771,8 @@ fn plain_group(
 
 struct Space<'a> {
     id: String,
+    machine_id: String,
+    group: String,
     name: String,
     members: Vec<&'a Row>,
     priority: u8,
@@ -731,6 +789,8 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
             .entry(format!("{}/{}", row.machine_path, row.space_id))
             .or_insert_with(|| Space {
                 id: format!("{}/{}", row.machine_path, row.space_id),
+                machine_id: row.machine_id.clone(),
+                group: row.group.clone(),
                 name: row.space_name.clone(),
                 members: Vec::new(),
                 priority: u8::MAX,
@@ -746,13 +806,8 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
     }
     let mut spaces: Vec<Space> = spaces.into_values().collect();
     for space in &mut spaces {
-        let key = format!(
-            "{}/{}",
-            space.id.split_once('/').map_or("", |(machine, _)| machine),
-            space.name
-        );
-        space.pinned = input.pins.spaces.contains(&key);
-        space.muted = input.mutes.spaces.contains(&key);
+        space.pinned = input.pinned_space(space);
+        space.muted = input.muted_space(space);
         space.members.sort_by(|a, b| {
             a.slot_index
                 .cmp(&b.slot_index)
@@ -916,20 +971,6 @@ fn is_folded(id: &str, settings: &Settings) -> bool {
 
 fn ids(rows: &[&Row]) -> Vec<String> {
     rows.iter().map(|row| row.id.clone()).collect()
-}
-
-fn is_muted(session: &Session, mutes: &Mutes) -> bool {
-    let id = format!("{}/{}", session.machine_id, session.session_id);
-    if mutes.sessions.contains(&id) {
-        return true;
-    }
-    if mutes.allowed.contains(&id) {
-        return false;
-    }
-    session
-        .space_name
-        .as_ref()
-        .is_some_and(|name| mutes.spaces.contains(&format!("{}/{name}", session.machine_id)))
 }
 
 fn folder_name(path: &str) -> String {

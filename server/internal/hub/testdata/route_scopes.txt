@@ -46,6 +46,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/admin/usage-sources/{id}
 -                    DELETE /api/v1/agent-shares/{share_id}
 -                    DELETE /api/v1/agents/sessions/{id}/messages/{clientId}
+-                    DELETE /api/v1/assistant/conversations/{id}
 -                    DELETE /api/v1/assistant/conversations/{id}/always/{hash}
 -                    DELETE /api/v1/assistant/conversations/{id}/model
 -                    DELETE /api/v1/assistant/directions/offers/{id}
@@ -56,6 +57,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/saved-prompts/{id}
 -                    DELETE /api/v1/assistant/standing-authorizations/{id}
 -                    DELETE /api/v1/assistant/tasks/{id}
+-                    DELETE /api/v1/assistant/tasks/{id}/start-grant
 -                    DELETE /api/v1/auth/tokens/{id}
 -                    DELETE /api/v1/bots/feishu/owner
 -                    DELETE /api/v1/channels/{id}/binding

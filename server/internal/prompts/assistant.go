@@ -63,13 +63,17 @@ var urgentRuleTemplates = map[string]string{
 	"agent_disaster": "assistant/urgent_rule_agent_disaster",
 }
 
-// UrgentRuleBuiltin is built-in rule id's definition ("" for an id that is not one).
-func UrgentRuleBuiltin(id string) string {
+// UrgentRuleBuiltin is built-in rule id's definition in Chinese ("" for an id that is not one).
+func UrgentRuleBuiltin(id string) string { return UrgentRuleBuiltinIn(id, "") }
+
+// UrgentRuleBuiltinIn is built-in rule id's definition in language, the owner's by its own name ("English", or
+// Japanese written in Japanese); "" is Chinese.
+func UrgentRuleBuiltinIn(id, language string) string {
 	name, ok := urgentRuleTemplates[id]
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(render(name, nil))
+	return strings.TrimSpace(render(name, struct{ Language string }{language}))
 }
 
 func RenderAssistantClaudeMD(d AssistantClaudeMD) string { return render("assistant/claude_md", d) }

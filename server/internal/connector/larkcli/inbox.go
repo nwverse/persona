@@ -987,7 +987,14 @@ func messageKey(message adapter.Message) string {
 	return message.ChatID
 }
 
+// atAll is an @all written in the content: lark-cli lists only people in mentions, so an @all reaches the Inbox as
+// "@_all" in a text message and as <at user_id="all"> in a post.
+var atAll = lazyre.New(`(?:^|\s)@_all(?:\s|$)|<at\s+user_id="all"`)
+
 func messageMentions(message adapter.Message, me string) bool {
+	if atAll.MatchString(rawText(message.Content)) {
+		return true
+	}
 	for _, mention := range message.Mentions {
 		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
 		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
