@@ -15412,6 +15412,28 @@
         }
       }
     },
+    "All Meetings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Meetings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべての会議"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部会议"
+          }
+        }
+      }
+    },
     "API Key" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -84300,6 +84322,28 @@
         }
       }
     },
+    "Meetings and notes you record on your phone, and meetings from connected apps such as Lark, show up here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meetings and notes you record on your phone, and meetings from connected apps such as Lark, show up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマートフォンで記録した会議やメモと、Lark などの連携アプリから取り込んだ会議がここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在手机上开的会议、记的笔记，和从飞书等连接的应用导入的会议，都会出现在这里。"
+          }
+        }
+      }
+    },
     "MEMORY.md: the table of contents Persona keeps itself; it's updated when you delete a memory." : {
       "localizations" : {
         "en" : {
@@ -145069,6 +145113,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Still on This Device" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still on This Device"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスにだけあるもの"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还在这台设备上"
+          }
+        }
+      }
+    },
+    "Still on This iPhone" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Still on This iPhone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone にだけあるもの"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还在这台 iPhone 上"
+          }
+        }
+      }
     },
     "Stop" : {
       "extractionState" : "manual",
