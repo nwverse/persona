@@ -99,6 +99,8 @@
     <string name="agents_grouping_state">By status</string>
     <string name="agents_grouping_todo">By to-do</string>
     <string name="agents_grouping_project">By project</string>
+    <string name="agents_grouping_app">By App</string>
+    <string name="agents_grouping_recent">Recently Used</string>
     <string name="agents_grouping_direction">By pinned</string>
     <string name="agents_menu_compact">Compact list</string>
     <string name="agents_menu_detailed">Detailed list</string>

@@ -396,6 +396,9 @@
     <string name="settings_subscriptions_counts_on">%1$d on</string>
     <string name="settings_subscriptions_counts_failing">%1$d on · %2$d failing</string>
     <string name="settings_subscriptions_counts_none">Available</string>
+    <string name="settings_ext_notification_expired">This notification has expired. Retry from the extension page.</string>
+    <string name="settings_ext_notification_wrong_scope">Can\'t find the original hub or assistant. Reconnect, then retry from the extension page.</string>
+    <string name="settings_ext_notification_unlock">Unlock your phone to run this notification action.</string>
     <plurals name="settings_ext_node_running">
         <item quantity="one">Running on %1$d machine</item>
         <item quantity="other">Running on %1$d machines</item>

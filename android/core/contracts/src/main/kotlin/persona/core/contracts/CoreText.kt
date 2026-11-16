@@ -188,6 +188,12 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         SourceIdentityConflict("Identity conflict"),
         SourceClaudeBackground("Claude background"),
         SourceClaudeDesktop("Claude desktop app"),
+        /** By App's Codex desktop section (#9199). */
+        AgentsCodexApp("Codex App"),
+        /** By App's section for another agent's desktop app: "TRAE desktop app" (#9199). */
+        AgentsDesktopApp("%1\$s desktop app"),
+        /** Recently Used's section title (#9199). */
+        AgentsRecentlyUsed("Recently Used"),
         SourceClaudeTerminal("Claude in a terminal"),
         SourceNoSend("This source can’t send yet"),
         ReadOnlyBecause("View only: %1\$s"),
