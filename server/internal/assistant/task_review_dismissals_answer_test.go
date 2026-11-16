@@ -11,6 +11,21 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// These tests inspect decisions and queued signals, not digest delivery. Keep the digest timer out of the fixture's
+// short-lived reachability settings so it cannot outlive a subtest and race their restoration.
+func newDecisionAnswerServiceOn(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, st)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	f.judge = `{"verdict":"done","reason":"The example change is reviewed."}`
+	args := json.RawMessage(`{"tasks":[{"title":"Fix the example UI","prompt":"Fix the example UI and add regression tests.","machine":"box","cwd":"/code/app","readonly":true,"why":"The example project is on this computer.","done_when":["The change is reviewed","Regression tests pass"],"expect_minutes":30}]}`)
+	if _, err := s.toolTaskPlan(context.Background(), "conv1", args); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the task agent link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	return s, f, onlyTodo(s)
+}
+
 func assertAnswerDismissal(t *testing.T, s *Service, st Store, id string, want taskReviewDismissal) {
 	t.Helper()
 	s.reviewDismissals.mu.Lock()
@@ -197,7 +212,7 @@ func TestTaskReviewDismissalNoAgentHandoffUndoesIt(t *testing.T) {
 	for _, option := range []string{"先灰度 10%", "直接全量"} { // i18n-ignore: the shared rollout decision's option labels
 		t.Run(option, func(t *testing.T) {
 			database := todoTestDB(t)
-			s, f, todo := newSupervisedServiceOn(t, database)
+			s, f, todo := newDecisionAnswerServiceOn(t, database)
 			waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
 			if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
 				t.Fatal(err)
@@ -223,11 +238,12 @@ func TestTaskReviewDismissalNoAgentHandoffUndoesIt(t *testing.T) {
 				t.Fatalf("handoff replay: %d %s", w.Code, w.Body)
 			}
 			key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
-			waitFor(t, "the supervisor handoff", func() bool {
-				s.supervise.mu.Lock()
-				defer s.supervise.mu.Unlock()
-				return s.supervise.sent[todo.ID+"|"+sigIdle] == key
-			})
+			s.supervise.mu.Lock()
+			signal, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+			s.supervise.mu.Unlock()
+			if !pending || signal.Key != key {
+				t.Fatalf("supervisor handoff was not queued: %+v", signal)
+			}
 			s.waitWorkEvents()
 		})
 	}

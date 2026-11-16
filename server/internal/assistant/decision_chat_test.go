@@ -16,7 +16,7 @@ import (
 
 func TestDecisionChatAnswerSettlesOnlyItsOriginalRound(t *testing.T) {
 	database := todoTestDB(t)
-	s, f, todo := newSupervisedServiceOn(t, database)
+	s, f, todo := newDecisionAnswerServiceOn(t, database)
 	waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
 	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
 		t.Fatal(err)
@@ -29,6 +29,8 @@ func TestDecisionChatAnswerSettlesOnlyItsOriginalRound(t *testing.T) {
 	asked := askOf(s, todo.ID).AskedAt
 	// A cached Web tab can answer immediately after the service restarts, before it lists to-dos again.
 	s = newServiceOn(t, f, database)
+	shortSupervise(t, s)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	reply := func(round string) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(map[string]string{"todo_id": todo.ID, "text": "Use the alternative with a smaller limit.", "asked_at": round})
 		w := httptest.NewRecorder()
@@ -74,7 +76,7 @@ func TestDecisionChatAnswerSettlesOnlyItsOriginalRound(t *testing.T) {
 
 func TestOrdinaryTaskChatDoesNotSettleADecision(t *testing.T) {
 	database := todoTestDB(t)
-	s, f, todo := newSupervisedServiceOn(t, database)
+	s, f, todo := newDecisionAnswerServiceOn(t, database)
 	waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
 	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
 		t.Fatal(err)
@@ -119,7 +121,7 @@ func TestDecisionChatEndedAskKeepsDismissal(t *testing.T) {
 	for _, kind := range []string{"accepted", "reopened", "closed", "ended review"} {
 		t.Run(kind, func(t *testing.T) {
 			database := todoTestDB(t)
-			s, f, todo := newSupervisedServiceOn(t, database)
+			s, f, todo := newDecisionAnswerServiceOn(t, database)
 			waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
 			if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
 				t.Fatal(err)
@@ -163,7 +165,7 @@ func TestDecisionChatEndedAskKeepsDismissal(t *testing.T) {
 
 func TestDecisionChatCheckedRoutingKeepsDismissal(t *testing.T) {
 	database := todoTestDB(t)
-	s, f, todo := newSupervisedServiceOn(t, database)
+	s, f, todo := newDecisionAnswerServiceOn(t, database)
 	waitsForReview(t, s, f, todo.ID, "Choose a rollout plan.")
 	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
 		t.Fatal(err)
