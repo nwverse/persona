@@ -16,7 +16,7 @@ func TestUrgentRuleBuiltinFollowsTheOwnersLanguage(t *testing.T) {
 	}
 	en := map[string]string{"money_loss": "Money or resources are being lost", "harm": "Physical harm or safety",
 		"agent_disaster": "A catastrophic mistake by an Agent"}
-	ja := map[string]string{"money_loss": "資金やリソース", "harm": "人身の危険", "agent_disaster": "致命的なミス"} // i18n-ignore
+	ja := map[string]string{"money_loss": "資金やリソース", "harm": "人身の危険", "agent_disaster": "鍵やシークレット"} // i18n-ignore
 	for id, want := range zh {
 		if got := UrgentRuleBuiltin(id); got != want {
 			t.Errorf("%s in Chinese = %q, want it unchanged %q", id, got, want)
