@@ -48268,6 +48268,28 @@
         }
       }
     },
+    "Couldn't read the commits" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the commits"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットを読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到提交"
+          }
+        }
+      }
+    },
     "Couldn't read the content: %@" : {
       "localizations" : {
         "en" : {
@@ -94433,6 +94455,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No commits yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No commits yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだコミットがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有提交"
+          }
+        }
+      }
     },
     "No longer on the computer" : {
       "localizations" : {
@@ -161066,6 +161110,28 @@
         }
       }
     },
+    "This folder is no longer there" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This folder is no longer there"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このフォルダはもうありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个文件夹已经不在了"
+          }
+        }
+      }
+    },
     "This hub already has this address." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -166421,6 +166487,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This version of the app can't read this computer's answer. Update the app and try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This version of the app can't read this computer's answer. Update the app and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバージョンのアプリではこのコンピュータの応答を読み取れません。アプリをアップデートしてもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个版本的 App 读不懂这台电脑的回答。更新 App 后再试。"
+          }
+        }
+      }
     },
     "This version of the app can't show this step. Update the app and tap Start Over to try again." : {
       "comment" : "A connector's sign-in sheet, at a step this version of the app can't draw (PersonaKit, #5758)",
