@@ -7,7 +7,6 @@ import { mergeRefs } from "../../lib/tap-guard";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
 import { Choice, DigitHint } from "./Choice";
 import { DelegatedCard } from "./Delegated";
-import { allowBody, denyBody } from "../../lib/quick-answers";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import type { Interaction } from "../../lib/types";
@@ -26,9 +25,11 @@ import { Button, Collapse, cx, EASE, Kbd, Menu, SECRET_INPUT, toast, useMenu } f
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { permissionDetail, permissionReason, summaryExtra } from "../../lib/tool-detail";
+import { usePermissionText } from "./permission-text";
 import { DIFF_TOOLS, DiffBlocks, editDiffs } from "./ActionRow";
-import { cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock";
+import { ANSWERED_LIST_MAX, cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock";
 import { useCardCut } from "./card-cut";
+import { answeredShown, answeredTally, keptAnswers, latestAnswer, nextRun, runPosition, tallyDetail, answeredHideAt } from "./card-stack";
 import { ScrollFold } from "./fold-scroll";
 import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
@@ -118,6 +119,9 @@ const CardAbout = createContext("");
 const CutReport = createContext<((key: string, cut: boolean) => void) | null>(null);
 /** On the stack's first card while cards are cut off below: how many the stack holds ("N pending", 0 for none). */
 const StackCount = createContext(0);
+/** On the stack's first card while others wait behind it (PendingCards): folded, where it stands in the run ("2 / 6"),
+ *  which opens them all; opened, "Show first only" in the same place, which folds them back. */
+const QueueSlot = createContext<{ position: number; total: number; open: boolean; onToggle: () => void } | null>(null);
 
 export function Card({ title, kicker, onDismiss, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
   const asked = useContext(AskedByVoice);
@@ -147,6 +151,7 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
     card?.scrollIntoView({ block: "nearest" });
     card?.focus({ preventScroll: true });
   };
+  const queue = useContext(QueueSlot);
   return (
     <div {...(cardKeys?.root ?? { tabIndex: -1 })} ref={tapGuard ? mergeRefs(tapGuard.ref, cardKeys?.root?.ref) : cardKeys?.root?.ref} data-pending-card aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -165,12 +170,26 @@ export function Card({ title, kicker, onDismiss, busy, children, footer, looking
             </div>
             <div ref={head} className="text-[13.5px] font-medium text-ink">{title}</div>
           </div>
-          {/* the stack goes on below the box: how many it holds, in the room this row has at its end */}
           {stack > 1 && (
             <span data-chat-cards-count className="flex shrink-0 items-center gap-1 text-xs whitespace-nowrap text-ink-2">
               {t("chat-interactions.pending", { count: stack })}
               <Icon name="arrowDown" size={12} stroke={2.2} className="text-ink-3" />
             </span>
+          )}
+          {/* folded, where this card stands among those waiting, which opens them all; opened, "Show first only" in the same
+              place (never an answer: the tap guard leaves it alone, and the card's keys do not take it) */}
+          {queue && (
+            <button
+              type="button"
+              data-chat-cards-position
+              onClick={queue.onToggle}
+              aria-expanded={queue.open}
+              aria-label={queue.open ? t("chat-interactions.first_only") : t("chat-interactions.queue_position_label", { position: queue.position, total: queue.total })}
+              title={queue.open ? undefined : t("chat-interactions.queue_show_all")}
+              className="touch-hit shrink-0 rounded-full bg-inset px-2 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums shadow-hairline transition-colors hover:text-ink"
+            >
+              {queue.open ? t("chat-interactions.first_only") : t("chat-interactions.queue_position", { position: queue.position, total: queue.total })}
+            </button>
           )}
         </div>
         <div className="mt-2">
@@ -325,26 +344,34 @@ function QuestionCard({ ix, canApprove }: { ix: Interaction; canApprove: boolean
     (picked[i] ?? []).every((label) => qs[i].options?.some((o) => o.label === label && o.action === "defer")));
   const all = qs.every((_, i) => answered(i) && allowed(i));
 
-  const send = async () => {
-    if (!all) return;
+  const send = async (directLabel?: string) => {
+    if (directLabel === undefined && !all) return;
     setBusy(true);
     const answers: Record<string, string> = {};
-    qs.forEach((x, i) => {
-      answers[x.question] = custom[i]?.trim() || (picked[i] ?? []).join(", ");
-    });
+    if (directLabel === undefined) {
+      qs.forEach((x, i) => {
+        answers[x.question] = custom[i]?.trim() || (picked[i] ?? []).join(", ");
+      });
+    } else {
+      // The pick's state update has not rendered yet, so carry its label into the immediate submission explicitly.
+      answers[q.question] = directLabel;
+    }
     await resolve(ix, { answers });
     setBusy(false);
   };
 
   const toggle = (label: string) => {
     if (localOnly && !q.options?.some((o) => o.label === label && o.action === "defer")) return;
+    const singleChoice = qs.length === 1 && !q.multi_select;
+    const hasCustomAnswer = singleChoice && Boolean(custom[qi]?.trim());
     setCustom((c) => ({ ...c, [qi]: "" }));
     setPicked((cur) => {
       const have = cur[qi] ?? [];
       const next = q.multi_select ? (have.includes(label) ? have.filter((x) => x !== label) : [...have, label]) : [label];
       return { ...cur, [qi]: next };
     });
-    if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
+    if (singleChoice && !hasCustomAnswer) void send(label);
+    else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
 
   return (
@@ -516,6 +543,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
 
 function PermissionCard({ ix }: { ix: Interaction }) {
   const [busy, setBusy] = useState(false);
+  const editable = usePermissionText(ix);
   const go = async (body: Record<string, unknown>) => {
     setBusy(true);
     await resolve(ix, body);
@@ -525,8 +553,8 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   // while that button is focused, which is the button's own activation, not the card's main action
   const keys = useCardKeys({
     enter: () => {
-      if (busy) return false;
-      void go(allowBody());
+      if (busy || editable.composing || !editable.canAllow) return false;
+      void go(editable.allow());
     },
   });
   const tapGuard = useChatCardTapGuard(ix);
@@ -540,17 +568,17 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       busy={busy}
       footer={
         <>
-          <Button tone="quiet" disabled={busy} onClick={() => go(denyBody())}>
+          <Button tone="quiet" disabled={busy} onClick={() => go(editable.deny())}>
             {t("chat-interactions.deny")}
           </Button>
           <span className="flex gap-1.5">
             {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
-            {offersAlways(ix) && (
+            {offersAlways(ix) && !editable.changed && (
               <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
             )}
-            <Button tone="primary" busy={busy} onClick={() => go(allowBody())}>
+            <Button tone="primary" busy={busy} disabled={!editable.canAllow} onClick={() => go(editable.allow())}>
               {t("chat-interactions.allow")}
               {keys.focused && <Kbd>Enter</Kbd>}
             </Button>
@@ -559,6 +587,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
       }
     >
       <PermissionBody ix={ix} />
+      {editable.editor}
       {alwaysScope(ix) && <p className="mt-2 text-[12px] leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
     </Card>
   );
@@ -1265,6 +1294,114 @@ export function AnsweredCard({ card }: { card: Answered }) {
   );
 }
 
+/** An answered card in one line: the answer, and what it answered (the question, the command allowed). */
+function answeredLine(card: Answered): { answer: string; about: string } {
+  if (card.resolution.dismiss === true) return { answer: t("chat-interactions.handed_back"), about: receiptAbout(card.ix) };
+  const lines = answerLines(card.ix, card.resolution);
+  const answer = lines.map((l) => l.answer.replace(/\s+/g, " ").trim()).join(" · ");
+  const labels = lines.map((l) => l.label).filter(Boolean).join(" · ");
+  return { answer, about: labels || receiptAbout(card.ix) };
+}
+
+/**
+ * What this page just answered, as one line over the slot instead of a card each (card-stack.ts): "Answered" with the
+ * answer and what it was about for one, "4 answered · All allowed" for several. It goes ANSWERED_SHOWN_MS after the
+ * last answer, unless the pointer or the keyboard is on it; tapping it lists each answer (and holds it until closed).
+ * Every answer keeps its own data-answered element, listed for screen readers while the line is closed.
+ */
+export function AnsweredSummary({ answered }: { answered: Answered[] }) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [focus, setFocus] = useState(false);
+  const [kept, setKept] = useState<Answered[]>([]);
+  const [released, setReleased] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const listId = useId();
+  const held = open || hover || focus;
+  const latest = latestAnswer(answered);
+  const hideAt = answeredHideAt(latest, released);
+  const visible = answeredShown({ now, latest, released, held });
+  useEffect(() => {
+    if (held || !visible) return;
+    const id = setTimeout(() => setNow(Date.now()), Math.max(0, hideAt - Date.now()));
+    return () => clearTimeout(id);
+  }, [held, visible, hideAt]);
+  const release = () => {
+    const at = Date.now();
+    setReleased(at);
+    setNow(at);
+  };
+  const items = open ? keptAnswers(kept, answered) : answered;
+  if (!visible || !items.length) return null;
+  const tally = answeredTally(items);
+  const one = items.length === 1 ? answeredLine(items[0]) : null;
+  const label = one
+    ? items[0].resolution.dismiss === true ? t("chat-interactions.handed_back") : t("chat-interactions.answered")
+    : t("chat-interactions.answered_count", { count: items.length });
+  const detail = one
+    ? items[0].resolution.dismiss === true ? one.about : [one.answer, one.about].filter(Boolean).join(" · ")
+    : tallyDetail(tally) || answeredLine(items[items.length - 1]).about;
+  const toggle = () => {
+    if (open) {
+      setOpen(false);
+      setKept([]);
+      release();
+    } else {
+      setKept(answered);
+      setOpen(true);
+    }
+  };
+  return (
+    <div
+      data-answered-summary
+      className="shrink-0 overflow-hidden rounded-card bg-surface shadow-card"
+      style={{ animation: `fade-up 250ms ${EASE} both` }}
+      onPointerEnter={(e) => e.pointerType === "mouse" && setHover(true)}
+      onPointerLeave={(e) => {
+        if (e.pointerType !== "mouse") return;
+        setHover(false);
+        release();
+      }}
+      // the keyboard on it holds it (someone reading it with a screen reader or Tab); a click's focus does not, or a line
+      // opened and closed with the pointer would stay
+      onFocus={(e) => e.target.matches(":focus-visible") && setFocus(true)}
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget)) return;
+        setFocus(false);
+        release();
+      }}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={toggle}
+        className="flex h-11 w-full items-center gap-2 px-3.5 text-left transition-colors hover:bg-hover"
+      >
+        <Icon name="check" size={12} stroke={3} className="shrink-0 text-green" />
+        <span aria-live="polite" className="shrink-0 text-meta font-medium whitespace-nowrap text-ink">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-meta text-ink-3" title={detail}>{detail}</span>
+        <Icon name="chevron" size={14} stroke={2.2} className={cx("shrink-0 text-ink-3 transition-transform duration-200", open && "rotate-180")} />
+      </button>
+      <ul
+        id={listId}
+        className={open ? "flex max-h-(--answered-max) flex-col overflow-y-auto overscroll-contain border-t border-line px-3.5 py-1" : "sr-only"}
+        style={{ "--answered-max": ANSWERED_LIST_MAX } as React.CSSProperties}
+      >
+        {items.map((card) => {
+          const { answer, about } = answeredLine(card);
+          return (
+            <li key={card.ix.id} data-answered={card.ix.id} className="flex min-h-9 min-w-0 items-center gap-2 py-1 text-meta">
+              <span className="max-w-[45%] shrink-0 truncate font-medium text-ink" title={answer}>{answer}</span>
+              {about && <span data-answered-about className="min-w-0 flex-1 truncate text-label text-ink-3" title={about}>{about}</span>}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** What is drawn right under a card: views/assistant/Tasks puts the suggested rule's line here (#5802), whose code
  *  loads with the first card that carries one. A slot, not an import: Tasks imports this file. */
 export const underCard: { line?: (ix: Interaction & { disabled?: boolean }) => React.ReactNode; /** The cards (by id) Always was answered on: their line stays to say what was made. */ made?: Set<string> } = {};
@@ -1311,9 +1448,11 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
 }
 
 /**
- * The cards waiting on you, and the ones just answered, above the composer. Wide screens show them all, as always.
- * Narrow ones (#1996) keep them in a box that scrolls on its own: the first in full and "N more" for the others until
- * that is tapped; while the keyboard is up, one line for all of them (tapping it puts the keyboard away).
+ * The cards waiting on you, and the ones just answered, above the composer, as one slot: the first waiting card in full
+ * with where it stands in the run ("2 / 6", which opens them all), the next taking its place once it is answered, so its
+ * answers are where the last one's were; what was just answered is one line over it (AnsweredSummary). On a narrow
+ * screen (#1996) they sit in a box that scrolls on its own; while the keyboard is up, one line for all of them (tapping
+ * it puts the keyboard away), and on a phone on its side one line until tapped.
  */
 export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard }: {
   interactions: Interaction[];
@@ -1345,23 +1484,49 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
     else next.delete(key);
     return next;
   }), []);
+  const ids = interactions.map((ix) => ix.id).join("\n");
+  const run = useRun(ids);
+  const slot = useSlotFocus(interactions[0]?.id);
   const { full, summary } = cardFold(count, { narrow, keyboard, open, short });
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
-  const done = shown ? [...delegated.map((d) => <DelegatedCard key={d.ix.id} d={d} />), ...answered.map((a) => <AnsweredCard key={a.ix.id} card={a} />)] : [];
-  // how many the stack holds, said on its first card while any of them is cut off: a wide stack, or a narrow one opened
-  // in full (folded, its "N more" row says it). Each card has its own keyed provider, so a card moving up to first as the
-  // one above it goes keeps its node, its typed answer and its focus.
-  const stack = count > 1 && cutCards.size > 0 && (!narrow || full > 1) ? count : 0;
+  const done = shown
+    ? [...delegated.map((d) => <DelegatedCard key={d.ix.id} d={d} />), ...(answered.length ? [<AnsweredSummary key="answered" answered={answered} />] : [])]
+    : [];
+  // the cut-off count only while all the cards are opened: a stack folded to its first says where it stands instead (the
+  // position chip). Each card has its own keyed provider, so a card moving up to first as the one above it goes keeps
+  // its node, its typed answer and its focus.
+  const stack = count > 1 && cutCards.size > 0 && full > 1 ? count : 0;
+  // opened, the same chip folds them back: no line of its own under the cards, which would take a line of the dock's room
+  // (a tall card's title then went out of view above the box) and put the control away from where it was opened
+  const queue = count > 1 && (full === 1 || (open && !short && full > 1))
+    ? { ...runPosition(run, count), open: full > 1, onToggle: () => setOpen(full === 1) }
+    : null;
   const cards = interactions.map((ix, i) => (
     <CutReport.Provider key={ix.id} value={report}>
-      <StackCount.Provider value={i === 0 ? stack : 0}><InteractionCard ix={ix} /></StackCount.Provider>
+      <StackCount.Provider value={i === 0 ? stack : 0}>
+        <QueueSlot.Provider value={i === 0 ? queue : null}><InteractionCard ix={ix} /></QueueSlot.Provider>
+      </StackCount.Provider>
     </CutReport.Provider>
   ));
   // only right after answering here (the "Answered" receipt shows), never while this chat still has a card: no jump, no nag
   const onward = !count && shown && answered.length > 0 && offerNext ? <NextWaitingRow {...offerNext} /> : null;
-  if (!narrow) return <>{done}{cards}{onward}</>;
-  const more = summary?.kind === "more";
+  // a phone on its side, opened from its one line: one quiet button puts them back into it
+  const fold = open && short && !keyboard ? (
+    <Button tone="quiet" onClick={() => setOpen(false)} className="touch-hit -mt-1 self-center">
+      {t("chat-interactions.collapse")}
+    </Button>
+  ) : null;
+  if (!narrow) {
+    return (
+      <>
+        {done}
+        <div {...slot} className="contents">{cards.slice(0, full)}</div>
+        {fold}
+        {onward}
+      </>
+    );
+  }
   return (
     <div className="flex min-h-0 shrink flex-col gap-2">
       {/* the box clips what is in it: its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
@@ -1371,7 +1536,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
             data-chat-cards (a long command) left its buttons below the fold, out of sight, with no way to bring them up */}
         {count > 0 && (
           <Collapse open={full >= 1} unclipped>
-            <div className={cx(done.length > 0 && "pt-2")}>{cards[0]}</div>
+            <div {...slot} className={cx(done.length > 0 && "pt-2")}>{cards[0]}</div>
           </Collapse>
         )}
         {count > 1 && (
@@ -1383,19 +1548,57 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
       {/* the line for what is folded stays in view under the box (in it, a tall first card would scroll it away) */}
       {summary && (
         <FoldRow
-          label={more ? t("chat-interactions.more_pending", { count: summary.count }) : t("chat-interactions.pending", { count: summary.count })}
-          detail={(more ? interactions.slice(1) : interactions).map(cardLine).join(" · ")}
+          label={t("chat-interactions.pending", { count: summary.count })}
+          detail={interactions.map(cardLine).join(" · ")}
           onClick={summary.kind === "typing" ? onDismissKeyboard : () => setOpen(true)}
         />
       )}
       {onward}
-      {open && (count > 1 || short) && !keyboard && (
-        <Button tone="quiet" onClick={() => setOpen(false)} className="touch-hit -mt-1 self-center">
-          {short ? t("chat-interactions.collapse") : t("chat-interactions.first_only")}
-        </Button>
-      )}
+      {fold}
     </div>
   );
+}
+
+/** The cards seen waiting since the stack was last empty (card-stack.ts nextRun), from the waiting ids joined by "\n". */
+function useRun(ids: string) {
+  const [seen, setSeen] = useState<readonly string[]>(() => (ids ? ids.split("\n") : []));
+  const next = nextRun(seen, ids ? ids.split("\n") : []);
+  // adjusted while rendering (React's "storing information from previous renders"): the count is right on the frame
+  // the card comes or goes, with no second render after it
+  if (next !== seen) setSeen(next);
+  return next;
+}
+
+/**
+ * Answering with the keyboard goes on with the keyboard: when the slot's card is answered while the keyboard was on it
+ * (its Enter, a digit, a focused button's Enter), the next card in the slot gets the focus, so Enter answers it in turn.
+ * A pointer answer leaves the focus where the browser puts it: a card that took it would show the keyboard's hints.
+ */
+function useSlotFocus(first: string | undefined) {
+  const ref = useRef<HTMLDivElement>(null);
+  const keyed = useRef(false);
+  const prev = useRef(first);
+  useLayoutEffect(() => {
+    if (prev.current === first) return;
+    prev.current = first;
+    const el = ref.current;
+    const active = document.activeElement;
+    if (!first || !el || !keyed.current || (active && active !== document.body && !el.contains(active))) return;
+    el.querySelector<HTMLElement>("[data-card-keys]")?.focus({ preventScroll: true });
+  }, [first]);
+  return {
+    ref,
+    onKeyDown: () => {
+      keyed.current = true;
+    },
+    onPointerDown: () => {
+      keyed.current = false;
+    },
+    onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
+      // focus that goes somewhere else ends it; focus lost with the answered card (to nothing) does not
+      if (e.relatedTarget && !ref.current?.contains(e.relatedTarget)) keyed.current = false;
+    },
+  };
 }
 
 /** One line in place of folded cards: how many, what they are, ›. */

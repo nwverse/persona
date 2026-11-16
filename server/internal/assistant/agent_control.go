@@ -24,7 +24,7 @@ import (
 // agentToolNames are the tools of the agents (not the assistant's conversations) that are this manager's own; their
 // descriptions and schemas are in prompts/mcp (docs/assistant/prompts.md). Each needs to know which agent calls it: the node
 // names the session of the agent's pane for them (node.callerTools).
-var agentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"}
+var agentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add"}
 
 // AgentTools are the agents' own tools (mcpTools for an agent).
 func (s *Service) AgentTools() []proto.Tool { return toolsNamed(agentToolNames) }
@@ -120,7 +120,12 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	var sent struct {
 		Queued bool `json:"queued"` // the runtime holds it behind a turn still running
 	}
-	if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, then, false), &sent); err != nil {
+	note, err := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", then) // more from its task's conversation reopens an accepted task (#6726, #7539)
+	if err == nil {
+		err = s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, then, false), &sent)
+	}
+	note.sent(sctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
+	if err != nil {
 		if working {
 			return "", fmt.Errorf("stopped it, but sending the new instruction failed: %w", err)
 		}
@@ -649,6 +654,12 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 		return proto.TextResult(res, false)
 	case "todo_decisions", "todo_decision_add": // todo_decisions.go
 		res, err := s.agentDecisionTool(ctx, machine, session, name, args, time.Now())
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		return proto.TextResult(res, false)
+	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add":
+		res, err := s.agentRepositoryTool(ctx, machine, session, name, args)
 		if err != nil {
 			return proto.TextResult(err.Error(), true)
 		}

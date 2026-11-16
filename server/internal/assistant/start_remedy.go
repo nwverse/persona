@@ -113,14 +113,12 @@ func (s *Service) beginRemedy(ctx context.Context, planID string, i int, t PlanT
 	return true
 }
 
-// remedyOf is the plan task of todo id whose start is being remedied, with its plan and index.
+// remedyOf is the plan task of todo id whose start is being remedied, with its plan and index: the plan that binds it
+// now (currentPlanAssignment), also for a to-do a plan took over through todo_id, which has no plan id of its own (#8770).
 func (s *Service) remedyOf(ctx context.Context, id string) (Todo, *TaskPlan, int, error) {
 	todo, ok := s.todoNow(id)
 	if !ok {
 		return Todo{}, nil, 0, db.ErrTodoNotFound
-	}
-	if todo.PlanID == "" {
-		return todo, nil, 0, errTaskNotInPlan
 	}
 	p, i, err := s.currentPlanAssignment(ctx, todo)
 	if err != nil {
@@ -267,11 +265,8 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 	default:
 		return "", fmt.Errorf("task %s did not fail to start", todo.ID)
 	}
-	s.tasks.mu.Lock()
-	busy := s.tasks.retrying[todo.ID]
-	s.tasks.retrying[todo.ID] = true
-	s.tasks.mu.Unlock()
-	if busy {
+	st, claimed := s.claimTaskStart(todo.ID)
+	if !claimed {
 		return "", errors.New("it is starting again already")
 	}
 	inPane := ""
@@ -282,19 +277,13 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 		t.Start.Attempt, t.Start.By, t.Start.At = attempt, "assistant", time.Now().UTC()
 		t.Error, t.ErrorCode, t.ErrorArgs = "", "", nil
 	}); err != nil {
-		s.tasks.mu.Lock()
-		delete(s.tasks.retrying, todo.ID)
-		s.tasks.mu.Unlock()
+		s.endTaskStart(todo.ID, st, proto.Session{})
 		return "", err
 	}
 	s.remedyStep(ctx, p.Conversation, todo.ID, startRemedyBody{Action: "retry", By: "assistant", Attempt: attempt, Reason: reason})
 	pt.Start.Attempt, pt.Start.By = attempt, "assistant"
 	pt.inPane = inPane
-	s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, true, func() {
-		s.tasks.mu.Lock()
-		delete(s.tasks.retrying, todo.ID)
-		s.tasks.mu.Unlock()
-	})
+	s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, true, func() { s.endTaskStart(todo.ID, st, proto.Session{}) })
 	where := "a new tab"
 	if inPane != "" {
 		where = "the same tab"
@@ -337,10 +326,7 @@ func (s *Service) giveUpStart(ctx context.Context, id, by string, told bool) {
 	if pt.Start == nil || pt.Start.State != remedying {
 		return
 	}
-	s.tasks.mu.Lock()
-	busy := s.tasks.retrying[id]
-	s.tasks.mu.Unlock()
-	if busy {
+	if s.taskStartOnWay(id) {
 		return
 	}
 	reason := cmp.Or(pt.Start.Reason, pt.Error)
@@ -381,12 +367,13 @@ func (s *Service) failedStartNotice(ctx context.Context, conversation string, t 
 }
 
 // remedyWatch fails for good the starts being remedied whose tab is no longer kept and that are not starting again:
-// on the supervisor's tick, so a hub restarted meanwhile catches up.
-func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time) {
-	if t.PlanID == "" || len(t.Agents) > 0 || t.DoneAt != nil {
+// on the supervisor's tick, so a hub restarted meanwhile catches up. history is the sweep's one read of the plans
+// (planHistoryOnce): it only picks the starts to give up, and giveUpStart reads the one it gives up again.
+func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time, history func(context.Context) ([]*TaskPlan, error)) {
+	if len(t.Agents) > 0 || t.DoneAt != nil {
 		return
 	}
-	_, p, i, err := s.remedyOf(ctx, t.ID)
+	p, i, err := s.currentPlanAssignmentIn(ctx, t, history)
 	if err != nil {
 		return
 	}

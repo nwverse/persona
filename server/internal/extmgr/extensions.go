@@ -396,6 +396,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	}
 	if ps.h != nil {
 		ps.voiceView(ctx, p, &v)    // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.volcView(ctx, p, &v)     // runs, but nothing transcribes or reads aloud without a key (volc_extension.go)
 		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
 	if ps.h != nil {
@@ -501,6 +502,7 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 		h.logf("plugin imessage: %v", err)
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
+	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}
@@ -1073,8 +1075,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 				tok = hubToken.renew(ps, p, attachedFull)
 			}
 			scopes := slices.Clone(g.Hub)
-			if attachedFull { // the routes' scopes: model calls are granted by name only (extension_model_calls.go)
-				scopes = slices.DeleteFunc(extension.EveryScope(), func(s string) bool { return s == extension.ScopeModels })
+			if attachedFull { // the routes' scopes: model calls and transcription are granted by name only
+				scopes = slices.DeleteFunc(extension.EveryScope(), func(s string) bool {
+					return s == extension.ScopeModels || s == extension.ScopeTranscription
+				})
 			}
 			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, scopes
 		}
@@ -1134,6 +1138,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionAssistantCall(ctx, id, method, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
+		case assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio, assistantwire.MethodTranscriptionFinish,
+			assistantwire.MethodTranscriptionCancel: // the transcription scope's (extension_transcription.go)
+			return ps.extensionTranscriptionCall(ctx, id, method, params)
 		case assistantwire.MethodAssistantDataStatus: // its own data contributions only, no scope (extension_assistant_data.go)
 			items := ps.assistantDataStatus(ctx, id, false)
 			if items == nil {

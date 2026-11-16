@@ -27,6 +27,7 @@ spec/
     triage/           the To-dos page's sections (status SOP), checked by the web app and the hub
     provider-import-link/ provider import links: what the web builds and what the hub reads
     star-prompt/      when the GitHub star prompts show (empty Agents pill, milestone card, onboarding toast)
+    stream-chunks/     the completed-block split of a streaming reply, checked against iOS by the pure Rust core
     meeting-echo/     Persona's echo in a meeting: a line is one only when its time and its words match, checked by the hub and iOS
     minutes-overview/ the minutes' summary card: bold places, cleaning, the fallback and its Markdown, checked by the hub, the mock, iOS and web
     tool-names/       tool names, subjects and arguments in words, checked by Android (iOS later)
@@ -35,6 +36,7 @@ spec/
     file-types/       a .ts file's type from its bytes, TypeScript or an MPEG transport stream, checked by the node and the hub (Go)
     screen-udp/       the live screen's video over UDP: sealing, packets, Reed-Solomon blocks, checked by the node (Go) and the iPhone
     screen-input/     the live screen's pixel scroll record, checked by the node (Go) and PersonaInputKit (helper and iPhone)
+    review/           what the node's git.review answers (empty fields left out), written by the node and decoded by iOS
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7
 ```
@@ -50,6 +52,7 @@ spec/
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
+| review | [README](fixtures/review/README.md): the node's real `git.review` answers, empty `header` and base `hash` left out, written by the node's test and decoded by iOS (#8733) |
 | comments | [README](fixtures/comments/README.md): the `> Comment N` / `Code comment N` / `Element comment N` blocks a message leads with, written and read back by the web app and the iOS app (#151) |
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
 | session-search | [README](fixtures/session-search/README.md): ranked runtime-Agent search, explicit query operators and shared local/server matching (#7624) |
@@ -58,6 +61,7 @@ spec/
 | needs-you | [README](fixtures/needs-you/README.md): the Agents tab's Needs you section, one row per session that waits for the user, and what its header, filter and badge count, checked by iOS and Android (#3580) |
 | triage | [README](fixtures/triage/README.md): the To-dos page's sections (the status SOP), related rows and counts, checked by the web app and the hub (#3483) |
 | sync | [README](fixtures/sync/README.md): stories of one chat on one or more devices (sends, cards, reconnects, hub restarts, wakes, long chats) with faults, checked at every step by Go, the clients and the end-to-end runs (#1073) |
+| stream-chunks | [README](fixtures/stream-chunks/README.md): the pure Rust projection of iOS `StreamChunks.split`, with source-cited Apple cases (#8607) |
 | tool-names | [README](fixtures/tool-names/README.md): a tool no table names in words ("GitHub · Create issue"), what its call is about, a shell's command line and its arguments as a key/value list, checked by Android; iOS's own tests hold the same cases until it reads them (#4339) |
 | fold-changes | [README](fixtures/fold-changes/README.md): the files a run of work's successful edits changed and their lines, counted by the hub for a fold and by the web for the same calls unfolded (#5157) |
 | input-clip | [README](fixtures/input-clip/README.md): the hub and runtime SDK's third tool-input pass, bounding encoded objects by dropping array tails and then object fields (#2907) |

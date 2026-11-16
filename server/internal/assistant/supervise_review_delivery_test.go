@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // deliveryReviewService is a supervised task with a GitHub PR, the hub running oldHub and the forge as given, with
@@ -59,8 +61,8 @@ func TestAcceptedNeedsTheTasksPRLive(t *testing.T) {
 		{name: "unmerged", forge: &fakeForge{}, hub: oldHub, refuse: "not merged"},
 		{name: "unmerged, unverifiable hub", forge: &fakeForge{}, refuse: "not merged"},
 		{name: "merged, not deployed", forge: &fakeForge{merged: true, sha: mergeSHA, contains: map[string]bool{oldHub: false}}, hub: oldHub, refuse: "does not contain it yet"},
-		{name: "forge error", forge: &fakeForge{err: errors.New("403")}, hub: oldHub, refuse: "could not be checked"},
-		{name: "forge error, unverifiable hub", forge: &fakeForge{err: errors.New("403")}, refuse: "could not be checked"},
+		{name: "forge error", forge: &fakeForge{err: errors.New("403")}, hub: oldHub, refuse: "交付状态暂时无法验证"},
+		{name: "forge error, unverifiable hub", forge: &fakeForge{err: errors.New("403")}, refuse: "交付状态暂时无法验证"},
 		{name: "the review's link names the unmerged PR", forge: &fakeForge{}, hub: oldHub, extra: map[string]any{"link": "https://github.com/o/r/pull/9"}, refuse: "not merged"},
 		{name: "deployed", forge: &fakeForge{merged: true, sha: mergeSHA, contains: map[string]bool{oldHub: true}}, hub: oldHub},
 		{name: "merged, unverifiable hub", forge: &fakeForge{merged: true, sha: mergeSHA}},
@@ -84,7 +86,7 @@ func TestAcceptedNeedsTheTasksPRLive(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tc.refuse) || !strings.Contains(err.Error(), "external_event") {
+			if err == nil || !strings.Contains(err.Error(), tc.refuse) || (tc.forge.err == nil && !strings.Contains(err.Error(), "external_event")) {
 				t.Fatalf("accepted (%v): %s", err, res)
 			}
 			if got.DoneAt != nil {
@@ -95,6 +97,23 @@ func TestAcceptedNeedsTheTasksPRLive(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAcceptedUnavailableDoesNotCallWorkUnfinished(t *testing.T) {
+	s, todo := deliveryReviewService(t, &fakeForge{err: errors.New("verification unavailable")}, &runningHub{commit: oldHub}, false)
+	_, err := acceptReview(s, todo.ID, nil)
+	if err == nil || !strings.Contains(err.Error(), "交付状态暂时无法验证") {
+		t.Fatalf("missing unavailable-verification guidance: %v", err)
+	}
+	for _, old := range []string{"is not live", "agent_send", "external_event", "outcome cannot"} {
+		if strings.Contains(err.Error(), old) {
+			t.Fatalf("unfinished-work guidance %q remains: %v", old, err)
+		}
+	}
+	if got := todoNow(s, todo.ID); got.DoneAt != nil {
+		t.Fatalf("unavailable verification closed the task: %+v", got)
+	}
+	t.Logf("unavailable verification refusal: %v", err)
 }
 
 func TestAcceptedRemovesConfirmedNonPR(t *testing.T) {
@@ -193,10 +212,15 @@ func TestAcceptedNonPRCannotHideEarlierRealPR(t *testing.T) {
 	s, todo := deliveryReviewService(t, &fakeForge{}, &runningHub{commit: oldHub}, false)
 	ctx := context.Background()
 	s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/10")
+	s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText,
+		Text: "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
+			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/r/issues/10":
 			_, _ = w.Write([]byte(`{"number":10}`))
+		case "/repos/o/r/issues/9":
+			_, _ = w.Write([]byte(`{"pull_request":{}}`))
 		case "/repos/o/r/pulls/9":
 			_, _ = w.Write([]byte(`{"merged":false}`))
 		default:
@@ -230,7 +254,7 @@ func TestForgetTaskPRKeepsStateOnWriteFailure(t *testing.T) {
 	st.mu.Lock()
 	st.failPut = errors.New("database unavailable")
 	st.mu.Unlock()
-	if err := s.forgetTaskPR(ctx, todo.ID, pr); err == nil {
+	if err := s.forgetTaskPR(ctx, todo.ID, pr, "https://github.com/o/r/pull/8"); err == nil {
 		t.Fatal("non-PR removal succeeded without persisting it")
 	}
 	st.mu.Lock()
@@ -258,7 +282,7 @@ func TestForgetTaskPRPersistsRemoval(t *testing.T) {
 	s.setTaskStage(ctx, todo.ID, "review", real)
 	s.setTaskStage(ctx, todo.ID, "review", pr)
 	s.watchDeploy(ctx, todo.ID, deployWatch{PR: pr, Since: time.Now()})
-	if err := s.forgetTaskPR(ctx, todo.ID, pr); err != nil {
+	if err := s.forgetTaskPR(ctx, todo.ID, pr, real); err != nil {
 		t.Fatal(err)
 	}
 	restarted, _ := newTaskServiceOn(t, st)

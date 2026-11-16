@@ -235,6 +235,11 @@ type Meta struct {
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
+	// codexPending: the ids of backgrounded commands whose terminal record has not been read. A command can finish in
+	// a later turn, so task_started does not clear it; the id leaves when its completed/failed record is read.
+	// codexPendingIDs keeps them oldest first and codexPendingKept (codex.go) bounds them.
+	codexPending    map[string]bool
+	codexPendingIDs []string
 	// codexTurnModel: the model the turn under way runs on (its turn_context), which the turn's agent items carry.
 	// task_started clears it, as a window starting there has none.
 	codexTurnModel string
@@ -277,18 +282,19 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveNamingMetadata reads only title provenance and generated usage during an existing incremental scan.
+// ObserveNamingMetadata reads title provenance, generated usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
 func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
-		!bytes.Contains(line, []byte(`"output_tokens"`)) {
+		!bytes.Contains(line, []byte(`"output_tokens"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) {
 		return
 	}
 	var e struct {
-		Type        string `json:"type"`
-		CustomTitle string `json:"customTitle"`
-		AITitle     string `json:"aiTitle"`
-		IsSidechain bool   `json:"isSidechain"`
+		Type        string    `json:"type"`
+		Timestamp   time.Time `json:"timestamp"`
+		CustomTitle string    `json:"customTitle"`
+		AITitle     string    `json:"aiTitle"`
+		IsSidechain bool      `json:"isSidechain"`
 		Message     *struct {
 			ID    string `json:"id"`
 			Usage *struct {
@@ -296,8 +302,9 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 			} `json:"usage"`
 		} `json:"message"`
 		Payload struct {
-			Type string `json:"type"`
-			Info *struct {
+			Type   string `json:"type"`
+			Effort string `json:"effort"`
+			Info   *struct {
 				Total struct {
 					OutputTokens int `json:"output_tokens"`
 				} `json:"total_token_usage"`
@@ -308,6 +315,10 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		return
 	}
 	switch e.Type {
+	case "turn_context":
+		if e.Payload.Effort != "" && !e.Timestamp.Before(m.EffortAt) {
+			m.Effort, m.EffortAt = e.Payload.Effort, e.Timestamp
+		}
 	case "custom-title":
 		if e.CustomTitle != "" {
 			m.Title, m.TitleManual, m.TitleSource = e.CustomTitle, true, "manual"
@@ -492,7 +503,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return nil
 	}
 	meta.tree = treeLine{uuid: e.UUID, parent: e.ParentUUID, sidechain: e.IsSidechain, assistant: e.Type == "assistant",
-		system: e.Type == "system", turnEnd: e.Type == "system" && e.Subtype == "turn_duration"}
+		system: e.Type == "system", turnEnd: e.Type == "system" && e.Subtype == "turn_duration", raw: line}
 	if e.Type == "user" {
 		meta.sawUser = true
 	}
@@ -634,9 +645,14 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		if notification {
 			return nil // other harness notifications are not user input
 		}
-		items := userText(mk, text, meta)
+		items, paseo := paseoInput(mk, 0, text)
+		if !paseo {
+			items = userText(mk, text, meta)
+		}
 		for i := range items {
-			items[i].Queued = true
+			if !paseo || items[i].Role == "user" { // a Paseo child's notice is a notice, as a background task's
+				items[i].Queued = true
+			}
 		}
 		if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
 			meta.FirstUser = items[0].Text
@@ -742,8 +758,11 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			if e.IsMeta {
 				return nil
 			}
-			items := userText(mk, s, meta)
-			if strings.Contains(s, "<task-notification>") {
+			items, paseo := paseoInput(mk, 0, s)
+			if !paseo {
+				items = userText(mk, s, meta)
+			}
+			if paseo || strings.Contains(s, "<task-notification>") { // a notice that woke the agent
 				markWake(items)
 			}
 			if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
@@ -770,8 +789,11 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				if e.IsMeta {
 					continue
 				}
-				items := userText(func(_ int, role, kind string) proto.Item { return mk(i, role, kind) }, b.Text, meta)
-				if strings.Contains(b.Text, "<task-notification>") {
+				items, paseo := paseoInput(mk, i, b.Text)
+				if !paseo {
+					items = userText(func(_ int, role, kind string) proto.Item { return mk(i, role, kind) }, b.Text, meta)
+				}
+				if paseo || strings.Contains(b.Text, "<task-notification>") {
 					markWake(items)
 				}
 				if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {

@@ -2,7 +2,6 @@
 import AVFoundation
 import Foundation
 import Testing
-import PersonaWire
 @testable import Persona
 
 /// Spoken meeting answers (#5004, docs/apple/recording.md「Persona in meetings」): said in the hub's realtime voice when it
@@ -270,6 +269,58 @@ import PersonaWire
         #expect(!MeetingVoiceRoutes.speaks(VoiceInfo(protocolVersion: 1, features: ["speak"])))
     }
 
+    // MARK: A speech contribution (#8712)
+
+    private func extensions(_ json: String) throws -> [HubExtension] {
+        try JSON.decoder.decode([HubExtension].self, from: Data(json.utf8))
+    }
+
+    @Test func theFirstRunningSpeechContributionIsPicked() throws {
+        let list = try extensions(#"""
+        [{"id":"voice","name":"语音","kind":"voice","status":"running","contributes":{"voice":["voice"]}},
+         {"id":"off-one","name":"A","kind":"ui","status":"disabled","contributes":{"speech":["a"]}},
+         {"id":"Bad Id","name":"B","kind":"ui","status":"running","contributes":{"speech":["b"]}},
+         {"id":"volc","name":"火山语音","kind":"ui","status":"running","contributes":{"transcription":["volc"],"speech":["volc"]}}]
+        """#)
+        let picked = try #require(MeetingVoiceRoutes.speechPick(list))
+        #expect(picked.extensionID == "volc" && picked.contribution == "volc", "not one that is off, nor an id that may not be a path")
+        #expect(MeetingVoiceRoutes.speechPick(try extensions(#"[{"id":"volc","name":"V","kind":"ui","status":"needs_setup","contributes":{"speech":["volc"]}}]"#)) == nil,
+                "one waiting for its key is not used")
+        #expect(MeetingVoiceRoutes.speechPick(try extensions(#"[{"id":"voice","name":"V","kind":"voice","status":"running"}]"#)) == nil)
+    }
+
+    @Test func aSpeechContributionReadsOnlyWhenItSaysSo() {
+        #expect(MeetingVoiceRoutes.reads(SpeechInfo(protocolVersion: 1, rate: 24000)))
+        #expect(!MeetingVoiceRoutes.reads(SpeechInfo(protocolVersion: 1, setup: "key")), "no key saved yet")
+        #expect(!MeetingVoiceRoutes.reads(SpeechInfo(protocolVersion: 1, setup: "off")), "reading answers turned off in its settings")
+        #expect(!MeetingVoiceRoutes.reads(SpeechInfo(protocolVersion: 0)))
+    }
+
+    @Test func theSpeechRouteAsksItsInfoOnceAMinute() async throws {
+        let hub = FakeHub()
+        var setup = ""
+        hub.on("GET", "/api/v1/extensions/volc/speech/volc/info") { _ in
+            Data((setup.isEmpty ? #"{"protocol":1,"rate":24000}"# : #"{"protocol":1,"rate":24000,"setup":"\#(setup)"}"#).utf8)
+        }
+        var api = hub.client
+        api.extensionsAPI = true
+        let list = try extensions(#"[{"id":"volc","name":"火山语音","kind":"ui","status":"running","contributes":{"speech":["volc"]}}]"#)
+        let routes = MeetingVoiceRoutes()
+        let now = Date()
+        let route = try #require(await routes.speechRoute(api: api, group: "g", extensions: list, now: now))
+        #expect(route.extensionID == "volc" && route.speech == "volc" && route.model == nil && route.voice == nil,
+                "the contribution's own voice: no model or voice of the voice extension's")
+        setup = "off"
+        #expect(await routes.speechRoute(api: api, group: "g", extensions: list, now: now.addingTimeInterval(30)) != nil, "kept a minute")
+        #expect(hub.sent("GET", "/api/v1/extensions/volc/speech/volc/info").count == 1)
+        #expect(await routes.speechRoute(api: api, group: "g", extensions: list, now: now.addingTimeInterval(61)) == nil,
+                "turned off: the voice extension's or the phone's voice says it")
+        let gone = FakeHub()
+        var api2 = gone.client
+        api2.extensionsAPI = true
+        #expect(await MeetingVoiceRoutes().speechRoute(api: api2, group: "g", extensions: list, now: now) == nil, "an info that cannot be read")
+    }
+
     @Test func theRequestSaysOnlyWhatItKnows() throws {
         let full = try JSONSerialization.jsonObject(with: JSON.encoder.encode(
             VoiceSpeech.Body(text: "Hi", model: "voice-deep", voice: "calm", lang: "en"))) as? [String: String]
@@ -367,3 +418,4 @@ import PersonaWire
     }
 }
 #endif
+import PersonaWire

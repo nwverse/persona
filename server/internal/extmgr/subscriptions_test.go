@@ -147,6 +147,13 @@ func TestSubscriptionGenerate(t *testing.T) {
 	if _, err := m.JSON(ctx, in); !errors.Is(err, subscriptions.ErrNoModel) {
 		t.Fatalf("nothing set up: %v", err)
 	}
+	modelFailure := &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "the upstream model is missing"}
+	answer = func(json.RawMessage) (json.RawMessage, error) {
+		return nil, modelFailure
+	}
+	if _, err := m.JSON(ctx, in); err != modelFailure || errors.Is(err, subscriptions.ErrNoModel) {
+		t.Fatalf("an upstream model failure was rewritten: %v", err)
+	}
 	until := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
 	answer = func(json.RawMessage) (json.RawMessage, error) {
 		return nil, &rpc.Error{Code: assistantwire.CodeModelPaused, Message: "held", Data: json.RawMessage(`{"reason":"quota","until":"` + until + `"}`)}

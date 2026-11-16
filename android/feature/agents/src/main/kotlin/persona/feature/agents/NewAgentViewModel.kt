@@ -8,6 +8,8 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.feature.chat.ComposerUploadLimiter
+import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -19,6 +21,12 @@ import kotlinx.coroutines.channels.Channel
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+
+/** The catalog source and engine `host` of a Paseo workspace (#7259), and the `kind` its worktrees are made by (#8856). */
+private const val PaseoHost = "paseo"
+
+/** What the Git status of the folder picked is asked by: the computer, the folder, a space, and the engine asked. */
+private data class RepoQuery(val machineId: String, val cwd: String, val space: AgentSpacePreset?, val kind: String?)
 
 /** A new tab in an existing herdr workspace: machine and directory are fixed. */
 internal data class AgentSpacePreset(val machineId: String, val workspaceId: String, val cwd: String, val name: String)
@@ -59,6 +67,11 @@ internal data class NewAgentState(
     val machineId: String = "",
     val selection: AgentDefaults = AgentDefaults(),
     val launchers: List<AgentLauncher> = emptyList(),
+    /**
+     * What the hub lists off on this computer (#8109, its `unavailable`): the Persona-managed providers their own-service
+     * rule leaves out here, with why. Shown after the launchers ([leftOutLaunchers]), never picked; empty from an older hub.
+     */
+    val unavailable: List<UnavailableLauncher> = emptyList(),
     val recent: List<AgentRecentDirectory> = emptyList(),
     val browser: AgentDirectories? = null,
     val browsing: Boolean = false,
@@ -86,6 +99,14 @@ internal data class NewAgentState(
     val focusPrompt: Int = 0,
     /** Claude Code's ultracode for this start (#582, iOS NewChatView): off each time the form opens, never saved. */
     val ultracode: Boolean = false,
+    /**
+     * The permission mode picked for a launcher that lists its own ([providerModes], #8261): "" its own approval, or one
+     * it lists (Allow everything). Picked on this form and never remembered, so a mode left from a Claude Code start
+     * never reaches such a start; back to "" each time the form opens.
+     */
+    val providerMode: String = "",
+    /** The thinking effort picked for such a launcher, one its model lists ([providerEfforts]); "" its own. Never remembered. */
+    val providerEffort: String = "",
     /** What `worktree/status` says of the folder picked (#4532); null while asking or when the computer can't say. */
     val repo: WorktreeStatus? = null,
     /** Start it in a worktree of its own, on [worktreeBranch] (empty: the node's pick). */
@@ -123,10 +144,13 @@ internal data class NewAgentState(
         else -> null
     }
     /**
-     * The folder is in a Git repository and this is not a tab in an existing space, nor an existing workspace picked
-     * (#7259, the start goes into it): the worktree switch shows (#4532).
+     * The folder is in a Git repository and this is not a tab in an existing space: the worktree switch shows (#4532).
+     * A workspace picked (#7259, the start goes into it) offers it only when Paseo's (#8856): Paseo makes the worktree
+     * as a workspace of its own; an Orca one's worktrees go through Orca's own New Worktree.
      */
-    val worktreeOffered: Boolean get() = space == null && workspace == null && repo?.path?.isNotEmpty() == true
+    val worktreeOffered: Boolean get() = space == null && (workspace == null || paseoWorkspace) && repo?.path?.isNotEmpty() == true
+    /** The workspace picked is Paseo's, whose worktrees Paseo makes (`kind` "paseo" for `worktree/status` and `add`). */
+    val paseoWorkspace: Boolean get() = workspace?.source == PaseoHost
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
     /** An empty launcher follows the model configuration, when the hub has one. */
     val following: Boolean get() = follow != null && selection.launcher.isEmpty()
@@ -137,6 +161,19 @@ internal data class NewAgentState(
         else launchers.firstOrNull { it.name == selection.launcher }?.agentType ?: "claude"
     /** The launcher that will run, whose models the "Model" row lists: the one picked, or the configuration's. */
     val modelLauncher: String get() = if (following) configuredLauncher?.name.orEmpty() else selection.launcher
+    /** [modelLauncher] as this computer lists it; null before its launchers are read or when it lists no such one. */
+    val runningLauncher: AgentLauncher? get() = launchers.firstOrNull { it.name == modelLauncher }
+    /** What people call [modelLauncher]: its display name (Paseo's label for its provider, #8261), else its name. */
+    val modelLauncherTitle: String get() = runningLauncher?.title ?: modelLauncher
+    /**
+     * The permission modes a start on [runningLauncher] takes when they are not Claude Code's (#8261, the node's
+     * `permission_modes`: Paseo's Grok, OpenCode or Codex): the form offers its own approval and, where it lists that too,
+     * Allow everything ([providerMode]), and the efforts its model lists ([providerEfforts]). Null for Claude Code's
+     * launchers and for every other one, which takes neither.
+     */
+    val providerModes: List<String>? get() = runningLauncher?.permissionModes?.takeIf { it.isNotEmpty() }
+    /** Claude Code's five modes, its efforts and ultracode, remembered per computer: a Claude Code launcher's start. */
+    val claudeModes: Boolean get() = agentType == "claude" && providerModes == null
     /** Older computers still require Codex's first message, including when following model configuration. */
     val promptRequired: Boolean get() = agentType == "codex" &&
         launchers.firstOrNull { it.name == modelLauncher }?.promptOptional != true
@@ -160,6 +197,8 @@ internal data class NewAgentState(
             else list.models.firstOrNull { it.id == configuredModel }
         return running?.efforts
     }
+    /** The efforts a start on a launcher that lists its modes takes (#8261): only those its model lists, none while not known. */
+    val providerEfforts: List<String> get() = if (providerModes == null) emptyList() else modelEfforts.orEmpty()
 }
 
 /**
@@ -174,6 +213,7 @@ private fun NewAgentState.settled(): NewAgentState {
     if (efforts != null && next.selection.effort.isNotEmpty() && next.selection.effort !in efforts) {
         next = next.copy(selection = next.selection.copy(effort = ""))
     }
+    if (next.providerEffort.isNotEmpty() && next.providerEffort !in next.providerEfforts) next = next.copy(providerEffort = "")
     return next
 }
 
@@ -202,15 +242,18 @@ internal class NewAgentViewModel(
     private var modelsJob: Job? = null
     private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
+    private val uploadLimiter = ComposerUploadLimiter()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
         viewModelScope.launch {
-            mutable.map { Triple(it.machineId, it.selection.cwd, it.space) }.distinctUntilChanged().collectLatest { (machine, cwd, space) ->
+            // A Paseo workspace picked asks Paseo, which says where its worktree goes (#8856).
+            mutable.map { RepoQuery(it.machineId, it.selection.cwd, it.space, if (it.paseoWorkspace) PaseoHost else null) }
+                .distinctUntilChanged().collectLatest { (machine, cwd, space, kind) ->
                 mutable.update { it.copy(repo = null) }
                 if (space != null || cwd.isBlank() || machines.value.none { it.id == machine && it.online }) return@collectLatest
                 delay(400)
-                val status = service.worktreeStatus(machine, cwd)
+                val status = service.worktreeStatus(machine, cwd, kind)
                 mutable.update { if (it.machineId == machine && it.selection.cwd == cwd) it.copy(repo = status) else it }
             }
         }
@@ -220,8 +263,13 @@ internal class NewAgentViewModel(
                 val recents = recentSetups()
                 if (pending != null) {
                     val r = pending.request
+                    // Another agent's mode and effort are its launcher's own picks (#8261), never Claude Code's.
+                    val claude = r.agentType == null
+                    val mode = r.permissionMode.orEmpty()
+                    val effort = r.effort.orEmpty()
                     mutable.value = NewAgentState(initialized = true, machineId = r.machineId,
-                        selection = AgentDefaults(r.cwd, r.launcher, r.permissionMode.orEmpty(), r.effort.orEmpty()), model = r.model.orEmpty(),
+                        selection = AgentDefaults(r.cwd, r.launcher, if (claude) mode else "", if (claude) effort else ""),
+                        providerMode = if (claude) "" else mode, providerEffort = if (claude) "" else effort, model = r.model.orEmpty(),
                         prompt = pending.firstMessage ?: r.prompt.orEmpty(), pending = pending, error = AgentText(R.string.agents_new_error_pending),
                         recentSetups = recents)
                 } else {
@@ -250,7 +298,10 @@ internal class NewAgentViewModel(
     /** Opens the form for a new session, or for a new tab in [space]; an unconfirmed start keeps its own form. */
     fun startIn(space: AgentSpacePreset?) {
         val current = state.value
-        if (current.pending != null || current.created != null || current.starting || current.space == space) return
+        if (current.pending != null || current.created != null || current.starting) return
+        // A provider's mode and effort are picked each time the form opens (#8261), never kept from the last one.
+        mutable.update { it.copy(providerMode = "", providerEffort = "") }
+        if (current.space == space) return
         machineJob?.cancel()
         browseJob?.cancel()
         workspacesJob?.cancel()
@@ -269,24 +320,25 @@ internal class NewAgentViewModel(
         machineJob?.cancel()
         browseJob?.cancel()
         modelsJob?.cancel()
-        mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), recent = emptyList(),
+        mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), unavailable = emptyList(), recent = emptyList(),
             browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null,
-            workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "") }
+            workspaces = emptyList(), workspace = null, folderBeforeWorkspace = "", providerMode = "", providerEffort = "") }
         loadWorkspaces(id)
         machineJob = viewModelScope.launch {
             try {
                 val defaults = store.defaults(service.scope, id)
                 val known = state.value.modelConfig.takeIf { it is NewAgentModelConfig.Follow || it is NewAgentModelConfig.Unsupported }
-                val (launchers, dirs, config) = coroutineScope {
-                    val l = async { service.launchers(id) }
+                val (listed, dirs, config) = coroutineScope {
+                    val l = async { service.launcherList(id) }
                     val d = async { service.directories(id) }
                     // The "New Agent" configuration is the hub's, not the machine's: read once per form.
                     val c = async { known ?: modelConfig() }
                     Triple(l.await(), d.await(), c.await())
                 }
                 val prefilledCwd = prefill?.cwd?.takeIf { prefill.machineId == id && it.isNotBlank() }
+                val launchers = listed.launchers
                 val launcher = defaultLauncher(config, defaults, launchers)
-                mutable.update { it.copy(loading = false, launchers = launchers, recent = dirs.recent.take(6), modelConfig = config,
+                mutable.update { it.copy(loading = false, launchers = launchers, unavailable = listed.unavailable, recent = dirs.recent.take(6), modelConfig = config,
                     selection = defaults.copy(cwd = it.space?.cwd ?: prefilledCwd ?: defaults.cwd.ifEmpty { dirs.recent.firstOrNull()?.path ?: dirs.path },
                         launcher = launcher),
                     model = RecentSetups.model(it.recentSetups, id, launcher),
@@ -310,16 +362,19 @@ internal class NewAgentViewModel(
             mutable.update { if (it.machineId == machineId && it.space == null) it.copy(workspaces = sections) else it }
         }
     }
-    /** Starts in [workspace], one of the rows offered: its folder replaces the one picked until "Choose by folder". */
+    /**
+     * Starts in [workspace], one of the rows offered: its folder replaces the one picked until "Choose by folder". The
+     * worktree switch goes off, as on the web: one turned on for another choice never carries over (#8856).
+     */
     fun pickWorkspace(workspace: persona.core.contracts.api.AgentWorkspace) {
         val current = state.value
         if (current.locked || current.loading || current.space != null || workspace.machineId != current.machineId) return
         browseJob?.cancel()
         mutable.update { it.copy(workspace = workspace, folderBeforeWorkspace = if (it.workspace == null) it.selection.cwd else it.folderBeforeWorkspace,
             selection = it.selection.copy(cwd = workspace.cwd), browsing = false, browser = null, error = null, pickedSetup = null,
-            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }) }
+            repo = it.repo.takeIf { _ -> workspace.cwd == it.selection.cwd }, inWorktree = false) }
     }
-    /** "Choose by folder": no workspace, and the folder picked before it back. */
+    /** "Choose by folder": no workspace, the folder picked before it back, and the worktree switch off. */
     fun chooseByFolder() {
         if (state.value.locked) return
         mutable.update {
@@ -327,14 +382,14 @@ internal class NewAgentViewModel(
             else {
                 val cwd = it.folderBeforeWorkspace.ifEmpty { it.selection.cwd }
                 it.copy(workspace = null, folderBeforeWorkspace = "", selection = it.selection.copy(cwd = cwd),
-                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd })
+                    repo = it.repo.takeIf { _ -> cwd == it.selection.cwd }, inWorktree = false)
             }
         }
     }
-    /** A recent folder: the start goes there, by folder (any workspace picked is no longer). */
+    /** A recent folder: the start goes there, by folder (any workspace picked is no longer, nor its worktree switch). */
     fun useFolder(path: String) {
         if (state.value.locked || state.value.loading) return
-        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "") }
+        mutable.update { it.copy(workspace = null, folderBeforeWorkspace = "", inWorktree = it.inWorktree && it.workspace == null) }
         selection(state.value.selection.copy(cwd = path))
     }
     /**
@@ -391,10 +446,15 @@ internal class NewAgentViewModel(
     /** The cards are a shortcut: when they can't be read, the form works without them. */
     private suspend fun recentSetups(): List<RecentSetup> = try { store.recentSetups(service.scope) }
         catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
-    /** Keeps a start of this form in the recent setups; failing to write them never hides the session it started. */
+    /**
+     * Keeps a start of this form in the recent setups; failing to write them never hides the session it started. Mode
+     * and effort only for Claude Code, as on the web: another agent's are picked each time (#8261).
+     */
     private suspend fun recordRecent(request: AgentStartRequest) {
+        val claude = request.agentType == null
         val setup = RecentSetup(request.machineId, request.cwd, request.launcher, request.model.orEmpty(), request.agentType ?: "claude",
-            request.permissionMode.orEmpty(), request.effort.orEmpty(), now().truncatedTo(ChronoUnit.SECONDS).toString())
+            if (claude) request.permissionMode.orEmpty() else "", if (claude) request.effort.orEmpty() else "",
+            now().truncatedTo(ChronoUnit.SECONDS).toString())
         try {
             val kept = store.updateRecentSetups(service.scope) { RecentSetups.record(it, setup) }
             mutable.update { it.copy(recentSetups = kept) }
@@ -429,6 +489,14 @@ internal class NewAgentViewModel(
     }
     fun prompt(value: String) { if (!state.value.locked) mutable.update { it.copy(prompt = value) } }
     fun ultracode(on: Boolean) { if (!state.value.locked && state.value.ultracode != on) mutable.update { it.copy(ultracode = on, error = null) } }
+    /** The permission mode for a launcher that lists its own (#8261): "" its own approval, or one it lists. */
+    fun providerMode(value: String) {
+        if (!state.value.locked && !state.value.loading) mutable.update { it.copy(providerMode = value, error = null, pickedSetup = null) }
+    }
+    /** The thinking effort for such a launcher: "" its own, or one its model lists. */
+    fun providerEffort(value: String) {
+        if (!state.value.locked && !state.value.loading) mutable.update { it.copy(providerEffort = value, error = null, pickedSetup = null).settled() }
+    }
     fun inWorktree(on: Boolean) { if (!state.value.locked) mutable.update { it.copy(inWorktree = on, error = null) } }
     fun worktreeBranch(value: String) { if (!state.value.locked) mutable.update { it.copy(worktreeBranch = value) } }
     fun browse(path: String = state.value.selection.cwd) {
@@ -500,9 +568,11 @@ internal class NewAgentViewModel(
         viewModelScope.launch {
             try {
                 // In a worktree of its own (#4532): made first; a failure says why, and nothing starts.
+                // From a Paseo workspace picked (#8856), Paseo makes it from the workspace's folder, as a workspace of its own.
                 val worktree = if (previous == null && current.worktreeOffered && current.inWorktree) try {
                     service.addWorktree(current.machineId, current.selection.cwd,
-                        AgentWorktree.nameHint(current.prompt, current.selection.cwd), current.worktreeBranch).path
+                        AgentWorktree.nameHint(current.prompt, current.selection.cwd), current.worktreeBranch,
+                        PaseoHost.takeIf { current.paseoWorkspace })
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     // A refusal says why in the node's words (git's, for worktree_failed), as iOS does; anything else as usual.
@@ -524,23 +594,32 @@ internal class NewAgentViewModel(
      * message goes the same way once the hub answers ([NewAgentState.firstMessageAfterStart], iOS and the web). Codex
      * takes its first message with the start, and so does any start without a sender.
      */
-    private fun newOperation(current: NewAgentState, agentType: String, worktree: String? = null): AgentStartOperation {
+    private fun newOperation(current: NewAgentState, agentType: String, worktree: WorktreeAdded? = null): AgentStartOperation {
         val typed = current.prompt.trim().takeIf { it.isNotEmpty() }
         val async = sender != null && current.firstMessageAfterStart
         // The photos and the uploaded files go with the first message as the composer writes them (#2321); the tab is
         // named from what was typed, as on iOS.
         val first = if (async && current.attachments.isNotEmpty())
-            NewAgentAttachments.firstMessage(typed.orEmpty(), current.attachments, uploads?.photosOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
+            NewAgentAttachments.firstMessage(current.prompt.takeIf(String::isNotBlank).orEmpty(), current.attachments,
+                uploads?.photosOnly?.invoke().orEmpty(), uploads?.filesOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
         else typed
         val efforts = current.modelEfforts
-        // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder.
+        // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder; with a worktree
+        // made from it (#8856), into the workspace made for the worktree, on the same engine.
         val workspace = current.workspace?.takeIf { current.space == null }
+        val workspaceId = current.space?.workspaceId ?: if (worktree != null) worktree.workspaceId.takeIf { workspace != null } else workspace?.sourceId
+        // Claude Code's mode and effort (its effort only one the model that will run takes); a launcher that lists its own
+        // modes (#8261) takes one of those picked here, its own approval going as none, and an effort its model lists;
+        // Codex and the rest take neither.
+        val claude = current.claudeModes
+        val mode = if (claude) current.selection.mode.takeIf { it.isNotEmpty() }
+            else current.providerMode.takeIf { it != "default" && current.providerModes?.contains(it) == true }
+        val effort = if (claude) current.selection.effort.takeIf { it.isNotEmpty() && (efforts == null || it in efforts) }
+            else current.providerEffort.takeIf { it.isNotEmpty() && it in current.providerEfforts }
         val request = AgentStartRequest(
-            current.machineId, worktree ?: workspace?.cwd ?: current.selection.cwd, current.selection.launcher,
-            typed.takeUnless { async }, current.selection.mode.takeIf { it.isNotEmpty() && agentType == "claude" },
-            // Codex starts take no effort; Claude's only one the model that will run takes.
-            current.selection.effort.takeIf { it.isNotEmpty() && agentType == "claude" && (efforts == null || it in efforts) },
-            current.space?.workspaceId ?: workspace?.sourceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
+            current.machineId, worktree?.path ?: workspace?.cwd ?: current.selection.cwd, current.selection.launcher,
+            typed.takeUnless { async }, mode, effort,
+            workspaceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
             nameHint = typed.takeIf { async }, model = current.sentModel,
             ultracode = true.takeIf { current.ultracode && agentType == "claude" },
             host = workspace?.source,
@@ -580,11 +659,13 @@ internal class NewAgentViewModel(
                 if (request.resumeSessionId == null) recordRecent(request)
                 // A tab in an existing space must not replace the machine's remembered directory.
                 if (request.workspaceId == null && request.resumeSessionId == null) {
-                    // A Codex (or any non-Claude) start sends no mode or effort: the machine keeps the ones its next
-                    // Claude Code starts with, as on iOS and the web (#1898).
-                    val kept = if (request.agentType != null) store.defaults(service.scope, request.machineId) else null
+                    // A Codex (or any non-Claude) start keeps its mode and effort to itself (a provider's are picked each
+                    // time, #8261): the machine keeps the ones its next Claude Code starts with, as on iOS and the web (#1898).
+                    val claude = request.agentType == null
+                    val kept = if (!claude) store.defaults(service.scope, request.machineId) else null
                     store.saveDefaults(service.scope, request.machineId, AgentDefaults(request.cwd, request.launcher,
-                        kept?.mode ?: request.permissionMode.orEmpty(), kept?.effort ?: request.effort.orEmpty()))
+                        if (claude) request.permissionMode.orEmpty() else kept?.mode.orEmpty(),
+                        if (claude) request.effort.orEmpty() else kept?.effort.orEmpty()))
                 }
                 // Keep the receipt until navigation is acknowledged, including across process death.
                 mutable.update { it.copy(created = session) }
@@ -606,11 +687,13 @@ internal class NewAgentViewModel(
     fun canUpload(machineId: String): Boolean = machineId.isNotEmpty() && uploads?.service?.invoke(machineId) != null
     /** How many more photos fit (iOS `MessagePhotos.limit`, 4). */
     fun photoRoom(): Int = (NewAgentAttachments.MAX_PHOTOS - state.value.attachments.count { it.media }).coerceAtLeast(0)
+    /** How many more ordinary files fit; this is separate from the photo/video places. */
+    fun fileRoom(): Int = (NewAgentAttachments.MAX_FILES - state.value.attachments.count { !it.media }).coerceAtLeast(0)
     private val noticeChannel = Channel<AgentText>(Channel.BUFFERED)
     /** What the form's toast says (iOS `model.toast`): a pick not taken, an upload that failed. */
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
-    /** Picked photos and files join the form and go to the computer picked, each on its own (iOS `NewAgentAttachments.upload`). */
+    /** Picked photos and files join the form and go to the computer picked, three at a time. */
     fun attach(picked: List<persona.feature.chat.ComposerAttachment>) {
         val uploads = uploads
         val current = state.value
@@ -618,8 +701,30 @@ internal class NewAgentViewModel(
             picked.forEach { uploads?.discard?.invoke(it) }
             return
         }
-        mutable.update { it.copy(attachments = it.attachments + picked, attachedOn = it.machineId, attachNote = null) }
-        picked.forEach { upload(it.id) }
+        var files = fileRoom()
+        var media = photoRoom()
+        val accepted = picked.filter { attachment ->
+            if (attachment.media) (media > 0).also { if (it) media-- }
+            else (files > 0).also { if (it) files-- }
+        }
+        val refused = picked.filterNot { it in accepted }
+        refused.forEach(uploads.discard)
+        if (refused.isNotEmpty()) notice(AgentText(
+            if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
+        if (accepted.isEmpty()) return
+        mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
+        accepted.forEach { upload(it.id) }
+    }
+    /** A failed file stays in the form; Retry goes through the same three-slot pump. */
+    fun retryAttachment(id: String) {
+        val attachment = state.value.attachments.firstOrNull { it.id == id } ?: return
+        if (attachment.error == null || attachment.uploadState == DraftUploadState.Invalid || state.value.locked) return
+        mutable.update { current ->
+            current.copy(attachments = current.attachments.map {
+                if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Pending) else it
+            })
+        }
+        upload(id)
     }
     /** ✕ on a photo or a file: an upload still going stops. */
     fun removeAttachment(id: String) {
@@ -635,7 +740,7 @@ internal class NewAgentViewModel(
         clearAttachments()
     }
     private fun clearAttachments() {
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val gone = state.value.attachments
         mutable.update { it.copy(attachments = emptyList(), attachedOn = "", attachNote = null) }
@@ -661,29 +766,62 @@ internal class NewAgentViewModel(
         // The services of the hub group this computer belongs to (bindingsFor): the group's own machine id goes up.
         val service = uploads.service(machine)
         if (service == null) {
-            // No hub to send it with: it goes, as iOS's upload without an API does.
-            drop(id)
+            if (attachment.image) {
+                // The existing photo UI has no retained failure row; ordinary files do.
+                drop(id)
+            } else {
+                // The picker can return after the hub went away. Keep the document and make Retry explain the offline failure.
+                val error = ComposerOperationException(persona.core.contracts.CoreText.of(
+                    persona.core.contracts.CoreText.Key.ComposerUploadOffline))
+                notice(uploadFailure(attachment.name, error))
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, error), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
+            }
             return
         }
-        mutable.update { s -> s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it }) }
-        uploadJobs[id] = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
-                val path = uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment)
+                val path = uploadLimiter.withSlot {
+                    mutable.update { s ->
+                        s.copy(attachments = s.attachments.map {
+                            if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it
+                        })
+                    }
+                    uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment) { size ->
+                        mutable.update { s ->
+                            s.copy(attachments = s.attachments.map {
+                                if (it.id == id) it.copy(size = size) else it
+                            })
+                        }
+                    }
+                }
                 // Another computer picked meanwhile: this one's path is no use there.
                 mutable.update { s ->
                     if (s.attachedOn != machine) s
                     else s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it })
                 }
-                uploadJobs.remove(id)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                uploadJobs.remove(id)
                 if (state.value.attachedOn != machine) return@launch
-                // As iOS (`FileUploads.run`): a toast says why, and the attachment goes.
+                // A failed upload stays as a row with its reason and Retry; its local content is not discarded.
                 notice(uploadFailure(attachment.name, e))
-                drop(id)
+                if (attachment.image) {
+                    drop(id)
+                    return@launch
+                }
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, e), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
             }
         }
+        uploadJobs[id] = job
+        // An older cancelled job must not unregister its replacement for the same attachment id.
+        job.invokeOnCompletion { uploadJobs.remove(id, job) }
     }
     /**
      * Another computer was picked (iOS `computerChanged`): files are on the one picked before, so they come out with a
@@ -694,7 +832,7 @@ internal class NewAgentViewModel(
         val current = state.value
         val from = current.attachedOn
         if (from.isEmpty() || from == to) return
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val files = current.attachments.filterNot { it.image }
         val photos = current.attachments.filter { it.image }.map { it.copy(path = null, error = null, uploadState = DraftUploadState.Pending) }
@@ -711,7 +849,7 @@ internal class NewAgentViewModel(
     suspend fun acknowledge() {
         try {
             store.pending(service.scope, null)
-            mutable.update { it.copy(pending = null, created = null, prompt = "") }
+            mutable.update { it.copy(pending = null, created = null, prompt = "", providerMode = "", providerEffort = "") }
             clearAttachments()
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { mutable.update { it.copy(error = AgentText(R.string.agents_new_error_cleanup)) } }

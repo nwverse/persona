@@ -15,7 +15,7 @@ import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
   asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   removeHandoffRule, setExtensionSecretReference, type HandoffRule, type SecretUser,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
@@ -491,14 +491,21 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
   };
   // a reconnect the hub could not resume: an extension_auth push missed meanwhile is not replayed (#4954); only the
-  // sign-in is read again, so what is being typed into the settings stays
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && authChanged()), [id]);
+  // sign-in is read again, so what is being typed into the settings stays. Only an extension one signs in to has a
+  // sign-in to read: the hub answers the others 404 (#8854)
+  const signsIn = !!detail?.auth;
+  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn]);
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
   const dirty = !!detail && (isDirty(draft, detail.config) || Object.keys(problems).length > 0);
   const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const fields = detail?.form?.fields ?? [];
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
+  const setupTarget = editable ? setupSecret(detail?.needs_setup, detail?.secrets) : undefined;
+  // Nothing to set here: the configuration's heading stands over "No configuration required". Otherwise every group in
+  // it has a heading of its own and the configuration's would stand over nothing (#8853).
+  const noConfiguration = !!detail && editable && !fields.length && !detail.secrets?.length && !shownPages(detail.ui, detail.auth).length && !detail.auth
+    && !channelOf(detail) && !detail.contributes?.connectors?.length;
 
   // The draft is the user's edits on top of `base`, the configuration last read (null until the page's first read is
   // shown). Each newer configuration the hub sends (another device's or app's change, an upgrade, a save) takes the
@@ -710,7 +717,13 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           <div className="flex flex-col gap-1.5 border-t border-line px-4 py-3">
             {p?.description && <p className="text-[12.5px] leading-relaxed text-ink-2">{p.description}</p>}
             {p && runNote(p) && <p className="text-[11.5px] text-ink-3">{runNote(p)}</p>}
-            {!!p?.needs_setup?.length && <p className="text-[12px] text-orange">{t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) })}</p>}
+            {!!p?.needs_setup?.length && (setupTarget ? (
+              // What is missing is a secret to set here: the line opens it (#8853).
+              <button type="button" onClick={() => setSecret(setupTarget)} className="flex items-center gap-1 text-left text-label text-orange hover:underline" data-extension-needs-setup>
+                {t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) })}
+                <Icon name="chevron" size={10} stroke={2.4} className="shrink-0" style={{ transform: "rotate(-90deg)" }} />
+              </button>
+            ) : <p className="text-label text-orange" data-extension-needs-setup>{t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) })}</p>)}
             {p?.error && <p className="text-[12px] break-words text-red select-text">{p.error}</p>}
             {error && <p className="text-[12px] break-words text-red select-text">{t("settings-extensions.detail_error", { error })}</p>}
           </div>
@@ -729,11 +742,12 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           onUpgrade={onUpgrade}
           onUninstall={() => setRemoving(true)}
           onChecked={async () => { await readDetail((d) => dirtyNow.current ? setDetail(d) : apply(d), (error) => { throw error; }); }}
+          configurationTitle={noConfiguration}
           configuration={<>
           {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
           {onChannel && channelOf(p) && <ChannelLink id={channelOf(p)!} manager={manager} onOpen={onChannel} />}
           {!editable && <Group><Row label={t(p.read_only || p.source === "hub.json" ? "settings-extensions.read_only" : "settings-extensions.externally_managed")} wrapHint /></Group>}
-          {editable && !fields.length && !p.secrets?.length && !shownPages(p.ui, p.auth).length && !p.auth && !channelOf(p) && !p.contributes?.connectors?.length && <Group><Row label={t("settings-extensions.no_configuration")} /></Group>}
+          {noConfiguration && <Group><Row label={t("settings-extensions.no_configuration")} /></Group>}
 
           {shownPages(p.ui, p.auth).length > 0 && (
             <Group title={t("settings-extensions.pages_title")} footer={t("settings-extensions.pages_footer")}>
@@ -760,7 +774,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
             <>
               {fieldErrors[""] && <p role="alert" className="mb-3 rounded-[8px] bg-red-tint px-3 py-2 text-[12px] break-words text-red">{t("settings-extensions.not_saved", { error: fieldErrors[""] })}</p>}
               {fields.some((f) => f.type !== "object") && (
-                <Group footer={saveFooter(fields)}>
+                <Group title={t("settings-extensions.fields_title")} footer={saveFooter(fields)}>
                   {fields
                     .filter((f) => f.type !== "object")
                     .map((f) => (

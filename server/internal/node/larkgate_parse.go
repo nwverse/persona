@@ -24,9 +24,69 @@ var (
 )
 
 // classifyLark reads a Bash command against the command gates (curl / wget aimed at one's API is refused); cwd
-// resolves @file bodies; risk supplies CLI metadata when configured. Known read commands also have a static fallback.
+// resolves @file bodies and query inputs; risk supplies CLI metadata when configured. Known read commands also have a
+// static fallback.
 func classifyLark(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk) larkVerdict {
-	return classifyLarkDepth(cmd, gates, cwd, risk, 0)
+	v := classifyLarkDepth(cmd, gates, cwd, risk, 0)
+	// A relative @file body or query input is read from cwd at check time. Whatever else the command runs may run
+	// the call elsewhere (cd in any spelling, env -C, sudo -D, a subshell) or change the file first (a redirect, an
+	// earlier command), so its contents are known only for a lone call (larkLoneGateCall, #8404).
+	if slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.relFile }) && !larkLoneGateCall(cmd, gates) {
+		v.other, v.unknown = true, true
+	}
+	return v
+}
+
+// larkLoneGateCall: the command is one gated call with literal words and no assignment or redirect, at most under
+// `timeout <duration>`, piped only into output filters. Nothing in it runs before the call or changes its directory.
+func larkLoneGateCall(cmd string, gates []proto.CommandGate) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	var calls []*syntax.CallExpr
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated || len(st.Redirs) != 0 {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			calls = append(calls, c)
+			return true
+		case *syntax.BinaryCmd:
+			return c.Op == syntax.Pipe && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	if !walk(tree.Stmts[0]) {
+		return false
+	}
+	for i, c := range calls {
+		if len(c.Assigns) != 0 || len(c.Args) == 0 {
+			return false
+		}
+		words := make([]string, len(c.Args))
+		for j, arg := range c.Args {
+			var dynamic bool
+			if words[j], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		if i > 0 {
+			if !larkFilters[words[0]] || words[0] == "cd" {
+				return false
+			}
+			continue
+		}
+		if words[0] == "timeout" && len(words) > 2 && timeoutArg.MatchString(words[1]) {
+			words = words[2:]
+		}
+		if gateOf(gates, words[0]) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func classifyLarkDepth(cmd string, gates []proto.CommandGate, cwd string, risk larkRisk, depth int) larkVerdict {
@@ -678,6 +738,7 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	}
 	method := strings.ToUpper(args[0])
 	path, resolved := expand(args[1])
+	path, _, _ = strings.Cut(path, "#") // curl never sends a URL fragment, including one after a raw path query.
 	route, _, _ := strings.Cut(path, "?")
 	if strings.Contains(route, "$") || strings.Contains(path, "$(") || strings.Contains(path, "`") || !resolved && method != "GET" {
 		return larkCall{}, "", false
@@ -690,11 +751,13 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		path = "/" + path
 	}
 	c.Path, c.Query, _ = strings.Cut(path, "?")
+	queryFlagSeen, queryFragment, get, hasData := false, false, false, false
 	rest := args[2:]
 	if len(rest) > 0 && (strings.HasPrefix(rest[0], "{") || strings.HasPrefix(rest[0], "[")) {
-		c.Body, rest = rest[0], rest[1:]
+		c.Body, rest, hasData = rest[0], rest[1:], true
 	} else if len(rest) > 0 && strings.HasPrefix(rest[0], "@") {
-		c.Body, rest = readBodyFile(rest[0][1:], cwd), rest[1:]
+		c.Body, c.relFile, rest = readBodyFile(rest[0][1:], cwd), !filepath.IsAbs(rest[0][1:]), rest[1:]
+		hasData = true
 	}
 	for i := 0; i < len(rest); i++ {
 		f := rest[i]
@@ -720,19 +783,129 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		switch name {
 		case "-X", "--request":
 			c.Method = strings.ToUpper(val) // curl takes the last -X
+		case "-G", "--get":
+			get = true
 		case "-H", "--header":
 			if h, _, _ := strings.Cut(val, ":"); !slices.Contains(g.Headers, strings.ToLower(strings.TrimSpace(h))) {
 				return larkCall{}, "", false
 			}
 		case "--upload":
 			c.Body = "上传文件 " + val
+		case "--url-query":
+			if gateCurlQueryExpansionUnknown(val) {
+				c.queryUnknown = true
+			}
+			query, relative := "", false
+			if strings.HasPrefix(val, "+") {
+				query = val[1:] // curl's leading plus says the rest is already encoded.
+			} else if name, value, found := strings.Cut(val, "="); found {
+				// A name is already literal: curl escapes only the value. A leading equals instead marks unnamed content,
+				// which it encodes without emitting that equals sign.
+				if name != "" {
+					query = name + "="
+				}
+				query += gateCurlQueryEscape(value)
+			} else if name, p, file := strings.Cut(val, "@"); file {
+				// With no equals, name@file is curl's file form; @file is the same form without a name.
+				if p == "-" {
+					query = val
+					c.queryUnknown = true
+				} else {
+					relative = !filepath.IsAbs(p)
+					if relative {
+						p = filepath.Join(cwd, p)
+					}
+					b, err := os.ReadFile(p)
+					if err != nil {
+						return larkCall{}, "读不到 --url-query 文件 " + p + "：" + err.Error(), false
+					}
+					if len(b) > 0 { // curl adds nothing for an empty file, even when it has a name.
+						query = gateCurlQueryEscape(string(b))
+						if name != "" {
+							query = name + "=" + query
+						}
+					}
+				}
+			} else {
+				query = gateCurlQueryEscape(val)
+			}
+			// A literal name or leading-plus content may introduce the final URL's fragment. Unlike a fragment already in
+			// the path (which curl parses before applying query flags), everything appended after this marker belongs to
+			// that fragment. Escaped values and file contents contain %23 instead and never set this state.
+			query, _, hasFragment := strings.Cut(query, "#")
+			c.relFile = c.relFile || relative
+			if queryFragment {
+				continue
+			}
+			if queryFlagSeen {
+				// Every later query flag adds a separator, even when the preceding argument was empty or the URL query
+				// already ended in one. Empty arguments and files therefore remain visible in the raw query identity.
+				c.Query += "&"
+			} else if c.Query != "" && !strings.HasSuffix(c.Query, "&") {
+				// The first query flag appends to a nonempty URL query, but does not duplicate its trailing separator.
+				c.Query += "&"
+			}
+			c.Query += query
+			queryFlagSeen = true
+			queryFragment = hasFragment
 		case "-d", "--data", "--data-raw", "--data-urlencode":
+			hasData = true
 			if c.Body == "" {
 				c.Body = val
 			}
 		}
 	}
+	if get && hasData {
+		// Curl moves data into the URL query for -G, including GET/HEAD and even with -X POST, and its combination with
+		// --url-query is not the order in which the flags appear. Mark every method unknown: rule-allowed calls can still
+		// go, while larkCheck refuses to create a confirmation grant for a different request.
+		c.queryUnknown = true
+		c.dataInQuery = true
+	}
 	return c, "", true
+}
+
+// gateCurlQueryExpansionUnknown reports every shell expansion in a raw --url-query argument. Quote information is gone
+// by this point, so even a previously assigned $NAME is unsafe to expand: single quotes would have kept it literal.
+// Literal dollars that cannot start an expansion remain data; +a=%24value is the explicit preencoded literal alternative.
+func gateCurlQueryExpansionUnknown(raw string) bool {
+	if strings.Contains(raw, "`") || shellVarRef.MatchString(raw) {
+		return true
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '$' || i+1 == len(raw) {
+			continue
+		}
+		next := raw[i+1]
+		if next == '{' || next == '(' || next == '[' || next >= '0' && next <= '9' ||
+			next >= 'A' && next <= 'Z' || next >= 'a' && next <= 'z' || next == '_' || strings.ContainsRune("*@#?$!-", rune(next)) {
+			return true // an unsupported, positional, special, arithmetic or command substitution
+		}
+		// Every other dollar is literal data (for example the $' in an already quoted reserved-byte argument).
+	}
+	return false
+}
+
+// gateCurlQueryEscape is curl --url-query's form escaping without its leading-plus or @file handling: unreserved bytes
+// stay as they are, a space becomes plus, and every other byte becomes a lowercase percent escape. Escaping bytes rather
+// than URL-parsing the argument also keeps existing percent signs, ampersands and equals signs from acquiring structure.
+func gateCurlQueryEscape(s string) string {
+	const hex = "0123456789abcdef"
+	var out strings.Builder
+	out.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-_.~", rune(c)) {
+			out.WriteByte(c)
+		} else if c == ' ' {
+			out.WriteByte('+')
+		} else {
+			out.WriteByte('%')
+			out.WriteByte(hex[c>>4])
+			out.WriteByte(hex[c&15])
+		}
+	}
+	return out.String()
 }
 
 func readBodyFile(p, cwd string) string {
