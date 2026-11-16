@@ -638,6 +638,9 @@ private fun SettingsPageContent(
     return page
 }
 
+internal fun shouldRequestNotificationPermission(item: ReadyItem, sdkInt: Int, requested: Boolean): Boolean =
+    item.id == "notifications" && item.satisfied == false && sdkInt >= 33 && !requested
+
 @Composable
 fun ReadinessScreen(
     sessions: SessionsRepository,
@@ -661,6 +664,7 @@ fun ReadinessScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("settings-readiness", android.content.Context.MODE_PRIVATE) }
+    var notificationRequested by remember { mutableStateOf(preferences.getBoolean("notification-requested", false)) }
     // The GitHub star prompts (#5761): finish() tells them setup is done.
     val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val readinessOn by remember(readiness) { readiness?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
@@ -767,12 +771,14 @@ fun ReadinessScreen(
                     if (skipped && item.satisfied != true && !confirmed) SettingsCaption(stringResource(R.string.settings_ready_skipped_note))
                     SettingsCaption(item.detail)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        Action(stringResource(R.string.settings_ready_open)) {
+                        val requestNotifications = shouldRequestNotificationPermission(item, Build.VERSION.SDK_INT, notificationRequested)
+                        Action(stringResource(if (requestNotifications) R.string.settings_ready_allow_notifications else R.string.settings_ready_open)) {
                             when {
-                                item.id == "notifications" && Build.VERSION.SDK_INT >= 33 &&
-                                    !preferences.getBoolean("notification-requested", false) -> {
+                                requestNotifications -> {
+                                    val firstRequest = !preferences.getBoolean("notification-requested", false)
                                     preferences.edit().putBoolean("notification-requested", true).apply()
-                                    notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    notificationRequested = true
+                                    if (firstRequest) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 }
                                 item.id == "local-network" && PairingLocalNetwork.missing(context) &&
                                     !preferences.getBoolean("local-network-requested", false) -> {
