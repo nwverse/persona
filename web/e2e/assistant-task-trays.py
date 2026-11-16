@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the actual Assistant trays using only synthetic HTTP/WS data.
 
-Build web first. Run with a loopback production preview URL and --shots <directory>.
+Build web first. Run with a loopback production preview URL and --shots <directory>; --text-size large uses the largest Web text-size setting.
 The test covers wide/narrow light/dark, the two entries (#3387: Needs you and In progress, each thing in one only),
 their capsule size and selected state, stable live task rows, every open task that does not wait on the user in In
 progress (a stopped one too, saying why it is not done, #3180) with inactive ones folded and finished ones excluded from open counts, a task's agents never listed by
@@ -57,7 +57,7 @@ def run(args):
                     writes = []
                     sockets = []
                     context = browser.new_context(viewport={"width": width, "height": 900}, locale="en-US", color_scheme=theme, reduced_motion="reduce")
-                    context.add_init_script(f"localStorage.setItem('persona.token', 'demo'); localStorage.setItem('persona.language', 'en'); localStorage.setItem('persona.theme', '{theme}');")
+                    context.add_init_script(f"localStorage.setItem('persona.token', 'demo'); localStorage.setItem('persona.language', 'en'); localStorage.setItem('persona.theme', '{theme}'); localStorage.setItem('persona.text-size', '{args.text_size}');")
                     context.add_init_script("const RealDate = Date; globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : ['2026-11-10T08:10:00Z'])); } static now() { return new RealDate('2026-11-10T08:10:00Z').getTime(); } };")
 
                     def api(route):
@@ -120,6 +120,8 @@ def run(args):
                     def capture(name):
                         expect(page.locator("vite-error-overlay")).to_have_count(0)
                         assert not errors, errors
+                        if args.text_size == "large":
+                            expect(page.locator("html")).to_have_attribute("data-text-size", "large")
                         assert bar.evaluate("e => { const box = e.getBoundingClientRect(); return box.x >= 0 && box.right <= innerWidth && box.bottom <= innerHeight; }")
                         # Reduced motion still runs 1 ms transitions (styles.css); headless Chrome draws frames only on
                         # demand, so let two frames finish them before the shot.
@@ -272,7 +274,7 @@ def run(args):
                     print(f"  chip open markers {chip_open} ({chip_open_running} in progress + {chip_open_needs} needs you) = To-dos page \"{header.text_content()}\"", flush=True)
                     page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
                     page.screenshot(path=str(shots / f"{width}-{theme}-todos.png"))
-                    # A main update must retain the review and waiting-PR trays alongside the Agent-only status column.
+                    # Main groups merge waits with explicit holds in Parked; retain the PR row and the separate review tray.
                     review = {"id": "demo-supervisor-review", "title": "Review with stopped Agent", "origin": MAIN, "created_at": AT, "updated_at": AT,
                               "agents": [{"machine_id": "demo", "session_id": "review-stopped", "linked_at": AT}],
                               "supervision": {"supervisor": MAIN, "state": "pending_review", "updated_at": AT, "reviews": []}}
@@ -281,13 +283,16 @@ def run(args):
                                      "agents": [], "pr_url": pr, "delivery": {"state": "pr"},
                                      "pr_status": {"url": pr, "state": "open", "draft": False, "review": "changes_requested", "checks": "pending",
                                                    "conflicts": True, "checked_at": "2026-11-10T08:09:00Z"}}
-                    parked = {"id": "demo-parked-stopped", "title": "Parked with stopped Agent", "origin": MAIN, "created_at": AT, "updated_at": AT,
-                              "agents": [{"machine_id": "demo", "session_id": "parked-stopped", "linked_at": AT}],
+                    rework = {"id": "demo-rework-stopped", "title": "Rework with stopped Agent", "origin": MAIN, "created_at": AT, "updated_at": AT,
+                              "agents": [{"machine_id": "demo", "session_id": "rework-stopped", "linked_at": AT}],
+                              "supervision": {"supervisor": MAIN, "state": "rework", "updated_at": AT, "reviews": [], "round": 2}}
+                    parked = {"id": "demo-parked", "title": "Waiting on a reviewer", "origin": MAIN, "created_at": AT, "updated_at": AT,
+                              "agents": [],
                               "supervision": {"supervisor": MAIN, "state": "parked", "updated_at": AT, "reviews": [],
                                               "parked": {"reason": "Waiting on a reviewer", "until": "2026-11-20T08:00:00Z", "waiting_on": "someone_else", "count": 1}}}
-                    todos[:] = [review, waiting_merge, parked]
+                    todos[:] = [review, waiting_merge, rework, parked]
                     sessions[:] = [sessions[0]] + [{"machine_id": "demo", "session_id": session, "title": "Stopped demo Agent", "cwd": "/demo",
-                                                   "state": "offline", "status": "offline", "updated_at": AT} for session in ("review-stopped", "parked-stopped")]
+                                                   "state": "offline", "status": "offline", "updated_at": AT} for session in ("review-stopped", "rework-stopped")]
                     remaining[:] = []
                     page.goto(args.url.rstrip("/") + "/")
                     bar.locator('[data-tray-entry="review"]').click()
@@ -296,19 +301,24 @@ def run(args):
                     expect(review_row.locator("[data-task-status]")).to_have_text("Supervisor reviewing")
                     expect(review_row.locator('[data-task-mark="stopped"]')).to_have_count(0)
                     capture("supervisor-review")
-                    bar.locator('[data-tray-entry="pr"]').click()
+                    expect(bar.locator('[data-tray-entry="parked"]')).to_contain_text("Parked")
+                    expect(bar.locator('[data-tray-entry="pr"]')).to_have_count(0)
+                    bar.locator('[data-tray-entry="parked"]').click()
                     merge_row = bar.locator('[data-pr-waiting-row="demo-waiting-merge"]')
                     expect(merge_row.locator("a")).to_have_attribute("href", pr)
                     for blocker in ("Changes requested", "Checks pending", "Conflicts"):
                         expect(merge_row).to_contain_text(blocker)
+                    expect(bar.locator("[data-parked-task-row]")).to_have_count(2)
+                    expect(bar.locator('[data-parked-task-row="demo-parked"]')).to_contain_text("Waiting on a reviewer")
                     capture("waiting-merge")
                     bar.locator('[data-tray-entry="running"]').click()
-                    parked_row = bar.locator('[data-task-slot="task:demo-parked-stopped"]')
-                    expect(parked_row.get_by_text("Parked with stopped Agent", exact=True)).to_be_visible()
-                    expect(parked_row.locator("[data-task-status]")).to_have_text("Stopped")
-                    expect(parked_row.locator("[data-task-todo-state]")).to_have_text("To-do: Parked")
+                    rework_row = bar.locator('[data-task-slot="task:demo-rework-stopped"]')
+                    expect(rework_row.get_by_text("Rework with stopped Agent", exact=True)).to_be_visible()
+                    expect(rework_row.locator("[data-task-status]")).to_have_text("Stopped")
+                    expect(rework_row.locator("[data-task-todo-state]")).to_have_text("To-do: Rework round 2")
+                    expect(bar.locator('[data-task-slot="task:demo-parked"]')).to_have_count(0)
                     capture("agent-state")
-                    print(f"PASS {width} {theme}: Agent-only status; Just finished excluded from open counts; supervisor review and waiting-PR blockers retained; draft not sent", flush=True)
+                    print(f"PASS {width} {theme} {args.text_size}: Agent-only status; Just finished excluded from open counts; supervisor review and waiting-PR blockers retained; draft not sent", flush=True)
                     context.close()
         finally:
             browser.close()
@@ -320,4 +330,5 @@ if __name__ == "__main__":
     parser.add_argument("url")
     parser.add_argument("--shots", required=True)
     parser.add_argument("--chromium", default="/usr/bin/google-chrome")
+    parser.add_argument("--text-size", choices=("standard", "large"), default="standard")
     run(parser.parse_args())

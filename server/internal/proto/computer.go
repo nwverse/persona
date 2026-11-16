@@ -51,6 +51,18 @@ type Computer struct {
 	// (#7775, docs/extensions/computer-use.md "Pixel scrolling"). Absent from an old node or one without the helper: the
 	// phone then scrolls by wheel notches only, and never sends a record.
 	ScreenInput *ScreenInput `json:"screen_input,omitempty"`
+	// PhoneScreen: this Mac's Persona Input can show one window on a portrait virtual display shaped like the phone
+	// (#9314, docs/extensions/computer-use.md "Phone Screen"). Absent from an old node or helper: the app offers no Phone
+	// Screen mode.
+	PhoneScreen *PhoneScreen `json:"phone_screen,omitempty"`
+}
+
+// PhoneScreen is what a Mac can do for the live screen's Phone Screen mode (#9314): Version, the node's screen.phone
+// request set; Permission, Persona Input's Accessibility (moving windows): granted | missing. The app offers the mode
+// while it is granted and says how to allow it otherwise.
+type PhoneScreen struct {
+	Version    int    `json:"version"`
+	Permission string `json:"permission,omitempty"`
 }
 
 // ScreenInput is what a Mac can do for pixel scrolling (#7775): Persona Input is installed and the node reads scroll
@@ -111,6 +123,8 @@ type Browser struct {
 	ScreenVideo *ScreenVideo `json:"screen_video,omitempty"`
 	// ScreenInput: as in Computer (#7775).
 	ScreenInput *ScreenInput `json:"screen_input,omitempty"`
+	// PhoneScreen: as in Computer (#9314).
+	PhoneScreen *PhoneScreen `json:"phone_screen,omitempty"`
 }
 
 // Display is one of a Mac's displays: its frame in points in the global display space (origin at the top-left corner
@@ -123,6 +137,9 @@ type Display struct {
 	Width  int  `json:"width"`
 	Height int  `json:"height"`
 	Main   bool `json:"main,omitempty"`
+	// Scale: the display's pixels per point (2 for Retina, #9314). macOS's Screen Sharing draws each display at its own
+	// pixels, so with mixed scales the app needs it to find a display on the framebuffer. 0 from an older node.
+	Scale float64 `json:"scale,omitempty"`
 }
 
 // BrowserCookie is one cookie imported into ego lite's default profile (hub → node browser.cookies.import, #1304). The

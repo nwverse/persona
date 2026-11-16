@@ -93,9 +93,11 @@ class AgentMachineTreeTest {
     }
 
     @Test fun oldAndUnknownPreferenceValuesFallBackToTheTree() {
-        listOf("Space", "Machine", "MachineSpace", "unknown", "").forEach {
+        // A stored Machine preference now opens By Machine (#9319); Space / MachineSpace / unknown stay By project.
+        listOf("Space", "MachineSpace", "unknown", "").forEach {
             assertEquals(AgentGrouping.MachineSpace, AgentGrouping.fromPreference(it))
         }
+        assertEquals(AgentGrouping.Machine, AgentGrouping.fromPreference("Machine"))
         assertEquals("a phone that never chose gets 按仓库", AgentGrouping.Repo, AgentGrouping.fromPreference(null))
         assertEquals(AgentGrouping.Repo, AgentGrouping.fromPreference("Repo"))
         assertEquals(AgentGrouping.State, AgentGrouping.fromPreference("State"))
@@ -105,7 +107,7 @@ class AgentMachineTreeTest {
         assertEquals(AgentGrouping.Recent, AgentGrouping.fromPreference("Recent"))
         assertEquals(
             listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo,
-                AgentGrouping.App, AgentGrouping.Recent, AgentGrouping.Direction),
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent, AgentGrouping.Direction),
             AgentGrouping.selectable,
         )
         assertEquals(AgentGrouping.Repo, AgentListSettings().grouping)
