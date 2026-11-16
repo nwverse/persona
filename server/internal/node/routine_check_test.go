@@ -77,6 +77,7 @@ func TestRoutineCheckReasonSkipsTheShellsJobControlWarning(t *testing.T) {
 		{"bash without a terminal", []string{"bash: cannot set terminal process group (-1): Inappropriate ioctl for device\nbash: no job control in this shell\nholiday\nmore\n"}, "holiday"},
 		{"in pieces", []string{"bash: cannot set terminal pro", "cess group (-1): Inappropriate ioctl for device\nbash: no job ", "control in this shell\nhol", "iday\n"}, "holiday"},
 		{"zsh", []string{"zsh: can't set tty pgrp: inappropriate ioctl for device\nfailed\n"}, "failed"},
+		{"bash in zh_CN", []string{"bash: 无法设定终端进程组 (-1): 对设备不适当的 ioctl 操作\nbash: 此 shell 中无任务控制\nholiday\nexit\n"}, "holiday"},
 		{"only the warning", []string{"bash: no job control in this shell\n"}, ""},
 		{"nothing printed, then bash's exit", []string{"bash: cannot set terminal process group (-1): Inappropriate ioctl for device\nbash: no job control in this shell\nexit\n"}, ""},
 		{"a login bash says logout", []string{"logout\n"}, ""},

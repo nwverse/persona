@@ -7,11 +7,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -76,8 +76,10 @@ type routineCheckLine struct {
 
 // shellJobControl is what an interactive shell prints about itself rather than for the check: the job-control warnings
 // of a shell with no terminal (bash, zsh), with or without their "bash: " prefix, and the "exit" (or "logout") bash
-// writes to stderr when the check ends with the exit builtin, terminal or not.
-var shellJobControl = regexp.MustCompile(`^(?:(?:[\w./-]+: )?(?:cannot set terminal process group \(-?\d+\): .*|no job control in this shell\.?|can't set tty pgrp: .*)|exit|logout)$`)
+// writes to stderr when the check ends with the exit builtin, terminal or not. bash translates the warnings: only the
+// untranslated ones and bash's zh_CN ones are known, so in another language the reason is still bash's first line
+// ("exit" is not translated).
+var shellJobControl = lazyre.New(`^(?:(?:[\w./-]+: )?(?:cannot set terminal process group \(-?\d+\): .*|no job control in this shell\.?|can't set tty pgrp: .*|无法设定终端进程组 \(-?\d+\): .*|此 shell 中无任务控制)|exit|logout)$`)
 
 func (w *routineCheckLine) Write(p []byte) (int, error) {
 	n := len(p)
