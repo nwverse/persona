@@ -1150,8 +1150,14 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   it are dropped. A new size or frame rate starts new processes. Refinement stays VideoToolbox's: x264 already encodes
   at a constant quality.
 - **Falling back**, for the rest of the stream: ffmpeg can't start (`unavailable`); it ends, or puts out something
-  that isn't the next frame (`failed`); any frame takes over 50 ms, more than 10% of the last 2 s's frames take over
-  8 ms (a process's first frame aside), or a frame is still inside after 200 ms (`slow`); a report cuts the bitrate or
+  that isn't the next frame (`failed`); any frame takes over 50 ms of its own, more than 10% of the last 2 s's frames
+  take over 8 ms of their own, judged once there are 60 of them, or a frame is still inside after 200 ms (`slow`). A
+  process's first frame counts for none of these, and its next 30 (its warm-up: x264's threads starting, the
+  capture's fresh buffers) only for the 50 ms bound; the reason in the log names the frame, the share and the
+  window's median and maximum. A
+  frame's own time starts when ffmpeg could start on it (it came in and the frame before it was out): frames that
+  waited behind a cold process's first one (30–40 ms) are not slow themselves, which on the first real session they
+  were (x264 stopped a fraction of a second in); a report cuts the bitrate or
   skips frames (`congested`: VideoToolbox can lower its bitrate as it runs, ffmpeg can't).
 - **Connection Stats** (iPhone): a line under the codec line reads "Encoder x264" while x264 encodes (on the codec
   line it would widen the panel past the screen at the larger text sizes); with x264 on for the Mac but not encoding,
@@ -1159,6 +1165,10 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   up", "… the network was busy", "… ffmpeg stopped", or "x264 isn't available on this Mac"). Screenshots:
   `-showScreenStatsDemo` with `-showScreenX264Demo` or `-showScreenX264OffDemo` (`VNCTests.testTheOverlayNamesTheEncoder`);
   the switch: `ComputerSectionTests.testX264AsksFirst` with the mock's `MOCK_SCREEN_X264=1`.
+- **Log**: the helper writes x264's starts ("x264 on: 1920x1080 at 60 fps, 8 threads, …"), why it isn't used ("x264
+  not used: route …") and why it stopped ("x264 off: slow: frame 12: 61.0 ms on its own") to the Mac's unified log:
+  `log show --predicate 'subsystem == "persona-screen" AND category == "x264"'` (its stderr goes nowhere under
+  LaunchServices).
 - **Verifying**: `PERSONA_TEST_FFMPEG=/opt/homebrew/bin/ffmpeg swift test --filter X264` in
   `apple/Packages/PersonaScreenCore` (encodes, decodes with VideoToolbox as the phone does, a keyframe from the spare)
   and `PERSONA_TEST_FFMPEG=… go test -run 'X264|FFmpeg' ./internal/node/` (the probe on the real thing). Without the

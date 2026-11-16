@@ -3292,9 +3292,12 @@ struct ChatView: View {
 
     // Out of the modifier chain: inline, Swift 6.3 timed out type-checking the Release build.
     private var prewarmSource: String { "\(shownKey.machineID)/\(shownKey.sessionID)|\(store.resets)" }
-    private var prewarmKey: String { "\(prewarmSource)|\(store.version)" }
+    /// In the background it changes too, so leaving cancels a prewarm between rows and coming back runs it again.
+    private var prewarmKey: String { "\(prewarmSource)|\(store.version)|\(RowMemo.prewarms(in: scenePhase))" }
 
     private func prewarmRows() async {
+        // Not while the app is in the background (#9108): a recording may be keeping it running, under iOS's CPU limit.
+        guard RowMemo.prewarms(in: scenePhase) else { return }
         let source = prewarmSource
         if scratch.prewarmSource != source {
             scratch.prewarmSource = source

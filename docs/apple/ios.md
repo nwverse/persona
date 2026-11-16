@@ -2479,6 +2479,13 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
   of the hub-level group (another group's hub keeps its own prefs); its Dock badge still counts them. A prefs read already on its
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
+- **The built-in assistant in the switcher** (#9055): its page (`ManagerDetailView`) has **Show in Switcher** (on: the roster's
+  `hide` is false), sent alone as `PATCH /api/v1/managers/assistant {"hide": …}` (`APIClient.hideManager`,
+  `ManagersModel.showInSwitcher`), shown at once and put back if the hub says no (`409 builtin_in_use` while it is the default
+  or has a computer, in plain words). It can't be turned off while the built-in one is the default, and its footer says so
+  (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
+  An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
+  update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
 - **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
@@ -2596,7 +2603,10 @@ then those still installing, each with its first letter on a disc in its color (
 client; the letter in the panel's color) and the state's dot at the disc's foot, its state line, a Default chip and a check on
 the current one or, beside any other with something waiting, its count ("The pages show the current assistant" above), on a
 solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
-picked. The dot (`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
+picked. A manager the roster marks `hidden` (the built-in assistant while the user hides it and it isn't used, #9055;
+Settings › Assistants) has no row (`AssistantSwitcherText.rows`); it still counts as installed (`ManagerRoster.installed`,
+`isMulti`), so the pages still scope by assistant, its badge still counts and the Default chip still shows. The dot
+(`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
 Settings › Assistants keeps its dot beside the words. Under them **New Assistant** (asks for a
 name, then the install code sheet of Settings › Assistants) and **Manage Assistants…** (Settings › Assistants). A row still
 installing opens its install code: the one this header made while it lasts, else a new one (`ManagersModel.showCode`; the hub
@@ -2609,8 +2619,9 @@ roster has no Default chip, and **New Assistant** and **Manage Assistants…** s
 `AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
-the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
-that becomes the default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
+the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster, or that the roster marks
+`hidden`, goes back to the default (`ManagerRoster.canPick`; a hidden one can't be picked either), and one that becomes the
+default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
 starts on the current assistant before the hub answers. Switching closes the Persona page's pushed pages (`assistantSwitches`:
 they read the assistant before and would write to the next); re-reading the same assistant (back online, the default moving
 under a pick) doesn't. While another assistant is current, the default's settings are read once a run all the same
@@ -2647,9 +2658,9 @@ default assistant.
   and gives way to the current assistant's main conversation only when the user switches. A hand-off sent as a plain message goes to the item's manager's main conversation. A summary started from an extension's chat page stays on the default
   manager.
 - **Tests**: `ManagerSwitchTests` (the route rule and real requests, the pick's start, fallback and one manager, the pick kept
-  across launches and through a change of the default, each manager's settings held, a manager leaving the roster, the lists,
-  another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the rows and
-  their words, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
+  across launches and through a change of the default, each manager's settings held, a manager leaving the roster or hidden,
+  the lists, another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the
+  rows and their words, a hidden one left out but still counted, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
   code sheet, Manage Assistants… → Settings › Assistants, a row still installing → code sheet; against the mock hub with
   `TEST_RUNNER_PERSONA_SWITCHER_HUB`). By hand, against the mock hub (`MOCK_MANAGER_NAS=1`):
   `-openAssistantManager m-3fa21c` (工作, no main conversation yet) or `m-8b04d2` (家里, offline) makes that manager the current

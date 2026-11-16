@@ -141,13 +141,12 @@ def parse_bounds(value):
     return (left + right) // 2, (top + bottom) // 2
 
 
-def ascii_input_argument(value):
+def ascii_input_arguments(value):
     if not isinstance(value, str) or not value or any(ord(char) < 32 or ord(char) > 126 for char in value):
         raise AdaptiveFailure("text input supports printable ASCII only; IME composing requires instrumentation")
-    escaped = value.replace(" ", "%s")
-    if any(char in escaped for char in "\r\n"):
-        raise AdaptiveFailure("text input cannot contain a newline; use SHIFT_LEFT ENTER")
-    return device_quote(escaped)
+    # Android decodes %s as a space, so keep a literal percent and s in separate commands.
+    parts = re.split(r"(?<=%)(?=s)", value)
+    return [device_quote(part.replace(" ", "%s")) for part in parts]
 
 
 def page_requirements(requires):
@@ -507,8 +506,8 @@ class AdaptiveRunner:
         def focused():
             return True if any(node.attrib.get("focused") == "true" for node in self.ui_tree()) else None
         poll("focused input before text", focused, timeout=10)
-        argument = ascii_input_argument(step.get("text"))
-        self.adb.shell("input", "text", argument, timeout=10)
+        for argument in ascii_input_arguments(step.get("text")):
+            self.adb.shell("input", "text", argument, timeout=10)
         self.action_log.append({"type": "text", "length": len(step["text"]), "ascii": True})
         self.reset_modifiers()
 

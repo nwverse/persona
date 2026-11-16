@@ -49,7 +49,7 @@ spec/
 | --- | --- |
 | continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开. Also replayed by the shared Rust core (`native/app-core`, `cargo test`) and through its Android binding (`:core:rustcore`), #6871 |
 | lines | 见各自 [README](fixtures/lines/README.md) |
-| sort | 见各自 [README](fixtures/sort/README.md) |
+| sort | See the domain [README](fixtures/sort/README.md). The reference implementation is `persona_core::sort` in `native/app-core`, checked by these iOS-derived fixtures. HarmonyOS production uses the core projection through `coreProjectSort` (#7579, #8966). |
 | answer | 见各自 [README](fixtures/answer/README.md) |
 | question-review | [README](fixtures/question-review/README.md): the review step of a question card of several questions, replayed by the Swift answer oracle only (#8483) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
