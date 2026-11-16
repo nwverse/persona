@@ -795,7 +795,7 @@ class Watcher:
                 self.comment(repo, number, "The failed test(s) also fail on a clean main checkout and are not attributed to this PR. The watcher will continue the remaining gates without claiming those failing tests passed.\n\n```text\n%s\n```" %
                              bounded(old.get("failure", ""), 6000))
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                 outcome="passed_with_base_failures", review_posted=False,
+                                 outcome="passed_with_base_failures", review_posted=old.get("review_posted", False),
                                  verification=old.get("verification"), checks=old.get("checks", []),
                                  base_failures=old.get("base_failures"), base_comment_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
@@ -849,7 +849,7 @@ class Watcher:
                         self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
                     except WatchError as error:
                         self.state.put(repo, number, head, evidence_key=evidence_key,
-                                       outcome="retry", retry_after=time.time() + 60,
+                                       outcome=old.get("outcome", "passed"), retry_after=time.time() + 60,
                                        success_posted=False, failure=str(error))
                         return False
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,

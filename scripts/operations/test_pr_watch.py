@@ -665,7 +665,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "success_review", side_effect=pr_watch_common.WatchError("offline")):
             self.watcher.process("example/one", 7)
         state = self.watcher.state.get("example/one", 7)
-        self.assertEqual(state["outcome"], "retry")
+        self.assertEqual(state["outcome"], "passed")
         self.assertGreater(state["retry_after"], time.time())
 
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
