@@ -5,12 +5,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
@@ -58,22 +62,30 @@ class TodoBottomBarShotsTest {
             createdAt = ago(300), doneAt = ago(20), doneBy = "user", spaces = emptyList()),
     )
 
-    private fun shot(window: String, widthDp: Int, heightDp: Int, state: String, style: AppStyle, dark: Boolean) {
+    /** [textScale] other than 1 draws at that text size (Compose's density, as the lessons ask); [tag] ends the file's name. */
+    private fun shot(window: String, widthDp: Int, heightDp: Int, state: String, style: AppStyle, dark: Boolean,
+        textScale: Float = 1f, tag: String = "") {
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 Box(Modifier.testTag("shot").width(widthDp.dp).height(heightDp.dp).background(PersonaTheme.palette.background)) {
-                    TodoDetailScreen(state, todos, machines, sessions, null, onBack = {}, onOpenSession = {}, onHandOff = {}, now = now)
+                    val page: @Composable () -> Unit = {
+                        TodoDetailScreen(state, todos, machines, sessions, null, onBack = {}, onOpenSession = {}, onHandOff = {}, now = now)
+                    }
+                    if (textScale == 1f) page()
+                    else CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, textScale)) { page() }
                 }
             }
         }
         rule.waitForIdle()
         val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
-        File(out(), "todo-bar-$window-$state-${style.name.lowercase()}-${if (dark) "dark" else "light"}.png").outputStream()
+        File(out(), "todo-bar-$window-$state-${style.name.lowercase()}-${if (dark) "dark" else "light"}$tag.png").outputStream()
             .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private fun phone(state: String, style: AppStyle, dark: Boolean) = shot("phone", 400, 900, state, style, dark)
-    private fun wide(state: String, style: AppStyle, dark: Boolean) = shot("wide", 840, 700, state, style, dark)
+    private fun phone(state: String, style: AppStyle, dark: Boolean, textScale: Float = 1f, tag: String = "") =
+        shot("phone", 400, 900, state, style, dark, textScale, tag)
+    private fun wide(state: String, style: AppStyle, dark: Boolean, textScale: Float = 1f, tag: String = "") =
+        shot("wide", 840, 700, state, style, dark, textScale, tag)
 
     // A phone, 400 x 900 dp.
     @Test fun phoneOpenGlass() = phone("open", AppStyle.Glass, false)
@@ -92,4 +104,10 @@ class TodoBottomBarShotsTest {
     @Test @Config(qualifiers = "en-w840dp-h700dp-xhdpi") fun wideOpenBoard() = wide("open", AppStyle.Board, false)
     @Test @Config(qualifiers = "en-w840dp-h700dp-xhdpi") fun wideOpenBoardDark() = wide("open", AppStyle.Board, true)
     @Test @Config(qualifiers = "en-w840dp-h700dp-xhdpi") fun wideDoneGlass() = wide("done", AppStyle.Glass, false)
+
+    // The largest text size on each, and Japanese at 1.3 times, where a fixed 560dp cap cut "Hand to agent" (TodoBottomBarWidthTest).
+    @Test fun phoneOpenGlassLargestText() = phone("open", AppStyle.Glass, false, textScale = 2f, tag = "-text2x")
+    @Test @Config(qualifiers = "en-w840dp-h700dp-xhdpi") fun wideOpenGlassLargestText() = wide("open", AppStyle.Glass, false, textScale = 2f, tag = "-text2x")
+    @Test @Config(qualifiers = "ja-w840dp-h700dp-xhdpi") fun wideOpenGlassJapaneseLargerText() =
+        wide("open", AppStyle.Glass, false, textScale = 1.3f, tag = "-ja-text130")
 }

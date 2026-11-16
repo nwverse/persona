@@ -859,7 +859,12 @@ the bar itself, `JBottomBar(Modifier.widthIn(max = Tokens.Size.readable))`: `JBo
 leaves Glass's capsule, and the hairline strip in Brief and Board, 800dp wide around a narrow row. `ReadingWidth` (760dp) is no cap here, the frame's own is
 almost as wide; `Tokens.Size.readable` (560dp, iOS's) is what a bar of a few buttons gets.
 
+A cap can cut a label the uncapped bar showed whole: in a fixed 560dp the Japanese 「エージェントに任せる」 was ellipsized from 1.3 times
+the text size in Glass, 1.5 in Brief and Board (every label was whole at 370dp). Scale the cap with `LocalDensity.current.fontScale`, as `ToolDetails` does its `box120`.
+
 Test it with a method-level `@Config(qualifiers = "en-w840dp-h700dp-xhdpi")` (the window is what `PageFrame` measures) and the
-buttons' `getUnclippedBoundsInRoot()`, in every style and with a one-button state too (`TodoBottomBarWidthTest`). To draw `main`
-for a side-by-side, run a shots test that does not name the new token in a worktree of `main`: the same file draws both sides, and
-`android_shots_diff.py` shows a phone's pictures identical and the difference on a wide one only inside the bar.
+buttons' `getUnclippedBoundsInRoot()`, in every style and with a one-button state too (`TodoBottomBarWidthTest`). A label's cut is
+`isLineEllipsized(0)` on its text node's layout under `@GraphicsMode(NATIVE)`: `hasVisualOverflow` was true for every `JButton` label
+(`softWrap = false`), cut or not. Draw each language at each text size (`LocalDensity` with the font scale, not the configuration). To
+draw `main` for a side-by-side, run a shots test that does not name the new token in a worktree of `main`: the same file draws both
+sides, and `android_shots_diff.py` shows a phone's pictures identical and the difference on a wide one only inside the bar.
