@@ -1,10 +1,13 @@
 package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
+import persona.core.navigation.AppTab
 import persona.core.navigation.InboxItemRoute
+import persona.core.navigation.InboxRoute
 import persona.core.navigation.LarkChatRoute
 import persona.feature.inbox.InboxItemLookupResult
 import persona.feature.inbox.InboxItemPages
+import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.InboxRecord
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LarkRoute
@@ -53,4 +56,13 @@ internal sealed interface InboxDestination {
     data class Open(val key: NavKey) : InboxDestination
     data object Missing : InboxDestination
     data object Failed : InboxDestination
+}
+
+/**
+ * A stack that no longer holds an Inbox list drops its landing (#9053): the list under the item that set it was closed
+ * without showing (the drawer, a tab's root, a link that went home), so nothing will take it, and a list entered later
+ * must open on Needs you, not where that item was.
+ */
+internal fun dropUntakenLandings(stacks: Map<AppTab, List<NavKey>>, landings: Map<AppTab, InboxLanding>) {
+    stacks.forEach { (tab, stack) -> if (InboxRoute !in stack) landings[tab]?.clear() }
 }

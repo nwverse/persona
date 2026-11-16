@@ -269,6 +269,51 @@ class InboxSectionBarTest {
         choice("In progress").assertIsSelected()
     }
 
+    @Test fun anEntryPutsAListLeftUnderOtherPagesBackOnNeedsYou() {
+        val landing = InboxLanding()
+        show(BarInbox(all), landing)
+        pick("FYI")
+        // A widget or a link to the Inbox while this list sat under other pages: it opens as on entry.
+        rule.runOnIdle { landing.enter() }
+        rule.waitForIdle()
+        choice("Needs you").assertIsSelected()
+        assertNull("taken once", landing.pending)
+    }
+
+    @Test fun aLandingDroppedBeforeTheListShowedLeavesTheNextEntryOnNeedsYou() {
+        // A link landed the list under its item, and the stack let go of that list before Back showed it.
+        val landing = InboxLanding().apply { land(invoice); clear() }
+        show(BarInbox(all), landing)
+        choice("Needs you").assertIsSelected()
+    }
+
+    @Test fun anItemOpenedBesideTheListMovesItOnlyWhileTheListIsDrawn() {
+        val landing = InboxLanding()
+        // On a phone the list is not drawn under the item: another item's chain leaves it as the user left it.
+        landing.landBeside(invoice)
+        assertNull(landing.pending)
+        show(BarInbox(all), landing)
+        assertEquals("the list counts itself drawn", 1, landing.drawn)
+        rule.runOnIdle { landing.landBeside(invoice) }
+        rule.waitForIdle()
+        choice("Done").assertIsSelected()
+    }
+
+    @Test fun needsYouStaysInSightFromEveryChoice() {
+        show(BarInbox(many(), interactions = listOf(card)))
+        pick("All")
+        for (s in AppStyle.entries) {
+            style = s
+            Snapshot.sendApplyNotifications(); rule.waitForIdle()
+            choice("All").assertIsSelected().assertIsDisplayed()
+            // The bar scrolled to All; Needs you, pinned at its start, is whole in sight with its count.
+            val needs = choice("Needs you").fetchSemanticsNode()
+            assertEquals("${s.key}: Needs you whole", needs.size.width.toFloat(), needs.boundsInRoot.width, 1f)
+            assertTrue("${s.key}: its count spoken", spoken("Needs you, 31"))
+        }
+        style = AppStyle.Glass
+    }
+
     @Test fun groupingIsInTheMoreSheetWhereItApplies() {
         val inbox = BarInbox(all)
         show(inbox)
@@ -294,6 +339,9 @@ class InboxSectionBarTest {
         pick("Done")
         assertTrue("Done's heading counts what the hub counted", rule.onAllNodes(hasText("40"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         gone("Nothing done yet")
+        // All stays the stacked page: no Done section without a done row, only the choice.
+        pick("All")
+        assertEquals(1, rule.onAllNodesWithText("Done").fetchSemanticsNodes().size)
     }
 
     private fun shots(name: String, styles: List<AppStyle> = AppStyle.entries, themes: List<Boolean> = listOf(false, true)) {

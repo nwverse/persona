@@ -471,7 +471,7 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                 }
             }
         }
-        AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (compact) Tokens.Space.s else 22.dp.dense)) {
+        AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (compact) Tokens.Space.s else JSegmentedBriefGap)) {
             options.forEachIndexed { index, segment ->
                 val on = index == selected
                 val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
@@ -517,6 +517,9 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
         }
     }
 }
+
+/** The room between two of Brief's tabs ([JSegmented]); a bar that splits its tabs in two keeps it between the parts. */
+internal val JSegmentedBriefGap: Dp get() = 22.dp.dense
 
 /** A [JSegment] with a toned count: its label, then the count's capsule (none at 0); [onFill]: on the selected pill's fill. */
 @Composable
@@ -571,14 +574,19 @@ private class RevealNode(private var scroll: androidx.compose.foundation.ScrollS
         if (start < 0 || !isAttached) return
         pending = false
         if (!selected) return
-        val shown = scroll.value until scroll.value + scroll.viewportSize
-        val target = when {
-            scroll.viewportSize <= 0 -> return
-            start < shown.first -> start
-            end > shown.last + 1 -> end - scroll.viewportSize
-            else -> return
+        coroutineScope.launch {
+            // Once the frame that placed it is done: a scroll written while the row is still being placed (its first
+            // frame, a choice made from outside) was taken but never moved the row.
+            androidx.compose.runtime.withFrameNanos { }
+            val viewport = scroll.viewportSize
+            val target = when {
+                !selected || viewport <= 0 -> return@launch
+                start < scroll.value -> start
+                end > scroll.value + viewport -> end - viewport
+                else -> return@launch
+            }
+            scroll.scrollTo(target)
         }
-        coroutineScope.launch { scroll.scrollTo(target) }
     }
 }
 

@@ -255,8 +255,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
     val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
+    // composed in a hidden tab never takes another stack's landing.
+    val inboxLandings = remember(session.identity) { AppTab.entries.associateWith { InboxLanding() } }
     fun showAssistantHome() {
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
+        // The Inbox list this closed, if any, never takes its landing; the next entry opens on Needs you.
+        inboxLandings.getValue(AppTab.Persona).clear()
         selected = AppTab.Persona
     }
     fun sidebarDestination(key: NavKey) {
@@ -307,13 +312,18 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     }
     val navigator = remember { AppNavigator(stacks, { selected }, { selected = it }, chatTab = { route ->
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
-    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns) }
+    }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
+        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
         val hadInboxOrigin = navigator.hasInboxOrigin(route.key)
         navigator.noteDirectOpen(route.key)
-        return if (!hadInboxOrigin && openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+        val tab = if (!hadInboxOrigin && openAssistant(route.key, true)) AppTab.Persona else route.open(stacks)
+        // A widget, a quick action or a link to the Inbox enters it: on Needs you, also when a list of it sat under
+        // other pages with another choice (#9053).
+        if (route.key == InboxRoute) inboxLandings.getValue(tab).enter()
+        return tab
     }
     /** Opens [route]; a card outside any session (#4808) also has Agents open its sheet, as its notification does. */
     fun openWithCard(route: ResolvedRoute) {
@@ -408,8 +418,11 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val provisionalPages = remember(session.identity) { mutableSetOf<NavKey>() }
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
     val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
-    // An item opened from outside the Inbox list moves the list to where the item is (#9053, InboxLink sets it).
-    val inboxLanding = remember(session.identity) { InboxLanding() }
+    // A landing is for the Inbox list under the item that set it: once its stack holds no Inbox list, nothing will take
+    // it, and it must not move a list entered later (#9053).
+    LaunchedEffect(inboxLandings) {
+        snapshotFlow { stacks.mapValues { (_, stack) -> stack.toList() } }.collect { held -> dropUntakenLandings(held, inboxLandings) }
+    }
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect
         val pages = InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats)
@@ -749,7 +762,6 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
-            LocalInboxLanding provides inboxLanding,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
@@ -771,7 +783,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
-                                persona.feature.settings.LocalExtensionPageVisible provides shown) {
+                                persona.feature.settings.LocalExtensionPageVisible provides shown, LocalInboxLanding provides inboxLandings.getValue(tab)) {
                                 NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
                                     onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
                                     sceneStrategies = listOf(listDetail),

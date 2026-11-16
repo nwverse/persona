@@ -56,7 +56,7 @@ internal class InboxDoneHistory(private val repository: InboxRepository, private
 
     /**
      * Each of [managers]' counts in [zone], once, without a page: read on entering the Inbox while its list holds no done
-     * item, so the section bar can offer Done on the hub's word (#9053). [start] waits for the same read.
+     * item, so the section bar can offer Done on the hub's word (#9053). [start] waits for it while it is still out.
      */
     fun count(managers: List<String?>, zone: ZoneId): kotlinx.coroutines.Deferred<Unit> = counted ?: run {
         counting = true
@@ -75,6 +75,9 @@ internal class InboxDoneHistory(private val repository: InboxRepository, private
         if (started) return
         started = true
         val asked = managers.map { it.orEmpty() }.distinct()
+        // Done reads its counts as it opens: the entry's read stands in only while it is still out. A finished one may have
+        // failed, or come before items were marked done since.
+        if (counted?.isCompleted == true) counted = null
         val read = count(managers, zone)
         scope.launch {
             read.await()

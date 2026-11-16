@@ -9,9 +9,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -31,7 +36,8 @@ import java.io.File
 /**
  * A quick filter's toned count (#9053, the Inbox's section bar): a badge in its state's colours that hides at 0 and caps
  * at 99+, with the exact number in the spoken name; a bay without a tone keeps its quiet digits and its old semantics,
- * so the Agents list's filters draw as before. Every style, light and dark; PNGs in build/quick-filter-count-tone-shots/.
+ * so the Agents list's filters draw as before. A pinned first bay stays whole in sight from every choice, and a board
+ * that scrolls sideways marks its chosen bay. Every style, light and dark; PNGs in build/quick-filter-count-tone-shots/.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -84,6 +90,70 @@ class QuickFilterCountToneTest {
                 .filter { SemanticsProperties.ContentDescription in it.config }
             assertTrue("${s.key}: no spoken name added", described.isEmpty())
         }
+    }
+
+    private fun choice(label: String) = rule.onNode(hasText(label) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected))
+
+    @Test fun aPinnedFirstBayStaysWholeInSightWhenTheLastIsChosen() {
+        var style by mutableStateOf(AppStyle.Glass)
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                Box(Modifier.width(360.dp).padding(Tokens.Space.l)) {
+                    QuickFilterBar(listOf(Bay("Needs you", 31, Status.NeedsYou, countTone = Status.NeedsYou),
+                        Bay("In progress", 6, countTone = Status.Idle), Bay("FYI", 40, countTone = Status.Idle), Bay("Done"), Bay("All")),
+                        4, onSelect = {}, revealSelected = true, pinFirst = true)
+                }
+            }
+        }
+        for (s in AppStyle.entries) {
+            style = s
+            rule.waitForIdle()
+            choice("All").assertIsDisplayed()
+            val needs = choice("Needs you").fetchSemanticsNode()
+            assertEquals("${s.key}: Needs you whole", needs.size.width.toFloat(), needs.boundsInRoot.width, 1f)
+        }
+    }
+
+    @Test fun aBoardMarksItsChosenBayAlsoWhenItScrolls() {
+        var mark = Color.Unspecified
+        var bays by mutableStateOf(emptyList<Bay>())
+        var selected by mutableStateOf(1)
+        var pin by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Board, reduceMotion = true) {
+                mark = PersonaTheme.palette.status(Status.NeedsYou).dot
+                Box(Modifier.testTag("bar").width(400.dp)) { QuickFilterBar(bays, selected, onSelect = {}, pinFirst = pin) }
+            }
+        }
+        val three = listOf(Bay("All", 9), Bay("Needs you", 3, Status.NeedsYou), Bay("Done", 4))
+        val six = listOf(Bay("Needs you", 3, Status.NeedsYou), Bay("All", 9), Bay("Working", 2, Status.Working),
+            Bay("Unread", 1, Status.Unread), Bay("Done", 4), Bay("Terminal", 0))
+        fun marked(label: String): Boolean {
+            rule.waitForIdle()
+            val bar = rule.onNodeWithTag("bar").fetchSemanticsNode().boundsInRoot
+            val cell = choice(label).fetchSemanticsNode().boundsInRoot
+            val image = rule.onNodeWithTag("bar").captureToImage().asAndroidBitmap()
+            // Inside the 3dp bar at the cell's foot, above the board's 1dp edge.
+            return image.getPixel((cell.center.x - bar.left).toInt(), (cell.bottom - bar.top).toInt() - 4) == mark.toArgb()
+        }
+        bays = three; selected = 1
+        assertTrue("a board that fits", marked("Needs you"))
+        // Six bays run past 400dp: the board scrolls, and its cells have no width of their own to fill.
+        bays = six; selected = 0
+        assertTrue("a board that scrolls", marked("Needs you"))
+        pin = true
+        assertTrue("pinned", marked("Needs you"))
+        bays = listOf(Bay("All", 9)) + six.take(1) + six.drop(2); selected = 1
+        assertTrue("in the part that scrolls beside the pinned bay", marked("Needs you"))
+    }
+
+    @Test fun aBoardBayWithoutANumberShowsNoneAndSaysOnlyItsName() {
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Board, reduceMotion = true) { QuickFilterBar(toned, 0, onSelect = {}) }
+        }
+        rule.waitForIdle()
+        assertTrue("no dash for All or FYI's 0", texts("—").isEmpty())
+        assertEquals(listOf("All"), choice("All").fetchSemanticsNode().config.getOrNull(SemanticsProperties.Text)?.map { it.text })
     }
 
     @Test fun drawsInEveryStyle() {

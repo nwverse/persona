@@ -1097,21 +1097,45 @@ data class Bay(
  * one big number per bay — tapping a cell filters to it. A Needs You dot is still, as on iOS's `QuickFilterBar`.
  * [revealSelected]: when the choice changes, also from outside the bar (a search, a link: the Inbox's section bar,
  * #9053), a bar that scrolls sideways scrolls it whole into sight ([revealWhenSelected]).
+ * [pinFirst]: the first bay stays at the bar's start and only the rest scroll beside it, so its count is in sight
+ * whichever bay is chosen (the Inbox's Needs you, #9053); a bar that fits looks the same either way.
  */
 @Composable
-fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, revealSelected: Boolean = false) {
+fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, revealSelected: Boolean = false,
+                   pinFirst: Boolean = false) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val scroll = rememberScrollState()
     val reveal = scroll.takeIf { revealSelected }
+    // How many bays sit outside the part that scrolls: the first, when pinned.
+    val pinned = if (pinFirst && bays.size > 1) 1 else 0
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
-            bays.forEachIndexed { index, bay -> JChip(bay.label, Modifier.revealWhenSelected(reveal, index == selected), selected = index == selected,
-                onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false, countTone = bay.countTone) }
+        AppStyle.Glass -> {
+            val gap = 8.dp.dense
+            @Composable fun chip(index: Int) {
+                val bay = bays[index]
+                JChip(bay.label, Modifier.revealWhenSelected(reveal?.takeIf { index >= pinned }, index == selected), selected = index == selected,
+                    onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false, countTone = bay.countTone)
+            }
+            if (pinned == 0) Row(modifier.fillMaxWidth().horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                bays.indices.forEach { chip(it) }
+            } else Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                chip(0)
+                Row(Modifier.weight(1f).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    (pinned until bays.size).forEach { chip(it) }
+                }
+            }
         }
         // Tabs that do not fit scroll sideways rather than being cut off at the edge.
-        AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count, countTone = it.countTone) }, selected, onSelect,
-            modifier.horizontalScroll(scroll), revealIn = reveal)
+        AppStyle.Brief -> {
+            val segments = bays.map { JSegment(it.label, it.count, countTone = it.countTone) }
+            if (pinned == 0) JSegmented(segments, selected, onSelect, modifier.horizontalScroll(scroll), revealIn = reveal)
+            else Row(modifier) {
+                JSegmented(segments.take(pinned), if (selected < pinned) selected else -1, onSelect)
+                JSegmented(segments.drop(pinned), selected - pinned, { onSelect(it + pinned) },
+                    Modifier.weight(1f).padding(start = JSegmentedBriefGap).horizontalScroll(scroll), revealIn = reveal)
+            }
+        }
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
             val shape = RoundedCornerShape(10.dp.corner)
             // Each bay is a share of the width while its label fits; more bays than that (the Agents list's six) keep
@@ -1121,29 +1145,47 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
             val whole = (maxWidth / BoardBayMinWidth).toInt().coerceAtLeast(1)
             val bayWidth = maxWidth / (whole + BoardBayPeek)
             val frame = Modifier.fillMaxWidth().clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
-            val row = if (fits) frame.height(IntrinsicSize.Min) else frame.horizontalScroll(scroll).height(IntrinsicSize.Min)
-            Row(row) {
-                bays.forEachIndexed { index, bay ->
-                    if (index > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
-                    val on = index == selected
-                    val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
-                    val cell = if (fits) Modifier.weight(1f) else Modifier.widthIn(min = bayWidth)
-                    // A toned count (the Inbox's section bar, #9053) shows no number at 0 and 99+ past 99, Needs you's in its
-                    // state's ink, and is spoken with the label.
-                    val toned = bay.countTone?.let { tone -> bay.count?.takeIf { it > 0 }?.let { it to tone } }
-                    val spoken = bay.countTone?.let { spokenCount(bay.label, bay.count) }
-                    Box(cell.revealWhenSelected(reveal.takeIf { !fits }, on).clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }) {
-                        Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
-                            if (bay.countTone == null) Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
-                            else Text(toned?.let { countBadgeText(it.first) } ?: "—", style = type.number, maxLines = 1,
-                                color = when { toned == null -> palette.ink3; toned.second == Status.Idle -> palette.ink; else -> palette.status(toned.second).text })
-                            Spacer(Modifier.height(2.dp.dense))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
-                                Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+            @Composable fun rule() = Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
+            @Composable fun cell(index: Int, place: Modifier) {
+                val bay = bays[index]
+                val on = index == selected
+                val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
+                // A toned count (the Inbox's section bar, #9053) shows no number at 0 and 99+ past 99, Needs you's in its
+                // state's ink, and is spoken with the label.
+                val toned = bay.countTone?.let { tone -> bay.count?.takeIf { it > 0 }?.let { it to tone } }
+                val spoken = bay.countTone?.let { spokenCount(bay.label, bay.count) }
+                Box(place.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }) {
+                    Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
+                        if (bay.countTone == null && bay.count != null) Text("${bay.count}", style = type.number, color = if (bay.count == 0) palette.ink3 else palette.ink, maxLines = 1)
+                        else if (toned != null) Text(countBadgeText(toned.first), style = type.number, maxLines = 1,
+                            color = if (toned.second == Status.Idle) palette.ink else palette.status(toned.second).text)
+                        // No number to show (the Inbox's Done and All, a toned 0): the line keeps its height so the labels
+                        // stay in one row, and is neither seen nor heard.
+                        else Text("—", Modifier.clearAndSetSemantics { }, style = type.number, color = palette.ink.copy(alpha = 0f), maxLines = 1)
+                        Spacer(Modifier.height(2.dp.dense))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
+                            Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        if (on) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(color))
+                    }
+                    // Over the cell's measured size: a cell of a board that scrolls has no bounded width of its own, and a
+                    // fillMaxWidth bar in it drew nothing.
+                    if (on) Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomStart) {
+                        Box(Modifier.fillMaxWidth().height(3.dp).background(color))
+                    }
+                }
+            }
+            if (fits) Row(frame.height(IntrinsicSize.Min)) {
+                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.weight(1f)) }
+            } else if (pinned == 0) Row(frame.horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected)) }
+            } else Row(frame.height(IntrinsicSize.Min)) {
+                cell(0, Modifier.widthIn(min = bayWidth))
+                rule()
+                Row(Modifier.weight(1f).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                    (pinned until bays.size).forEach { index ->
+                        if (index > pinned) rule()
+                        cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected))
                     }
                 }
             }

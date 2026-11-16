@@ -58,7 +58,8 @@ object InboxBar {
             if (done || picked == DONE) add(Choice(DONE, null, null))
             add(Choice(ALL, null, null))
         }
-        fun present(id: String) = if (id == DONE) done else count(id) > 0
+        // Done on the hub's counts alone draws only where it is chosen; All stays the stacked page, every section with rows.
+        fun present(id: String) = if (id == DONE && picked == DONE) done else count(id) > 0
         val shown = (if (picked == ALL) OPEN + DONE else listOf(picked)).filter(::present)
         val empty = when {
             picked == DONE -> when {

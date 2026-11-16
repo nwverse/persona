@@ -86,14 +86,21 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     // The landing taken: the list shows the item's choice, All with Collapsed open (a fold kept with the others, read from
-    // the stored ones so an early landing never writes the defaults over them); Back from the item returns here.
+    // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. An
+    // entry ([InboxLanding.enter]) puts the list back as it opens.
     LaunchedEffect(landing?.pending) {
         val to = landing?.take() ?: return@LaunchedEffect
+        if (to == InboxLanding.ENTERED) { barChosen = ""; barSaved = ""; return@LaunchedEffect }
         moveBar(InboxBar.landed(bar, to))
         if (to.openCollapsed) {
             val stored = filters ?: repository.preferences.first()
             if (InboxBar.NOISE !in stored.expanded) filter(stored.copy(expanded = stored.expanded + InboxBar.NOISE))
         }
+    }
+    // Drawn: an item opened from another item beside this list moves it ([InboxLanding.landBeside]).
+    DisposableEffect(landing) {
+        landing?.let { it.drawn++ }
+        onDispose { landing?.let { it.drawn-- } }
     }
     val listStates = rememberSaveableStateHolder()
     var error by remember { mutableStateOf<String?>(null) }
@@ -146,10 +153,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // The bar's choices and counts over the rows as shown (an older hub's AI-twin rows In progress), and what an empty
     // choice says; the hub's day counts keep Done in it while the list holds no done item.
     val barView = InboxBar.bar(bySection, chosen, listSettings, if (filtering) null else history.days[historyManager]?.sumOf { it.count })
-    // Done on the hub's counts alone: drawn with its counted groups, which read their own pages as they open.
+    // Done chosen on the hub's counts alone: drawn with its counted groups, which read their own pages as they open.
     val displayGroups = if (InboxBar.DONE !in barView.shown || bySection.any { it.id == InboxBar.DONE }) bySection
         else bySection + InboxGroup(InboxBar.DONE, persona.core.contracts.CoreText.of(persona.core.contracts.CoreText.Key.InboxDone),
-            emptyList(), emptyList(), folded = chosen == InboxBar.ALL && InboxBar.DONE !in expanded)
+            emptyList(), emptyList(), folded = false)
     // A choice draws its section alone; All draws every section, folding as before.
     val groups = if (chosen == InboxBar.ALL) displayGroups else displayGroups.filter { it.id == chosen }
     val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
@@ -273,8 +280,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val doneOpen = groups.any { it.id == "done" && !it.folded }
     // Another assistant is another history (a new [history]): read it too when Done is already open.
     LaunchedEffect(doneOpen, history) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
-    // With no done item in the list, the hub's counts say whether Done has any (#9053): read once on entry, not its pages.
-    val countDone = !filtering && result.groups.none { it.id == InboxBar.DONE }
+    // With no done item in the list, the hub's counts say whether Done has any (#9053): read once on entry, not its pages,
+    // after the list is in (cached or read), so a list that holds done items asks nothing.
+    val listIn = snapshot.refreshes > 0 || snapshot.records.isNotEmpty()
+    val countDone = listIn && !filtering && result.groups.none { it.id == InboxBar.DONE }
     LaunchedEffect(countDone, history) { if (countDone) history.count(historyManagers, zone) }
     // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
     // title alike; with a filter or search on, or no counts, what is loaded.
@@ -296,9 +305,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         if (bulk.size >= BULK_CONFIRM_AT) confirmBulk = bulk else markAll(bulk, InboxBulkAction.Dismiss)
     }
     if (showMore) {
-        // By source / By time (#2576) sits here rather than in a row of its own over the list (#9053): Android's
-        // QuickFilterBar has no trailing menu, and a page's display choices live in its ⋯ (the Agents list's Display).
-        // Only where it applies: Done is always by time and In progress never grouped.
+        // By source / By time (#2576) sits here rather than in a row of its own over the list (#9053): QuickFilterBar has
+        // no trailing control (only the Agents tab's home capsule has one), its five choices already run past a phone's
+        // width, and "List controls" puts grouping in a grouping control or the ⋯, where the Agents list's QuickFilterBar
+        // form keeps its own. Only where it applies: Done is always by time and In progress never grouped.
         val groupings = if (chosen == InboxBar.DONE || chosen == InboxBar.WORKING) emptyList() else listOf(
             JAction(res.getString(R.string.inbox_grouping_source), checked = grouping != InboxGroups.TIME, section = res.getString(R.string.inbox_grouping_title)) {
                 filter(currentFilters.copy(grouping = InboxGroups.SOURCE)) },
@@ -440,9 +450,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     Bay(inboxChoiceTitle(choice.id), choice.count, Status.NeedsYou.takeIf { choice.id == InboxBar.ACTION },
                         countTone = when (choice.tone) { InboxBar.Tone.Needs -> Status.NeedsYou; InboxBar.Tone.Neutral -> Status.Idle; null -> null })
                 }
-                // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight.
+                // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
+                // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4).
                 QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
-                    onSelect = { moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true)
+                    onSelect = { moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true)
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
             }

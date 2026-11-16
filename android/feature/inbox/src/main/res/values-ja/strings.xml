@@ -90,7 +90,7 @@
     <string name="inbox_empty_filtered_title">この絞り込みに一致する未対応の項目はありません</string>
     <string name="inbox_empty_filtered_text">絞り込みを解除すると、受信トレイ全体が表示されます。</string>
     <string name="inbox_empty_caught_up_title">すべて確認済み</string>
-    <string name="inbox_empty_caught_up_text">この絞り込みには何もありません。</string>
+    <string name="inbox_empty_caught_up_text">新しいメッセージやメールはここに表示されます。</string>
     <string name="inbox_grouping_title">グループ</string>
     <string name="inbox_empty_action_title">対応が必要なものはありません</string>
     <string name="inbox_empty_working_title">進行中のものはありません</string>
