@@ -649,3 +649,14 @@ unknown-risk write. Stable read shortcuts are listed in `larkCLIKnownReads`, whi
 nothing, so lark-cli's own answer still wins. When a card names a read as a write, check the lookup in the node's
 environment first, before changing the classifier. A literal `cd` before a command variable (`cd /tmp; L=/abs/lark-cli; $L …`)
 now resolves only absolute values: a relative one is looked up from the new directory.
+
+## A rejected answer must not consume Don't handle (#7907)
+
+Validate the ask round and the answer before changing its dismissal. Keep the persisted receipt in force while an
+answer is being sent; only complete the undo after it is taken. A retryable send failure must leave the dismissal
+unchanged. A recorded choice handed to the supervisor when no Agent can receive it is already taken, not a failed
+answer to retry. If the final dismissal write fails after delivery, retain its receipt and do not make the already-sent
+answer retryable. Tests must check both the in-memory receipt and stored one, plus stale rounds and failed sends.
+
+Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
+that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.

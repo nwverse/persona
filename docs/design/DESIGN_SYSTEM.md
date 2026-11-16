@@ -571,6 +571,7 @@ on-demand model panel, not the everyday Assistant home (#6887).
   no clicks. Where it goes is measured when the pointer or the focus comes into the bubble's row, and only its classes
   change, so the button Tab reached keeps the focus (`docs/web/web.md`, "The hover bar beside your bubbles").
 - Android Markdown tables in chat and file previews (`ReadableMarkdownTable`): a table that fits the upstream renderer stays unchanged. In a wide one, short columns keep their natural width, long columns wrap between the font-scaled `RichTextTokens` minimum and maximum, and only the table scrolls sideways. Share pictures keep the unchanged static table.
+- Android tool diffs (`DiffView`, an Edit / MultiEdit / Write call's detail): as iOS `DiffView`, an added or removed line sits on the palette's diff fill (`diffAddFill` / `diffDelFill`: Glass reads `Tokens.Common.<Light|Dark>.Diff`, iOS `Theme.Diff.addFill` / `delFill`; Brief and Board keep their own diff hue at the tokens' strength), the words that changed in a paired line on the deeper emphasis (`diffAddEmphasis` / `diffDelEmphasis`, the generated `Tokens.Common.<Light|Dark>.Diff.addEmphasis` / `delEmphasis` from `spec/tokens`, iOS `addEmphasis` / `delEmphasis`; the older `diffAddWord` / `diffDelWord` stay for the extension review), the sign and the +N −N keep the plain diff colors, and the code stays the label color. Long runs of unchanged lines fold into one quiet row until Show All; a Codex patch shows whole, on plain rows with no tint and no word marks. No second diff component: the Git page and the extension review keep their own surfaces.
 - Web Markdown tables in replies: a column is as narrow as its words. Headers never wrap and have no minimum width; a
   cell whose words fit one line in about 5.5em stays on one line with no minimum; only longer cells keep 7em, so a
   squeezed table never stacks a sentence a word per line. The copy button (hover or keyboard focus; always on a screen
@@ -721,6 +722,7 @@ sending identity or confirmation behavior.
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
 - A row without a background that reaches the edges of an inset-grouped cell (`listRowInsets` leading 0 and `listRowBackground(Color.clear)`, such as the Knowledge kind bar) adds `.unclippedListRow()` (`apple/Persona/DesignSystem/UnclippedListRow.swift`): the cell's 26 pt rounded corners clip it otherwise, and its first chips lose a corner (#7735). A row with a background keeps the clipping, or its square corners show.
 - Row height at least 44. Sidebar rows use `Theme.Sidebar`. The iOS Agents list (#3753): `Theme.Size.tapTarget` is its least row height in every grouping and display; a row that is one plain button takes taps on its label alone, so the row gives its room above and below to the label (`ButtonRowInsets`, `ButtonRowLabel` in `apple/Persona/Views/Chats/RepoTreeRows.swift`) and the label is the whole row; folding headings are `TouchHeight` tall and fold chevrons `tapTargetFrame` squares. The Mac keeps its sizes.
+- A list read further down hears of news without being moved (Android `JLatestPill`, `android/core/designsystem/src/main/kotlin/persona/core/designsystem/LatestPill.kt`; iOS keeps the row being read in place and holds the list while it scrolls, `ReaderAnchor` / `Hold`): what needs the user or went down is given to its row at once, even while the list scrolls (principle 4: what needs the user is visible without opening anything), the order and the rest of the page wait for the list to rest, at most a bounded time. What came out of view, counted as a tap on the pill shows it, is one line in a pill at the list's edge, away from the top only. The pill never scrolls the list, takes focus or waits for the hold, and does not stand in for the row's own state; a tap goes to the latest. Its words are one line and spoken as written; the screen reader says what the tap does.
 - Chip family: `Chip` (label), `FilterChip` (toggle), `LinkBadge`, `CountBadge`, plus 50+ lookalikes in feature code (DS-21).
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
@@ -1142,6 +1144,7 @@ package-only Undo with retained recovery files; `docs/operations/hub-update.md` 
 | Case | Component |
 | --- | --- |
 | Page load | `Loadable` and `LoadableContent` (`apple/Persona/DesignSystem/Components.swift:739-770`); only about 9 call sites |
+| Page load (Android) | `JLoadable` and `jLoadableContent` (`Lists.kt`), the same three cases as `Loadable` plus the two a phone needs: a spinner (`JLoading`, with optional text) before the first answer; the content, kept while it reloads (`refreshing` feeds `JListPage`'s pull indicator) and with a failed reload said as one `JNotice` line above it with an inline Retry; and, with nothing to show, a `JNotice` carrying the reason (and an optional title) with Retry under it. A failed read over an empty value is a failure, never the page's empty state (`empty` slot, `JEmptyState`), so an offline cache is not shown as a successful empty answer. A retry goes back to the spinner. Retry is the shared `designsystem_retry`; the reason text comes from the page. First page on it: Settings › Hub version |
 | Row or button busy | `RowProgress`, `trailingProgress`, small `ProgressView` |
 | Load failure on a settings page | `LoadProblem` (`apple/Persona/DesignSystem/SettingsForm.swift:73`), no Retry |
 | List read failure (web) | `ListError` (`web/src/ui/ListError.tsx`): a red `role="alert"` line saying what could not be read and why, with **Retry** under it, in place of the rows; the paged session lists and the sidebar's Agents list (its complete list, and By to-do's unread to-dos) draw it, so a failed read never leaves a list blank or on "Loading…" |
@@ -1236,6 +1239,7 @@ The widget extension doesn't build `Theme`: Persona's widgets take their colors,
 - `CandleChart`: candlesticks with an optional volume chart under them; rising and falling colors come from the caller (the diff's green and red); holding a candle reads its prices, else the last one's.
 - `TrendLine`: a trend line the size of a word, no axes, in the quiet ink unless given a color; VoiceOver reads where it went and its lowest and highest.
 - Charts never take a hex: series use role colors, the data hues or `Theme.Hue`; text around them stays in the text's colors.
+- Machine monitoring has its own `MetricColor` palette on both Apple and Android: CPU blue, memory teal, download orange, upload purple and load magenta, with separate light/dark values from `spec/tokens/color.metric.json`. These series never reuse Agent state colors and do not change with interface style or theme accent. Android's additional disk series uses the registered neutral slate token. Holding a chart keeps one shared timestamp across the detail's charts; only **Back to now**, or that timestamp leaving the selected range, returns to current values. Missing series remain unknown and gaps never borrow a neighboring value.
 
 ### 3.14 Tabletop hinge safety (Android)
 
@@ -1566,6 +1570,8 @@ control when it sits lower in the row.
 - **Tested** by `KeepTappedRowTests`: in the middle, at the newest end and at the oldest end, one open and one close
   each, in both chats, asserting the tapped row's screen position frame by frame.
 
+- **Edit diffs use the existing side panel (#9160)**: an edit row opens a Changes panel at that file and call, not a modal that hides the conversation. The panel gives the exchange's edited files a tree and keeps the selected diff beside a scrollable conversation on wide screens; a scope switch reads the whole session, including folded history. Live edits never move the reader to another file: the current diff appends in place, and other files use a new-changes pill. The old modal had no room for that navigation and could not leave the explanation and diff visible together; the existing panel already supplies the container, narrow-screen return and session memory, so no second viewer remains.
+
 ### 4.8 Pending requests
 
 Task decisions on the web reuse the task-routing chip for **Answer in chat** (#5929). It identifies the task and
@@ -1769,6 +1775,10 @@ Claude Code's AskUserQuestion, the assistant's ask_user and Codex's questions.
   row is wider than the card (the largest text sizes) it scrolls, opening with the current one in sight; the card's title
   then wraps to up to three lines.
 - **Previous / Next** move one question at a time. A question gone back to shows the answer it had.
+- **A single-select pick** moves on to the next question by itself after a short pause (250 ms), once, and never past
+  the last one. A second pick within the pause starts the pause again, so the card moves a whole pause after the last
+  pick and its tick is seen; Previous / Next meanwhile cancel the move (`QuestionSteps.step`, #6549; two taps within the
+  pause used to skip a question).
 - **The review** (`ScreenReview`, `apple/Persona/Views/Interactions/ScreenReview.swift`): a row per question, Previous and
   **Submit N Answers**. A question left reads **Not answered** in the caution color; the main button then goes to it,
   and **Submit Without Them** sends the rest. At the largest text sizes the buttons stack, the main one first, and so
@@ -2265,7 +2275,9 @@ page the user watches during the meeting is the page they keep writing in after 
   subtitle and Topics hide and the top card keeps only its newest part (the Live box its newest line; the Highlights
   card its newest highlight, the latest `at`, or its waiting line; neither with Full Transcript), so the thread keeps its
   height (the structure stays the same, so the thread's scroll position holds); it changes on `Theme.Motion.state`, and
-  when the keyboard goes down the card is whole again. At accessibility sizes a one-line header (dot, time, menu, Hide)
+  when the keyboard goes down the card is whole again. In the meeting room (#8731 B1) the people row and the tabs step
+  aside instead, and only the Live page folds (its Live box to its newest line). The Highlights page keeps its card
+  whole, Full Transcript included, since the card is that page. At accessibility sizes a one-line header (dot, time, menu, Hide)
   stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
   **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the

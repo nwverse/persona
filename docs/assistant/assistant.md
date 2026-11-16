@@ -692,6 +692,10 @@ In the assistant's composer (web, and the iPhone/iPad shell composer's `Composer
 - Blocks further into the message (inside quoted text) are never taken for mentions, and a block naming a computer the hub doesn't know stays as the client wrote it. The transcript keeps the filled-in block, so the chat's context row shows what the assistant was given.
 - **Not yet**: the native Mac, Android, and BeautifulUI's separate legacy iOS `PromptComposer` menu. They only need to list the same endpoint and write the same tag; the manager side already handles their messages.
 
+## Pictures in replies (#9473)
+
+A reply that names a picture by address (Markdown `![alt](https://…)`, often what an Agent found on the web) is drawn by the apps from the manager, not from the picture's host: `GET /api/v1/remote-image` (`assistant/remote_image.go` over `server/internal/remoteimage`, feature `remote_images`) fetches it from the open internet only, checks and scales it, and keeps it in `cache/remote-images/` (a cache, at most 512 MiB). The host sees the manager's address and never a device's, and the apps get the size they draw. Limits, refusals and the answer are in `docs/protocol/protocol.md` ("Remote images (#9473)"). The user's own Agents' and assistant's replies load at once; content other people wrote (Inbox, mail, Lark, channels) keeps a tap in the apps, since its pictures may be tracking pixels.
+
 ## Pitfalls
 
 - Models call ask_user **in parallel** with other tools (measured: ask_user and schedule_followup in the same millisecond), so ask_user can't be the sole "confirm before acting" gate;
