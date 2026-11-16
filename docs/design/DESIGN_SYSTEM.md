@@ -1941,8 +1941,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, lists, menus, sheets, selection controls and
 confirmation dialogs. Persona and Agents are peer conversation views in the native title control. Inbox, Todos,
 Knowledge, Health, Apps, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
-views. Use native `CapsuleSegmentButtonV2` for the peer switch at ordinary font scales and native `Select` at 1.5× or
-larger. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
+views. The peer switch uses the message/group symbols in native `CapsuleSegmentButtonV2`, with localized accessible names and at least 48 vp per item at every font scale. It does not revert to a text Select. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
 device name. The expanded master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. It has no
 permanent third pane or replacement navigation rail.
 
@@ -1952,7 +1951,7 @@ boundary after layout and adds only the remaining overlap. Recompute when the ho
 avoided host or centered sheet needs zero extra system inset. Never hard-code an inset or repeat it on inner rows. Preserve the system
 gesture region and keep the last row and primary action above it.
 
-The 4 vp footer is application spacing, not a fixed HarmonyOS safe-area measurement. Native Navigation paints the primary pane's grouped/canvas background through the gesture area while leaving scrolling controls in the safe layout region; a short list's remaining height is not extra inset. Question, plan-editor, context-selection and Spaces sheet content uses 16 vp internal edges plus only the outstanding measured system overlap. The intrinsic-height Agent filter sheet keeps its 12 vp internal inset and measures its own outstanding overlap; centered sheets add no system inset. Chat siblings and wrapped GridRow rows use 8 vp gaps, and same-level feed cards use 16 vp content edges. The compact composer reserves fixed action targets and 8 vp gaps, giving its remaining width to the same editor instead of rounding button slots to coarse columns. Do not merge the jump-to-latest button into the composer surface. Appearance labels and Select controls wrap as whole items. At enlarged text sizes Inbox status uses the Agents native Select pattern. Native Back visibility also determines whether a custom title needs its own leading 16 vp inset.
+The 4 vp footer is application spacing, not a fixed HarmonyOS safe-area measurement. Native Navigation paints the primary pane's canvas background through the gesture area while leaving scrolling controls in the safe layout region; a short list's remaining height is not extra inset. Question, plan-editor, context-selection and Spaces sheet content uses 16 vp internal edges plus only the outstanding measured system overlap. The intrinsic-height Agent filter sheet uses 16 vp side and bottom edges and an 8 vp top edge, and measures its own outstanding overlap; centered sheets add no system inset. Chat siblings and wrapped GridRow rows use 8 vp gaps, and same-level feed cards use 16 vp content edges. The compact composer reserves fixed action targets and 8 vp gaps, giving its remaining width to the same editor instead of rounding button slots to coarse columns. Do not merge the jump-to-latest button into the composer surface. Appearance labels and Select controls wrap as whole items. At enlarged text sizes Inbox status uses the Agents native Select pattern. Native Back visibility also determines whether a custom title needs its own leading 16 vp inset.
 
 Conversation detail hides its title only while the matching selected row is fully visible in the expanded master
 and identifies the conversation for the same owner. Compact, collapsed, filtered-out, offscreen or different-owner
@@ -1971,16 +1970,19 @@ The standard system typography is 20 fp title, 17 fp body, 14 fp secondary and 1
 height. Follow the application system font scale up to 3.2×; use 16 vp page edges, 12 vp insets, 8 vp gaps, 24 vp
 section spacing, 20 vp business-surface corners and a 48 vp minimum response region. System controls own their
 internal dimensions and material. Fixed icon slots use 22 vp symbols, independently of the text scale.
-The compact Persona/Agents Select caps only its displayed value at 2× so both title actions remain reachable;
-its native option menu and content continue to follow the system text scale. Native Radio and Checkbox outlines
+The Persona/Agents symbol segment keeps both native 48 vp targets reachable at enlarged text sizes. Native Radio and Checkbox outlines
 use the secondary foreground when unselected; the control background is not an outline color.
 
 System is the default style for a fresh or unset preference. Existing explicit Glass, Brief and Board selections stay
 selected and remain available after update. Avatar, Accent, color mode and style are separate. Standard is the
 default row density when an older device-appearance record has no density value; saving density preserves the
-existing Avatar and Accent fields. Agent grouping (flat, computer, repository or worktree) is a separate owner- and
+existing Avatar and Accent fields. Agent grouping (Status, Machine or Project) is a separate owner- and
 view-scoped workspace preference, not a device appearance field. Preference restoration finishes before selection
 is enabled, failed writes keep the last confirmed value, and changing one option does not reset the others.
+
+Shared native Select controls retain a 48vp minimum target and leave their height to ArkUI content sizing; a fixed 48vp height would clip 3.2× text. See the [native Select sizing rules](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-basic-components-select).
+
+The Agent quick filter uses the existing native Select when the actual pane cannot fit all five full localized segment labels. Native text measurement and the explicit segment padding determine fit; a font scale of 1.5× or above also uses Select. Search and filter keep their compact row at ordinary text sizes. This content-filter fallback is independent of the two-icon Persona/Agents peer control. At accessibility sizes a narrow native selector may ellipsize its displayed value; its complete localized value and menu options remain available.
 
 Native `WithTheme` supplies light and dark system tokens; an own-message subtree supplies readable bubble tokens.
 Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
@@ -1995,14 +1997,14 @@ viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interacti
 
 The composer uses native GridRow/GridCol spans and order. Focus, draft, attachments, the actual composer width and
 system font scale rearrange one TextArea in place; they do not replace its node or draft owner. At 1.5× or in a narrow
-pane, actions can stack with complete single-line labels. A local font multiplier is not a substitute for the
+pane, fixed-size icon actions can stack without replacing the editor. A local font multiplier is not a substitute for the
 native system scale. Verify focus and IME composition on device when width, keyboard or posture changes; static
 layout and portable tests do not prove native composition continuity.
 
 A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
 that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
 a message thread keep their separate meaning. A missing resource title falls back to its identifier in the native
-bar. Secondary list actions, such as grouping, use the framework's textual button style.
+bar. Grouping uses native Select controls with visible values; secondary functional actions use compact native icon buttons.
 
 Persona assistant question cards remain in the native transcript List alongside the stable composer. Each card keeps
 its own request identity; ordinary sends leave withdrawal to the Hub, and non-blocking questions remain answerable.
@@ -2034,7 +2036,11 @@ text sizes; verification must reach each complete action within its own viewport
 readable foreground tokens in both modes. Reopening an active transfer retains its captured receiving computer and
 folder; pending or unknown outcomes never silently resend.
 
-Large system text never clips decision metadata: plan machine, path and permission wrap in native Flex. Inbox search moves above its native actions from 1.5×, with intrinsic button height. Preference labels and Select controls wrap when their combined intrinsic widths exceed the row. The native peer Select uses the available title slot; only the normal-size segmented control keeps its maximum width.
+Large system text never clips decision metadata: plan machine, path and permission wrap in native Flex. Inbox search moves above its native actions from 1.5×, with complete 48 vp icon targets. Preference labels and Select controls wrap when their combined intrinsic widths exceed the row. The native symbol peer segment keeps its shared 104 vp width and fixed-size symbols; content filters still use their native large-text Select fallback.
+
+HarmonyOS functional actions reuse `IconActions`, `ButtonStyles.icon` and `iconPrimary`: native Circle controls with actual 48 vp bounds and 22 vp symbols, semantic resource colors, state-consistent accessible names and native pressed/disabled/focus behavior. Title tools may retain the existing 40 vp visual plus 48 vp response region. Content labels, selection scopes and system confirmation verbs stay visible. Unknown extension actions are grouped into named native menus, retaining their current fields, captured owner/page authority, explicit destructive role and independent danger tone. A caller cannot substitute a new page with the same action ID for an old menu callback.
+
+This requested HarmonyOS presentation uses compact icon submissions while retaining the visible decision choices and execution context; it does not change Apple decision-row sizing. Approval/Deny use distinct symbols and colors, and pending/unknown never appears as an ordinary actionable Send. The sidebar shares the canvas; plan content has explicit context/goal/bounds/criteria hierarchy, question Answer is trailing, Todo rows have native group dividers, and card outer insets are applied once. Avoid repeated Details rows or descriptive subtitles. Recording, external sends, Forget Hub and extension installation retain visible consequences in a single native confirmation or permission sheet. The [HarmonyOS guide](../harmony/harmony.md#compact-native-actions) owns the complete interaction contract.
 
 ## 8. Inconsistencies and duplicate definitions
 
