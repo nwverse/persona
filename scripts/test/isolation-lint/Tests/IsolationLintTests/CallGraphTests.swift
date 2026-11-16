@@ -43,6 +43,33 @@ final class CallGraphTests: XCTestCase {
         """)
     }
 
+    /// `Failure.read(errno)` makes a case of the sources' enum `Failure`: it calls no `read(_:)` of another type, even
+    /// where the name may also stand for any type (here a generic parameter) (#8994).
+    func testAnEnumCaseWrittenOnItsTypeIsNoCall() {
+        expect("""
+        nonisolated enum Avatar {
+            static func read(_ from: URL) -> Data? { try? Data(contentsOf: from) } // off
+        }
+        nonisolated struct Socket {
+            enum Failure: Error { case read(Int32), pathTooLong }
+            func receive() throws { throw Failure.read(errno) }
+        }
+        func wrapped<Failure: Error>(_ error: Failure) -> Error { error }
+        func load() { Task.detached { _ = Avatar.read(url) } }
+        """)
+    }
+
+    /// A static method of the enum, called on its name, is still a call.
+    func testAStaticMethodOnAnEnumsNameIsStillACall() {
+        expect("""
+        nonisolated enum Failure: Error {
+            case read(Int32)
+            static func read(from: URL) -> Data? { try? Data(contentsOf: from) } // main
+        }
+        func screen() { _ = Failure.read(from: url) }
+        """)
+    }
+
     func testFunctionsThatCallEachOtherSettle() {
         expect("""
         nonisolated func ping(_ n: Int) { _ = try? Data(contentsOf: url); if n > 0 { pong(n - 1) } } // off
