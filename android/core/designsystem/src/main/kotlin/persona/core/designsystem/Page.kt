@@ -375,7 +375,9 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        CompositionLocalProvider(LocalPaneListToggle provides null) {
+            Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        }
     }
 }
 
@@ -421,8 +423,10 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
+    val listToggle = LocalPaneListToggle.current
     val leading: @Composable () -> Unit = {
         when {
+            listToggle != null -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), listToggle)
             onBack != null -> JBackButton(onClick = onBack)
             else -> LocalRootLeading.current?.invoke()
         }
