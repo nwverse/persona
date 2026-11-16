@@ -223,10 +223,19 @@ notices/statuses. Exact manifests, malformed inputs and deliberately wrong expec
 The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
 `coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
 label, while the other three take JSON documents.
+`harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
+all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
+turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
+same generated ArkTS codec and existing registry dispatch/flush/drain commands replay four operation cases at all 10
+checkpoints, with exact item IDs and 13 complete turn objects; an existing burst is also replayed through the
+standalone `replace` branch. Exact manifests, malformed/wrong-shaped inputs and deliberately wrong static and
+checkpoint expectations are checked. The helper supplies a fold range only after the real runtime requests it. No
+turn fixture, overlay or turn-grouping semantics changes.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
 mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
 a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
-device. No production client uses the new exports yet.
+device. In particular, the turn helper evidence does not replace #8808's real Linux NAPI addon loader. No production
+client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
