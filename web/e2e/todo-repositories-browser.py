@@ -472,6 +472,24 @@ def run_creation(theme, width, suffix=""):
     check(js("document.querySelector('[role=dialog]').scrollWidth <= document.querySelector('[role=dialog]').clientWidth"),
           f"{where}: the creation dialog has no horizontal overflow")
     shot(f"creation-corrected-{width}-{theme}{suffix}")
+    # The real Add-link field: a canonical link, the same issue through a public alias (silently deduplicated by the
+    # existing AddLink behavior), then a genuinely different issue. One creation POST follows.
+    def add_link(url):
+        press("Add issue or PR")
+        eventually("!!document.querySelector('[role=dialog] input[type=url]')")
+        type_url(url)
+        press("Add issue or PR")
+        eventually("!document.querySelector('[role=dialog] input[type=url]')")
+        settle()
+    add_link("https://github.com/example/web/issues/7")
+    add_link("HTTP://github.com/Example/Web/issues/7")
+    check(js("document.querySelectorAll('[role=dialog] [data-repository-link]').length") == 1,
+          f"{where}: the alias of an existing link is deduplicated")
+    shot(f"creation-duplicate-{width}-{theme}{suffix}")
+    add_link("https://github.com/example/web/issues/8")
+    check(js("document.querySelectorAll('[role=dialog] [data-repository-link]').length") == 2,
+          f"{where}: a different issue is added")
+    shot(f"creation-links-{width}-{theme}{suffix}")
     js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create' && b.type === 'submit').click(); true")
     eventually("!!window.repoFixture.creation")
     body = json.loads(js("JSON.stringify(window.repoFixture.creation)"))
@@ -481,6 +499,10 @@ def run_creation(theme, width, suffix=""):
     row0 = bindings["repositories"][0]
     check(row0["repo_id"] == "web" and row0["requested_ref"] == {"kind": "branch", "value": "main"},
           f"{where}: the corrected branch ref is sent with its repository")
+    links = row0.get("links", [])
+    check(len(links) == 2 and [link.get("url") for link in links] == [
+        "https://github.com/example/web/issues/7", "https://github.com/example/web/issues/8",
+    ], f"{where}: the deduplicated and added issues send one create POST")
 
 
 try:
