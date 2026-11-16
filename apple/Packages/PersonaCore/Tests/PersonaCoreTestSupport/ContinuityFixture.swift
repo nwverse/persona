@@ -41,9 +41,9 @@ public enum ContinuityJSON: Equatable, Sendable {
     }
 
     public func encoded() throws -> String {
-        // display_answer's C contract is a bare JSON string, not an object. Foundation otherwise rejects fragments
-        // with an Objective-C exception rather than a Swift error; allow them only for this scalar case.
-        let options: JSONSerialization.WritingOptions = if case .string = self { [.fragmentsAllowed] } else { [] }
+        // Foundation otherwise rejects fragments with an Objective-C exception rather than a Swift error. Only
+        // display_answer's bare JSON string is a C input; other scalar values here are diagnostic renderings.
+        let options: JSONSerialization.WritingOptions = [.fragmentsAllowed]
         let data = try JSONSerialization.data(withJSONObject: foundation, options: options)
         return String(decoding: data, as: UTF8.self)
     }
