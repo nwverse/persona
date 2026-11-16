@@ -114,7 +114,7 @@ public enum ProjectionBindingReplay {
             }
             expectedPicks = .object(picks)
         }
-            expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Double(page))
+        let expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Double(page))
         try ProjectionFixture.assertEqual(
             try ProjectionFixture.require(transition["page"], "page"), expectedPage, "answer/\(name)/page"
         )
