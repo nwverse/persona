@@ -7,7 +7,7 @@ import PersonaCore
 public enum ContinuityJSON: Equatable, Sendable {
     case null
     case bool(Bool)
-    case number(Double)
+    case number(Decimal)
     case string(String)
     case array([ContinuityJSON])
     case object([String: ContinuityJSON])
@@ -17,7 +17,9 @@ public enum ContinuityJSON: Equatable, Sendable {
     public var string: String? { if case .string(let value) = self { value } else { nil } }
     public var int: Int? {
         guard case .number(let value) = self else { return nil }
-        return Int(exactly: value)
+        // Integer-only fixture readers do not accept fractions or out-of-range values as valid indices.
+        guard let exact = Int(exactly: NSDecimalNumber(decimal: value)) else { return nil }
+        return exact
     }
     public var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
     public subscript(_ key: String) -> ContinuityJSON? { object?[key] }
@@ -31,7 +33,7 @@ public enum ContinuityJSON: Equatable, Sendable {
         switch value {
         case is NSNull: .null
         case let value as NSNumber where CFGetTypeID(value) == CFBooleanGetTypeID(): .bool(value.boolValue)
-        case let value as NSNumber: .number(value.doubleValue)
+        case let value as NSNumber: .number(value.decimalValue)
         case let value as Bool: .bool(value)
         case let value as String: .string(value)
         case let value as [Any]: .array(try value.map(from))
@@ -52,7 +54,7 @@ public enum ContinuityJSON: Equatable, Sendable {
         switch self {
         case .null: NSNull()
         case .bool(let value): value
-        case .number(let value): value
+        case .number(let value): NSDecimalNumber(decimal: value)
         case .string(let value): value
         case .array(let values): values.map(\.foundation)
         case .object(let values): values.mapValues(\.foundation)
@@ -175,16 +177,16 @@ public extension Request {
         var object: [String: ContinuityJSON]
         switch self {
         case let .fetchAfter(after_seq: after):
-            object = ["kind": .string("fetch_after"), "after_seq": .number(Double(after))]
+            object = ["kind": .string("fetch_after"), "after_seq": .number(Decimal(after))]
         case let .fetchLatest(fold_work: fold):
             object = ["kind": .string("fetch_latest"), "fold_work": .bool(fold)]
         case let .subscribe(since_seq: since, fold_work: fold):
             object = ["kind": .string("subscribe"), "fold_work": .bool(fold)]
-            if let since { object["since_seq"] = .number(Double(since)) }
+            if let since { object["since_seq"] = .number(Decimal(since)) }
         case let .fetchOlder(before_seq: before, fold_work: fold):
-            object = ["kind": .string("fetch_older"), "before_seq": .number(Double(before)), "fold_work": .bool(fold)]
+            object = ["kind": .string("fetch_older"), "before_seq": .number(Decimal(before)), "fold_work": .bool(fold)]
         case let .fetchRange(fold_id: _, from_seq: from, through_seq: through):
-            object = ["kind": .string("fetch_range"), "from_seq": .number(Double(from)), "through_seq": .number(Double(through))]
+            object = ["kind": .string("fetch_range"), "from_seq": .number(Decimal(from)), "through_seq": .number(Decimal(through))]
         }
         return .object(object)
     }

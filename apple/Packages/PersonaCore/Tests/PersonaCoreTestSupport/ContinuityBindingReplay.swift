@@ -64,7 +64,7 @@ public struct ContinuityBindingReplay: Sendable {
                 let item = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
                 return item["id"] ?? .null
             }), expected["item_ids"], "\(label) item_ids")
-            try equal(.number(Double(patch.covered)), expected["covered"], "\(label) covered")
+            try equal(.number(Decimal(patch.covered)), expected["covered"], "\(label) covered")
             try equal(patch.history.map(ContinuityJSON.string) ?? .null, expected["history"], "\(label) history")
             try equal(patch.hasMore.map(ContinuityJSON.bool) ?? .null, expected["has_more"], "\(label) has_more")
             try equal(.bool(patch.loadedOnce), expected["loaded_once"], "\(label) loaded_once")

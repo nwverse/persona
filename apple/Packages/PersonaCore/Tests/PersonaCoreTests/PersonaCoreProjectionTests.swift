@@ -35,6 +35,21 @@ final class PersonaCoreProjectionTests: XCTestCase {
         print("PersonaCore Swift/C task_index: \(count) complete objects plus the background receipt")
     }
 
+    func testJSONComparisonKeepsLargeIntegersAndScalarFailuresExact() throws {
+        let larger = try ProjectionFixture.decode("9007199254740993", "large integer")
+        let smaller = try ProjectionFixture.decode("9007199254740992", "adjacent integer")
+        try ProjectionFixture.assertWrongExpectationIsRejected(
+            larger, wrong: smaller, label: "JSON integers above 2^53 remain distinct"
+        )
+        try ProjectionFixture.assertWrongExpectationIsRejected(
+            .number(1), wrong: .number(0), label: "scalar mismatches are catchable Swift errors"
+        )
+        let original = try ProjectionFixture.decode("9007199254740993", "encoded integer")
+        XCTAssertEqual(try original.encoded(), "9007199254740993")
+        let negative = try ProjectionFixture.decode("-9007199254740993", "encoded negative integer")
+        XCTAssertNotEqual(negative, try ProjectionFixture.decode("-9007199254740992", "adjacent negative integer"))
+    }
+
     func testInvalidUTF8ResultIsNotAccepted() throws {
         // Every malformed-input path must reach the adapter's explicit C failure mapping, not a JSON decoder's nil.
         for projection in [
