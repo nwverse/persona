@@ -14,6 +14,7 @@ WATCH = ROOT / "scripts" / "operations" / "pr_watch.py"
 FAKE_GH = r'''
 import json, os, sys
 from pathlib import Path
+from datetime import datetime, timezone
 args = sys.argv[1:]
 state_path, log_path = Path(os.environ["FAKE_GH_STATE"]), Path(os.environ["FAKE_GH_LOG"])
 state = json.loads(state_path.read_text())
@@ -24,7 +25,9 @@ if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
     entry["review"] = json.loads(entry["input"]) if entry["input"] and "/pulls/" in args[1] else None
 if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
-    print("[]")
+    kind = next((suffix for suffix in ("/comments", "/reviews", "/commits") if args[1].endswith(suffix)), "")
+    records = {"comments": state.get("comments", []), "reviews": state.get("reviews", []), "commits": state.get("commits", [])}[kind[1:]]
+    print(json.dumps(records))
     entry["returncode"] = 0
     with open(log_path, "a") as log:
         log.write(json.dumps(entry) + "\n")
@@ -61,10 +64,14 @@ elif args[:2] == ["api"] and args[1].endswith("/reviews"):
     sys.exit(code)
 elif args[:2] in (["pr", "review"], ["pr", "comment"]):
     entry["body"] = args[args.index("--body") + 1]
+    if args[:2] == ["pr", "comment"]:
+        state.setdefault("comments", []).append({"createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "body": entry["body"]})
+        state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "edit"]:
     state["pr"].setdefault("labels", []).append(args[args.index("--add-label") + 1])
     state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "close"]:
+    entry["comment"] = args[args.index("--comment") + 1] if "--comment" in args else ""
     state["pr"]["state"] = "CLOSED"
     state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "merge"]:
@@ -170,6 +177,32 @@ class WatcherIntegrationTests(unittest.TestCase):
         before = len(calls)
         self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in self.run_watch()[before:]))
         self.assertTrue(any("reviewer" in call for call in calls))
+
+    def test_stale_pr_with_multiple_activity_records_is_marked_explained_and_closed(self):
+        state = json.loads(self.state_path.read_text())
+        old = datetime.now(timezone.utc).timestamp() - 8 * 86400
+        def timestamp(seconds):
+            return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["pr"]["createdAt"] = timestamp(old - 3600)
+        state["pr"]["updatedAt"] = timestamp(old)
+        state["comments"] = [{"createdAt": timestamp(old - 1800), "body": "old discussion"},
+                             {"createdAt": timestamp(old - 900), "body": "another old comment"}]
+        state["reviews"] = [{"createdAt": timestamp(old - 1200)}]
+        state["commits"] = [{"committedDate": timestamp(old - 600)}, {"committedDate": timestamp(old)}]
+        config = json.loads(self.config_path.read_text())
+        config["repositories"][0]["close_stale"] = True
+        self.config_path.write_text(json.dumps(config))
+        self.state_path.write_text(json.dumps(state))
+        calls = self.run_watch()
+        current = json.loads(self.state_path.read_text())
+        self.assertEqual(current["pr"]["state"], "CLOSED")
+        self.assertIn("stale", current["pr"]["labels"])
+        self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
+        self.assertTrue(any(call.get("argv", [])[:2] == ["pr", "close"] for call in calls))
+        notices = [call for call in calls if call.get("argv", [])[:2] == ["pr", "comment"]]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("more than seven days", notices[0]["body"])
+        self.assertFalse(any(call.get("reviewer") for call in calls))
 
     def test_findings_use_changed_line_and_do_not_merge(self):
         self.env["FAKE_REVIEW_FINDINGS"] = json.dumps([{"path": "fix.py", "line": 2, "severity": "P1",

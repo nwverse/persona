@@ -71,7 +71,7 @@ class WatcherTests(unittest.TestCase):
         # These unit tests do not perform real GitHub calls. Keep the three
         # read-only activity APIs empty unless a stale-specific test supplies
         # its own observations; the production parser still fails on bad data.
-        self.activity = patch.object(self.watcher, "stale_progress_at", side_effect=lambda repo, number, snapshot, old: pr_watch_common.progress_timestamp(snapshot, [], [], []))
+        self.activity = patch.object(self.watcher, "stale_progress_at", side_effect=lambda repo, number, snapshot, old, **kwargs: pr_watch_common.progress_timestamp(snapshot, [], [], []))
         self.activity.start()
         self.addCleanup(self.activity.stop)
 
@@ -103,6 +103,52 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
         review.assert_not_called()
         merge.assert_not_called()
+
+    def test_stale_multiple_activity_records_use_real_queries_and_ignore_only_own_notice(self):
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
+        snapshot = pr(createdAt="2026-11-01T00:00:00.123Z")
+        old = pr_watch_common.github_time("2026-11-01T00:00:00.123Z")
+        now = old + 8 * 86400
+        comments = [{"createdAt": "2026-11-01T01:00:00Z", "body": "old review"},
+                    {"createdAt": "2026-11-02T01:00:00.456Z", "body": "another old comment"}]
+        current = dict(snapshot)
+        calls = []
+        def activity(argv, **kwargs):
+            calls.append(argv)
+            if "issues/7/comments" in argv[1]:
+                return comments + ([{"createdAt": "2026-11-08T00:00:00Z", "body": self.comments[-1]}] if len(self.comments) else [])
+            if "pulls/7/reviews" in argv[1]:
+                return [{"createdAt": "2026-11-01T02:00:00Z"}]
+            return [{"committedDate": "2026-11-01T03:00:00Z"}, {"committedDate": "2026-11-02T03:00:00Z"}]
+        def github(argv, **kwargs):
+            if argv[1:3] == ["pr", "edit"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[1:3] == ["pr", "close"]:
+                current["state"] = "CLOSED"
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            self.fail(argv)
+        with patch.object(pr_watch, "gh_json", side_effect=activity), \
+                patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(current)), \
+                patch.object(pr_watch, "run", side_effect=github), \
+                patch.object(pr_watch.time, "time", return_value=now):
+            self.assertTrue(self.watcher.mark_and_close_stale(config, snapshot, {}))
+        self.assertEqual(current["state"], "CLOSED")
+        self.assertTrue(all("[.[]" in call[-1] for call in calls))
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+
+    def test_stale_pr_with_multiple_activity_records_closes_despite_its_own_notice_extra(self):
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z")
+        old = pr_watch_common.github_time("2026-11-01T00:00:00Z")
+        notice = "This PR has had no substantive progress for more than seven days"
+        comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice},
+                    {"createdAt": "2026-11-08T00:00:01Z", "body": "I am still working on this"}]
+        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
+            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {}, ignore_notice=notice)
+        self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
+        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], [], []]):
+            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {}, ignore_notice=notice)
+        self.assertEqual(activity, old)
 
     def test_recent_pr_activity_prevents_stale_close(self):
         self.github_pr = pr()
@@ -1522,6 +1568,23 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         repair.assert_called_once()
         self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
+
+    def test_verification_repair_publication_without_semantic_findings_retries_new_head(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, semantic="passed", findings=[], repair_rounds=0)
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(SHA_B)]), \
+                patch.object(pr_watch_repair, "main_failure_comparison", return_value={"reproduced": False}), \
+                patch.object(pr_watch_repair, "update_branch_with_main", return_value=None), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model", return_value=None), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])):
+            self.watcher.repair_verification(self.watcher.config["repositories"][0], pr(), self.root,
+                                             pr_watch_common.VerificationError("real failure"))
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["head"], SHA_B)
+        self.assertEqual(state["outcome"], "retry")
+        self.assertEqual(state["repair_rounds"], 1)
 
     def test_repair_stops_after_three_rounds(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)

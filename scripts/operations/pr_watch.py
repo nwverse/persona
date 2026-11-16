@@ -631,7 +631,7 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
-            self.record_review_publication(repo, number, pr, old.get("findings", findings), posted=True)
+            self.record_review_publication(repo, number, pr, old.get("findings", []), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
@@ -741,7 +741,7 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
-            self.record_review_publication(repo, number, pr, old.get("findings", findings), posted=True)
+            self.record_review_publication(repo, number, pr, old.get("findings", []), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
@@ -769,14 +769,18 @@ class Watcher:
             raise WatchError("PR has an outstanding changes request")
         return True
 
-    def stale_progress_at(self, repo, number, pr, old):
+    def stale_progress_at(self, repo, number, pr, old, ignore_notice=None):
         """Use actual GitHub activity, never repeated polling or retry state."""
         comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
-                            "--paginate", "--jq", ".[] | {createdAt: .created_at}"], timeout=90)
+                            "--paginate", "--jq", "[.[] | {createdAt: .created_at, body: .body}]"], timeout=90)
         reviews = gh_json(["api", "repos/%s/pulls/%s/reviews" % (repo, number),
-                           "--paginate", "--jq", ".[] | {createdAt: .submitted_at}"], timeout=90)
+                           "--paginate", "--jq", "[.[] | {createdAt: .submitted_at}]"], timeout=90)
         commits = gh_json(["api", "repos/%s/pulls/%s/commits" % (repo, number),
-                           "--paginate", "--jq", ".[] | {committedDate: .commit.committer.date}"], timeout=90)
+                           "--paginate", "--jq", "[.[] | {committedDate: .commit.committer.date}]"], timeout=90)
+        if ignore_notice is not None:
+            # Only the exact notice posted by this invocation is excluded;
+            # other new contributor comments still keep the PR open.
+            comments = [item for item in comments if item.get("body") != ignore_notice]
         progress = pr_watch_common.progress_timestamp(pr, comments, reviews, commits)
         return progress
 
@@ -806,9 +810,10 @@ class Watcher:
         latest = pr_snapshot(repo, number)
         if latest["state"] != "OPEN" or latest["isDraft"]:
             return False
-        progress = self.stale_progress_at(repo, number, pr, old)
-        # The notice and label just added by this watcher are not new work.
-        # A new contributor comment, review or commit during publication wins.
+        progress = self.stale_progress_at(repo, number, pr, old, ignore_notice=reason)
+        # Only this exact notice is excluded; other comments, reviews and
+        # commits still reset the interval. `old` is the pre-mark snapshot, so
+        # the marker write cannot make its own timestamp look like new work.
         if progress > last_progress + 1:
             self.state.put(repo, number, pr["headRefOid"], outcome="stale_close_pending",
                            last_progress_at=last_progress, stale_activity_at=progress,
