@@ -77,6 +77,51 @@ function fixture() {
   return { page, translations, get parseCount() { return parseCount; } };
 }
 
+test('identity changes refresh selection without decoding an unchanged payload', () => {
+  const context = fixture(), { page } = context;
+  const value = row({ machine_id: 'raw-machine', session_id: 'raw-session', last_text: 'Same payload' });
+  const bound = { identity: 'retained-binding', key: 'retained-key', value };
+  const bindings = page.bindAgentRows([], [bound], true), binding = bindings[0];
+  page.selectionVisible = true;
+  page.workspace = { selectedKey: binding.presentation.selectionKey };
+  assert.equal(page.isRowSelected(binding), true);
+  for (const [field, replacement] of [['group', 'other-hub'], ['kind', 'conversation'],
+    ['manager', 'other-manager'], ['machine', 'other-machine'], ['session', 'other-session']]) {
+    value[field] = replacement;
+    assert.equal(page.bindAgentRows(bindings, [bound], true)[0], binding);
+    const machine = value.machine || 'raw-machine', session = value.session || 'raw-session';
+    assert.equal(binding.presentation.selectionKey, JSON.stringify([value.group, value.kind, value.manager, machine, session]));
+    assert.equal(page.isRowSelected(binding), false, field + ' retires the old highlight');
+    page.workspace.selectedKey = binding.presentation.selectionKey;
+    assert.equal(page.isRowSelected(binding), true);
+  }
+  assert.equal(context.parseCount, 1);
+  value.group = '';value.raw = '{}';value.session = '';
+  page.bindAgentRows(bindings, [bound], true);
+  page.workspace.selectedKey = binding.presentation.selectionKey;
+  value.id = 'fallback-session';page.bindAgentRows(bindings, [bound], true);
+  assert.equal(binding.presentation.selectionKey, JSON.stringify([value.kind,value.manager,value.machine,value.id]));
+  assert.equal(page.isRowSelected(binding), false);
+  assert.equal(context.parseCount, 2, 'changing only the fallback id does not decode again');
+});
+test('same-key session changes move the native highlight through full flat and grouped reconciliation',()=>{
+ for(const groupingMode of ['flat','machines']){
+  const context=fixture(),{page}=context;
+  const value=row({machine_id:'m1',session_id:'s1',last_text:'Same payload'},{machine:'m1',session:'s1'});
+  const group={id:'machines',rows:[value]},workspace={groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
+   groups:[group],visibleRows(){return this.groups.flatMap(item=>item.rows);}};
+  Object.assign(page,{workspace,selectionVisible:true,flatRowBindings:[],groupBindings:[],rowBindingOwner:undefined,rowBindingScope:'',groupBindingSequence:0});
+  page.model.profile={id:'hub',manager:'work'};page.model.scope=()=> 'hub/work';
+  page.syncRowBindings();const binding=groupingMode==='flat'?page.flatRowBindings[0]:page.groupBindings[0].rows[0];
+  assert.equal(page.isRowSelected(binding),true);assert.equal(context.parseCount,1);
+  group.rows=[row(JSON.parse(value.raw),{machine:'m1',session:'s2'})];
+  page.syncRowBindings();const refreshed=groupingMode==='flat'?page.flatRowBindings[0]:page.groupBindings[0].rows[0];
+  assert.equal(refreshed,binding);assert.equal(page.isRowSelected(refreshed),false);
+  workspace.selectedKey=JSON.stringify(['hub','session','work','m1','s2']);assert.equal(page.isRowSelected(refreshed),true);
+  assert.equal(context.parseCount,1);
+ }
+});
+
 test('projection decodes once, keeps BoundRow identity, and refreshes display fields for same-key raw updates', () => {
   const context = fixture(), { page } = context;
   const firstRow = row({ machine_id: 'm1', repo_root: '/work/persona', status: 'working', last_text: 'First',

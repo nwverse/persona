@@ -13,6 +13,26 @@ function fixture(){const p=new Route(),repo={},effects=[];let allowed=true,gener
 test('only an explicitly touch-activated focused editor uses a non-focusable chooser',()=>{const {p}=fixture();for(const source of [0,1,4,5])assert.equal(p.preserveInput({source}),false);assert.equal(p.preserveInput({source:2}),true);p.fieldFocused=false;assert.equal(p.preserveInput({source:2}),false);});
 test('native host removal before or after presentation retires the old picker and permits a new explicit open',()=>{for(const shown of [false,true])for(const reason of ['decision','capability']){const f=fixture(),{p,model,effects}=f;p.openAttachmentChooser({source:2});const old=p.chooser.session,choice=p.chooserItems[0];if(shown)p.chooser.begin(old);if(reason==='decision')model.decision={id:'blocking'};else f.capability(false);p.syncChooser();assert.equal(p.chooser.shown,false);assert.equal(p.chooser.presenting,false);p.chooseItem(choice);assert.deepEqual(effects,[]);model.decision=undefined;f.capability(true);p.syncChooser();assert.equal(p.chooser.shown,false);p.openAttachmentChooser({source:2});assert.notEqual(p.chooser.session.id,old.id);p.finishChooser(old);assert.equal(p.chooser.shown,true);}});
 test('a More request during exit waits for the old presentation and consumes its own input-source intent once',()=>{const {p,effects}=fixture();p.openComposerActions({source:2});p.syncChooser();const old=p.chooser.session;p.chooser.begin(old);p.openComposerActions({source:4});p.syncChooser();assert.equal(p.chooser.shown,false);assert.equal(p.nativeChooser('actions'),false);p.finishChooser(old);const fresh=p.chooser.session;assert.notEqual(fresh.id,old.id);assert.equal(fresh.request,2);assert.equal(fresh.preserveInput,false);assert.equal(p.nativeChooser('actions'),true);p.chooseItem(p.chooserItems[0]);assert.deepEqual(effects,['history']);p.finishChooser(fresh);p.syncChooser();assert.equal(p.chooser.shown,false);});
+test('replacing More never hides the replacement through the native parent callback',()=>{
+ const parentSource=readFileSync(new URL('../entry/src/main/ets/pages/Index.ets',import.meta.url),'utf8');
+ const close=parentSource.match(/  private closeChatActions\(revision: number\): void \{[^}]*\}/)[0];
+ const Parent=new Function('return '+stripTypeScriptTypes('class Parent {'+close+'}'))();
+ for(const presenting of [false,true]){
+  const {p}=fixture(),parent=new Parent(),hidden=[];
+  const show=p.onShowActions;
+  p.onShowActions=()=>{show();parent.chatMenuRevision=p.actionsRequest;parent.chatBodyMenuVisible=p.actionsVisible;};
+  p.onHideActions=request=>{hidden.push(request);parent.closeChatActions(request);p.actionsVisible=parent.chatBodyMenuVisible;};
+  p.openComposerActions({source:2});p.syncChooser();const old=p.chooser.session;
+  if(presenting)p.chooser.begin(old);
+  p.openComposerActions({source:4});p.syncChooser();
+  assert.equal(p.actionsVisible,true);assert.equal(parent.chatBodyMenuVisible,true);
+  assert.ok(!hidden.includes(2),'no callback withdraws the replacement request');
+  if(presenting)p.finishChooser(old);
+  const fresh=p.chooser.session;assert.notEqual(fresh.id,old.id);assert.equal(fresh.request,2);
+  p.finishChooser(old);assert.equal(p.actionsVisible,true);assert.equal(p.nativeChooser('actions'),true);
+  assert.ok(!hidden.includes(2));
+ }
+});
 test('blocking fallback never inherits a prior touch intent or reopens it when composing returns',()=>{const {p,model}=fixture();p.openComposerActions({source:2});p.syncChooser();const old=p.chooser.session;p.chooser.begin(old);model.decision={id:'blocking'};p.syncChooser();p.openFallbackActions();p.syncChooser();assert.equal(p.actionsVisible,true);assert.equal(p.chooser.session,undefined);model.decision=undefined;p.syncChooser();assert.equal(p.chooser.shown,false);p.finishChooser(old);assert.equal(p.chooser.shown,false);});
 test('offline photos stay local while context choices require the captured online repository',()=>{const {p,model,effects}=fixture();model.connected=false;p.openAttachmentChooser({source:4});assert.equal(p.nativeChooser('attachments'),true);const photo=p.chooserItems[0],knowledge=p.chooserItems[2];assert.equal(p.itemEnabled(photo),true);assert.equal(p.itemEnabled(knowledge),false);p.chooseItem(knowledge);assert.deepEqual(effects,[]);assert.equal(p.attachmentSheet,false);p.chooseItem(photo);assert.deepEqual(effects,['photos']);});
 test('old owner clicks and layout callbacks cannot affect a new chooser',()=>{const {p,effects}=fixture();p.openAttachmentChooser({source:2});const old=p.chooser.session,choice=p.chooserItems[0];p.chooser.close(old);p.chooser.finish(old);p.openAttachmentChooser({source:2});const heights=p.chooserHeights.slice();p.recordChooserHeight(choice,0,999);p.chooseItem(choice);assert.deepEqual(p.chooserHeights,heights);assert.deepEqual(effects,[]);assert.equal(p.chooser.shown,true);const current=p.chooserItems[0];p.model={...p.model};p.chooseItem(current);assert.deepEqual(effects,[]);});

@@ -907,7 +907,8 @@ export class ClientModel {
     return decision;
   }
   prepareMessageText(text: string = this.draft): string { return withSourceContext(text, this.sourceContext, this.features); }
-  async send(): Promise<boolean> {
+  async send(admit?: () => boolean): Promise<boolean> {
+    if (admit && !admit()) return false;
     const text = this.draft;
     if (utf8Bytes(text) > 100000) { this.error = 'chat_attachment_text_too_large'; return false; }
     if (this.draftLoading || this.decision || !this.canSend() || !text.trim() || ['pending', 'unknown'].includes(this.operationState)) return false;
@@ -917,16 +918,16 @@ export class ClientModel {
       catch (error) { this.failure(error as Error); return false; }
     }
     const preparedText = this.prepareMessageText(text); if (utf8Bytes(preparedText) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
-    return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext);
+    return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext, '', admit);
   }
-  async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string): Promise<boolean> {
-    if (!prepared.repository || this.draftLoading || this.decision || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
+  async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string, admit?: () => boolean): Promise<boolean> {
+    if (admit && !admit() || !prepared.repository || this.draftLoading || this.decision || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
       !this.owns(prepared.generation, prepared.scope) || this.target() !== prepared.modelTarget || this.repository !== prepared.repository ||
       this.target(prepared.row) !== prepared.modelTarget || (!prepared.text.trim() && !prepared.images.length)) return false;
     if (this.draft !== draft || this.sourceContext !== context) { this.error = 'chat_attachment_selection_changed'; return false; }
-    return this.dispatchMessage(prepared.repository, prepared.row, prepared.text, prepared.images, prepared.generation, prepared.scope, prepared.modelTarget, draft, context, JSON.stringify(prepared.snapshot));
+    return this.dispatchMessage(prepared.repository, prepared.row, prepared.text, prepared.images, prepared.generation, prepared.scope, prepared.modelTarget, draft, context, JSON.stringify(prepared.snapshot), admit);
   }
-  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = ''): Promise<boolean> {
+  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = '', admit?: () => boolean): Promise<boolean> {
     const store = new ChatDraftStore(this.local), entry = new ChatOutboxEntry();
     if (!this.draftRevision) this.draftRevision = util.generateRandomUUID();
     entry.id = util.generateRandomUUID(); entry.target = target; entry.revision = this.draftRevision; entry.text = text; entry.context = context; entry.draft = draft; entry.imageCount = images.length; entry.attachmentSnapshot = attachmentSnapshot; entry.at = Date.now(); entry.localEpoch = this.local.revision('outbox:' + scope);
@@ -934,11 +935,11 @@ export class ClientModel {
     try {
       const captured = new ChatDraft(); captured.text = draft; captured.context = context; captured.revision = entry.revision;
       await store.save(target, captured);
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
+      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
       await store.stage(scope, entry); staged = true;
-      if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
+      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || this.decision || !this.canSend()) { await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
-      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
+      dispatched = true; await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend());
     } catch (error) {
       if (entry.state === 'done') {
         this.activeMessages.delete(entry.id);
@@ -1069,13 +1070,17 @@ export class ClientModel {
       await this.listResources(row.kind); return this.owns(generation, scope) && this.target() === target;
     } catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); return false; }
   }
+  private draftContexts(context: string): Record<string, Object>[] {
+    const saved = Wire.parse(context), contexts = Wire.rows(saved, 'contexts').slice();
+    if (!contexts.length && Wire.text(saved, 'kind')) contexts.push(saved);
+    return contexts;
+  }
   async addDraftContext(row: ResourceRow, expectedTarget: string, generation: number, scope: string): Promise<boolean> {
     const current = (): boolean => this.owns(generation, scope) && this.target() === expectedTarget && this.canCompose() &&
       (!row.group || row.group === this.profile.id) && row.manager === this.profile.manager;
     if (!current() || this.draftLoading || !['knowledge', 'todo', 'inbox'].includes(row.kind)) return false;
     const previous = this.sourceContext, previousRevision = this.draftRevision;
-    const saved = Wire.parse(previous), contexts = Wire.rows(saved, 'contexts').slice();
-    if (!contexts.length && Wire.text(saved, 'kind')) contexts.push(saved);
+    const contexts = this.draftContexts(previous);
     if (contexts.some((item: Record<string, Object>) => Wire.text(item, 'id') === row.id && Wire.text(item, 'kind') === row.kind && Wire.text(item, 'manager') === row.manager && (row.kind !== 'knowledge' || Wire.text(item, 'entry_kind') === row.path))) return true;
     const reference = Wire.payload(['kind', 'id', 'title', 'manager'], [row.kind, row.id, row.title || row.id, row.manager]);
     if (row.kind === 'knowledge') reference['entry_kind'] = row.path;
@@ -1097,7 +1102,7 @@ export class ClientModel {
     if (view !== this) { const target = await view.handoff(row); if (!this.owns(generation, scope)) throw new Error('request_updated'); return target; }
     const target = await this.openMain();
     if (!this.owns(generation, scope) || this.selected.key() !== target.key()) throw new Error('request_updated');
-    const contexts = this.sourceContext ? Wire.rows(Wire.parse(this.sourceContext), 'contexts') : [];
+    const contexts = this.draftContexts(this.sourceContext);
     const ref = Wire.payload(['kind', 'id', 'title', 'manager'], [row.kind, row.id, row.title, owner]);
     if (!contexts.some((item: Record<string, Object>) => Wire.text(item, 'id') === row.id && Wire.text(item, 'kind') === row.kind)) contexts.push(ref);
     this.sourceContext = JSON.stringify(Wire.payload(['contexts'], [contexts])); this.draftRevision = util.generateRandomUUID();

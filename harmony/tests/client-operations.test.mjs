@@ -578,6 +578,52 @@ test('a context from a different owner is not staged',async()=>{
  const item=new ResourceRow('reference','Reference','todo');item.manager='other';
  assert.equal(await model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope()),false);assert.equal(writes,0);assert.equal(model.sourceContext,before);
 });
+test('promoting a quoted message preserves its text and attachment metadata through the next send',async()=>{
+ const {model,writes}=fixture();model.canCompose=()=>true;model.persistDraft=async()=>{};
+ model.features=['persona_contracts_v1'];
+ const legacy={kind:'message',title:'Quoted reply',item_id:'quoted-item',machine_id:'machine-one',session_id:'chat-one',manager:model.profile.manager,
+  text:'Quoted details <tag> & meaning',images:[{id:'image-one',mime_type:'image/png',width:640,height:480}],
+  files:[{name:'notes.txt',path:'/fixture/notes.txt',size:42}],metadata:{reference:'retained'}};
+ model.sourceContext=JSON.stringify(legacy);
+ const item=new ResourceRow('todo-reference','Todo','todo');item.manager=model.profile.manager;
+ assert.equal(await model.addDraftContext(item,model.target(),model.connectionGeneration(),model.scope()),true);
+ assert.deepEqual(JSON.parse(model.sourceContext).contexts[0],legacy);
+ assert.equal(await model.send(),true);assert.equal(writes.length,1);
+ const serialized=writes[0][1].match(/^<persona-context[^>]*>([\s\S]*?)<\/persona-context>/)[1];
+ const sent=JSON.parse(serialized.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));
+ assert.deepEqual(sent,legacy);assert.match(writes[0][1],/todo-reference/);
+});
+test('a Knowledge handoff preserves a legacy message reference already in the main draft',async()=>{
+ const {model,writes}=fixture();model.features=['persona_contracts_v1'];
+ model.selected.kind='conversation';model.selected.manager=model.profile.manager;
+ const legacy={kind:'message',title:'Quoted reply',text:'Keep the quoted text',images:[{id:'image-one'}],files:[{name:'notes.txt',size:42}]};
+ model.sourceContext=JSON.stringify(legacy);model.persistDraft=async()=>{};
+ model.viewFor=async()=>model;model.openMain=async()=>model.selected;
+ const source=new ResourceRow('knowledge-one','Knowledge','knowledge');source.manager=model.profile.manager;
+ await model.handoff(source);
+ const contexts=JSON.parse(model.sourceContext).contexts;assert.deepEqual(contexts[0],legacy);assert.equal(contexts[1].id,source.id);
+ assert.equal(await model.send(),true);assert.equal(writes.length,1);
+ assert.match(writes[0][1],/Keep the quoted text/);assert.match(writes[0][1],/image-one/);assert.match(writes[0][1],/knowledge-one/);
+});
+test('route admission survives draft, outbox and mutation journals for plain and prepared messages',async()=>{
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ for(const preparedSend of [false,true])for(const boundary of ['draft','outbox','mutation']){
+  const {model}=fixture();let allowed=true,posts=0;const put=model.local.put.bind(model.local),beforeRequest=globalThis.clientTestRequest;
+  const repo=new HubRepository({managerId:model.profile.manager,hubId:model.profile.id},model.local);model.repository=repo;
+  model.local.put=async(key,value)=>{await put(key,value);if(boundary==='draft'&&key.startsWith('draft:')||boundary==='outbox'&&key.startsWith('outbox:'))allowed=false;};
+  const entered=deferred(),gate=deferred(),begin=repo.mutations.begin.bind(repo.mutations);
+  if(boundary==='mutation')repo.mutations.begin=async(...args)=>{const record=await begin(...args);entered.resolve();await gate.promise;return record;};
+  globalThis.clientTestRequest=async(_path,method)=>{if(method==='POST')posts++;return '{}';};
+  const draft=model.draft,context=model.sourceContext;
+  const prepared={repository:repo,generation:model.connectionGeneration(),scope:model.scope(),modelTarget:model.target(),row:model.selected,text:'Prepared message',images:[]};
+  try{
+   const sending=preparedSend?model.sendPrepared(prepared,draft,context,()=>allowed):model.send(()=>allowed);
+   if(boundary==='mutation'){await entered.promise;allowed=false;gate.resolve();}
+   assert.equal(await sending,false);assert.equal(posts,0);assert.equal(model.draft,draft);assert.equal(model.sourceContext,context);
+  }finally{globalThis.clientTestRequest=beforeRequest;}
+ }
+});
+
 test('failed context persistence restores the old context without replacing a newer edit',async()=>{
  for(const newer of [false,true]){
   const {model}=fixture();model.canCompose=()=>true;const before=model.sourceContext,wait=deferred();model.persistDraft=()=>wait.promise;

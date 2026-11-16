@@ -97,6 +97,7 @@ export struct Conversation {
   @Param actionsRequest: number = 0;
   @Event onShowActions: () => void = () => {};
   @Event onHideActions: (request: number) => void = () => {};
+  @Event admission: () => boolean = (): boolean => true;
   @Event onOpenCard: (itemId: string, kind: string) => void = () => {};
   @Event onPrimaryStop: (shown: boolean) => void = () => {};
   @Event onOpenFile: (path: string) => void = () => {};
@@ -114,6 +115,7 @@ export struct Conversation {
   private revisionVisibilityRevision: number = 0;
   private revisionMenuLease: ConversationRevisionLease | undefined = undefined;
   private attachmentKey: string = '';
+  private mounted: boolean = false;
   @Local lines: ConversationLine[] = [];
   @Local imageGallery: MessageImageGalleryEntry[] = [];
   private imageIndices: Map<string, number> = new Map();
@@ -458,15 +460,17 @@ export struct Conversation {
       await this.attachments.open(this.model, host as common.UIAbilityContext, row);
     }).catch(() => { if (this.attachmentKey === key) { this.attachments.errorKey = 'chat_attachment_storage_unavailable'; this.attachments.busy = true; } });
   }
+  private sendCurrent(): boolean { return this.mounted && this.active && this.admission(); }
   private async sendDraft(): Promise<void> {
-    if (this.sending || this.attachments.busy || !this.model.canSend()) return;
-    if (!this.attachments.attachments.length) { await this.model.send(); return; }
-    const generation = this.model.connectionGeneration(), scope = this.model.scope(), target = this.model.target(), draft = this.model.draft, context = this.model.sourceContext;
+    if (!this.sendCurrent() || this.sending || this.attachments.busy || !this.model.canSend()) return;
+    const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target(), draft = owner.draft, context = owner.sourceContext;
+    const current = (): boolean => this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target;
+    if (!this.attachments.attachments.length) { await owner.send(current); return; }
     this.sending = true;
     try {
-      const prepared = await this.attachments.prepareSend(this.model.prepareMessageText(draft));
-      await this.model.sendPrepared(prepared, draft, context);
-    } catch (error) { if (this.model.owns(generation, scope) && this.model.target() === target) this.attachments.errorKey = error instanceof Error && error.message.startsWith('chat_attachment_') ? error.message : 'chat_attachment_send_failed'; }
+      const prepared = await this.attachments.prepareSend(owner.prepareMessageText(draft), current);
+      await owner.sendPrepared(prepared, draft, context, current);
+    } catch (error) { if (current()) this.attachments.errorKey = error instanceof Error && error.message.startsWith('chat_attachment_') ? error.message : 'chat_attachment_send_failed'; }
     finally { this.sending = false; }
   }
   private async preview(item: ChatAttachment): Promise<void> {
@@ -613,6 +617,7 @@ export struct Conversation {
     reconcileTimelineRows(this.lines, lines);
   }
   aboutToAppear(): void {
+    this.mounted = true;
     this.questions.sync(this.model, this.active); this.chooser.sync(this.model, this.active);
     this.syncReading(); this.syncFeed(); this.syncAttachments(); this.syncTimeline(); this.syncRevision(); this.primaryStopChanged();
     const target = this.model.target(); this.model.loadView('work:' + target).then((value: string) => {
@@ -620,6 +625,7 @@ export struct Conversation {
     });
   }
   aboutToDisappear(): void {
+    this.mounted = false;
     this.questions.retire(); this.actionIntent = undefined; this.chooser.retire();
     this.onPrimaryStop(false); this.saveReading(); this.readingEpoch++;
     if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1; this.feed.close(); this.feedKey = '';
@@ -808,9 +814,9 @@ export struct Conversation {
         }
         GridCol({ span: this.verticalActions() ? this.composerColumns() : this.sendColumns(), order: this.expandedComposer() ? this.verticalActions() ? 1 : 4 : 2 }) {
           Button(tr(this.primaryStop() ? 'stop' : this.model.stopPending() || this.sending ? 'pending' : 'send')).attributeModifier(ButtonStyles.primary).padding(0).width(this.expandedComposer() ? '100%' : Tokens.touch).alignSelf(ItemAlign.End)
-            .enabled(this.primaryStop() || this.model.canSend() && !this.model.stopPending() && !this.sending && !this.attachments.busy && !this.model.draftLoading &&
-              (this.model.draft.trim().length > 0 || this.attachments.attachments.length > 0) && this.model.operationState !== 'pending' && this.model.operationState !== 'unknown')
-            .onClick(() => { if (this.primaryStop()) this.model.stop(() => this.active); else this.sendDraft(); }).id('chat.send')
+            .enabled(this.sendCurrent() && (this.primaryStop() || this.model.canSend() && !this.model.stopPending() && !this.sending && !this.attachments.busy && !this.model.draftLoading &&
+              (this.model.draft.trim().length > 0 || this.attachments.attachments.length > 0) && this.model.operationState !== 'pending' && this.model.operationState !== 'unknown'))
+            .onClick(() => { if (!this.sendCurrent()) return; if (this.primaryStop()) this.model.stop(() => this.sendCurrent()); else this.sendDraft(); }).id('chat.send')
         }
       }.width('100%').onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.composerWidth = width; })
     }.padding(Tokens.gap).backgroundColor(Colors.subtle).borderRadius(Tokens.capsule).width('100%').id('chat.composer')

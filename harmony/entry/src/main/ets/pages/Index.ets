@@ -59,6 +59,8 @@ struct Index {
   @Local detailModel: ClientModel = client;
   @Local chatReady: boolean = true;
   @Local detailRoute: string = '';
+  @Local detailSelection: string = '';
+  private detailOwner: ClientModel | undefined;
   @Local adminRefreshRevision: number = 0;
   @Local inboxRefreshRevision: number = 0;
   @Local extensionTitle: string = '';
@@ -442,7 +444,17 @@ struct Index {
   }
   private extensionMenus(name: string, param: Object): NavigationMenuItem[] { return [{ value: tr('refresh'), symbolIcon: new SymbolGlyphModifier($r('sys.symbol.arrow_clockwise')), action: () => { if (this.activeChild === this.childKey(name, param)) this.extensionRefreshRevision++; } }]; }
   private settingsKind(param: Object): string { return NavigationContext.from('settings', param as string).page; }
-  private targetReady(name: string, param: Object): boolean { return this.chatReady && this.detailRoute === this.childKey(name, param); }
+  private targetReady(name: string, param: Object): boolean {
+    if (!this.chatReady || this.detailRoute !== this.childKey(name, param)) return false;
+    if (name !== 'session' && name !== 'conversation') return true;
+    return this.detailOwner === this.detailModel &&
+      this.detailSelection === JSON.stringify([this.detailModel.scope(), this.detailModel.selected.key()]);
+  }
+  private markDetailReady(key: string): void {
+    this.detailOwner = this.detailModel;
+    this.detailSelection = JSON.stringify([this.detailModel.scope(), this.detailModel.selected.key()]);
+    this.detailRoute = key; this.chatReady = true;
+  }
   private settingsModel(param: Object): ClientModel { return NavigationContext.from('settings', param as string).scoped ? this.detailModel : this.model; }
   private async connect(): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), address = this.address, code = this.pairCode, revision = this.pairingRevision;
@@ -804,7 +816,7 @@ struct Index {
       if (row.key() !== view.selected.key()) await view.select(row);
       else if (name === 'session' || name === 'conversation') { if (view.connected) view.showConversation(row); }
       if (revision !== this.routeRevision || this.activeChild !== key || !this.model.owns(generation, scope) || view.selected.key() !== row.key()) return;
-      this.detailRoute = key; this.chatReady = true;
+      this.markDetailReady(key);
       if (name === 'assistant' || name === 'settings' && descriptor.page === 'voice') view.watchDecisions(true);
     } catch (error) { if (revision === this.routeRevision && this.activeChild === key && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
   }
@@ -817,7 +829,7 @@ struct Index {
     if (name === 'settings' && this.settingsKind(param) === 'appearance') this.ensureAgentWorkspace();
     const descriptor = NavigationContext.from(name, param as string);
     if (descriptor.scoped) this.restoreTarget(name, param);
-    else { this.routeRevision++; this.chatReady = true; this.detailRoute = this.activeChild; if (name === 'resources') this.model.listResources(param as string); }
+    else { this.routeRevision++; this.markDetailReady(this.activeChild); if (name === 'resources') this.model.listResources(param as string); }
   }
   @Builder targetLoading(name: string, param: Object) {
     Column({ space: Tokens.gap }) {
@@ -844,7 +856,7 @@ struct Index {
   @Builder destination(name: string, param: Object) {
     NavDestination() {
       if (name === 'session' || name === 'conversation') {
-        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
+        if (this.targetReady(name, param)) Conversation({ model: this.detailModel, admission: (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param), onOpenFile: (path: string) => this.openTools(path), active: this.activeChild === this.childKey(name, param), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address), showContextMenu: this.mainDestination(name, param) || this.hideChatTitle(name, param), onOpenCard: (itemId: string, kind: string) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.openAssistantCard(itemId, kind); }, onPrimaryStop: (shown: boolean) => { if (this.activeChild === this.childKey(name, param) && this.targetReady(name, param)) this.inlineStopIdentity = shown ? JSON.stringify([this.detailModel.scope(), this.detailModel.connectionGeneration(), this.detailModel.target()]) : ''; }, onShowActions: () => this.showChatActions(name, param), actionItems: this.chatMenuActions, actionsVisible: this.chatBodyMenuVisible && this.activeChild === this.childKey(name, param), actionsRequest: this.chatMenuRevision, onHideActions: (request: number) => this.closeChatActions(request) })
         else this.targetLoading(name, param)
       } else if (name === 'history') {
         if (this.targetReady(name, param)) InteractionHistoryPage({ model: this.detailModel, active: this.activeChild === this.childKey(name, param), onLink: (address: string) => this.openReader(address) })

@@ -15,13 +15,13 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['destinationBackHidden','chatSelectionShown','peerUsesSelect','measurePeerSlot','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown'];
+const names=['destinationBackHidden','chatSelectionShown','peerUsesSelect','measurePeerSlot','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
 const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
 function fixture(){const shell=new NativeNavigation(),pushed=[];let gen=1;
  const primary={profile:{id:'hub'},selected:row('primary','owner-a'),connected:true,error:'',connectionGeneration:()=>gen,scope:()=> 'hub/owner-a',owns:(g,s)=>g===gen&&s==='hub/owner-a',reportError(e){this.error=e.message;},hideConversation(){},async listResources(){}};
- const detail={selected:row('previous'),connected:true,async select(r){this.selected=r;},hideConversation(){},showConversation(){},watchDecisions(){}};
+ const detail={selected:row('previous'),connected:true,scope:()=> 'hub/owner-b',connectionGeneration:()=>gen,async select(r){this.selected=r;},hideConversation(){},showConversation(){},watchDecisions(){}};
  primary.viewFor=async()=>detail;shell.mainReadWaiters=[];shell.model=primary;shell.detailModel=primary;shell.activeChild='';shell.routeRevision=0;shell.creatingConversations=new Map();shell.chatReady=false;shell.detailRoute='';shell.stack={size:()=>pushed.length,clear:()=>pushed.splice(0),pushPath:r=>pushed.push(r),getAllPathName:()=>pushed.map(r=>r.name),getParamByIndex:i=>pushed[i]?.param};shell.savePath=()=>{};
  return {shell,primary,detail,pushed,bump:()=>gen++};
 }
@@ -47,8 +47,17 @@ test('late route restoration and handoff cannot navigate or expose a replaced ta
  const handoff=deferred();primary.handoff=()=>handoff.promise;const sending=shell.handoffResource(row('todo','owner-b','todo'));shell.activeChild='new-route';handoff.resolve(target);await sending;assert.equal(pushed.length,0);
 });
 test('returning from a native picker to the same resolved destination preserves its mounted content',async()=>{
- const {shell,primary,detail}=fixture(),target=detail.selected,param=JSON.stringify(target),gate=deferred();shell.activeChild=shell.childKey('conversation',param);shell.detailRoute=shell.activeChild;shell.chatReady=true;shell.detailModel=detail;primary.viewFor=()=>gate.promise;
+ const {shell,primary,detail,bump}=fixture(),target=detail.selected,param=JSON.stringify(target),gate=deferred();shell.activeChild=shell.childKey('conversation',param);shell.detailRoute=shell.activeChild;shell.chatReady=true;shell.detailModel=detail;shell.markDetailReady(shell.activeChild);primary.viewFor=()=>gate.promise;bump();
  const returning=shell.restoreTarget('conversation',param);assert.equal(shell.chatReady,true);assert.equal(shell.detailRoute,shell.activeChild);gate.resolve(detail);await returning;assert.equal(shell.targetReady('conversation',param),true);
+});
+test('a Knowledge source remains mounted while handoff selects the destination chat',async()=>{
+ const {shell,primary,detail,pushed}=fixture(),source=row('knowledge','owner-b','knowledge'),param=JSON.stringify(source);
+ shell.activeChild=shell.childKey('knowledge',param);await shell.restoreTarget('knowledge',param);
+ assert.equal(shell.targetReady('knowledge',param),true);
+ const main=row('main','owner-b');detail.selected=main;
+ assert.equal(shell.targetReady('knowledge',param),true,'source callback can complete before its chat route is pushed');
+ await shell.openLinkedResource(main);assert.equal(pushed.at(-1).name,'conversation');
+ assert.equal(shell.targetReady('conversation',pushed.at(-1).param),false);
 });
 
 test('callbacks from a hidden workspace cannot open a destination in the new route', async()=>{
@@ -96,6 +105,36 @@ test('a default main read uses the same response after a main conversation moves
  const repo={async call(path,method){calls++;assert.equal(path,'/api/v1/assistant');assert.notEqual(method,'POST');return {main:'main',machine_id:'old',main_machine_id:'new',conversations:[{id:'main',machine_id:'old'},{id:'main',machine_id:'new'}]};}};
  primary.repo=()=>repo;primary.section=0;primary.mainId='cached';shell.defaultMainPending=false;shell.mainReadWaiters=[];
  await shell.resolveMainDestination();assert.equal(calls,1);assert.equal(pushed.length,1);assert.equal(JSON.parse(pushed[0].param).machine,'new');assert.equal(primary.mainId,'main');
+});
+test('opening main gates its composer until the shown route selects the resolved conversation',async()=>{
+ const {shell,primary,pushed}=fixture(),selection=deferred(),entered=deferred();
+ shell.chatMenuRevision=0;
+ primary.profile.manager='owner-a';primary.section=0;primary.watchDecisions=()=>{};
+ primary.viewFor=async()=>primary;
+ primary.repo=()=>repository;const repository={async call(){return {main:'main',machine_id:'machine',conversations:[{id:'main'}]};}};
+ const original=primary.selected;primary.draft='previous conversation draft';
+ primary.select=async row=>{entered.resolve();await selection.promise;primary.selected=row;primary.draft='main conversation draft';};
+ const oldParam=JSON.stringify(original);shell.activeChild=shell.childKey('conversation',oldParam);
+ shell.markDetailReady(shell.activeChild);shell.defaultMainPending=false;
+ await shell.resolveMainDestination();const route=pushed.at(-1);
+ assert.equal(route.name,'conversation');assert.equal(primary.selected,original);
+ assert.equal(shell.targetReady(route.name,route.param),false,'new destination cannot render the previous composer');
+ shell.routeShown(route.name,route.param);await entered.promise;
+ assert.equal(shell.targetReady(route.name,route.param),false,'pending selection keeps the destination gated');
+ assert.equal(primary.draft,'previous conversation draft');
+ selection.resolve();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(primary.selected.id,'main');assert.equal(primary.draft,'main conversation draft');
+ assert.equal(shell.targetReady(route.name,route.param),true);assert.equal(shell.detailModel,primary);
+});
+test('a newly selected chat cannot reuse the previous route readiness while creation finishes',async()=>{
+ const {shell,primary}=fixture(),done=deferred(),entered=deferred();
+ const original=primary.selected,param=JSON.stringify(original);
+ shell.activeChild=shell.childKey('conversation',param);shell.detailRoute=shell.activeChild;shell.chatReady=true;
+ shell.detailOwner=primary;shell.detailSelection=JSON.stringify([primary.scope(),primary.selected.key()]);
+ primary.newConversation=async()=>{primary.selected=row('new-chat','owner-a');entered.resolve();await done.promise;return primary.selected;};
+ shell.newConversation();await entered.promise;
+ assert.equal(shell.targetReady('conversation',param),false);
+ done.resolve();await new Promise(resolve=>setImmediate(resolve));
 });
 test('unavailable and empty default directories never create or select a conversation',async()=>{
  for(const failure of [true,false]){
