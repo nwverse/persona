@@ -40,6 +40,7 @@ class ShadowContinuityAdapter(
     private val afterFirstFrame: (() -> Unit) -> Unit = AndroidContinuityFrameScheduler()::afterFirstFrame,
     private val createShadow: ((ContinuityFrameScheduler, () -> Unit) -> ContinuityAdapter)? = null,
     private val started: () -> Unit = {},
+    private val progress: (compared: Int, mismatches: Int) -> Unit = { _, _ -> },
 ) : ContinuityAdapter {
     private val kotlin = KotlinContinuityAdapter(chat)
     private var shadow: ContinuityAdapter? = null
@@ -49,6 +50,7 @@ class ShadowContinuityAdapter(
     private var closed = false
     val mismatchCount: Int get() = count.get()
     private val count = AtomicInteger()
+    private var compared = 0
     override val state get() = kotlin.state
     override val behind get() = kotlin.behind
 
@@ -94,6 +96,12 @@ class ShadowContinuityAdapter(
         // Kotlin's gap/verified describe this step; Rust's verified is persistent core authority.
         // Cache restores and live pushes intentionally differ. Their contract is tested separately.
         if (expected.requests != actual.requests) report("requests", shape)
+        compared++
+        if (compared % 10 == 0) reportProgress()
+    }
+
+    private fun reportProgress() {
+        try { progress(compared, mismatchCount) } catch (_: Throwable) {}
     }
 
     private fun report(rule: String, shape: String) {
@@ -115,7 +123,10 @@ class ShadowContinuityAdapter(
         closed = true
         kotlin.close()
         // Do not discard already accepted inputs when the repository releases this chat.
-        ShadowContinuityDiagnostics.enqueue(::disable)
+        ShadowContinuityDiagnostics.enqueue {
+            disable()
+            reportProgress()
+        }
     }
 
     private inner class ShadowFrames(private val firstFrame: (() -> Unit) -> Unit) : ContinuityFrameScheduler {

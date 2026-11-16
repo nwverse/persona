@@ -30,8 +30,10 @@ object DebugContinuity {
             if (selected == "shadow") ShadowContinuityAdapter(chat, sink = { mismatch ->
                 ShadowContinuityDiagnostics.report(mismatch)
                 Log.w("PersonaCoreShadow", JsonCodec.encodeToString(ContinuityMismatch.serializer(), mismatch))
-                Log.i("PersonaCoreShadow", "mismatches=${ShadowContinuityDiagnostics.count}")
-            }, started = { Log.i("PersonaCoreShadow", "shadow started after first frame; mismatches=${ShadowContinuityDiagnostics.count}") })
+            }, started = { Log.i("PersonaCoreShadow", "shadow started after first frame") },
+                progress = { compared, mismatches ->
+                    Log.i("PersonaCoreShadow", "compared=$compared mismatches=$mismatches")
+                })
             else KotlinContinuityAdapter(chat)
         }
     }

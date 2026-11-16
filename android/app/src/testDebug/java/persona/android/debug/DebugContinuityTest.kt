@@ -50,6 +50,16 @@ class DebugContinuityTest {
         }
     }
 
+    @Test fun shadowCloseLogsOnlyCountsWithoutLoadingNative() {
+        DebugContinuity.persist(context, "shadow")
+        val shadow = DebugContinuity.factory(context)("secret-chat", {})
+        org.robolectric.shadows.ShadowLog.clear()
+        shadow.close()
+        ShadowContinuityDiagnostics.awaitIdle()
+        assertEquals(listOf("compared=0 mismatches=0"),
+            org.robolectric.shadows.ShadowLog.getLogsForTag("PersonaCoreShadow").map { it.msg })
+    }
+
     @Test fun rustAndUnknownAppSelectionsAreRejectedBeforeWritingPreferences() {
         for (value in listOf("rust", "unknown")) {
             assertThrows(IllegalArgumentException::class.java) { DebugContinuity.persist(context, value) }

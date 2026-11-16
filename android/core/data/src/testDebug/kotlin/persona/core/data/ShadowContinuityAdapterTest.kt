@@ -17,6 +17,61 @@ import persona.core.rustcore.wire.Config
 import persona.core.rustcore.wire.Effect
 
 class ShadowContinuityAdapterTest {
+    @Test fun progressCountsCompletedInputsPeriodicallyAndDrainsBeforeClose() = runBlocking {
+        val progress = ConcurrentLinkedQueue<Pair<Int, Int>>()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var accepts = 0
+        val adapter = ShadowContinuityAdapter("secret-chat", createShadow = { _, _ ->
+            AlteredAdapter {
+                if (++accepts == 10) {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                }
+                it
+            }
+        }, progress = { compared, mismatches -> progress.add(compared to mismatches) })
+        try {
+            repeat(9) { adapter.accept(ContinuityAdapter.Input.Push(batch(it + 1))) }
+            ShadowContinuityDiagnostics.awaitIdle()
+            assertTrue(progress.isEmpty())
+            adapter.accept(ContinuityAdapter.Input.Push(batch(10)))
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertTrue(progress.isEmpty())
+            release.countDown()
+            ShadowContinuityDiagnostics.awaitIdle()
+            assertEquals(listOf(10 to 0), progress.toList())
+            adapter.accept(ContinuityAdapter.Input.Push(batch(11)))
+        } finally {
+            release.countDown()
+            adapter.close()
+            adapter.close()
+            ShadowContinuityDiagnostics.awaitIdle()
+        }
+        assertEquals(listOf(10 to 0, 11 to 0), progress.toList())
+    }
+
+    @Test fun failingProgressSinkDoesNotDisableShadowOrChangeKotlin() = runBlocking {
+        val progress = ConcurrentLinkedQueue<Pair<Int, Int>>()
+        val adapter = ShadowContinuityAdapter("chat", createShadow = { _, _ -> AlteredAdapter { it } },
+            progress = { compared, mismatches ->
+                progress.add(compared to mismatches)
+                error("secret-diagnostics-error")
+            })
+        val plain = KotlinContinuityAdapter("chat")
+        try {
+            repeat(21) {
+                val input = ContinuityAdapter.Input.Push(batch(it + 1))
+                assertEquals(plain.accept(input), adapter.accept(input))
+            }
+        } finally {
+            adapter.close()
+            ShadowContinuityDiagnostics.awaitIdle()
+        }
+        assertEquals(listOf(10 to 0, 20 to 0, 21 to 0), progress.toList())
+        assertEquals(0, adapter.mismatchCount)
+    }
+
     @Test fun shadowReturnsExactlyKotlinAppliedForEveryInputKind() = runBlocking {
         val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
         val plain = KotlinContinuityAdapter("private-chat")
@@ -88,7 +143,9 @@ class ShadowContinuityAdapterTest {
 
     @Test fun everyComparedFieldReportsOnlyRuleAndShape() = runBlocking {
         val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
-        val adapter = ShadowContinuityAdapter("secret-chat", sink = { reports.add(it) }, createShadow = { _, _ ->
+        val progress = ConcurrentLinkedQueue<Pair<Int, Int>>()
+        val adapter = ShadowContinuityAdapter("secret-chat", sink = { reports.add(it) },
+            progress = { compared, mismatches -> progress.add(compared to mismatches) }, createShadow = { _, _ ->
             AlteredAdapter { value -> value.copy(state = value.state.copy(
                 items = listOf(item(91).copy(text = "secret-shadow-text")), history = "secret-shadow-history",
                 covered = 918273, hasMore = false, loadedOnce = false), verified = false,
@@ -102,6 +159,7 @@ class ShadowContinuityAdapterTest {
         assertEquals(setOf("item-ids-order", "items", "covered", "history", "hasMore", "loadedOnce", "requests"),
             reports.map { it.rule }.toSet())
         assertEquals(7, adapter.mismatchCount)
+        assertEquals(listOf(1 to 7), progress.toList())
         reports.forEach { report ->
             assertEquals("continuity", report.domain)
             assertEquals("latest items=1 history=set fromSeq=unset toSeq=set backlog=true hasMore=true moreAfter=false", report.inputShape)
@@ -204,7 +262,9 @@ class ShadowContinuityAdapterTest {
         for (failure in listOf("load", "creation", "accept", "rejected", "rejected-creation", "rejected-accept", "rejected-applied")) {
             val reports = ConcurrentLinkedQueue<ContinuityMismatch>()
             val attempts = AtomicInteger()
+            val progress = ConcurrentLinkedQueue<Pair<Int, Int>>()
             val adapter = ShadowContinuityAdapter("secret-chat", sink = { reports.add(it) }, afterFirstFrame = { it() },
+                progress = { compared, mismatches -> progress.add(compared to mismatches) },
                 createShadow = { scheduler, rejected ->
                     attempts.incrementAndGet()
                     when (failure) {
@@ -233,6 +293,7 @@ class ShadowContinuityAdapterTest {
             adapter.close()
             ShadowContinuityDiagnostics.awaitIdle()
             assertEquals(1, attempts.get())
+            assertEquals(listOf(0 to 1), progress.toList())
             val report = reports.single()
             assertEquals(when {
                 failure.startsWith("rejected") -> "rust-rejected"

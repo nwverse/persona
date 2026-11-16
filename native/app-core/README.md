@@ -69,7 +69,11 @@ single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects
 later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
 
 Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
-finishes nor cancels it; only a coroutine whose transport actually failed emits `FillFailed`. `Rejected` has no chat
+finishes nor cancels it; until a response is successfully queued, its request owner reports failures or cancellation
+with `FillFailed`. Successful content acknowledgements, not arbitrary Acks, clear errors and complete a reconciliation.
+Synchronous adapters retain the native state lock and serialized HTTP operations; only asynchronous adapters submit
+outside that lock and open concurrent folds. Ack-only frames reuse the item list and do not schedule cache writes.
+`Rejected` has no chat
 or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
 releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
 
@@ -83,8 +87,10 @@ Rust-only acknowledgements and concurrent-fold capability do not change the Kotl
 `PersonaCoreShadow` reports contain only domain, rule and input kind with counts/flags; never items, identifiers, text,
 history or sequence values. Driver-level rejection has its own `rust-rejected` rule, including rejection followed by
 an exception, and never logs the rejection reason through the shadow. Native failure disables only that chat's shadow.
-Neither accept nor close waits for Rust; close preserves queued inputs. Release source sets contain neither the shadow
-nor its preferences.
+Neither accept nor close waits for Rust; close preserves queued inputs. After every 10 completed input comparisons,
+and after draining on close, each shadow logs only `compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+`compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
+Release source sets contain neither the shadow nor its preferences.
 
 ## Reproducing phase-1 evidence
 
