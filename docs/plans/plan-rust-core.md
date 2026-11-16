@@ -467,8 +467,12 @@ Phase 3 lands in several PRs.
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
     labels, with 15 + 8 complete fixture comparisons and Apple/CoreFoundation-derived whitespace boundaries.
-  - The current SwiftUI multi-question review confirmation remains separately #8483. No UI timing, transport,
-    production adapter or new answer FFI/JNI/NAPI boundary is included.
+  - `AnswerBindingFixtureTest` drives `projectAnswer` and `displayAnswer` through real host-JNI string boundaries
+    (#8838). All 15 + 8 cases compare complete expected objects from the unchanged fixtures, including conditional
+    next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
+    expectation are rejected, and the U+200B boundary is exercised. This is synchronous host-JNI evidence, not UI
+    timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
+    remains separately #8483; C/NAPI/Swift bindings, transport and physical-device evidence are not included.
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
