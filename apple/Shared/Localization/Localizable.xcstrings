@@ -73386,6 +73386,29 @@
       },
       "extractionState" : "manual"
     },
+    "In Progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "In Progress [Action Bar]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -102424,6 +102447,29 @@
         }
       }
     },
+    "Nothing Done Yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Done Yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了したものはまだありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有已处理的"
+          }
+        }
+      }
+    },
     "Nothing Here" : {
       "localizations" : {
         "en" : {
@@ -102446,6 +102492,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Nothing in Progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing in Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中のものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有进行中的"
+          }
+        }
+      }
     },
     "Nothing Muted" : {
       "localizations" : {
@@ -102836,6 +102905,29 @@
       },
       "extractionState" : "manual"
     },
+    "Nothing Needs You" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Needs You"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応が必要なものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有需要你处理的"
+          }
+        }
+      }
+    },
     "Nothing needs you [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -103084,6 +103176,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有需要记的：没有提到要点、决定或待办。"
+          }
+        }
+      }
+    },
+    "Nothing to Read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to Read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読むものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有要看的"
           }
         }
       }
@@ -110736,6 +110851,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Pick another section above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick another section above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上で別のセクションを選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在上方选择其他分区。"
+          }
+        }
+      }
     },
     "Please look at the attached files" : {
       "localizations" : {

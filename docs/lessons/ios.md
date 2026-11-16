@@ -2781,3 +2781,13 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
   edges). At the default size it looked fine.
 - Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
   screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
+
+## A page put back beneath a kept item learns of the item from the item's own appearance (2026-11-16, #9053)
+
+A place's kept stack (`ShellPlaces`) comes back as a `NavigationPath`, which can't be read element by element, so the
+Inbox list rebuilt beneath a kept item can't see which item is on top of it. SwiftUI makes that list (its `@State` fresh)
+but runs its `onAppear` only when Back reveals it, and on that pop the revealed page's `onAppear` runs before the popped
+page's `onDisappear`. So the item page records itself on appear and clears itself on disappear (`InboxBarLanding`), and
+the list reads the record on its first appearance only, landing on the item's section; later appearances (an item it
+pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
+walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.

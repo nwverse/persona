@@ -8,12 +8,18 @@ struct CapsuleFilterItemData: Identifiable {
     var count: Int?
     var tone: StatusTone?
     var symbol: String?
+    /// The count drawn as a `CountBadge` of this look (zero hides it, 99+ caps it, and the spoken name says "Title, n"),
+    /// as the Inbox's section bar draws it (#9053); nil keeps the plain number the Agents filters show.
+    var countLook: CountBadge.Look? = nil
 }
 
 struct CapsuleFilterBar<Trailing: View>: View {
     var items: [CapsuleFilterItemData]
     var selection: String
     var choose: (String) -> Void
+    /// The strip's identifier and its choices' prefix (`<prefix><id>`): the Agents list's by default.
+    var scrollID = "agents.filters.scroll"
+    var itemIDPrefix = "agents.filter."
     @ViewBuilder var trailing: Trailing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var focused: String?
@@ -26,7 +32,7 @@ struct CapsuleFilterBar<Trailing: View>: View {
                     HStack(spacing: Theme.Space.xs) {
                         ForEach(items) { item in
                             CapsuleFilterItem(item: item, selected: item.id == selection,
-                                              expanded: item.id == selection || item.id == focused) {
+                                              expanded: item.id == selection || item.id == focused, idPrefix: itemIDPrefix) {
                                 choose(item.id)
                                 withAnimation(reduceMotion ? nil : Theme.Motion.standard) {
                                     proxy.scrollTo(item.id, anchor: .center)
@@ -60,7 +66,7 @@ struct CapsuleFilterBar<Trailing: View>: View {
                         focused = geometry.centered()
                     }
                 }
-                .accessibilityIdentifier("agents.filters.scroll")
+                .accessibilityIdentifier(scrollID)
             }
             Rectangle().fill(Theme.cardStroke)
                 .frame(width: Theme.Size.hairline)
@@ -78,6 +84,7 @@ private struct CapsuleFilterItem: View {
     var item: CapsuleFilterItemData
     var selected: Bool
     var expanded: Bool
+    var idPrefix: String
     var action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var fullWidth: CGFloat = 0
@@ -109,10 +116,14 @@ private struct CapsuleFilterItem: View {
                         .hidden()
                     }
                 if let count = item.count {
-                    Text("\(count)").monospacedDigit()
-                        .foregroundStyle(selected ? ink : .secondary)
-                        .contentTransition(.numericText(value: Double(count)))
-                        .fixedSize()
+                    if let look = item.countLook {
+                        CountBadge(count: count, look: look)
+                    } else {
+                        Text("\(count)").monospacedDigit()
+                            .foregroundStyle(selected ? ink : .secondary)
+                            .contentTransition(.numericText(value: Double(count)))
+                            .fixedSize()
+                    }
                 }
             }
             .font(Theme.Font.secondaryMedium)
@@ -127,12 +138,19 @@ private struct CapsuleFilterItem: View {
         .buttonStyle(.plain)
         .animation(reduceMotion ? nil : Theme.Motion.standard, value: expanded)
         .animation(reduceMotion ? nil : Theme.Motion.standard, value: selected)
-        .accessibilityIdentifier("agents.filter." + item.id)
-        .accessibilityLabel(item.count.map { "\(item.title) \($0)" } ?? item.title)
+        .accessibilityIdentifier(idPrefix + item.id)
+        .accessibilityLabel(spokenName)
         #if DEBUG
         .accessibilityValue(expanded ? Text("Expanded") : Text("Collapsed [Readiness Card ee6046]"))
         #endif
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// The title with its count: a badge's only while it shows one, the exact number past 99 too.
+    private var spokenName: String {
+        guard let count = item.count else { return item.title }
+        guard item.countLook != nil else { return "\(item.title) \(count)" }
+        return count > 0 ? item.title + String(localized: ", ") + String(count) : item.title
     }
 
     private func measured(_ title: String, changed: @escaping (CGFloat) -> Void) -> some View {

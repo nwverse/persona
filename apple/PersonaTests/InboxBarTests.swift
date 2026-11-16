@@ -1,0 +1,98 @@
+import Foundation
+import Testing
+@testable import Persona
+
+/// The section bar's rules beyond the shared cases (#9053, `InboxBarFixtureTests`): what each choice draws, how Done
+/// counts what the history loaded, and the page's landing record.
+@MainActor
+struct InboxBarTests {
+    private func item(_ id: String, tier: String? = nil, status: String? = nil, done: Bool = false, kind: String = "dm") -> InboxItem {
+        var it = InboxItem(id: id, source: "lark", kind: kind, account: "feishu", accountName: "feishu", title: id, preview: "", count: 1)
+        it.tier = tier
+        it.status = status
+        if done { it.doneAt = Date(timeIntervalSince1970: 100) }
+        return it
+    }
+
+    @Test func theInboxOpensOnNeedsYouAndNothingIsKept() {
+        let state = InboxBarState()
+        #expect(state.chosen == .action)
+        #expect(state.saved == nil)
+        #expect(state.query.isEmpty)
+    }
+
+    @Test func aChoiceDrawsItsSectionAloneAndCollapsedOnlyUnderAll() {
+        for choice in InboxChoice.allCases {
+            let tiers = InboxItem.Tier.allCases.filter { InboxBar.draws($0, chosen: choice) }
+            switch choice {
+            case .all: #expect(tiers == InboxItem.Tier.allCases)
+            case .done: #expect(tiers.isEmpty)
+            default: #expect(tiers == [choice.tier].compactMap { $0 }, "\(choice)")
+            }
+            #expect(InboxBar.drawsDone(chosen: choice) == (choice == .done || choice == .all), "\(choice)")
+        }
+        #expect(!InboxItem.Tier.allCases.contains { InboxBar.draws($0, chosen: .action) && $0 == .noise })
+    }
+
+    @Test func groupingAppliesWhereASectionHasGroups() {
+        #expect(InboxChoice.action.groups)
+        #expect(InboxChoice.fyi.groups)
+        #expect(InboxChoice.all.groups)
+        #expect(!InboxChoice.done.groups, "Done is always by when it was done")
+        #expect(!InboxChoice.working.groups, "In Progress is never grouped")
+    }
+
+    @Test func doneCountsTheHistoryWhenTheListHasNone() {
+        let filter = InboxProjection.Filter()
+        let projection = InboxProjection(items: [item("a", tier: "action")], filter: filter)
+        let none = InboxBar.Rows(projection, agents: 0, filter: filter, history: [], doneDays: nil)
+        #expect(!none.hasDone)
+        let loaded = InboxBar.Rows(projection, agents: 0, filter: filter, history: [item("old", done: true)], doneDays: nil)
+        #expect(loaded.hasDone)
+        #expect(InboxBar.entries(loaded, chosen: .action).map(\.choice) == [.action, .done, .all])
+        // a search the history's rows don't match: nothing to show, and the hub's day counts don't apply
+        let searched = InboxProjection.Filter(query: "zzz")
+        let filtered = InboxBar.Rows(InboxProjection(items: [], filter: searched), agents: 0, filter: searched,
+                                     history: [item("old", done: true)], doneDays: ["2026-01-01": 3])
+        #expect(!filtered.hasDone)
+    }
+
+    @Test func theAgentKindCountsOnlyTheWaitingAgents() {
+        let filter = InboxProjection.Filter(kind: "agent")
+        let projection = InboxProjection(items: [item("a", tier: "action", kind: "agent"), item("f", tier: "fyi", kind: "agent")], filter: filter)
+        let rows = InboxBar.Rows(projection, agents: 2, filter: filter, history: [], doneDays: nil)
+        #expect(rows.action == 2)
+        #expect(rows.fyi == 0)
+        #expect(rows.filtered)
+    }
+
+    @Test func aChosenEmptySectionSaysSoUnlessNothingIsOpen() {
+        var rows = InboxBar.Rows()
+        rows.fyi = 3
+        #expect(InboxBar.empty(rows, chosen: .action, source: "", kind: "", query: "") == .section)
+        #expect(InboxBar.empty(rows, chosen: .fyi, source: "", kind: "", query: "") == nil)
+        #expect(InboxBar.empty(rows, chosen: .all, source: "", kind: "", query: "") == nil)
+        #expect(InboxBar.empty(InboxBar.Rows(), chosen: .working, source: "", kind: "", query: "") == .caughtUp)
+        #expect(InboxBar.empty(InboxBar.Rows(), chosen: .done, source: "", kind: "", query: "") == .section,
+                "Done with nothing never says the whole Inbox is caught up")
+    }
+
+    @Test func everyChosenEmptyHasItsOwnWords() {
+        let titles = InboxChoice.allCases.map(InboxPage.emptyTitle)
+        #expect(Set(titles).count == InboxChoice.allCases.count)
+        #expect(titles.allSatisfy { !$0.isEmpty })
+        #expect(InboxPage.emptyTitle(.all) == String(localized: "All Caught Up"))
+    }
+
+    @Test func theLandingRecordFollowsTheItemInFront() {
+        let landing = InboxBarLanding()
+        let a = item("a", tier: "fyi")
+        let b = item("b", tier: "noise")
+        landing.appeared(a)
+        landing.appeared(b) // a chain link pushed over a
+        landing.disappeared(a) // a goes behind after the push
+        #expect(landing.shown?.key == b.key)
+        landing.disappeared(b)
+        #expect(landing.shown == nil)
+    }
+}
