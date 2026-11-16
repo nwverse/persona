@@ -74,6 +74,20 @@ class AssistantLinesTest {
         assertEquals("Dentist", result.title)
         assertEquals("2026-11-13T15:30:00Z", result.time)
         assertEquals("Personal", result.place)
+        // The id is not a number, so it is not an event this phone's calendar can be asked to delete.
+        assertNull(result.itemId)
+    }
+
+    @Test fun quickResultKeepsTheCreatedItemsIdForUndo() {
+        // The phone's calendar ids are numbers: only those name something Undo can take back (iOS QuickResult.itemID).
+        assertEquals(42L, QuickResult.of(call("phone_calendar_create_event", """{"id":"42","title":"Dentist"}"""))!!.itemId)
+        // A missing or unreadable id still draws the card; it just offers no Undo (an old message, another phone's write).
+        for (raw in listOf("""{"title":"Dentist"}""", """{"id":"","title":"Dentist"}""", """{"id":"E1","title":"Dentist"}""",
+            """{"id":0,"title":"Dentist"}""", """{"id":"  "}""")) {
+            val result = QuickResult.of(call("phone_calendar_create_event", raw))
+            assertNotNull(raw, result)
+            assertNull(raw, result!!.itemId)
+        }
     }
 
     @Test fun aTasksStateFollowsItsAgents() {

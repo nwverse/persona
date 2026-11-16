@@ -115,8 +115,15 @@ sealed interface TaskNow {
     }
 }
 
-/** A reminder or an event the assistant added on the phone, read from its tool call. */
-data class QuickResult(val reminder: Boolean, val callId: String, val title: String, val time: String?, val place: String?) {
+/**
+ * A reminder or an event the assistant added on the phone, read from its tool call (iOS `QuickResult`).
+ *
+ * [itemId] is the id of the item the phone made, which Undo deletes. The phone's calendar ids are numbers, so a result
+ * without a readable one (an old message, another phone's write) still draws its card, without an Undo button.
+ */
+data class QuickResult(
+    val reminder: Boolean, val callId: String, val itemId: Long?, val title: String, val time: String?, val place: String?,
+) {
     companion object {
         fun of(call: ToolCall): QuickResult? {
             val short = call.name.substringAfterLast("__")
@@ -129,11 +136,17 @@ data class QuickResult(val reminder: Boolean, val callId: String, val title: Str
             if (result.isError == true) return null
             val o = runCatching { JsonCodec.parseToJsonElement(result.text.orEmpty()) as? JsonObject }.getOrNull() ?: return null
             fun s(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-            if (s("id").isNullOrEmpty()) return null
-            return QuickResult(reminder, call.use.id, s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
+            return QuickResult(reminder, call.use.id, s("id")?.trim()?.toLongOrNull()?.takeIf { it > 0 },
+                s("title").orEmpty(), s(if (reminder) "due" else "start"), s(if (reminder) "list" else "calendar"))
         }
     }
 }
+
+/**
+ * Undo on a quick result (iOS `TasksStore.undone`): [Added] when the phone still has the item, [Undoing] while the
+ * delete runs, [Undone] once it is off the phone. A failure goes back to [Added].
+ */
+enum class QuickResultUndo { Added, Undoing, Undone }
 
 /** What the assistant's conversation adds to the transcript's lines, drawn by the chat's host. */
 sealed interface AssistantExtra {
