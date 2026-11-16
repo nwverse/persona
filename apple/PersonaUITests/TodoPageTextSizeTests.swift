@@ -31,8 +31,9 @@ final class TodoPageTextSizeTests: XCTestCase {
     }
 
     /// The bottom bar in the page's three states (#9008): with an Agent at work and a stage, with nothing yet, and done
-    /// (Reopen alone). Its buttons are as tall as the app's other buttons (44 pt, not the large control size), and on a wide
-    /// page (an iPad) the row is no wider than `Theme.Size.readable`, centered. `bar-<state>.png` in PERSONA_SHOTS;
+    /// (Reopen alone). Its buttons are the Sidebar layout's foot's pills (`floatingPill`), as tall as its New Chat (46 pt,
+    /// not the large control size's 61), and on a wide page (an iPad) the row is no wider than `Theme.Size.readable`,
+    /// centered. `bar-<state>.png` in PERSONA_SHOTS;
     /// PERSONA_LANDSCAPE=1 turns the device first; PERSONA_BEFORE shoots and checks nothing.
     @MainActor func testBottomBarInEachState() throws {
         guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
@@ -50,7 +51,7 @@ final class TodoPageTextSizeTests: XCTestCase {
             guard env["PERSONA_BEFORE"] == nil else { continue }
             let buttons = [done] + (state == "done" ? [] : [app.buttons["todo.handToAgent"].firstMatch])
             for b in buttons {
-                XCTAssertEqual(b.frame.height, 44, accuracy: 3, "\(state): \(b.identifier) 44 pt tall \(b.frame)")
+                XCTAssertEqual(b.frame.height, 46, accuracy: 2, "\(state): \(b.identifier) 46 pt tall \(b.frame)")
             }
             let row = buttons.map(\.frame).reduce(buttons[0].frame) { $0.union($1) }
             XCTAssertLessThanOrEqual(row.width, 561, "\(state): the row is no wider than a readable page \(row)")
