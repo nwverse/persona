@@ -811,11 +811,7 @@ fn plain_group(
     idle_key: Option<String>,
 ) -> Group {
     let visible_rows = if folded {
-        members
-            .iter()
-            .filter(|row| settings.history && row.archived)
-            .map(|row| row.id.clone())
-            .collect()
+        Vec::new()
     } else if quick != Quick::All {
         ids(&members)
     } else {

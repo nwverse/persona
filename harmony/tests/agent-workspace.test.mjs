@@ -181,6 +181,7 @@ test('history loads only when the hub advertises the archive capability and hono
   await workspace.setMachineFilter('m1');
   await workspace.setHistory(true);
   assert.ok(state.calls.some((call) => call.method === 'GET' && call.path === '/api/v1/sessions/archived?machine_id=m1&manager=work'));
+  workspace.toggleFold('state/idle');
   assert.deepEqual(workspace.groups.flatMap((group) => group.rows).map((row) => row.id), ['archive-1'], 'archived offline snapshots remain readable history');
 });
 
@@ -446,6 +447,19 @@ test('frozen reconstruction applies core visible rows, not every frozen idle row
   assert.deepEqual(workspace.visibleRows(), []);
 });
 
+test('archived history respects folded groups before and after expansion', async () => {
+  const archived = agent('archive-folded', {archived: true, state: 'offline', status: 'offline'});
+  const {workspace, client} = await opened({history: [archived]});
+  client.features = ['agent_session_archives'];
+  await workspace.setHistory(true);
+  assert.deepEqual(workspace.visibleRows(), []);
+  assert.ok(workspace.groups.some((group) => group.totalRowCount > 0 && group.folded));
+  workspace.toggleFold('state/idle');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['archive-folded']);
+  workspace.toggleFold('state/idle');
+  assert.deepEqual(workspace.visibleRows(), []);
+});
+
 test('frozen reading drops deleted and offline rows without admitting new members', async () => {
   const first = agent('keep'), second = agent('offline');
   const {workspace, client} = await opened({sessions: [first, second]});
@@ -513,7 +527,7 @@ test('a mutation journal admission is revoked when its captured Hub goes away',a
 
 test('a background directory load cannot bypass established reading membership',async()=>{const first=agent('frozen-a'),second=agent('frozen-b'),{workspace,client}=await opened({sessions:[first,second]});workspace.setReadingDetail(true);client.directoryReady=true;client.directoryLoading=true;workspace.toggleFold('state/idle');client.directorySessions=[agent('new-member'),agent('frozen-a',{state:'idle'}),second];workspace.update(client,true);assert.deepEqual(workspace.visibleRows().map(row=>row.id),['frozen-a','frozen-b']);assert.equal(workspace.visibleRows()[0].state,'idle');});
 test('forgetting a foreign Hub removes frozen rows, history, selection and action authority',async()=>{const a=clientFixture(),b=clientFixture();a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';const first=agent('same'),second=agent('same');first.group='hub-a';second.group='hub-b';a.client.directoryReady=true;a.client.directorySessions=[first,second];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client,true);w.selectExternal(second);w.historyRows=[second];const ticket=w.actionTicket(second);assert.equal(ticket(),true);w.forgetHub('hub-b');assert.deepEqual(w.visibleRows().map(row=>row.group),['hub-a']);assert.equal(w.selectedKey,'');assert.equal(w.historyRows.length,0);assert.equal(ticket(),false);});
-test('an archive-only foreign owner is included and its open confirmation cannot survive reconnect',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('archived',{archived:true,state:'offline'})]});a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';b.client.features=['agent_session_archives'];b.client.sessions=[];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client);assert.equal(w.historySupported(),true);await w.setHistory(true);assert.ok(b.state.calls.some(call=>call.path.startsWith('/api/v1/sessions/archived')));assert.equal(w.visibleRows().length,1,'the archived offline Agent remains readable history');await w.setHistory(false);const row=a.client.sessions[0],ticket=w.actionTicket(row);assert.equal(ticket(),true);a.state.generation++;assert.equal(ticket(),false);});
+test('an archive-only foreign owner is included and its open confirmation cannot survive reconnect',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('archived',{archived:true,state:'offline'})]});a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';b.client.features=['agent_session_archives'];b.client.sessions=[];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client);assert.equal(w.historySupported(),true);await w.setHistory(true);assert.ok(b.state.calls.some(call=>call.path.startsWith('/api/v1/sessions/archived')));w.toggleFold('state/idle');assert.equal(w.visibleRows().length,1,'the archived offline Agent remains readable history');await w.setHistory(false);const row=a.client.sessions[0],ticket=w.actionTicket(row);assert.equal(ticket(),true);a.state.generation++;assert.equal(ticket(),false);});
 
 const nativePageSource=readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets',import.meta.url),'utf8');
 function nativePageMethod(name){const start=nativePageSource.search(new RegExp('^  private (?:async )?'+name+'\\(','m'));assert.ok(start>=0);const body=nativePageSource.indexOf('{',start);let depth=1,quote='',escape=false,at=body+1;for(;at<nativePageSource.length&&depth;at++){const c=nativePageSource[at];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}return nativePageSource.slice(start,at);}
