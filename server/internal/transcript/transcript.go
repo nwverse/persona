@@ -235,6 +235,11 @@ type Meta struct {
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
+	// codexPending: the ids of backgrounded commands whose terminal record has not been read. A command can finish in
+	// a later turn, so task_started does not clear it; the id leaves when its completed/failed record is read.
+	// codexPendingIDs keeps them oldest first and codexPendingKept (codex.go) bounds them.
+	codexPending    map[string]bool
+	codexPendingIDs []string
 	// codexTurnModel: the model the turn under way runs on (its turn_context), which the turn's agent items carry.
 	// task_started clears it, as a window starting there has none.
 	codexTurnModel string
