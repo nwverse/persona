@@ -279,6 +279,26 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamChun
     .unwrap_or_default()
 }
 
+/// Repairs only an open code fence and reports this slice's code/text end state. Pure function, no runtime handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepair<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_repair::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
 /// Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>(
