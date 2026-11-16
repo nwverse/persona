@@ -375,6 +375,16 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row("Demo task").querySelector("[data-task-status]")!.textContent).toBe(t("lib-state-labels.working"));
   });
 
+  it.each(["pending_review", "rework"] as const)("keeps a stale %s chip off a working Agent's rendered row (#6492)", (state) => {
+    act(() => putTodo({ ...todo, supervision: { supervisor: conversation, state, reviews: [], round: 2 } }));
+    expect(entry("review")).toBeNull();
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    expect(row.querySelector("[data-task-status]")!.textContent).toBe(t("lib-state-labels.working"));
+    expect(row.querySelector('[data-task-mark="working"] [data-state="working"]')).not.toBeNull();
+    expect(row.querySelector("[data-task-todo-state]")).toBeNull();
+  });
+
   it("updates the same row while it runs, opens the task, and moves it under Just finished once it is accepted", () => {
     act(() => entry("running").click());
     const row = host.querySelector("[data-task-slot]");

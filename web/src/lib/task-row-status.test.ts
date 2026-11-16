@@ -14,9 +14,6 @@ describe("a task row's status column says only what its Agent is doing (#6492)",
     expect(agentRowKey({ live: false, status: "follow_up", lead: session("idle"), todo: true, starting: false })).toBe("idle");
     expect(agentRowKey({ live: false, status: "done", lead: undefined, todo: true, starting: false })).toBe("stopped");
     expect(agentRowKey({ live: false, status: "follow_up", lead: session("unread"), todo: true, starting: false })).toBe("unread");
-    // an idle lead whose child sessions work or ask folds them in, as todoStatus and mostUrgentAgent do
-    expect(agentRowKey({ live: false, status: "follow_up", lead: { ...session("idle"), children: { total: 1, working: 1 } }, todo: true, starting: false })).toBe("working");
-    expect(agentRowKey({ live: false, status: "parked", lead: { ...session("idle"), children: { total: 1, needs_you: 1 } }, todo: true, starting: false })).toBe("needs_you");
     // the states that are the Agent's own stay as they are
     expect(agentRowKey({ live: false, status: "needs_you", lead: session("needs_you"), todo: true, starting: false })).toBe("needs_you");
     expect(agentRowKey({ live: false, status: "usage_limit", todo: true, starting: false })).toBe("usage_limit");
@@ -26,6 +23,11 @@ describe("a task row's status column says only what its Agent is doing (#6492)",
     // a to-do nobody dispatched (todo_create, no plan) is not starting (#7594)
     expect(agentRowKey({ live: false, status: "not_started", todo: true, starting: false })).toBe("not_started");
     expect(agentRowKey({ live: false, status: "accepted", todo: false, starting: true })).toBe("not_started");
+  });
+
+  it.each(["follow_up", "parked"])("folds working and asking children into an idle lead's %s row", (status) => {
+    expect(agentRowKey({ live: false, status, lead: { ...session("idle"), children: { total: 1, working: 1 } }, todo: true, starting: false })).toBe("working");
+    expect(agentRowKey({ live: false, status, lead: { ...session("idle"), children: { total: 1, needs_you: 1 } }, todo: true, starting: false })).toBe("needs_you");
   });
 
   it("draws every key with the Agents' own marks and names stopped and idle apart", () => {
