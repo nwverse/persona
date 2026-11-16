@@ -221,7 +221,7 @@ func TestTaskPlanInboxReusePreservesSourceAndCorrectsTheLegacyLink(t *testing.T)
 	if current.InboxItem != it.ID || todoCount(s) != 2 {
 		t.Fatalf("reuse made another task or lost source: %+v", current)
 	}
-	if err := s.linkPlannedInbox(ctx, p.Conversation, p.Tasks[0], current); err != nil {
+	if _, err := s.linkPlannedInbox(ctx, p.Conversation, p.Tasks[0], current); err != nil {
 		t.Fatal(err)
 	}
 	s.inbox.mu.Lock()
@@ -234,9 +234,10 @@ func TestTaskPlanInboxReusePreservesSourceAndCorrectsTheLegacyLink(t *testing.T)
 
 type taskInboxFailStore struct {
 	*db.DB
-	failCreate atomic.Bool
-	failEdit   atomic.Bool
-	failInbox  atomic.Bool
+	failCreate  atomic.Bool
+	failEdit    atomic.Bool
+	failInbox   atomic.Bool
+	onInboxFail func()
 }
 
 func (s *taskInboxFailStore) CreateTodo(ctx context.Context, row db.TodoRow) error {
@@ -255,9 +256,80 @@ func (s *taskInboxFailStore) EditTodo(ctx context.Context, id string, edit db.To
 
 func (s *taskInboxFailStore) PutInboxItem(ctx context.Context, id string, data []byte, at time.Time, done *time.Time) error {
 	if s.failInbox.Load() {
+		if s.onInboxFail != nil {
+			s.onInboxFail()
+		}
 		return errors.New("test item write failed")
 	}
 	return s.DB.PutInboxItem(ctx, id, data, at, done)
+}
+
+func TestTaskPlanInboxConcurrentWriteCannotLeaveADeletedTarget(t *testing.T) {
+	ctx := context.Background()
+	st := &taskInboxFailStore{DB: todoTestDB(t)}
+	s, _ := newTaskServiceOn(t, st)
+	const conversation = "inbox-concurrent-write-test"
+	it := taskInboxItem(t, s, "example:concurrent", "box", conversation)
+	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(it.ID)); err != nil {
+		t.Fatal(err)
+	}
+	st.onInboxFail = func() {
+		st.failInbox.Store(false)
+		s.inbox.mu.Lock()
+		newer := beginWrite(it)
+		it.Summary = "A newer user edit must survive"
+		s.inbox.settle(newer)
+		s.inbox.mu.Unlock()
+	}
+	st.failInbox.Store(true)
+	p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
+	if err != nil || p.Tasks[0].Error == "" {
+		t.Fatalf("expected a visible admission failure: %+v %v", p, err)
+	}
+	// The concurrent writer runs after the failed save releases the saving window.
+	if s.saveInbox(ctx, []*InboxItem{it})[it.ID] {
+		t.Fatal("persist newer Inbox write")
+	}
+	s.inbox.mu.Lock()
+	id, summary := it.Agent.TodoID, it.Summary
+	s.inbox.mu.Unlock()
+	row, err := st.GetTodo(ctx, id)
+	if err != nil || row == nil {
+		t.Fatalf("newer Inbox write points at a deleted task %q: %v", id, err)
+	}
+	if row.InboxItem != it.ID || p.Tasks[0].TodoID != id || summary != "A newer user edit must survive" {
+		t.Fatalf("concurrent winner lost its task or user edit: %+v, plan %+v, summary %q", row, p, summary)
+	}
+	if td, _ := s.todoNow(id); len(td.Agents) != 0 || s.taskStartOnWay(id) {
+		t.Fatal("an unpersisted admission started an Agent")
+	}
+	var retry map[string][]map[string]any
+	_ = json.Unmarshal(taskInboxArgs(it.ID), &retry)
+	retry["tasks"][0]["todo_id"] = id
+	raw, _ := json.Marshal(retry)
+	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, raw); err != nil {
+		t.Fatal(err)
+	}
+	_, plans, err := s.feed(ctx, conversation, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, next := range plans {
+		if next.ID == p.ID {
+			continue
+		}
+		retried, err := s.startPlan(ctx, next.ID, nil, false)
+		if err != nil || retried.Tasks[0].TodoID != id || retried.Tasks[0].Error != "" {
+			t.Fatalf("retry on the retained task: %+v %v", retried, err)
+		}
+	}
+	waitFor(t, "retained task retry", func() bool {
+		td, _ := s.todoNow(id)
+		return len(td.Agents) == 1
+	})
+	if todoCount(s) != 1 {
+		t.Fatal("retry duplicated the retained task")
+	}
 }
 
 func TestTaskPlanInboxFailedAdmissionLeavesNoDanglingLink(t *testing.T) {

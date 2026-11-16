@@ -1052,6 +1052,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   without filing the item, changing its draft or sending a reply. Unrelated tasks omit the field. Multiple tasks retain their own back-references:
   the web detail lists each task and its current workers, scoped to the item's manager, and one completed task cannot file an item with other unfinished tasks.
   Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
+  If a newer item write retains that target, admission instead keeps the to-do and its source, reports the failure without starting an Agent,
+  and supplies the same `todo_id` for retry rather than deleting a target the newer write still references.
   That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
   (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
   so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:

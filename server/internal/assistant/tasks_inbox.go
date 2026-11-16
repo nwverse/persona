@@ -63,23 +63,23 @@ func (s *Service) checkPlannedInbox(ctx context.Context, conversation string, t 
 	return b.checkTaskInbox(conversation, t)
 }
 
-// linkPlannedInbox persists the task's source and updates the item's legacy single-task link.
-func (s *Service) linkPlannedInbox(ctx context.Context, conversation string, t PlanTask, todo Todo) error {
+// linkPlannedInbox also says whether a failed save left a newer item write still referring to this task.
+func (s *Service) linkPlannedInbox(ctx context.Context, conversation string, t PlanTask, todo Todo) (keep bool, err error) {
 	if t.InboxItem == "" {
-		return nil
+		return false, nil
 	}
 	if todo.InboxItem != "" && todo.InboxItem != t.InboxItem {
-		return fmt.Errorf("todo %s already belongs to another Inbox item", todo.ID)
+		return false, fmt.Errorf("todo %s already belongs to another Inbox item", todo.ID)
 	}
 	changed := todo.InboxItem != t.InboxItem
 	if changed {
 		if _, err := s.editTodo(ctx, todo.ID, db.TodoEdit{InboxItem: &t.InboxItem}); err != nil {
-			return err
+			return false, err
 		}
 	}
 	b := &s.inbox
 	b.mu.Lock()
-	err := b.checkTaskInbox(conversation, t)
+	err = b.checkTaskInbox(conversation, t)
 	var w *inboxWrite
 	if err == nil {
 		it := b.items[t.InboxItem]
@@ -92,12 +92,20 @@ func (s *Service) linkPlannedInbox(ctx context.Context, conversation string, t P
 	}
 	b.mu.Unlock()
 	if err == nil && s.saveWrites(ctx, []*inboxWrite{w}, "its planned task link")[t.InboxItem] {
+		b.mu.Lock()
+		it := b.items[t.InboxItem]
+		keep = it != nil && it.Agent != nil && it.Agent.TodoID == todo.ID
+		b.mu.Unlock()
+		// Do not remove a target the current item still references; the failed admission must not start an Agent.
+		if keep {
+			return true, errInboxNotPersisted
+		}
 		err = errInboxNotPersisted
 	}
 	if err != nil && changed {
 		if _, undoErr := s.editTodo(ctx, todo.ID, db.TodoEdit{InboxItem: &todo.InboxItem}); undoErr != nil {
-			return fmt.Errorf("%w (restoring the task source also failed: %v)", err, undoErr)
+			return false, fmt.Errorf("%w (restoring the task source also failed: %v)", err, undoErr)
 		}
 	}
-	return err
+	return false, err
 }

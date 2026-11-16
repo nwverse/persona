@@ -120,12 +120,18 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				s.nameTodoLater(ctx, todo.ID, title, t.Prompt)
 			}
 		}
-		if err := s.linkPlannedInbox(ctx, p.Conversation, *t, todo); err != nil {
+		if keep, err := s.linkPlannedInbox(ctx, p.Conversation, *t, todo); err != nil {
 			t.Error = err.Error()
+			if keep {
+				t.TodoID = todo.ID
+				t.Error = fmt.Sprintf("%v (task %s is kept for the newer Inbox write; retry with this todo_id)", err, todo.ID)
+			}
 			if t.ReuseTodo != "" {
 				s.releaseTakenTodo(t.ReuseTodo)
-			} else if err := s.deleteTodo(ctx, todo.ID); err != nil {
-				s.logf("task %s: undo Inbox admission: %v", todo.ID, err)
+			} else if !keep {
+				if err := s.deleteTodo(ctx, todo.ID); err != nil {
+					s.logf("task %s: undo Inbox admission: %v", todo.ID, err)
+				}
 			}
 			continue
 		}
@@ -166,7 +172,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	for i := range p.Tasks {
-		if task := p.Tasks[i]; task.TodoID != "" {
+		if task := p.Tasks[i]; task.TodoID != "" && task.Error == "" {
 			s.startPlanTaskAsync(p.ID, p.Conversation, i, task, false, func() {
 				s.releaseTakenTodo(task.ReuseTodo) // linked or failed: the todo is no longer in the gap
 			})
