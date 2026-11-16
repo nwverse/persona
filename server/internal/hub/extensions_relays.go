@@ -40,6 +40,9 @@ type relayPools struct {
 	mu   sync.Mutex
 	by   map[string]*relayPool
 	ping [2]time.Duration // tests: relayPingEvery and relayPingTimeout
+	// rounds, when a test sets it, hears each round of pingRelay: whether the stream was idle, whether it was pinged,
+	// and the ping's error (the stream is closed by then).
+	rounds func(idle, pinged bool, err error)
 }
 
 // relayPool is the relay streams of one manager bus connection (bus; nil: none, a pool of one request).
@@ -137,10 +140,12 @@ func (ps *relayPools) pingTimes() (every, timeout time.Duration) {
 }
 
 // pingRelay pings rc's stream ws while it waits in the pool, and closes it when no pong comes back in time, even if
-// a request took it meanwhile (such a request would wait for an answer that is not coming). A stream with a request
-// on it is not pinged: the pong may wait behind an answer the client reads slowly.
+// a request took it meanwhile (such a request would wait for an answer that is not coming; one that has not been
+// written yet fails to write, and net/http sends it again on another stream). A stream with a request on it is not
+// pinged: the pong may wait behind an answer the client reads slowly.
 func (h *Hub) pingRelay(ctx context.Context, ws *websocket.Conn, rc *relayConn) {
 	every, timeout := h.ext.relays.pingTimes()
+	rounds := h.ext.relays.rounds
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -149,16 +154,22 @@ func (h *Hub) pingRelay(ctx context.Context, ws *websocket.Conn, rc *relayConn) 
 			return
 		case <-t.C:
 		}
-		if !rc.idle() {
-			continue
+		idle, pinged := rc.idle(), false
+		var err error
+		if idle {
+			pinged = true
+			pctx, cancel := context.WithTimeout(ctx, timeout)
+			err = ws.Ping(pctx)
+			cancel()
 		}
-		pctx, cancel := context.WithTimeout(ctx, timeout)
-		err := ws.Ping(pctx)
-		cancel()
+		if err != nil && ctx.Err() == nil {
+			_ = ws.CloseNow() // no close handshake: a side that sends no pong sends no close either
+			_ = rc.Close()
+		}
+		if rounds != nil {
+			rounds(idle, pinged, err)
+		}
 		if err != nil {
-			if ctx.Err() == nil {
-				_ = rc.Close()
-			}
 			return
 		}
 	}
