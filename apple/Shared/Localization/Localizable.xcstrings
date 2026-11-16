@@ -111397,6 +111397,28 @@
         }
       }
     },
+    "Persona Urgent Call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Urgent Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 緊急コール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 加急来电"
+          }
+        }
+      }
+    },
     "Personal harm or safety: smoke, gas or water alarms, a call for help" : {
       "localizations" : {
         "en" : {

@@ -53,6 +53,12 @@ struct UrgentCallTests {
         #expect(UrgentCallVoice.speechLanguage("en") == "en-US")
     }
 
+    @Test func theCallsNameFollowsLockScreenDetails() {
+        #expect(UrgentCallCenter.callName(title: "云账单扣费失控", details: true).contains("云账单扣费失控"))
+        #expect(!UrgentCallCenter.callName(title: "云账单扣费失控", details: false).contains("云账单"))
+        #expect(UrgentCallCenter.callName(title: nil, details: true) == UrgentCallCenter.callName(title: "x", details: false))
+    }
+
     @Test func linesEndAsSentences() {
         #expect(UrgentCallSession.sentence("还在涨", spaced: false) == "还在涨。")
         #expect(UrgentCallSession.sentence("要不要停？", spaced: false) == "要不要停？")

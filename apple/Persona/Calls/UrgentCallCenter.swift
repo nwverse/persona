@@ -48,12 +48,22 @@ import UserNotifications
 
     // MARK: Ringing
 
+    /// The name the incoming call shows: "Urgent: <title>" while the lock screen may show details, else only that
+    /// it is Persona's urgent call (the notifications' privacy rule).
+    nonisolated static func callName(title: String?, details: Bool) -> String {
+        guard details, let title, !title.isEmpty else { return String(localized: "Persona Urgent Call") }
+        return String(localized: "Urgent: \(title)")
+    }
+
     /// A VoIP push came: report it as a call now, whatever it holds (iOS requires it), then `done`. One that does not
     /// open or is too old is reported and ended at once.
     func incoming(_ payload: [AnyHashable: Any], done: @escaping () -> Void) {
         let uuid = UUID()
         let ring = PushCrypto.notificationInfo(payload).flatMap { UrgentCallRing(info: $0) }
-        let name = ring.map { String(localized: "Urgent: \($0.title)") } ?? "Persona"
+        // "Show Details on Lock Screen" (Settings › Notifications), as the app keeps it for the Live Activity: off (or not
+        // read yet), the call and its notification say only that Persona is calling, not what about.
+        let details = UserDefaults.standard.bool(forKey: LiveActivityController.detailsKey)
+        let name = Self.callName(title: ring?.title, details: details)
         let update = Conversation.Update(localMember: Handle(type: .generic, value: "owner"),
                                          members: [Handle(type: .generic, value: ring?.id ?? uuid.uuidString, displayName: name)])
         prepareAudio()
@@ -74,7 +84,7 @@ import UserNotifications
                 end(uuid, .failed)
                 return
             }
-            await companion(ring, missed: false)
+            await companion(ring, missed: false, details: details)
             try? await Task.sleep(for: Self.ringFor)
             if let r = ringing[uuid], !r.answered { missed(uuid) }
         }
@@ -112,7 +122,8 @@ import UserNotifications
         guard let r = ringing.removeValue(forKey: uuid) else { return }
         end(uuid, .unanswered)
         report(r.ring, .missed)
-        Task { await companion(r.ring, missed: true) }
+        let details = UserDefaults.standard.bool(forKey: LiveActivityController.detailsKey)
+        Task { await companion(r.ring, missed: true, details: details) }
     }
 
     /// The manager says where a call is (`urgent_call`): a phone still ringing for one answered, declined or settled
@@ -207,10 +218,10 @@ import UserNotifications
 
     /// A silent time-sensitive notification beside the call, which stays when the call's banner goes: "Persona is calling
     /// you", or after the ring "Missed urgent call".
-    private func companion(_ ring: UrgentCallRing, missed: Bool) async {
+    private func companion(_ ring: UrgentCallRing, missed: Bool, details: Bool) async {
         let content = UNMutableNotificationContent()
         content.title = missed ? String(localized: "Missed urgent call") : String(localized: "Persona is calling you")
-        content.body = ring.title
+        content.body = details ? ring.title : ""
         content.interruptionLevel = .timeSensitive
         content.sound = nil // the call rings; the notification only stays
         content.threadIdentifier = "urgent-call"

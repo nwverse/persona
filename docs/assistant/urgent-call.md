@@ -115,6 +115,6 @@ Every call is a work event (`urgent_call`, `urgent_call_skipped`, `urgent_call_e
 ## Privacy
 
 - The VoIP push is sealed like every other push; the relay and Apple see only that one went.
-- The incoming call shows "Urgent: <title>", a few words the assistant writes for the lock screen (at most 30 characters); what happened and the card show only on the call page, after answering. The companion notification has the same title.
+- The incoming call follows "Show Details on Lock Screen" (Settings › Notifications), as notifications do: on, it shows "Urgent: <title>", a few words the assistant writes for the lock screen (at most 30 characters); off (and before the app has read the setting), only "Persona Urgent Call". The companion notification shows the title only when details are on. What happened and the card show only on the call page, after answering.
 - No audio is recorded. The transcript lives with the conversation in the manager's database and goes when the conversation is deleted. Logs keep counts and states, never content.
 - Without realtime voice, the owner's words are recognized on the phone; the speech extension, when the owner set one up, receives only what Persona says.
