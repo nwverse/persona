@@ -58,6 +58,9 @@ uses Persona. Registered app identities (bundle IDs, App Groups, keychain groups
   (`scripts/test/test_doc_paths.py` checks the index and every quoted path).
 - **Quality bar**: a top App Store app. Check every changed screen (watch included) in a simulator screenshot, dark and light, through
   DEBUG launch arguments + `xcrun simctl io <udid> screenshot`, and actually look at it; compiling is not enough (`docs/operations/testing.md`).
+- **Screenshots go in the PR, never in the repository**: review evidence (light / dark, before / after, UI test captures) is shown in the
+  PR body or a comment, not committed to `main`, docs included (`docs/operations/collaboration.md`, "Screenshots in PRs"). Only generated
+  README / store images (`docs/assets/`) and app resources are committed. `scripts/test/test_no_committed_screenshots.py` blocks new ones.
 
 ### Public repository
 

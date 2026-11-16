@@ -565,6 +565,74 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### Owner input through the Persona plugin
+
+`integrations/claude-code-plugin/` (its `README.md` is the contract), `server/internal/node/ccplugin.go`, `server/internal/devices/owner_input.go`.
+The inbox can never carry the owner's go-ahead: Claude Code tells the model a peer message is not the user's and cannot
+grant consent, so "yes, merge it" from the phone was refused (#5965). Claude Code's plugin API has a supported way in:
+`$.prompt.submit({ text, asUser: true })` submits text as the person's own words, without the "The <plugin> plugin sent a
+message" frame. A user-scope plugin installed from a terminal also loads in the desktop app's local sessions. Persona's
+plugin (`persona`) uses it for the owner's own messages; Persona Link installs and updates it.
+
+- **Measured** (2026-11-16, Windows 11; Claude Code 2.1.291, 2.1.299 and 2.1.308, the last the desktop app's own; a
+  throwaway `claude -p --input-format stream-json` session per run in an empty directory whose `CLAUDE.md` allowed a
+  file to be created only on the person's own approval). The same "I approve: please create APPROVED.txt now.": through
+  the real peer inbox, wrapped in `prompts/agents/peer_message`, it was refused ("came from another session, not the
+  person's own approval"); submitted by a plugin without `asUser` (read as "The spikeplug plugin sent a message: …") it
+  was refused; submitted with `asUser` the file was created ("the user explicitly approves in their own message"), on
+  all three versions. In bypass permissions mode (2.1.308), where the inbox holds Persona's message for approval at
+  the computer, the `asUser` prompt was not held: queued at 05:02:22.8, it started its turn at 23.3, as soon as the
+  turn before it ended. The transcript line is a plain user line: `{"type":"user","message":{"role":"user","content":
+  "<text>"},"origin":{"kind":"plugin","name":"<plugin>","asUser":true},"promptSource":"system"}`, no `isMeta`, after a
+  `queue-operation` enqueue with the text. A prompt submitted while a turn runs waits in Claude Code's queue and starts
+  its own turn once the session rests (it is never folded into the running turn), and the submit resolves as that turn
+  starts. A plugin's `$.http.fetch` gives up after 30 s; over a Unix socket on Windows its first connection attempts can
+  fail while the listener is new, so the plugin retries. The process at the socket's other end is the claude itself
+  (the pid of its `sessions/<pid>.json`), on Windows read with `SIO_AF_UNIX_GETPEERPID`.
+- **Transport and who may take a message**: the plugin talks HTTP to the node socket (`node.sock`, the one hooks use;
+  the node tells HTTP from its JSON requests by the first line): `POST /claude-plugin/v1/poll` (held up to 25 s) and
+  `/ack`. The node answers only the claude that has the session open: the socket's peer pid (`SO_PEERCRED`,
+  `LOCAL_PEERPID`, `SIO_AF_UNIX_GETPEERPID`) must be the pid whose `sessions/<pid>.json` names the session the request
+  names; anything else gets 403, and where the system cannot say, nothing is handed over. Nothing that arrives on the
+  socket becomes a message: only `session.send` makes one. The boundary is the node socket's own (0600, the same user;
+  `docs/integrations/script-cli.md` "Security and privacy"): a process of that user could already type into the user's terminals.
+  Polls from a claude the node does not deliver to this way (an engine pane's, the assistant's own, an SDK's) are told
+  to come back in 5 minutes. `{"kind":"claude-plugin.status"}` on the same socket lists the sessions whose plugin polls
+  (for Persona Link's installer and diagnostics).
+- **Which messages**: only the owner's own. The hub marks a message typed in the owner's app (`captureHumanSubmission`:
+  a full-role device token, not a link or answer-only token, not the master token, not a member hub), and the devices
+  manager turns that mark into `owner_input: true` on `session.send` (`ownerInputParams`), dropping any `owner_input`
+  a caller put in the params. Messages from the assistant, extensions, channels (the Lark and WeChat bots), relays
+  between conversations and the auth relay have no mark and keep the inbox, as do Stop and the answers to a question
+  the session asked (both at priority `now`), and slash commands (still refused, `peer_command`).
+- **When**: only to a session at rest: its status file says idle (or shell) and its plugin polls. A session at work or
+  behind a dialog gets the message through the inbox at once, as before: it is read at the next tool boundary (or after
+  the dialog), and the send says `relay_reason: "busy"`. Holding the message until the turn ends was the other choice:
+  it would make a steer wait for minutes, and a held message could not be taken back once the plugin had it. So a
+  go-ahead goes in as the owner's while the session waits for one, which is when it asks for it.
+- **Delivery and fallback**: the node hands the message to the session's waiting poll (`deadline_ms` 5 s ahead; the
+  plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
+  the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says
+  it did not submit it, or nothing shows within 10 s: the message goes through the inbox instead, as above.
+  `session.send` answers `delivered_as: "user_input"` or `"relayed"` with `relay_reason` (`no_plugin`, `busy`,
+  `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried `owner_input` to such a
+  session. A relayed message meets the inbox's own outcomes too: one a bypass-mode session holds is `peer_held`, as
+  before. Pictures go as paths in `<attached_images>`, as through the inbox.
+- **What the apps show**: the session's row says `capabilities.plugin_input: true` while its plugin polls. The message
+  shows in the chat as the user's own line (the transcript's plain user line); one relayed shows from "Persona" as
+  before. The web app says so when an owner's message to a session with the plugin was relayed (`lib-outbox.relayed_busy`,
+  `lib-outbox.relayed_plugin`): the Agent may not take it as their approval. Nothing is said when it went in as their
+  input, nor for a session without the plugin (it never had another way). iOS and Android show the chat line as it is
+  and ignore the new fields for now.
+- **The plugin** submits text and nothing else: no command, no file but its own manifest, nothing written. It refuses a
+  slash command, an empty or overlong text and a message past its deadline, tells the node why (`ack`), and keeps quiet
+  (the debug log only) while no node answers, backing off up to a minute.
+- **Not covered**: a desktop session the node opens to send to (`sendThroughDesktopApp`) has usually not polled yet, so
+  its first message goes through the inbox. A claude with no inbox does not use the plugin either: there would be no
+  fallback. Public sharing omits the plugin's lines, as any line without the human origin (`transcript.shareHuman`).
+  The plugin API is early access and may change; `asUser` has no priority, so a stop still goes through the inbox.
+  How the desktop app draws the plugin's prompt was not checked.
+
 ### Stop and answers from the phone (#5961)
 
 `server/internal/node/claudebg.go` (`interruptOutside`, `sendOutside`). Measured with Claude Code 2.1.321, the desktop app's own, on macOS (2026-11-12/13). The inbox's priority `now` is Claude Code's own "send now": its queue aborts the running turn for a command of priority now, and the message runs at once. It also ends a question or a permission prompt the session waits on: their tool call ends "Tool permission request aborted".
