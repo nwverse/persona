@@ -32,6 +32,10 @@ type inboxBatchStore interface {
 	PutInboxItems(ctx context.Context, rows []db.InboxRow) error
 }
 
+type conversationInboxStore interface {
+	PutConversationInboxItems(ctx context.Context, machine, session string, rows []db.InboxRow) error
+}
+
 func (s *Service) inboxDB() inboxStore {
 	st, _ := s.store().(inboxStore)
 	return st
@@ -169,6 +173,7 @@ func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo 
 // are taken; and after finish, which may undo a change.
 func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, prepare func(*InboxItem) *InboxItem, finish func(map[string]bool)) map[string]bool {
 	b := &s.inbox
+	_, post := ctx.Value(inboxPostConversation{}).([2]string)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -187,7 +192,9 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 	now := time.Now()
 	for i, it := range changed {
 		if current := b.items[it.ID]; current != it {
-			continue // the item was forgotten or replaced while this save was waiting
+			if !post || prepare == nil || it.Source != inboxPostSource || it.Kind != inboxPostKind {
+				continue // generic saves still refuse forgotten/replaced rows; only a typed post stages a detached candidate
+			}
 		}
 		it.arrived(now)
 		row := it
@@ -195,6 +202,9 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 			row = prepare(it)
 		} else {
 			row, _ = b.filingSnapshot(it, nil)
+		}
+		if post {
+			row.arrived(now) // the staged post, never the previously committed row
 		}
 		raw, _ := json.Marshal(row)
 		rows = append(rows, db.InboxRow{ID: row.ID, Data: raw, UpdatedAt: row.UpdatedAt, DoneAt: row.DoneAt})
@@ -230,6 +240,19 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 // that fails, or the store can't, each row is written on its own so one that fails does not keep the others out. It
 // returns the ids that were not written anywhere.
 func (s *Service) putInboxRows(ctx context.Context, st inboxStore, rows []db.InboxRow) map[string]bool {
+	if source, post := ctx.Value(inboxPostConversation{}).([2]string); post {
+		if guarded, ok := st.(conversationInboxStore); ok {
+			if err := guarded.PutConversationInboxItems(ctx, source[0], source[1], rows); err != nil {
+				s.logf("inbox: save assistant post: %v", err)
+				failed := make(map[string]bool, len(rows))
+				for _, row := range rows {
+					failed[row.ID] = true
+				}
+				return failed // never retry a rejected post through the unguarded writer
+			}
+			return nil
+		}
+	}
 	if bs, ok := st.(inboxBatchStore); ok && len(rows) > 1 {
 		err := bs.PutInboxItems(ctx, rows)
 		if err == nil {
