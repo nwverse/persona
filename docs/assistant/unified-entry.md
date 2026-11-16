@@ -1072,17 +1072,23 @@ writable task it hands out used to wait on its card however much the owner wante
   matters), the north star's report or a saved state note (an earlier run wrote it), that runs into the conversation it
   came from, or that is in the health space never offers or uses one.
 - **Only in a clean round**: a schedule with a grant starts each round in a new conversation of its own, under an id
-  the hub picks before it starts, and that conversation's context leaves out the live snapshot (Lark messages,
-  calendar, the Inbox matters followed, agents' lines: `Context`). `task_plan` there starts a writable task whose kind
+  the hub picks before it starts (Claude Code only: another agent picks its own id, so its rounds are never clean and
+  their cards don't offer a grant), and that conversation's context leaves out the live snapshot (Lark messages,
+  calendar, the Inbox matters followed, agents' lines: `Context`). The assistant's own instructions and memory in its
+  directory still load, as in every conversation of the assistant's. An automatic retry of a failed round goes on in
+  that round's conversation, not a clean one, so what it plans asks. `task_plan` there starts a writable task whose kind
   the grant covers (as a remembered kind covers its folder tree) without the card only when the hub noted the round as
   it sent it (in memory, so not after a hub restart), the turn began with that schedule's own prompt written after
   that, and the whole conversation, as its machine reads it, is that prompt and the agent's own work with Persona's
   own tools that read nothing from outside (`grantSafeTools`: planning, listing computers and repositories,
-  `notify_user`, Claude Code's `ToolSearch` and `TodoWrite`). Mail, Inbox, web pages, shell commands, files, agent
-  transcripts, a relayed message or a picture keep the card, and so does anything the hub cannot read or tell
-  (another agent that picks its own conversation id, a node that does not say the page is whole).
+  `notify_user`, Claude Code's `ToolSearch` and `TodoWrite`), ending with this `task_plan` call: the round's first
+  (a second one's answer names other work, which may come from outside). Mail, Inbox, web pages, shell commands,
+  files (the knowledge base included), agent transcripts, a relayed message or a picture keep the card, and so does
+  anything the hub cannot read or tell (a node that does not say the page is whole).
 - **`user_requested` in a round**: a round the hub started has no message of the owner's, so `task_plan` ignores
-  `user_requested` in a conversation while a scheduled round is under way there, with or without a grant.
+  `user_requested` in a turn a scheduled task started, with or without a grant: while the hub has a round under way in
+  that conversation, or when its latest turn began with a scheduled prompt (after a hub restart too). An owner who
+  writes into that turn gets the card.
 - **Everything else keeps the card**: other scheduled tasks' rounds, every turn the hub did not start for that
   schedule, kinds outside the grant.
 - **Lifetime**: no expiry. It holds while the schedule's prompt, target (the computer and conversation its runs go

@@ -256,13 +256,6 @@ func (s *Service) noteCleanRound(session, task string) {
 	s.sched.clean[session] = task
 }
 
-// endCleanRound drops session's clean mark: it did not start under that id (another agent picks its own).
-func (s *Service) endCleanRound(session string) {
-	s.sched.mu.Lock()
-	defer s.sched.mu.Unlock()
-	delete(s.sched.clean, session)
-}
-
 // cleanRoundSession: session is a clean round's conversation while its round is under way (noteCleanRound).
 func (s *Service) cleanRoundSession(session string) bool {
 	if session == "" {
@@ -361,8 +354,7 @@ func scheduledPrompt(it proto.Item, label string) bool {
 // written outside Persona (no mail, Inbox, web page, chat, agent transcript or file) and only says where work can run
 // or plans it. Any other tool, built-in or not, keeps the card.
 var grantSafeTools = map[string]bool{
-	"task_plan": true, "task_plan_withdraw": true, "machines_list": true, "repositories_list": true,
-	"repository_get": true, "todo_repositories_get": true, "notify_user": true,
+	"machines_list": true, "repositories_list": true, "repository_get": true, "todo_repositories_get": true, "notify_user": true,
 }
 
 // grantSafeBuiltins are the agent's own tools that read nothing: Claude Code's to-do list and its loading of a
@@ -428,12 +420,38 @@ func (s *Service) cleanRound(ctx context.Context, t Task, machine, session strin
 	if first < 0 || !scheduledPrompt(res.Items[first], t.label()) || res.Items[first].Queued {
 		return false
 	}
+	// The read reaches this very call: its last item is the task_plan call being answered, the round's only one (an
+	// earlier one's answer names other work, which may come from outside: its duplicates).
+	last := len(res.Items) - 1
+	if last <= first || !planCall(res.Items[last]) {
+		return false
+	}
 	for i, it := range res.Items {
-		if i != first && (i < first && it.Kind != proto.KindNotice || i > first && !grantSafeAfterPrompt(it)) {
+		if i != first && i != last && (i < first && it.Kind != proto.KindNotice || i > first && !grantSafeAfterPrompt(it)) {
 			return false
 		}
 	}
 	return true
+}
+
+// planCall: it is the agent's call of Persona's task_plan.
+func planCall(it proto.Item) bool {
+	if it.Role != "assistant" || it.Kind != proto.KindToolUse {
+		return false
+	}
+	rest, ok := strings.CutPrefix(it.ToolName, "mcp__")
+	i := strings.LastIndex(rest, "__")
+	return ok && i > 0 && compat.IsMCPServer(strings.TrimPrefix(rest[:i], "plugin_")) && compat.Tool(rest[i+2:]) == "task_plan"
+}
+
+// scheduledTurn: the latest turn in items began with a scheduled task's prompt (no owner's message started it).
+func scheduledTurn(items []proto.Item) bool {
+	_, turn := splitLastTurn(items)
+	if len(turn) == 0 {
+		return false
+	}
+	src := prompts.ItemSource(turn[0])
+	return src != nil && (src.Kind == proto.SourcePatrol || src.Kind == proto.SourceFollowup)
 }
 
 // scheduleGrantCover is what the grant of t, whose round task_plan is called in, lets start without the card: nil when
@@ -464,4 +482,23 @@ func (s *Service) scheduledTask(ctx context.Context, id string) (Task, bool) {
 		return sc.tasks[i], true
 	}
 	return Task{}, false
+}
+
+// inScheduledTurn: task_plan from session on machine is called in a turn a scheduled task started, as the hub knows it
+// (a round under way there) or as the conversation says (its latest turn began with a scheduled prompt: after a hub
+// restart too). A conversation its own machine cannot read back to it is taken as the ordinary turn it almost always is.
+func (s *Service) inScheduledTurn(ctx context.Context, machine, session string) bool {
+	if s.roundUnderWay(machine, session) {
+		return true
+	}
+	items, ok := s.lastTurnItems(ctx, machine, session)
+	return ok && scheduledTurn(items)
+}
+
+// claudeConversation: session on machine is not known to run another agent than Claude Code, the only one whose
+// rounds can be clean (it starts under the id the hub picks): another's card does not offer a grant it could never
+// use. Only the offer: a round that is not clean never uses a grant (cleanRound).
+func (s *Service) claudeConversation(ctx context.Context, machine, session string) bool {
+	c, ok := s.session(ctx, machine, session)
+	return !ok || c.Agent == "" || c.Agent == "claude"
 }

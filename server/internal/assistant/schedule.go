@@ -1758,8 +1758,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
 	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
-	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant.
-	clean := t.SessionID == "" && t.Space == "" && t.liveGrant() != nil
+	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
+	// retry: it goes on in the round's conversation, which has its earlier work, and its plans ask.
+	clean := t.SessionID == "" && !retried && t.grantEligible() && t.liveGrant() != nil
 	if t.SessionID != "" {
 		if m, ok := s.device(ctx, t.MachineID); ok {
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
@@ -1791,6 +1792,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return proto.Session{}, err
 	}
 	launcher := strings.TrimPrefix(binding.Provider, "launcher.")
+	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {
+		clean = false // only Claude Code starts a conversation under the id the hub picks: another keeps its own
+	}
 	if t.RunSessionID != "" {
 		m, ok := s.device(ctx, t.RunMachineID)
 		switch {
@@ -1832,11 +1836,13 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID}
 	if clean {
 		sp.NewSessionID = newGuestSessionID()
-		s.noteCleanRound(sp.NewSessionID, t.ID) // before it starts: its first message's context asks
+		// Before it starts: its first message's context asks, and its turn may plan at once.
+		s.noteCleanRound(sp.NewSessionID, t.ID)
+		s.noteRound(here, sp.NewSessionID, t.ID, time.Now().Add(-roundEarly))
 	}
 	sess, err := s.startConversation(ctx, sp)
-	if clean && (err != nil || sess.SessionID != sp.NewSessionID) {
-		s.endCleanRound(sp.NewSessionID) // another agent picked its own id: an ordinary round, its plans ask
+	if clean && (err != nil || sess.SessionID != sp.NewSessionID || sess.MachineID != here) {
+		s.endRound(here, sp.NewSessionID, t.ID) // not started as asked: an ordinary round, its plans ask
 	}
 	if err != nil {
 		s.logf("task %s: %v", t.ID, err)

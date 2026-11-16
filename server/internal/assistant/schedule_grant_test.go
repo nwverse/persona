@@ -67,16 +67,22 @@ func granted(t Task) Task {
 }
 
 // round runs task id the way the scheduler does and gives its conversation the turn that round started: what came
-// before (earlier), the prompt the hub sent, written now, then whatever the agent did (extra). It returns the
-// conversation's machine and id.
+// before (earlier), the prompt the hub sent, written now, then whatever the agent did (extra), ending with the
+// task_plan call being made. It returns the conversation's machine and id.
 func (g *grantFixture) round(id string, earlier []proto.Item, extra ...proto.Item) (string, string) {
+	g.t.Helper()
+	return g.roundAs(id, false, earlier, extra...)
+}
+
+// roundAs is round, as the automatic retry of a failed run when retried.
+func (g *grantFixture) roundAs(id string, retried bool, earlier []proto.Item, extra ...proto.Item) (string, string) {
 	g.t.Helper()
 	task, ok := taskByID(g.s, id)
 	if !ok {
 		g.t.Fatalf("no task %s", id)
 	}
 	now := time.Now()
-	sess, err := g.s.runTask(task, now, now, true, false) // Run now: a round the hub starts too
+	sess, err := g.s.runTask(task, now, now, true, retried) // Run now: a round the hub starts too
 	if err != nil {
 		g.t.Fatal(err)
 	}
@@ -87,6 +93,7 @@ func (g *grantFixture) round(id string, earlier []proto.Item, extra ...proto.Ite
 	items := slices.Clone(earlier)
 	items = append(items, proto.Item{Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()})
 	items = append(items, extra...)
+	items = append(items, toolUse("mcp__persona__task_plan"))
 	g.setItems(items)
 	return sess.MachineID, sess.SessionID
 }
@@ -161,8 +168,7 @@ func TestScheduledRoundStartsTheKindItsOwnerGranted(t *testing.T) {
 	}
 
 	g.s.endRound(machine, session, "deps") // the first round's turn ended
-	machine, session2 := g.round("deps", nil, toolUse("ToolSearch"), toolResult(), toolUse("mcp__persona__machines_list"), toolResult(),
-		toolUse("mcp__persona__task_plan"))
+	machine, session2 := g.round("deps", nil, toolUse("ToolSearch"), toolResult(), toolUse("mcp__persona__machines_list"), toolResult())
 	if session2 == session || !g.s.cleanRoundSession(session2) {
 		t.Fatalf("a granted schedule's round did not start a clean conversation of its own: %s after %s", session2, session)
 	}
@@ -216,7 +222,7 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 		g := newGrantFixture(t, granted(depsTask()))
 		machine, session := g.round("deps", nil)
 		g.mu.Lock()
-		g.items[len(g.items)-1].TS = time.Now().Add(-3 * time.Hour) // a prompt from before this round
+		g.items[0].TS = time.Now().Add(-3 * time.Hour) // a prompt from before this round
 		g.mu.Unlock()
 		if _, out := g.plan(machine, session, "/wt/app/x"); !waitsForStart(out) {
 			t.Fatalf("a turn older than the round used the grant: %s", out)
@@ -227,6 +233,20 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 		machine, session := g.round("deps", nil)
 		if _, out := g.plan(machine, session, "/wt/other/x", map[string]any{"user_requested": true}); !waitsForStart(out) {
 			t.Fatalf("a scheduled round's user_requested started a writable task: %s", out)
+		}
+		g.s.endRound(machine, session, "deps") // as after a hub restart: the conversation still says whose turn it is
+		if _, out := g.plan(machine, session, "/wt/other/y", map[string]any{"user_requested": true}); !waitsForStart(out) {
+			t.Fatalf("a scheduled turn the hub forgot let user_requested start a writable task: %s", out)
+		}
+	})
+	t.Run("the retry of a failed round", func(t *testing.T) {
+		g := newGrantFixture(t, granted(depsTask()))
+		machine, session := g.roundAs("deps", true, nil)
+		if g.s.cleanRoundSession(session) {
+			t.Fatal("a retry started a clean round: it would plan the failed round's work again, with no card")
+		}
+		if _, out := g.plan(machine, session, "/wt/app/x"); !waitsForStart(out) {
+			t.Fatalf("a retry used the grant: %s", out)
 		}
 	})
 	t.Run("the schedule changed before Start", func(t *testing.T) {
@@ -282,12 +302,14 @@ func TestScheduledRoundThatReadOutsideContentWaits(t *testing.T) {
 		extra   []proto.Item
 		noOffer bool
 	}{
-		"web page":                {task: granted(depsTask()), extra: []proto.Item{toolUse("WebFetch"), toolResult()}},
-		"mail":                    {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__mail_search"), toolResult()}},
-		"inbox":                   {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__inbox_list"), toolResult()}},
-		"shell":                   {task: granted(depsTask()), extra: []proto.Item{toolUse("Bash"), toolResult()}},
-		"agent read":              {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__agent_read"), toolResult()}},
-		"a picture":               {task: granted(depsTask()), extra: []proto.Item{{Role: "user", Kind: proto.KindImage}}},
+		"web page":   {task: granted(depsTask()), extra: []proto.Item{toolUse("WebFetch"), toolResult()}},
+		"mail":       {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__mail_search"), toolResult()}},
+		"inbox":      {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__inbox_list"), toolResult()}},
+		"shell":      {task: granted(depsTask()), extra: []proto.Item{toolUse("Bash"), toolResult()}},
+		"agent read": {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__agent_read"), toolResult()}},
+		"a picture":  {task: granted(depsTask()), extra: []proto.Item{{Role: "user", Kind: proto.KindImage}}},
+		"an earlier task_plan": {task: granted(depsTask()), extra: []proto.Item{toolUse("mcp__persona__task_plan"),
+			{Role: "user", Kind: proto.KindToolResult, Text: "Possible duplicates: a task from a mail…"}}},
 		"relay before its prompt": {task: granted(depsTask()), earlier: []proto.Item{relay}},
 		"another schedule's prompt before it": {task: granted(depsTask()), earlier: []proto.Item{{Role: "user", Kind: proto.KindText,
 			TS: time.Now().Add(-time.Hour), Text: prompts.MessageSourceText("Morning briefing: 3 Inbox matters…",

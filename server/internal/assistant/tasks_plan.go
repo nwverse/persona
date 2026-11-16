@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -208,7 +209,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
 	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in the health
 	// space, whose plans always wait for Start.
-	if scope == nil && s.roundUnderWay(machine, sessionID) {
+	if scope == nil && slices.ContainsFunc(a.Tasks, func(t PlanTask) bool { return t.UserRequested }) && s.inScheduledTurn(ctx, machine, sessionID) {
 		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
 		for i := range a.Tasks {
 			a.Tasks[i].UserRequested = false
@@ -217,7 +218,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	var round Task
 	var inRound bool
 	if scope == nil && !s.inHealth(ctx, sessionID) {
-		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() {
+		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() && s.claudeConversation(ctx, machine, sessionID) {
 			for i := range a.Tasks { // the card offers to let this schedule start these by itself
 				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.grantBasis()
 			}
