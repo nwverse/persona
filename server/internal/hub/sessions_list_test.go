@@ -161,10 +161,10 @@ func TestRuntimeExactLookupFullRow(t *testing.T) {
 	h.machines, h.byID["other"] = append(h.machines, other), other
 	q := "summary=0&limit=50&machine_id=demo&session_id=" + neturl.QueryEscape(full.SessionID)
 	exact := runtimePage(t, h, q)
-	legacy := runtimePage(t, h, "machine_id=demo")
+	legacy := runtimePage(t, h, "machine_id=demo&summary=0&limit=1&session_id="+neturl.QueryEscape(full.SessionID))
 	if exact.Total != 1 || len(exact.Sessions) != 1 || exact.HasMore || exact.Cursor != "" || len(exact.Remove) != 0 || exact.Revision == "" ||
 		!reflect.DeepEqual(exact.Sessions[0], legacy.Sessions[0]) {
-		t.Fatalf("exact row differs from legacy collection: %+v", exact)
+		t.Fatalf("exact row differs from the same full-row page: %+v", exact)
 	}
 	if full := exact.Sessions[0]; len(full.Background) != 1 || len(full.Subagents) != 1 || len(full.Workflows) != 1 || len(full.Queued) != 2 ||
 		full.PermissionMode != "acceptEdits" || full.Launcher != "example" || full.Ultracode == nil || full.Loop.Prompt == "" {
@@ -285,8 +285,56 @@ func TestRuntimeListPagesAndSummary(t *testing.T) {
 		t.Fatalf("filtered: %+v", filtered)
 	}
 	legacy := runtimePage(t, h, "machine_id=demo")
-	if len(legacy.Sessions) != 3 || len(legacy.Sessions[0].Background) != 1 || len([]rune(legacy.Sessions[0].LastText)) != 500 {
+	// The legacy answer carries the same bounded rows the paged list does (#3759): a whole fleet's list was hundreds of
+	// KB per pull, cut to the same summary — last_text bounded, background work left out (its counts ride along).
+	if len(legacy.Sessions) != 3 || len(legacy.Sessions[0].Background) != 0 || len([]rune(legacy.Sessions[0].LastText)) != 180 {
 		t.Fatalf("legacy changed: %+v", legacy)
+	}
+}
+
+// The whole-list answer (no opt-in keys) keeps its exact legacy shape — the keys apps that never opted into the
+// bounded API decode — while its rows are bounded like a summary's: long texts cut, the task arrays left out, none
+// of the summary's own additions (pane_source, the counts scalars) added. A whole fleet's answer was hundreds of KB
+// per pull while every sessions_list hint reread it.
+func TestLegacyListBoundedRows(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	now := time.Now().UTC()
+	m.sessions = []proto.Session{{
+		MachineID: "demo", SessionID: "busy", Title: strings.Repeat("t", 600), Cwd: "/demo/app", Status: proto.StatusWorking,
+		UpdatedAt: now, LastText: strings.Repeat("你", 600), Activity: strings.Repeat("a", 600),
+		Subagents: []proto.Subagent{{ID: "sub", Running: true}}, Background: []proto.BackgroundTask{{ID: "task"}},
+		Workflows: []proto.Workflow{{TaskID: "flow", Running: true}}, Queued: []string{"waiting"}, Ports: []proto.Port{{Port: 3000}},
+	}}
+	w := httptest.NewRecorder()
+	h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions", nil))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, gained := range []string{`"pane_source"`, `"waiting"`, `"background_count"`, `"running_subagents"`, `"background_tasks_count"`} {
+		if strings.Contains(body, gained) {
+			t.Fatalf("legacy answer gained %s: %s", gained, body)
+		}
+	}
+	for _, kept := range []string{`"subagents"`, `"background"`, `"workflows"`, `"queued"`, `"ports"`} {
+		if strings.Contains(body, kept) {
+			t.Fatalf("legacy answer kept the task array %s: %s", kept, body)
+		}
+	}
+	var v struct {
+		Sessions []proto.Session `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Sessions) != 1 {
+		t.Fatalf("rows: %d", len(v.Sessions))
+	}
+	row := v.Sessions[0]
+	if len([]rune(row.Title)) != 256 || len([]rune(row.LastText)) != 180 || len([]rune(row.Activity)) != 120 {
+		t.Fatalf("texts not bounded: title=%d last_text=%d activity=%d", len([]rune(row.Title)), len([]rune(row.LastText)), len([]rune(row.Activity)))
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -121,9 +122,11 @@ func TestTaskStateDiscardsDraftWhenRunCannotBeRegistered(t *testing.T) {
 	node := newFakeHub().withMachine()
 	s := newServiceOn(t, node, store)
 	task.stateRunKey = s.openTaskStateDraft()
-	// The state instructions belong to the dispatched scheduled prompt, not a separate injected notice.
+	// The state instructions belong to the dispatched scheduled prompt (as the hub sends it, its source in front), not a
+	// separate injected notice.
 	now := time.Now().UTC()
-	node.setItems(proto.Item{Role: "user", Kind: proto.KindText, Text: taskPrompt(task, now, now, time.UTC, false, false, false)})
+	sent := prompts.MessageSourceText(taskPrompt(task, now, now, time.UTC, false, false, false), taskMessageSource(task))
+	node.setItems(proto.Item{Role: "user", Kind: proto.KindText, Text: sent})
 	args, _ := json.Marshal(map[string]string{"run_key": task.stateRunKey, "text": "new cursor"})
 	result, err := s.toolScheduleStateSet(ctx, "server", "scheduled", args)
 	if err != nil || !strings.Contains(result, "not yet saved") {
@@ -273,7 +276,7 @@ func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
 	previous := task
 	previous.stateRunKey = s.openTaskStateDraft() // the previous run's draft is still open: only the prompt check can refuse it
 	prompt := func(task Task) proto.Item {
-		return proto.Item{Role: "user", Kind: proto.KindText, Text: "⏰ 定时任务，每 30 分钟：patrol" + taskStatePrompt(task)}
+		return proto.Item{Role: "user", Kind: proto.KindText, Text: hubRunPrompt(task.stateRunKey, "")}
 	}
 	node.setItems(prompt(previous), proto.Item{Role: "assistant", Kind: proto.KindText, Text: "done"}, prompt(task))
 
@@ -293,35 +296,53 @@ func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
 
 func TestCurrentTaskStateRun(t *testing.T) {
 	user := func(text string) proto.Item { return proto.Item{Role: "user", Kind: proto.KindText, Text: text} }
-	marker := func(key string) string {
-		return "call schedule_state_set with run_key " + key + " and the updated state text"
-	}
+	run := func(key string) proto.Item { return user(hubRunPrompt(key, "")) }
 	queued := user("another message")
 	queued.Queued = true
-	queuedRun := user(marker("aaa"))
+	queuedRun := run("aaa")
 	queuedRun.Queued = true
 	peer := user("from another conversation")
 	peer.From = "other"
+	peerRun := user(hubRunPrompt("old", ""))
+	peerRun.From = "other"
+	app := user(hubRunPrompt("old", ""))
+	app.ClientMsgID = "c1"
 	woke := proto.Item{Role: "system", Kind: proto.KindNotice, Text: "background task finished", Wake: true}
 	reply := proto.Item{Role: "assistant", Kind: proto.KindText, Text: "ok"}
+	typed := []proto.Item{run("old"), reply, run("aaa"), reply, user(typedRunKey("old"))}
+	both := user(runLineOf(hubRunPrompt("old", "")) + "\n" + runLineOf(hubRunPrompt("aaa", "")))
+	legacy := user("⏰ Patrol（定时任务，每 30 分钟）" + taskStatePrompt(Task{Repeat: repeatInterval, stateRunKey: "aaa"}))
 	for name, tc := range map[string]struct {
 		items []proto.Item
 		key   string
 		want  bool
 	}{
-		"only turn":         {[]proto.Item{user(marker("aaa"))}, "aaa", true},
-		"paged back a turn": {[]proto.Item{user(marker("old")), user(marker("aaa"))}, "aaa", true},
-		"previous key":      {[]proto.Item{user(marker("old")), reply, user(marker("aaa"))}, "old", false},
-		"queued is no turn": {[]proto.Item{user(marker("old")), user(marker("aaa")), queued}, "aaa", true},
+		"only turn":         {[]proto.Item{run("aaa")}, "aaa", true},
+		"paged back a turn": {[]proto.Item{run("old"), run("aaa")}, "aaa", true},
+		"previous key":      {[]proto.Item{run("old"), reply, run("aaa")}, "old", false},
+		"queued is no turn": {[]proto.Item{run("old"), run("aaa"), queued}, "aaa", true},
 		// #8913: what comes after the run's prompt goes on with the run.
-		"later plain prompt":   {[]proto.Item{user(marker("aaa")), reply, user("📋 督办：check the PR")}, "aaa", true},
-		"woken by its notice":  {[]proto.Item{user(marker("aaa")), reply, woke, reply}, "aaa", true},
-		"another chat's words": {[]proto.Item{user(marker("aaa")), reply, peer, reply}, "aaa", true},
-		"queued run prompt":    {[]proto.Item{user(marker("old")), reply, user("busy"), queuedRun}, "aaa", true},
-		"next run's prompt":    {[]proto.Item{user(marker("old")), reply, user("📋 督办"), reply, user(marker("aaa"))}, "old", false},
-		"in no prompt here":    {[]proto.Item{user(marker("aaa")), reply, user("x")}, "bbb", false},
+		"later plain prompt":   {[]proto.Item{run("aaa"), reply, user("📋 督办：check the PR")}, "aaa", true},
+		"woken by its notice":  {[]proto.Item{run("aaa"), reply, woke, reply}, "aaa", true},
+		"another chat's words": {[]proto.Item{run("aaa"), reply, peer, reply}, "aaa", true},
+		"queued run prompt":    {[]proto.Item{run("old"), reply, user("busy"), queuedRun}, "aaa", true},
+		"next run's prompt":    {[]proto.Item{run("old"), reply, user("📋 督办"), reply, run("aaa")}, "old", false},
+		"in no prompt here":    {[]proto.Item{run("aaa"), reply, user("x")}, "bbb", false},
 		"no items":             {nil, "aaa", false},
-		"prefix of the key":    {[]proto.Item{user(marker("aaab"))}, "aaa", false},
+		"prefix of the key":    {[]proto.Item{run("aaab")}, "aaa", false},
+		// #9043: only a prompt the hub sent for a run hands out a key, whatever else carries its words.
+		"the owner typed an earlier key":     {typed, "old", false},
+		"the run's own key after that":       {typed, "aaa", true},
+		"the owner pasted a run's line":      {[]proto.Item{run("aaa"), reply, user(runLineOf(hubRunPrompt("old", "")))}, "old", false},
+		"both runs' lines in one message":    {[]proto.Item{run("old"), reply, run("aaa"), reply, both}, "old", false},
+		"an app's message, whatever it says": {[]proto.Item{run("aaa"), reply, app}, "old", false},
+		"the owner quoted a run's prompt": {[]proto.Item{run("aaa"), reply, user(prompts.ProtectUserMessage(hubRunPrompt("old", "")))},
+			"old", false},
+		"another chat sent a run's prompt": {[]proto.Item{run("aaa"), reply, peerRun}, "old", false},
+		"an earlier key in the saved state": {[]proto.Item{run("old"), reply, user(hubRunPrompt("aaa", runLineOf(hubRunPrompt("old", ""))))},
+			"old", false},
+		"a run's line alone":                 {[]proto.Item{user(runLineOf(hubRunPrompt("aaa", "")))}, "aaa", false},
+		"an older run's template, no source": {[]proto.Item{legacy}, "aaa", true},
 	} {
 		if got := currentTaskStateRun(tc.items, tc.key); got != tc.want {
 			t.Errorf("%s: got %v, want %v", name, got, tc.want)
@@ -364,7 +385,7 @@ func TestTaskStateRunGoesOnAfterItsBackgroundWork(t *testing.T) {
 		idle := proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusDone, State: proto.StateUnread}
 		working := proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusWorking, State: proto.StateWorking}
 		items := []proto.Item{
-			{ID: "earlier", Role: "user", Kind: proto.KindText, Text: "⏰ Patrol" + taskStatePrompt(earlier)},
+			{ID: "earlier", Role: "user", Kind: proto.KindText, Text: hubRunPrompt(earlier.stateRunKey, "")},
 			{ID: "earlier-report", Role: "assistant", Kind: proto.KindText, Text: "New issue #100"},
 			{ID: "run", Role: "user", Kind: proto.KindText, Text: prompt},
 			{ID: "launch", Role: "assistant", Kind: proto.KindToolUse, ToolName: "Agent", ToolUseID: "toolu_a1"},
@@ -476,9 +497,7 @@ func TestTaskStateStagedBeforeTheStopIsSavedAtTheStop(t *testing.T) {
 
 func TestRunBackground(t *testing.T) {
 	user := func(text string) proto.Item { return proto.Item{Role: "user", Kind: proto.KindText, Text: text} }
-	prompt := func(key string) proto.Item {
-		return user("⏰ patrol（call schedule_state_set with run_key " + key + " and the updated state text）")
-	}
+	prompt := func(key string) proto.Item { return user(hubRunPrompt(key, "")) }
 	launched := func(id, text string) proto.Item {
 		return proto.Item{Role: "user", Kind: proto.KindToolResult, ToolUseID: id, Text: text}
 	}
@@ -504,6 +523,9 @@ func TestRunBackground(t *testing.T) {
 		"another run's work":    {[]proto.Item{prompt("old"), agent}, 0},
 		"no prompt":             {[]proto.Item{agent}, 0},
 		"after a later message": {[]proto.Item{prompt("k"), agent, user("📋 督办"), shell}, 2},
+		// #9043: the run starts at its prompt, not at a message that only carries a key's words.
+		"after the run's key typed": {[]proto.Item{prompt("k"), agent, user(typedRunKey("k")), shell}, 2},
+		"after another key typed":   {[]proto.Item{prompt("k"), agent, user(typedRunKey("old"))}, 1},
 	} {
 		if got := runBackground(tc.items, "k"); got != tc.want {
 			t.Errorf("%s: got %d, want %d", name, got, tc.want)

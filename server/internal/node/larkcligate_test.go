@@ -75,6 +75,11 @@ func TestLarkCLIGate(t *testing.T) {
 		{`lark-cli --profile other im +chat-list`, "deny"},
 		{`lark-cli im +chat-list --profile=other`, "deny"},
 		{`cat ~/.lark-cli/config.json`, "deny"},
+		// …nor through its environment variable, which the node sets to the manager's profile (#9123).
+		{`LARKSUITE_CLI_PROFILE=other lark-cli im +chat-list`, "deny"},
+		{`unset LARKSUITE_CLI_PROFILE; lark-cli im +chat-list`, "deny"},
+		{`env -u LARKSUITE_CLI_PROFILE lark-cli im +chat-list`, "deny"},
+		{`export LARKSUITE_CLI_PROFILE=other && timeout 30 lark-cli im +chat-list`, "deny"},
 		// A read's argument from a file: $(cat file) and $(< file), as $(head file) (#9101).
 		{`lark-cli im +chat-messages-list --chat-id "$(cat ids.txt)"`, "allow"},
 		{`lark-cli im +chat-messages-list --chat-id "$(< ids.txt)"`, "allow"},
@@ -263,6 +268,28 @@ func TestLarkCLIRiskLive(t *testing.T) {
 	} {
 		if got := risk(strings.Fields(cmd)); got != want {
 			t.Errorf("%s: lark-cli says %q, the gate expects %q", cmd, got, want)
+		}
+	}
+}
+
+// With lark.cli.profile set, the assistant's process gets LARKSUITE_CLI_PROFILE beside the wrapper: Claude Code's Bash
+// runs through the user's shell snapshot, whose PATH may find another lark-cli first, and lark-cli reads the variable
+// as --profile (#9123). Without a profile, nothing is set.
+func TestAssistantEnvNamesTheLarkCLIProfile(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	bin := filepath.Join(t.TempDir(), "lark-cli")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"work", ""} {
+		n := &Node{dir: t.TempDir(), larkCfgAt: time.Now(), logger: log.New(io.Discard, "", 0),
+			larkCfg: proto.AssistantLark{CLI: &proto.LarkCLI{Bin: bin, Profile: profile}}}
+		env, release := n.assistantLarkEnv(t.TempDir(), "")
+		release()
+		n.gates().close()
+		got, ok := envOf(env, larkProfileEnvName)
+		if profile != "" && got != profile || profile == "" && ok {
+			t.Fatalf("profile %q: %s=%q (set %v)", profile, larkProfileEnvName, got, ok)
 		}
 	}
 }
