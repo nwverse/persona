@@ -3873,7 +3873,7 @@ def day_publish(rid, repair=False, regenerate=True):
     name = rec.get("title") or "Day · " + rec["day"]
     summary = recap["summary"] if recap else ""
     entry = {"kind": "recordings", "id": rid, "name": name, "relevance": 0, "tags": [], "one_line": summary,
-             "updated": rec["started_at"]}
+             "updated": rec["started_at"], "recording_kind": "day"}  # #8870
     KB["recordings"] = [e for e in KB.get("recordings", []) if e["id"] != rid] + [entry]
     meta = {k: v for k, v in rec.items() if k != "segments"}
     meta.update(name=name, chars=sum(len(s["text"]) for s in rec["segments"]))
@@ -7321,7 +7321,8 @@ def recordings_route_locked(h, method, p):
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
-             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
+             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
+             "recording_kind": kind}  # #8870
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
