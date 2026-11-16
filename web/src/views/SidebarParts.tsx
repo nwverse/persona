@@ -9,6 +9,7 @@ import { useLarkHome } from "../lib/lark-chats";
 import { agentKey } from "../lib/pins";
 import { NAV_PAGES, extensionNavKey, sidebarActiveKey } from "../lib/persona-nav";
 import { arrangePages, useSidebarPrefs } from "../lib/sidebar-pages";
+import { useStartPageCheck } from "../lib/start-page";
 import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
@@ -90,8 +91,9 @@ export function useNavPages() {
   // "Messages" needs the hub to read Feishu (feature `lark`) as well as this browser's switch
   const larkHome = larkSwitch && lark;
   const extensionPages = useExtensionSlot("nav_page");
-  // off unless turned on in Settings › General › Agent (#2475)
-  const boardOn = useWorkspaceBoardSetting().enabled === true;
+  // off unless turned on in Settings › General › Agent (#2475); null until the hub answered
+  const board = useWorkspaceBoardSetting().enabled;
+  const boardOn = board === true;
 
   const main = assistant?.main ? assistant.conversations.find((c) => c.session_id === assistant.main) : undefined;
   const page: Record<(typeof NAV_PAGES)[number], NavPage | false> = {
@@ -120,6 +122,8 @@ export function useNavPages() {
 
   // as arranged in Settings › General › Sidebar pages: the list, and the pages that wait under More (docs/web/web.md "The sidebar's pages")
   const { shown: pages, more } = arrangePages(all, useSidebarPrefs());
+  // the start page this load opened on, if it is not there after all, gives way to the main chat (lib/start-page.ts)
+  useStartPageCheck((k) => all.some((p) => p.k === k), extensionPages, board !== null);
 
   return { phase, online, total, main, pages, more, all };
 }

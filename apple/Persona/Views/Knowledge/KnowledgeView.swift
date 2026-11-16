@@ -31,6 +31,8 @@ struct KnowledgeView: View {
     @State private var deletingProject: KBEntry?
     /// The recording a swipe asked to delete (its row shows the question), and why a delete failed (#8731).
     @State private var deletingRecording: UUID?
+    /// A recording row's recording while Rename is open (#8873).
+    @State private var renamingRecording: UUID?
     @State private var recordingFailure: String?
     /// Projects taken off the list while their deletion is sent.
     @State private var hiddenProjects: Set<String> = []
@@ -83,9 +85,13 @@ struct KnowledgeView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .alert("Couldn't Finish", isPresented: Binding(get: { recordingFailure != nil }, set: { if !$0 { recordingFailure = nil } })) {
             Button("OK [Recordings Section de32e2]") { recordingFailure = nil }.lineLimit(1)
         } message: { Text(recordingFailure ?? "") }
+        #if os(iOS) || os(visionOS)
+        .recordingRename($renamingRecording)
+        #endif
         #if os(macOS)
         .modifier(MacBelowTitleRowIfAsked()) // under Knowledge's title in the window: the list starts below it (#1243)
         #endif
@@ -317,6 +323,13 @@ struct KnowledgeView: View {
             if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingDetailView(id: id) }
         } label: { KBRow(entry: e) }
             .accessibilityIdentifier("kb.recording")
+            // Rename (#8873): a touch and hold, and VoiceOver's actions; not a day, named by its date.
+            .contextMenu {
+                if RecordingLibrary.shared.entry(id)?.isDay == false {
+                    Button { renamingRecording = id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
+                }
+            }
+            .accessibilityAction(named: Text("Rename")) { if RecordingLibrary.shared.entry(id)?.isDay == false { renamingRecording = id } }
             .confirmationDialog("Delete This Recording?", isPresented: Binding(get: { deletingRecording == id }, set: { if !$0, deletingRecording == id { deletingRecording = nil } }),
                                 titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {

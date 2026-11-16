@@ -906,12 +906,15 @@ iPhone's side comes next.
   there (to its own relay for the relay): `use` with what the phone has of each, and nothing more goes out on it until
   the node's `resumed` says what the node has; each side then sends on from there, so RFB loses and repeats nothing,
   and a stale video backlog is dropped for a keyframe on the node's side. A direct route that fails, or stays silent for
-  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A relay
+  1.5 s with a ping out, puts the channels back on their relays at once (the node does the same on its side). A direct
+  connection whose attach isn't answered within 3 s (`attachWithin`) is lost too, so the route is dialed again (#9218:
+  a redial whose answer went missing used to stay, never pinged, and kept the stream on the relay for good). A relay
   that drops while a direct route carries the session doesn't end it: the session asks the app to open the relay again
   (`attach=1`), which attaches with the token and is the channel's relay again, so the hub keeps the last word. A new
   video stream joins the route in use. Each move is a `PathChange` (the stream's first route is one too, `start`):
   `ScreenVideoLink` sends `update.path` to Persona Screen, keeps it as `route` and calls `onPathChange`, the quality
-  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses.
+  tiers' hook (#6396). Logs (category `screen-link`) carry route kinds and reasons, never addresses: dials that
+  connect or fail ("direct lan: connected" / "no connection"), routes lost ("direct lan: lost"), and moves.
 - **Rejoining**: a relay that dropped while the session went on (a hub restart, the phone changing networks) is opened
   again with the same `pair` and `attach=1`; the node attaches it to the live session instead of dialing Screen Sharing
   or starting Persona Screen again (`session_gone`, 410 at the hub, when there is none). The phone then sends `use`.
@@ -1150,8 +1153,14 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   it are dropped. A new size or frame rate starts new processes. Refinement stays VideoToolbox's: x264 already encodes
   at a constant quality.
 - **Falling back**, for the rest of the stream: ffmpeg can't start (`unavailable`); it ends, or puts out something
-  that isn't the next frame (`failed`); any frame takes over 50 ms, more than 10% of the last 2 s's frames take over
-  8 ms (a process's first frame aside), or a frame is still inside after 200 ms (`slow`); a report cuts the bitrate or
+  that isn't the next frame (`failed`); any frame takes over 50 ms of its own, more than 10% of the last 2 s's frames
+  take over 8 ms of their own, judged once there are 60 of them, or a frame is still inside after 200 ms (`slow`). A
+  process's first frame counts for none of these, and its next 30 (its warm-up: x264's threads starting, the
+  capture's fresh buffers) only for the 50 ms bound; the reason in the log names the frame, the share and the
+  window's median and maximum. A
+  frame's own time starts when ffmpeg could start on it (it came in and the frame before it was out): frames that
+  waited behind a cold process's first one (30–40 ms) are not slow themselves, which on the first real session they
+  were (x264 stopped a fraction of a second in); a report cuts the bitrate or
   skips frames (`congested`: VideoToolbox can lower its bitrate as it runs, ffmpeg can't).
 - **Connection Stats** (iPhone): a line under the codec line reads "Encoder x264" while x264 encodes (on the codec
   line it would widen the panel past the screen at the larger text sizes); with x264 on for the Mac but not encoding,
@@ -1159,10 +1168,76 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   up", "… the network was busy", "… ffmpeg stopped", or "x264 isn't available on this Mac"). Screenshots:
   `-showScreenStatsDemo` with `-showScreenX264Demo` or `-showScreenX264OffDemo` (`VNCTests.testTheOverlayNamesTheEncoder`);
   the switch: `ComputerSectionTests.testX264AsksFirst` with the mock's `MOCK_SCREEN_X264=1`.
+- **Log**: the helper writes x264's starts ("x264 on: 1920x1080 at 60 fps, 8 threads, …"), why it isn't used ("x264
+  not used: route …") and why it stopped ("x264 off: slow: frame 12: 61.0 ms on its own") to the Mac's unified log:
+  `log show --predicate 'subsystem == "persona-screen" AND category == "x264"'` (its stderr goes nowhere under
+  LaunchServices).
 - **Verifying**: `PERSONA_TEST_FFMPEG=/opt/homebrew/bin/ffmpeg swift test --filter X264` in
   `apple/Packages/PersonaScreenCore` (encodes, decodes with VideoToolbox as the phone does, a keyframe from the spare)
   and `PERSONA_TEST_FFMPEG=… go test -run 'X264|FFmpeg' ./internal/node/` (the probe on the real thing). Without the
   variable both skip the parts that need ffmpeg.
+
+### Phone Screen (#9314)
+
+A third mode next to Mouse Mode and Trackpad Mode: the Mac gets a portrait virtual display shaped like the phone's
+picture, the window the phone picks fills it, and the phone switches windows from a list. Text reads at phone size
+without zooming. For people who already work on their Mac from the live screen; Mouse Mode stays the default.
+The approach and its measurements of macOS follow [Snug](https://github.com/zephyr4123/snug) (MIT; code adapted from it
+keeps its notice, `THIRD_PARTY_NOTICES.md`). Phase 1 (this section) is the Mac, the node and the manager; the iPhone's
+mode, window sheet and gestures come next on the same issue.
+
+- **Who does what**: Persona Input (Persona Link's helper that already holds Accessibility for pixel scrolling) runs a
+  session, `--socket <path> --token <t> --phone-screen`, started by the node like its scroll session. Moving other apps'
+  windows needs Accessibility (`AXIsProcessTrusted`), which the same System Settings switch gives it. `--preflight`
+  prints a second line, `phone_screen: <version> granted|missing`; a helper from before prints none, and the node then
+  offers nothing.
+- **The virtual display** (`PhoneScreenDisplay.swift`, the sizes in `PersonaInputKit`'s `PhoneScreenFit`): private
+  `CGVirtualDisplay`, portrait, aspect = the picture's height / width (clamped 1…2.2). macOS offers a 2× desktop mode only
+  from 540 × 800 points, so the base width is 540 (wider for a short picture); every 10 points up to 1080 is a mode of the
+  same aspect, HiDPI on, so a window with a large minimum size gets a wider mode and the picture only scales. Three fixed
+  identities (vendor, product, serial), so ColorSync keeps one profile. A new display comes online at the mode macOS
+  remembers for it (the first time 1080 wide at 1×), so the helper switches it to the base width at 2× and places it.
+- **Switching modes from a child**: a short-lived run of the helper's own binary (`--phone-screen-set`, `-mode`, `-has`)
+  does every mode switch and move. A process that switched a virtual display's mode itself keeps it online about 40 s
+  after letting it go (Snug); switched from a child, it went offline 0.02 s after release here. The helper also can't read
+  the modes of a display that appeared after it started, so its size comes from `CGDisplayBounds` and a child checks that
+  a new mode is listed.
+- **Where it goes**: against the main display on the first side with room (right, left, below, above), aligned to main's
+  top or left edge (`PhoneScreenPlacement`), because of how Screen Sharing lays out displays of different scales (next).
+- **Framebuffer layout** (measured on macOS 26.6 with one 1920 × 1080 1× display and a 540 × 950 pt 2× virtual one):
+  Screen Sharing draws each display at its own pixel size, so the framebuffer was 3000 × 1900, not the displays' point
+  box (2460 × 1080). Five placements (left, right, below, above, offset) all fit one rule: the edge of a display that
+  touches the main display sits at main's pixel coordinate, and the display extends by its own pixels. A 540 × 1021 pt
+  display right of main gave 3000 × 2042, as the rule says. The node's `displays[]` carry `scale` (AppKit's
+  `backingScaleFactor`) so the phone can apply it.
+- **Other displays and windows stay put**: before adding and after removing, the helper records the other displays' modes
+  and the frames of every window on screen; once the virtual display is offline it sets back any mode macOS changed (it
+  applies the modes it remembers per combination of displays) and moves back windows that moved.
+- **Windows** (`PhoneScreenSession.swift`, `PhoneScreenAX.swift`): the list is the standard windows of apps in the Dock
+  (Accessibility, minimized ones included), front to back as on screen. Placing a window writes where it was (frame,
+  minimized, full screen) to `~/.persona/phone-screen.json` first (no record, no move), takes it out of full screen or the
+  Dock, sets size, position, size and checks (up to 10 tries; the same frame twice means the app or the menu bar holds it
+  there), takes a wider mode when the app's minimum size is larger, and brings it to the front through Accessibility's
+  `AXFrontmost` (macOS 14 and later ignore `activate()` from a helper in the background). Placing another window puts the
+  previous one back. Every Accessibility call waits at most 1 s for an app that hangs. A session that died leaves records,
+  and the next one puts those windows back before anything else.
+- **Ending**: when the node closes the socket (the phone sent `stop`, its RFB stream ended, or the node went away) or the
+  helper gets SIGTERM, it puts every window back, lets the display go, waits until it is offline and sets back what moved.
+  A display let go while the Mac's monitor sleeps goes offline only when it wakes (Snug).
+- **Node** (`phonescreen.go`): `screen.phone {pair, op, width, height, pid, window}` with `op` start, windows, place or
+  stop. Like the video channel it needs the RFB stream carrying `pair` open and signed in (`not_signed_in`), allows one
+  session per Mac (`busy` for another pair), and attaches the session to that stream, so it ends when the stream does.
+  Requests go to the helper one at a time; one that takes longer than its limit (start 30 s, place 30 s, windows 15 s)
+  ends the session. The statuses carry `phone_screen {version, permission}` from the cached `--preflight`.
+- **Manager**: `POST /api/v1/machines/{mid}/computer/phone-screen` (protocol.md), with the clipboard's gate. Window titles
+  are never logged.
+- **Measured on a Mac** (macOS 26.6, 2026-11-16, a node stand-in driving the signed helper): start 1.7–2.1 s to a 540 ×
+  1021 pt display at 2×; place 0.6–0.9 s; switching windows put the previous one back; stop 0.9 s, after which the display
+  was gone, the main display's mode unchanged and none of 180 windows had moved.
+- **Known limits**: `CGVirtualDisplay` is private and may change with macOS. On a Mac with no display attached any added
+  display replaces the default one (Snug). Windows in another Space or in full screen in their own Space are not listed
+  yet. With displays of mixed scales chained away from the main display, RFB may still not find the virtual display
+  (video captures it by id either way).
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 

@@ -1,3 +1,4 @@
+import PersonaWire
 import SwiftUI
 
 /// New conversations inherit their effective model. A missing catalog is unknown, not proof that a saved effort is invalid.

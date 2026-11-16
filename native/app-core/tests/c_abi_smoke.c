@@ -1,8 +1,12 @@
-// An independently compiled C consumer of the checked-in C header (#8560, #8912).
+// An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017, #9241).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
-// answer + display_answer (15 + 8 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
-// overlay applied here, never in the core) and task_index (5 complete expected objects plus the background receipt).
+// answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
+// overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
+// viewed_images (ordinary post-overlay plus source-derived folded expected objects).
+// The stream_repair replay (22 fence + 19 marker/boundary + 39 table/boundary complete objects) mirrors the Apple
+// Swift assertions and existing JNI-derived boundaries. Expectations are independently transcribed from Apple
+// tests/source and that replay, never derived from the Rust output. Every object compares both `repaired` and `end`.
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
 // compact separators), so object key order is insignificant while every value, array order and Unicode string is exact.
 // Malformed inputs must return an empty buffer and a deliberately wrong expectation must be detected, per domain.
@@ -461,6 +465,27 @@ static JValue *jbool_value(int value) {
     return v;
 }
 
+static JValue *jnumber(long value) {
+    char text[32];
+    snprintf(text, sizeof(text), "%ld", value);
+    JValue *v = jnew(J_NUMBER);
+    if (!v) return NULL;
+    size_t length = strlen(text);
+    v->u.number.text = malloc(length + 1);
+    if (!v->u.number.text) { jfree(v); return NULL; }
+    memcpy(v->u.number.text, text, length + 1);
+    v->u.number.length = length;
+    return v;
+}
+
+static void jpush(JValue *array, JValue *value) {
+    if (!array || array->kind != J_ARRAY || !value) { jfree(value); return; }
+    JValue **items = realloc(array->u.array.items, (array->u.array.count + 1) * sizeof(*items));
+    if (!items) { jfree(value); return; }
+    array->u.array.items = items;
+    array->u.array.items[array->u.array.count++] = value;
+}
+
 static JValue *jclone(const JValue *v) {
     if (!v) return NULL;
     JValue *copy = jnew(v->kind);
@@ -748,6 +773,187 @@ static void check_stream(const char *fixtures) {
     printf("c-abi: stream_chunks %zu/21 complete expected objects\n", replayed);
 }
 
+/* ---------- stream_repair ---------- */
+
+/* The Apple StreamRepairTests assertions and existing JNI-derived boundaries are independently transcribed from
+ * apple/Packages/PersonaKit/Tests/PersonaKitTests/StreamRepairTests.swift, its StreamRepair.swift implementation and
+ * StreamRepairBindingFixtureTest, never from Rust output. `prefix` is JNI-derived, not an Apple test assertion.
+ * Every case carries the complete {repaired, end} object. Apple test assertions are named where they directly apply;
+ * source-derived end values and the JNI whitespace/digit boundaries are not presented as executed Apple assertions. */
+typedef struct {
+    const char *input;
+    const char *repaired;
+    const char *end;
+    const char *source;
+} RepairCase;
+
+static JValue *repair_input(const char *text) {
+    JValue *input = jnew(J_OBJECT);
+    jset(input, "text", jstring(text));
+    return input;
+}
+
+static JValue *repair_expected(const char *repaired, const char *end) {
+    JValue *expected = jnew(J_OBJECT);
+    jset(expected, "repaired", jstring(repaired));
+    jset(expected, "end", jstring(end));
+    return expected;
+}
+
+static void expect_different_repair_object(JValue *actual, JValue *wrong, const char *surface, const char *mutation) {
+    if (!actual || !wrong || jequal(actual, wrong)) fail("stream_repair", surface, mutation);
+    jfree(wrong);
+}
+
+static size_t replay_complete_repairs(const RepairCase *cases, size_t count, const char *surface) {
+    size_t matched = 0;
+    for (size_t i = 0; i < count; i++) {
+        JValue *input = repair_input(cases[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        JValue *expected = repair_expected(cases[i].repaired, cases[i].end);
+        if (!input || !expected || jcount(expected) != 2 || !actual) {
+            fail("stream_repair", cases[i].source, "empty projection or incomplete expected object");
+        } else if (!jequal(actual, expected)) {
+            fail("stream_repair", cases[i].source, "complete {repaired, end} object differs");
+        } else {
+            matched++;
+        }
+        if (i == 0 && actual && expected) {
+            JValue *wrong_end = jclone(expected);
+            jset(wrong_end, "end", jstring("not-an-end"));
+            expect_different_repair_object(actual, wrong_end, surface, "wrong end compared equal");
+
+            JValue *wrong_repaired = jclone(expected);
+            jset(wrong_repaired, "repaired", jstring("deliberately wrong repaired text"));
+            expect_different_repair_object(actual, wrong_repaired, surface, "wrong repaired compared equal");
+
+            JValue *extra_field = jclone(expected);
+            jset(extra_field, "extra", jnew(J_BOOL));
+            expect_different_repair_object(actual, extra_field, surface, "extra field compared equal");
+        }
+        jfree(expected);
+        jfree(actual);
+        jfree(input);
+    }
+    return matched;
+}
+
+static void check_stream_repair(void) {
+    /* 22 fence expectations (21 repair inputs plus the additional `let a` end input); prefix is JNI-derived. */
+    static const RepairCase fence[] = {
+        {"text\n```ts\nconst a", "text\n```ts\nconst a\n```", "code", "closesAnOpenCodeFenceWithItsOwnMarker"},
+        {"~~~~\nx\n", "~~~~\nx\n~~~~", "code", "closesAnOpenCodeFenceWithItsOwnMarker"},
+        {"```\na\n```\ndone", "```\na\n```\ndone", "text", "closesAnOpenCodeFenceWithItsOwnMarker"},
+        {"看这段：\n```swi", "看这段：\n", "code", "holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole"},
+        {"```mermaid", "", "code", "holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole"},
+        {"看这段：\n```swift\n", "看这段：\n```swift\n```", "code", "holdsAFencesOpeningLineBackUntilItsInfoStringIsWhole"},
+        {"```\nlet a = 1\n``", "```\nlet a = 1\n```", "code", "holdsAHalfWrittenClosingRunBack"},
+        {"````\nx\n```", "````\nx\n````", "code", "holdsAHalfWrittenClosingRunBack"},
+        {"````\nx\n```\n", "````\nx\n```\n````", "code", "holdsAHalfWrittenClosingRunBack"},
+        {"prefix\n````\nx\n```\n", "prefix\n````\nx\n```\n````", "code", "JNI-derived prefix + partial closer"},
+        {"```\n**x [a](b", "```\n**x [a](b\n```", "code", "changesNothingInsideAFenceButItsEnd"},
+        {"```\n-", "```\n-\n```", "code", "changesNothingInsideAFenceButItsEnd"},
+        {"1. 安装依赖：\n\n   ```bash\n   npm install", "1. 安装依赖：\n\n   ```bash\n   npm install\n   ```", "code", "closesAFenceInTheListItemItOpenedIn"},
+        {"1. 安装依赖：\n   ```bash\n   npm install\n", "1. 安装依赖：\n   ```bash\n   npm install\n   ```", "code", "closesAFenceInTheListItemItOpenedIn"},
+        {"- 运行：\n  ~~~\n  make", "- 运行：\n  ~~~\n  make\n  ~~~", "code", "closesAFenceInTheListItemItOpenedIn"},
+        {"- 运行：\n  ```\n  make\n  ``", "- 运行：\n  ```\n  make\n  ```", "code", "closesAFenceInTheListItemItOpenedIn"},
+        {"```\na\n  ", "```\na\n```", "code", "leavesOutALineOfOnlyIndentationSoFar"},
+        {"这是 **重要", "这是 **重要**", "text", "closesWhatTheGrowingLineLeavesOpen (#9286)"},
+        {"```swift\nlet a\n```", "```swift\nlet a\n```", "code", "tellsWhereTheTextEnds"},
+        {"```swift\nlet a\n```\n", "```swift\nlet a\n```\n", "text", "tellsWhereTheTextEnds"},
+        {"```swift\nlet a", "```swift\nlet a\n```", "code", "tellsWhereTheTextEnds"},
+        {"", "", "text", "tellsWhereTheTextEnds"},
+    };
+    /* 14 original marker expectations plus five existing JNI digit / leading-blank-line boundaries. */
+    static const RepairCase marker[] = {
+        {"- 第一项\n-", "- 第一项\n", "text", "Apple markersOnly"},
+        {"- 第一项\n- ", "- 第一项\n", "text", "Apple markersOnly"},
+        {"1. 第一步\n2.", "1. 第一步\n", "text", "Apple markersOnly"},
+        {"1. 第一步\n12", "1. 第一步\n", "text", "Apple markersOnly"},
+        {"正文\n##", "正文\n", "text", "Apple markersOnly"},
+        {"正文\n>", "正文\n", "text", "Apple markersOnly"},
+        {"标题\n---", "标题\n", "text", "Apple markersOnly"},
+        {"- [ ]", "", "text", "Apple markersOnly"},
+        {"**", "", "text", "Apple markersOnly"},
+        {"- 第", "- 第", "text", "Apple markersOnly control"},
+        {"2026年", "2026年", "text", "Apple markersOnly control"},
+        {"1.5 倍", "1.5 倍", "text", "Apple markersOnly control"},
+        {"-\n", "-\n", "text", "leavesALineThatHasEnded"},
+        {"正文\n---\n", "正文\n---\n", "text", "existing JNI ended-line control"},
+        {"1234567890", "1234567890", "text", "existing JNI ten-digit boundary"},
+        {"- 12", "- 12", "text", "existing JNI marker-prefixed digits"},
+        {"\xef\xbc\x91\xef\xbc\x92", "\xef\xbc\x91\xef\xbc\x92", "text", "existing JNI full-width digits"},
+        {"\n-", "\n", "text", "existing JNI leading blank line"},
+        {"\n##", "\n", "text", "existing JNI leading blank line"},
+    };
+    /* 22 Apple table-repair expectations from holdsATablesHalfWrittenLastRowBack, givesATableHeaderItsDelimiterRowEarly,
+     * findsATableRightUnderAParagraphLine, keepsATableInTheListItemItIsIn and findsNoTableInALazyLine, plus the
+     * existing JNI/Foundation .whitespaces boundaries and the matching paragraph-separator boundary. */
+#define TABLE_HEAD "| 文件 | 改动 |\n| --- | --- |\n| a.swift | 刷新 |\n"
+    static const RepairCase table[] = {
+        {TABLE_HEAD "| b.swi", TABLE_HEAD, "table", "half-written last row"},
+        {TABLE_HEAD "| b.swift | 超时 |\n", TABLE_HEAD "| b.swift | 超时 |\n", "table", "finished last row"},
+        {"| 文件 | 改", "| 文件 | 改", "text", "unfinished header"},
+        {"Use a | b\n| not a table", "Use a | b\n| not a table", "text", "pipe in prose"},
+        {"| 文件 | 改动 |\n", "| 文件 | 改动 |\n| --- | --- |", "table", "early delimiter"},
+        {"| a | b |\n| --", "| a | b |\n| --- | --- |", "table", "partial delimiter"},
+        {"| a | b |\n|", "| a | b |\n| --- | --- |", "table", "partial delimiter"},
+        {"## 结果\n| a | b | c |\n", "## 结果\n| a | b | c |\n| --- | --- | --- |", "table", "heading + header"},
+        {"| a | b |\n| :-- | --: |", "| a | b |\n| :-- | --: |", "table", "aligned delimiter"},
+        {"| 不是表格\n", "| 不是表格\n", "text", "prose pipe row"},
+        {"| x |\n| a | b |\n", "| x |\n| a | b |\n", "text", "pipe row under pipe row"},
+        {"**结果：**\n| a | b |\n", "**结果：**\n| a | b |\n| --- | --- |", "table", "paragraph + header"},
+        {"**结果：**\n| a | b |\n| --", "**结果：**\n| a | b |\n| --- | --- |", "table", "paragraph + delimiter"},
+        {"**结果：**\n| a | b |\n| --- | --- |\n| 1", "**结果：**\n| a | b |\n| --- | --- |\n", "table", "Apple repair/end"},
+        {"- 项\n\n  | a | b |\n", "- 项\n\n  | a | b |\n  | --- | --- |", "table", "Apple list table/end"},
+        {"1. 项\n   | a | b |\n   | -", "1. 项\n   | a | b |\n   | --- | --- |", "table", "ordered list table"},
+        {"- 项\n  | a | b |\n  | --- | --- |\n  | 1", "- 项\n  | a | b |\n  | --- | --- |\n", "table", "Apple list repair/end"},
+        {"- 项\n\n  | a | b |\n  | --- | --- |\n  ", "- 项\n\n  | a | b |\n  | --- | --- |\n", "table", "Apple list repair/end"},
+        {"- 项\n| a | b |\n", "- 项\n| a | b |\n", "text", "lazy list continuation"},
+        {"- a\n  - b\n  | x |\n", "- a\n  - b\n  | x |\n", "text", "lazy list continuation"},
+        {"> 引用\n| a | b |\n", "> 引用\n| a | b |\n", "text", "quote continuation"},
+        {"- 项\n| a | b |\n| --- | --- |\n| 1", "- 项\n| a | b |\n| --- | --- |\n| 1", "text", "Apple lazy repair/end"},
+        {"**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", "**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", "table", "Apple finished table end"},
+        {"| a | b |\n| --- | --- |\nfoo", "| a | b |\n| --- | --- |\nfoo", "table", "Apple row without pipes"},
+        {"| a | b |\n| --- | --- |\n- 项", "| a | b |\n| --- | --- |\n- 项", "text", "Apple block after table"},
+        {"- 项\n\n  | a | b |\n  ", "- 项\n\n  | a | b |\n  | --- | --- |", "table", "Apple indented table end"},
+        {"| a | b |\n| --- | --- |\n| 1", "| a | b |\n| --- | --- |\n", "table", "tellsWhereTheTextEnds"},
+        {"| a | b |\n| --- | --- |\n| 1 | 2 |\n", "| a | b |\n| --- | --- |\n| 1 | 2 |\n", "table", "tellsWhereTheTextEnds"},
+        {"| a | b |\n", "| a | b |\n| --- | --- |", "table", "tellsWhereTheTextEnds"},
+        {"| a | b |\n| -", "| a | b |\n| --- | --- |", "table", "tellsWhereTheTextEnds"},
+        {"| a | b", "| a | b", "text", "tellsWhereTheTextEnds"},
+        {"| a | b |\n| --- | --- |\n\n后文", "| a | b |\n| --- | --- |\n\n后文", "text", "tellsWhereTheTextEnds"},
+        {"| a |\n| -\r |\n| x", "| a |\n| -\r |\n| x", "text", "existing JNI CR delimiter"},
+        {"| a |\n| -\x0b |\n| x", "| a |\n| -\x0b |\n| x", "text", "existing JNI vertical-tab delimiter"},
+        {"| a |\n| -\t |\n| x\n", "| a |\n| -\t |\n| x\n", "table", "existing JNI tab delimiter"},
+        {"| a |\n| -\xc2\xa0 |\n| x\n", "| a |\n| -\xc2\xa0 |\n| x\n", "table", "existing JNI NBSP delimiter"},
+        {"| a |\n| -\xc2\x85 |\n| x", "| a |\n| -\xc2\x85 |\n| x", "text", "existing JNI NEL delimiter"},
+        {"| a |\n| -\xe2\x80\xa8 |\n| x", "| a |\n| -\xe2\x80\xa8 |\n| x", "text", "existing JNI line-separator delimiter"},
+        {"| a |\n| -\xe2\x80\xa9 |\n| x", "| a |\n| -\xe2\x80\xa9 |\n| x", "text", "Apple-source paragraph-separator boundary"},
+    };
+    size_t fence_matched = replay_complete_repairs(fence, sizeof(fence) / sizeof(fence[0]), "fence");
+    size_t marker_matched = replay_complete_repairs(marker, sizeof(marker) / sizeof(marker[0]), "marker");
+    size_t table_matched = replay_complete_repairs(table, sizeof(table) / sizeof(table[0]), "table");
+    if (fence_matched != 22) fail("stream_repair", "manifest", "expected exactly 22 complete fence objects");
+    if (marker_matched != 19) fail("stream_repair", "manifest", "expected exactly 19 complete marker objects");
+    if (table_matched != 39) fail("stream_repair", "manifest", "expected exactly 39 complete table objects");
+    /* Malformed inputs must produce an empty buffer. */
+    expect_empty(persona_core_project_stream_repair, "stream_repair", "wrong_schema", "{\"invalid\":true}");
+    expect_empty(persona_core_project_stream_repair, "stream_repair", "invalid_json", "not JSON");
+    /* A deliberately wrong fence expectation must not compare equal. */
+    {
+        JValue *input = repair_input("text\n```ts\nconst a");
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        JValue *wrong = repair_expected("text\n```ts\nconst a\n~~~", "text");
+        if (jequal(actual, wrong)) fail("stream_repair", "fence_negative", "a wrong fence expectation compared equal");
+        jfree(wrong);
+        jfree(actual);
+        jfree(input);
+    }
+    printf("c-abi: stream_repair %zu/22 fence + %zu/19 marker/boundary + %zu/39 table/boundary complete objects\n",
+           fence_matched, marker_matched, table_matched);
+}
+
 /* ---------- answer + display_answer ---------- */
 
 static const char *const question_manifest[] = {
@@ -760,6 +966,7 @@ static const char *const question_manifest[] = {
 
 static const char *const recommended_manifest[] = {
     "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
+    "recommended_corefoundation_boundary",
     "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
     "recommended_trims_prefix_space", "recommended_unspaced",
 };
@@ -1066,7 +1273,7 @@ static void check_turns(const char *fixtures) {
     }
     if (corpus != 61) fail("turns", "manifest", "the corpus must hold exactly 61 cases including the four operation ones");
     if (replayed != 57) fail("turns", "manifest", "exactly 57 static cases must replay");
-    if (turn_objects != 62) fail("turns", "manifest", "the 54 non-empty cases must hold 62 complete turn objects");
+    if (turn_objects != 73) fail("turns", "manifest", "the 54 non-empty cases must hold 73 complete turn objects");
     printf("c-abi: turns %zu/57 static cases, %zu complete turn objects, overlay applied client-side\n", replayed, turn_objects);
 
     if (plain_input) {
@@ -1163,6 +1370,221 @@ static void check_task_index(const char *fixtures) {
     expect_empty(persona_core_project_task_index, "task_index", "invalid_json", "not JSON");
 }
 
+/* ---------- production WebSocket Envelope scalars (#8995) ---------- */
+
+static void check_transport_envelope(const char *fixtures) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/wire-envelope/frames.json", fixtures);
+    JValue *doc = load_json(path);
+    const JValue *cases = jget(doc, "cases");
+    if (!cases) fail("transport", "manifest", "missing #8955 fixture");
+    static const char *const expected[][3] = {
+        {"items_wrong_other_event_key_drops_event", "wrong_type", "rows"},
+        {"hello_wrong_features_type_drops_event", "wrong_type", "features"},
+        {"hello_rows_must_be_integer", "wrong_type", "rows"},
+        {"hello_non_object_is_not_an_event", "not_object", ""},
+        {"unknown_type_still_checks_known_keys", "wrong_type", "features"},
+        {"missing_type_is_dropped", "missing_key", "type"},
+        {"null_type_is_dropped", "missing_key", "type"},
+        {"numeric_type_is_dropped", "wrong_type", "type"},
+        {"items_missing_machine_id_drops_event", "missing_key", "machine_id"},
+        {"items_missing_session_id_drops_event", "missing_key", "session_id"},
+        {"items_from_seq_must_be_integer", "wrong_type", "from_seq"},
+        {"items_backlog_must_be_boolean", "wrong_type", "backlog"},
+        {"mesh_wrong_outer_key_type_drops_event", "wrong_type", "build"},
+        {"inbox_wrong_items_type_drops_event", "wrong_type", "items"},
+        {"unknown_type_wrong_backlog_drops_event", "wrong_type", "backlog"},
+        {"hello_wrong_from_seq_drops_event", "wrong_type", "from_seq"},
+        {"hello_wrong_build_type_drops_event", "wrong_type", "build"},
+        {"inbox_shared_scalars_check_even_when_unused", "wrong_type", "machine_id"},
+        {"items_data_must_be_string_or_null", "wrong_type", "data"},
+        {"screen_numeric_status_drops_event", "wrong_type", "status"},
+    };
+    size_t replayed = 0;
+    for (size_t i = 0; i < jcount(cases); i++) {
+        const JValue *c = jat(cases, i);
+        const char *name = jstr(jget(c, "name"));
+        const char *outcome = jstr(jget(jget(c, "expected"), "outcome"));
+        if (!name || !outcome || strcmp(outcome, "dropped") != 0) continue;
+        // Only the shared scalar cases belong to #8995. Full Item / Fleet / other event routing is out of scope.
+        if (strncmp(name, "items_missing_", 15) == 0 || strncmp(name, "inbox_fleet_", 12) == 0 ||
+            strcmp(name, "items_invalid_item_scalar_drops_event") == 0 ||
+            strcmp(name, "items_unprojected_number_never_panics") == 0 ||
+            strcmp(name, "fleet_requires_fleet_payload") == 0 ||
+            strcmp(name, "screen_missing_session_id_drops_event") == 0 ||
+            strcmp(name, "sessions_list_requires_revision") == 0) continue;
+        const JValue *expected_case = NULL;
+        for (size_t j = 0; j < sizeof(expected) / sizeof(expected[0]); j++) {
+            if (strcmp(name, expected[j][0]) == 0) { expected_case = c; break; }
+        }
+        if (!expected_case) {
+            char message[256];
+            snprintf(message, sizeof(message), "new shared-scalar dropped case is not placed: %s", name);
+            fail("transport", name, message);
+            continue;
+        }
+        JValue *actual = project_case(persona_core_transport_frame, jget(c, "input"));
+        const JValue *error = jget(actual, "error");
+        if (!error) { fail("transport", name, "wrong-known-key frame was not refused"); jfree(actual); continue; }
+        const char *code = jstr(jget(error, "code"));
+        const char *detail = jstr(jget(error, "detail"));
+        const char *expected_key = jstr(jget(jget(c, "expected"), "key"));
+        size_t j = 0;
+        while (j < sizeof(expected) / sizeof(expected[0]) && strcmp(name, expected[j][0]) != 0) j++;
+        if (!code || !detail || strcmp(code, expected[j][1]) != 0 ||
+            (expected_key ? strcmp(detail, expected_key) != 0 : detail[0] != 0))
+            fail("transport", name, "refusal code/key differs from the source-derived fixture");
+        jfree(actual);
+        replayed++;
+    }
+    if (replayed != sizeof(expected) / sizeof(expected[0]))
+        fail("transport", "manifest", "every named shared-scalar case must replay");
+    const char *mixed = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\",\"history\":\"\\ud83d\"}";
+    PersonaCoreBytes mixed_result = persona_core_transport_frame((const uint8_t *)mixed, strlen(mixed));
+    JValue *mixed_decoded = mixed_result.data && mixed_result.length ? json_parse(mixed_result.data, mixed_result.length) : NULL;
+    // Source-undetermined: the mixed rows/history input must be refused, never silently Other. Exact Foundation
+    // error priority is not asserted here; rows in isolation below has an unambiguous wrong_type expectation.
+    const char *mixed_code = jstr(jget(jget(mixed_decoded, "error"), "code"));
+    if (!mixed_code) fail("transport", "nested_malformed_scalar", "valid items must not hide another bad scalar");
+    jfree(mixed_decoded);
+    persona_core_bytes_free(mixed_result);
+    const char *rows = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\"}";
+    PersonaCoreBytes rows_result = persona_core_transport_frame((const uint8_t *)rows, strlen(rows));
+    JValue *rows_decoded = rows_result.data && rows_result.length ? json_parse(rows_result.data, rows_result.length) : NULL;
+    const char *rows_code = jstr(jget(jget(rows_decoded, "error"), "code"));
+    const char *rows_detail = jstr(jget(jget(rows_decoded, "error"), "detail"));
+    if (!rows_code || strcmp(rows_code, "wrong_type") != 0 || !rows_detail || strcmp(rows_detail, "rows") != 0)
+        fail("transport", "rows_type", "rows is Int? in LiveConnection.swift's Envelope");
+    jfree(rows_decoded);
+    persona_core_bytes_free(rows_result);
+    const char *other = "{\"type\":\"future_event\",\"unknown\":1.5}";
+    PersonaCoreBytes result = persona_core_transport_frame((const uint8_t *)other, strlen(other));
+    JValue *decoded = result.data && result.length ? json_parse(result.data, result.length) : NULL;
+    const char *frame = jstr(jget(decoded, "frame"));
+    if (!frame || strcmp(frame, "other") != 0) fail("transport", "unknown_event", "unknown type must remain Other");
+    jfree(decoded);
+    persona_core_bytes_free(result);
+    jfree(doc);
+    printf("c-abi: transport %zu shared-scalar refusals plus Other routing\n", replayed);
+}
+
+/* ---------- viewed images: real C ABI plus complete ordinary/folded expected objects ---------- */
+
+static JValue *named_case(const JValue *doc, const char *name) {
+    JValue *cases = jget(doc, "cases");
+    for (size_t i = 0; i < jcount(cases); i++) {
+        JValue *c = jat(cases, i);
+        const char *candidate = jstr(jget(c, "name"));
+        if (candidate && strcmp(candidate, name) == 0) return c;
+    }
+    return NULL;
+}
+
+static JValue *fold_image(const char *item_id, const char *tool_use_id, const char *tool, const char *source,
+                          const char *path, long size, long width, long height) {
+    JValue *image = jnew(J_OBJECT);
+    if (item_id) jset(image, "item_id", jstring(item_id));
+    jset(image, "tool_use_id", jstring(tool_use_id));
+    jset(image, "tool", jstring(tool));
+    jset(image, "source", jstring(source));
+    if (path) jset(image, "path", jstring(path));
+    jset(image, "mime", jstring("image/png"));
+    if (size > 0) jset(image, "size", jnumber(size));
+    if (width > 0) jset(image, "width", jnumber(width));
+    if (height > 0) jset(image, "height", jnumber(height));
+    return image;
+}
+
+static JValue *expected_viewed(const char *id, const char *const *ids, size_t count) {
+    JValue *expected = jnew(J_OBJECT);
+    jset(expected, "id", jstring(id));
+    JValue *images = jnew(J_ARRAY);
+    for (size_t i = 0; i < count; i++) jpush(images, jstring(ids[i]));
+    jset(expected, "image_ids", images);
+    jset(expected, "is_input", jbool_value(0));
+    jset(expected, "type", jstring("viewed"));
+    return expected;
+}
+
+static void check_viewed_images(const char *fixtures) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/lines/work.json", fixtures);
+    JValue *work = load_json(path);
+    JValue *tool = named_case(work, "tool_images_belong_to_call");
+    snprintf(path, sizeof(path), "%s/lines/ios/differences.json", fixtures);
+    JValue *overlay = load_json(path);
+    JValue *entry = named_case(overlay, "tool_images_belong_to_call");
+    const JValue *expected = NULL;
+    JValue *lines = jget(jget(entry, "replace"), "lines");
+    for (size_t i = 0; i < jcount(lines); i++) {
+        JValue *line = jat(lines, i);
+        const char *type = jstr(jget(line, "type"));
+        if (type && strcmp(type, "viewed") == 0) expected = line;
+    }
+    if (!tool || !expected) fail("viewed_images", "ordinary", "missing source input or complete post-overlay expected");
+    JValue *actual = project_case(persona_core_project_viewed_images, jget(tool, "input"));
+    if (!actual || !jequal(actual, expected)) {
+        fail("viewed_images", "tool_images_belong_to_call", "complete post-overlay viewed object differs");
+    }
+    if (actual && jequal(actual, jget(jget(tool, "expected"), "lines"))) {
+        fail("viewed_images", "overlay_shape", "compared a line with the whole lines array");
+    }
+    JValue *wrong = jclone(expected);
+    jset(wrong, "id", jstring("vi-fold:2#0"));
+    if (actual && jequal(actual, wrong)) fail("viewed_images", "wrong_expectation", "wrong owner compared equal");
+    jfree(wrong);
+    jfree(actual);
+
+    snprintf(path, sizeof(path), "%s/lines/folds.json", fixtures);
+    JValue *folds = load_json(path);
+    JValue *fold_case = named_case(folds, "fold_counts_tools_and_thoughts");
+    JValue *input = jclone(jget(fold_case, "input"));
+    JValue *items = jget(input, "items");
+    JValue *fold = NULL;
+    for (size_t i = 0; i < jcount(items); i++) {
+        JValue *item = jat(items, i);
+        const char *kind = jstr(jget(item, "kind"));
+        if (kind && strcmp(kind, "fold") == 0) fold = jget(item, "fold");
+    }
+    if (!fold) fail("viewed_images", "fold_input", "source fold not found");
+    JValue *images = jnew(J_ARRAY);
+    /* ViewedImagesTests.aFoldGivesTheSameStripAsItsWork is the independent source for these four FoldImage values. */
+    jpush(images, fold_image("5#0", "a", "Read", "read", "/w/shot.png", 100, 4, 3));
+    jpush(images, fold_image("8#0", "b", "mcp__persona__computer_state", "screenshot", NULL, 900, 16, 10));
+    jpush(images, fold_image(NULL, "d", "Read", "read", "/w/big.JPG", 0, 0, 0));
+    jpush(images, fold_image("20#0", "g", "mcp__persona__browser_look", "browser", NULL, 300, 8, 5));
+    jset(fold, "images", images);
+    JValue *fold_actual = project_case(persona_core_project_viewed_images, input);
+    static const char *const ids[] = {
+        "p:/w/shot.png", "s:image/png:900:16x10", "p:/w/big.JPG", "s:image/png:300:8x5",
+    };
+    JValue *fold_expected = expected_viewed("vi-1#0", ids, 4);
+    if (!fold_actual || !jequal(fold_actual, fold_expected)) {
+        fail("viewed_images", "folded_work", "complete source-derived folded viewed object differs");
+    }
+    JValue *wrong_fold = expected_viewed("vi-1#0", ids, 3);
+    if (fold_actual && jequal(fold_actual, wrong_fold)) {
+        fail("viewed_images", "fold_wrong_expectation", "incomplete expected compared equal");
+    }
+    jfree(wrong_fold);
+    jfree(fold_expected);
+    jfree(fold_actual);
+    jfree(input);
+    jfree(folds);
+
+    expect_empty(persona_core_project_viewed_images, "viewed_images", "wrong_schema", "{\"invalid\":true}");
+    expect_empty(persona_core_project_viewed_images, "viewed_images", "invalid_json", "not JSON");
+    expect_empty(persona_core_project_viewed_images, "viewed_images", "no_work", "{\"items\":[]}");
+    JValue *empty_fold_input = jclone(jget(fold_case, "input"));
+    JValue *empty_fold_actual = project_case(persona_core_project_viewed_images, empty_fold_input);
+    if (empty_fold_actual) fail("viewed_images", "no_fold_images", "fold without images returned a viewed line");
+    jfree(empty_fold_actual);
+    jfree(empty_fold_input);
+    jfree(overlay);
+    jfree(work);
+    puts("c-abi: viewed_images ordinary post-overlay and folded complete expected objects; negatives rejected");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: c_abi_smoke <spec/fixtures directory>\n");
@@ -1173,7 +1595,7 @@ int main(int argc, char **argv) {
         "sort/filters.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
         "lines/ios/differences.json", "lines/folds.json", "lines/frozen.json", "lines/layout.json",
         "lines/queued.json", "lines/rebuild.json", "lines/structure.json", "lines/tasks.json",
-        "lines/wakes.json", "lines/work.json",
+        "lines/wakes.json", "lines/work.json", "wire-envelope/frames.json",
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
         char path[4096];
@@ -1187,15 +1609,18 @@ int main(int argc, char **argv) {
     }
     check_sort(argv[1]);
     check_stream(argv[1]);
+    check_stream_repair();
     check_answer_file(argv[1], "questions.json", 0, 15);
-    check_answer_file(argv[1], "recommended.json", 1, 8);
+    check_answer_file(argv[1], "recommended.json", 1, 9);
     check_answer_boundaries();
     check_turns(argv[1]);
     check_task_index(argv[1]);
+    check_transport_envelope(argv[1]);
+    check_viewed_images(argv[1]);
     if (failures) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, stream_repair 80 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }

@@ -193,6 +193,8 @@ type Node struct {
 	cx        codexCards      // Codex questions and approvals listed to the hub (codexask.go)
 	kept      map[string]bool // sessions always listed (node.configure keep_sessions)
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
+	// ccPlugins: Persona's Claude Code plugin in the sessions outside Persona's terminals that loaded it (ccplugin.go).
+	ccPlugins ccPluginRegistry
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
 	starts     startLog       // sessions starting in the background (starting.go)
@@ -293,6 +295,8 @@ type Node struct {
 	larkCfg     proto.AssistantLark
 	larkCfgAt   time.Time
 	larkAllowed map[string]bool
+	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
+	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
@@ -329,6 +333,9 @@ type Node struct {
 	// inputs: pixel scrolling (#7775, inputhelper.go): on a Mac, each paired 5900 stream is read for the phone's scroll
 	// records, which go to Persona Input. nil elsewhere: the streams pass as they come.
 	inputs *screenInputs
+	// phones: Phone Screen (#9314, phonescreen.go): on a Mac, the one live screen whose phone shows a window on a virtual
+	// display, through Persona Input. nil elsewhere: screen.phone answers unavailable.
+	phones *phoneScreens
 }
 
 func New(version string) (*Node, error) {
@@ -385,8 +392,9 @@ func New(version string) (*Node, error) {
 		n.logger.Printf("machine uid: %v", err) // the hubs then treat this computer as theirs alone
 	}
 	if runtime.GOOS == "darwin" {
-		n.screenStart = n.startScreenHelper                                         // Persona Screen, the live screen's video helper (#3954)
-		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn} // Persona Input (#7775)
+		n.screenStart = n.startScreenHelper                                                                   // Persona Screen, the live screen's video helper (#3954)
+		n.inputs = &screenInputs{logf: n.logger.Printf, signed: n.screens.signedIn}                           // Persona Input (#7775)
+		n.phones = &phoneScreens{logf: n.logger.Printf, signed: n.screens.signedIn, attach: n.screens.attach} // Phone Screen (#9314)
 	}
 	n.links = screenlink.NewRegistry(screenlink.DefaultLimits, n.logger.Printf)
 	// Direct routes (#6398): a listener on this computer's LAN and Tailscale addresses, only while a screen session is
@@ -450,6 +458,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
+	go n.watchClaudePlugin(ctx) // claudeplugin.go
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
 	go n.runCodex(ctx)
 	var adopted []*assistantProc
@@ -492,6 +501,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
 	go n.modelRecoveryLoop(ctx)
+	go n.keepProbesFresh(ctx) // a message after a quiet spell finds its launcher's probe fresh (#9097)
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
 	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
@@ -1104,9 +1114,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ls, err := n.launchers(ctx)
 		bl := n.runtimes.launchers()
 		if len(bl) > 0 {
-			// A runtime's launcher (DSH) is offered even when the login shell's list failed; one named like a shell
-			// launcher is not (the shell's runs: runtimeStart).
-			ls, err = append(append([]proto.Launcher(nil), ls...), n.runtimes.besideShell(bl, ls)...), nil
+			// Explicit shell launchers keep their names; a discovered CLI fallback yields to its connected runtime.
+			ls, err = n.runtimes.withShell(bl, ls), nil
 		}
 		if withDesktop, added := n.withDesktopLauncher(ls); added { // Claude's desktop app (claudedesktop_new.go)
 			ls, err = withDesktop, nil
@@ -1473,6 +1482,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		_ = json.Unmarshal(params, &opts)
 		ctx = context.WithValue(ctx, sendTraceKey{}, opts.ClientMsgID)
 		ctx, waits := withComputerWait(ctx) // claudebg.go: an outside Claude took it behind a dialog
+		var owner *ownerDelivery
+		if opts.OwnerInput {
+			ctx, owner = withOwnerDelivery(ctx) // ccplugin.go: which way the owner's message went in
+		}
 		err := n.sends.once(opts.ClientMsgID, func() error {
 			var after echoAfter
 			if opts.ClientMsgID != "" {
@@ -1486,10 +1499,20 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)
 			})
 		})
-		if err == nil && *waits {
-			return map[string]any{"ok": true, "waits_on_computer": true}, nil
+		if err != nil {
+			return ok(err)
 		}
-		return ok(err)
+		res := map[string]any{"ok": true}
+		if *waits {
+			res["waits_on_computer"] = true
+		}
+		if owner != nil && owner.as != "" {
+			res["delivered_as"] = owner.as
+			if owner.reason != "" {
+				res["relay_reason"] = owner.reason
+			}
+		}
+		return res, nil
 	case "session.echoes": // what the hub kept of earlier sends (echo.go), after this node started
 		var a struct {
 			Echoes []echoRecord `json:"echoes"`
@@ -1928,6 +1951,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.portDial(ctx, params)
 	case "screen.dial": // live-screen video channel (#3954): start the capture helper for a signed-in pair (screen.go)
 		return n.screenDial(ctx, params)
+	case "screen.phone": // Phone Screen (#9314): the virtual display and its window, for a signed-in pair (phonescreen.go)
+		return n.screenPhone(ctx, params)
 	case "port.probe":
 		return n.portProbeRPC(ctx, params)
 	case methodPreviewServers: // a session folder's dev servers, from its .claude/launch.json (preview_launch.go)
@@ -2280,6 +2305,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
 		Clipboard:          clipshare.Support(),
+		ClaudePlugin:       n.claudePluginStatus(),
 	}
 }
 

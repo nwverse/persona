@@ -158,6 +158,9 @@ export interface SessionCapabilities {
   /** Returning to before a user message, with optional native file restoration. */
   rewind?: boolean;
   rewind_code?: boolean;
+  /** A Claude outside Persona's terminals with Persona's plugin: your own messages go in as your input while it rests
+   *  (docs/integrations/claude-integration.md "Owner input through the Persona plugin"). Absent from older nodes. */
+  plugin_input?: boolean;
 }
 
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
@@ -228,6 +231,8 @@ export interface Port {
 }
 
 export interface Session {
+  /** Explicit references to a deleted Assistant conversation return a scrubbed tombstone. */
+  deleted?: boolean;
   /** The engine host it lives in (herdr, herdr-core, orca, paseo…), and the other hosts it is live in at once (#2576). */
   host?: string;
   also_open_in?: string[];
@@ -821,6 +826,8 @@ export interface Interaction {
   questions?: Question[];
   plan?: string;
   tool_input?: Record<string, unknown>;
+  /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
+  editable_text?: string;
   summary?: string;
   screen?: string;
   secret?: boolean;

@@ -1044,9 +1044,11 @@ nonisolated enum Theme {
         static let agentsRoom: CGFloat = 34
         /// The optional third segment must leave both side buttons reachable on narrow screens.
         static let compactSwitchLargestTypeSize: DynamicTypeSize = .large
-        /// A segment of the switch on iPhone Duo's side rail (`ShellSideRail`): square, a symbol over the page's name, within
-        /// the column the system's bars take beside the content.
-        static let railSegment: CGFloat = 54
+        /// The switch standing upright on iPhone Duo (`ShellSwitch(axis: .vertical)`: the outer display's side rail, and the
+        /// tabs' switch on the inner display in the Separate layout, #4231): a bar of fixed items, as the system's tab bar it
+        /// stands for, so its segments keep the default text size (DESIGN_SYSTEM.md 6.2), each its page's symbol alone in a
+        /// tap target, its name spoken and shown large on a long press (the Large Content Viewer).
+        static let switchTypeSize: DynamicTypeSize = .large
     }
 
     /// The page behind lists and chats.

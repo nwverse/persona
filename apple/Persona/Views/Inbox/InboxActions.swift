@@ -14,7 +14,7 @@ struct InboxActionBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let s = item.summary, !s.isEmpty {
+            if let s = item.lineSummary, !s.isEmpty {
                 (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                     .font(Theme.Font.secondary)
                     .lineLimit(3)

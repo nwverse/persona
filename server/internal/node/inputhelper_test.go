@@ -59,7 +59,7 @@ func newInputWorld(t *testing.T, permission string) *inputWorld {
 	swap(t, &inputAsks, &askRecord{file: func() string { return filepath.Join(bin, "Persona Input.asked") }})
 	swap(t, &screenSigner, func(string) (helperSigner, error) { return nil, nil })
 	swap(t, &inputPermissions, &inputPermissionCache{ttl: time.Minute})
-	swap(t, &inputPreflight, func(context.Context, string) string { return permission })
+	swap(t, &inputPreflight, func(context.Context, string) string { return "post_event: " + permission })
 	swap(t, &screenLaunch, func(_ context.Context, helper string, args ...string) error {
 		w.mu.Lock()
 		defer w.mu.Unlock()
@@ -218,7 +218,7 @@ func TestPersonaInputOnlyForASignedInStreamAndWithinItsCount(t *testing.T) {
 	w.says = false
 	w.mu.Unlock()
 	var preflights atomic.Int32
-	swap(t, &inputPreflight, func(context.Context, string) string { preflights.Add(1); return "granted" })
+	swap(t, &inputPreflight, func(context.Context, string) string { preflights.Add(1); return "post_event: granted" })
 	s = &inputSession{inputs: w.inputs, pair: "K"}
 	helloNow(s)
 	if n := w.starts.Load(); n != 1 {

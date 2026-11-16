@@ -107,6 +107,10 @@ type Task struct {
 	// Space is the space of the conversation that set it up ("health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
+	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
+	// schedule_grant.go). The hub's: only the owner's Start on the card of one of its rounds adds to it; no app body and
+	// no tool sets or widens it, and a change of the prompt or of where it runs drops it.
+	StartGrant *StartGrant `json:"start_grant,omitempty"`
 	// CreatedBy is "assistant" for tasks Persona set up from a conversation.
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
@@ -288,8 +292,23 @@ type schedule struct {
 	// news again; a skip that finds the conversation no longer waiting, a run going in, or the task deleted clears it.
 	// In memory only: a hub restart pushes a wait once more.
 	waitTold map[string]string
+	// rounds: by machine NUL conversation, the rounds the hub is sending there (schedule_grant.go noteRound); in memory only.
+	rounds map[string][]schedRound
+	// clean: by conversation, the scheduled task whose clean round it is (schedule_grant.go noteCleanRound).
+	clean map[string]string
+	// deletedBy: by deleted task, the conversation whose cancel_followup / delete_routine deleted it, and when
+	// (deleteTaskFrom). That conversation's run asking for the task again is its own call, not the run bringing back
+	// what the user or another conversation deleted (scheduleOwn, #9090). Kept for runWatchTimeout, in memory only:
+	// after a hub restart a deletion is taken as the user's, as before.
+	deletedBy map[string]taskDeletion
 	// limitWait: tests' wait before retrying a run a usage limit stopped (nil: until the reset, limitRetryWait).
 	limitWait func(reset, now time.Time) time.Duration
+}
+
+// taskDeletion is who deleted a task: the conversation (session id) whose tool did, at that time.
+type taskDeletion struct {
+	session string
+	at      time.Time
 }
 
 // missedRuns returns scheduled failures that have not been followed by a successful run.
@@ -468,6 +487,7 @@ func (s *Service) saveLocked(sc *schedule, tasks []Task) error {
 	if tasks == nil {
 		tasks = []Task{} // null would read as "never moved over"
 	}
+	dropStaleGrants(tasks) // a prompt or target changed since the owner's grant: it no longer applies (schedule_grant.go)
 	if st := s.store(); st != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -789,7 +809,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // to schedule the next one"): the same task is kept, with the launcher and permission mode the user picked for it, instead of a new
 // follow-up per run. A one-off rescheduled by a relative time becomes a task every that long; one that already
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
-// told so, nothing is scheduled (#4792). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
+// told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
 func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
 	if sessionID == "" {
@@ -814,9 +834,14 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	r := sc.runs[last]
 	i := sc.indexLocked(r.RefID)
 	if i < 0 {
-		// Deleted while this run was going: its "schedule the next one" must not bring it back (#4792).
+		// Deleted while this run was going: its "schedule the next one" must not bring back what the user or another
+		// conversation deleted (#4792). This conversation deleting it and asking for it again is a new task (#9090).
+		by := sc.deletedBy[r.RefID].session
 		sc.mu.Unlock()
-		if ranRecently(r) && copiesRun(r, title, rawPrompt) {
+		if ranRecently(r) && copiesRun(r, title, rawPrompt) && by != sessionID {
+			if by != "" {
+				return i18n.T(s.lang(ctx), "assistant-schedule.deleted_elsewhere_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), "", true, nil
+			}
 			return i18n.T(s.lang(ctx), "assistant-schedule.deleted_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), "", true, nil
 		}
 		return "", "", false, nil
@@ -955,8 +980,14 @@ func (s *Service) taskInSpace(ctx context.Context, id, space string) bool {
 	return i < 0 || sc.tasks[i].Space == space
 }
 
-// deleteTask removes a task (cancel_followup, delete_routine, the app); false when there is none.
+// deleteTask removes a task (the app, or the hub undoing one it just made); false when there is none.
 func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
+	return s.deleteTaskFrom(ctx, id, "")
+}
+
+// deleteTaskFrom is deleteTask by conversation sessionID's cancel_followup / delete_routine ("": not a
+// conversation's), noting which conversation deleted it (deletedBy).
+func (s *Service) deleteTaskFrom(ctx context.Context, id, sessionID string) (bool, error) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return false, err
@@ -972,6 +1003,7 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 			sc.mu.Unlock()
 			return false, err
 		}
+		sc.noteDeletionLocked(id, sessionID, time.Now())
 	}
 	delete(sc.waitTold, id)
 	sc.mu.Unlock()
@@ -980,6 +1012,24 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 		s.broadcastSchedule()
 	}
 	return i >= 0, nil
+}
+
+// noteDeletionLocked keeps who deleted task id (sessionID, "" when no conversation did), dropping what is older than
+// runWatchTimeout: a run that started before then is no longer told its task was deleted (ranRecently).
+func (sc *schedule) noteDeletionLocked(id, sessionID string, now time.Time) {
+	for k, d := range sc.deletedBy {
+		if now.Sub(d.at) >= runWatchTimeout {
+			delete(sc.deletedBy, k)
+		}
+	}
+	if sessionID == "" {
+		delete(sc.deletedBy, id)
+		return
+	}
+	if sc.deletedBy == nil {
+		sc.deletedBy = map[string]taskDeletion{}
+	}
+	sc.deletedBy[id] = taskDeletion{session: sessionID, at: now}
 }
 
 // describeSchedule lists the tasks of space ("" the assistant's own, "health"): a conversation sees and changes only
@@ -1350,6 +1400,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.nudgeLoop(ctx)          // the Lark bot's cards left unanswered (feishu_nudge.go)
 	go s.sourceReportLoop(ctx)   // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)         // the todos' reminders (todo_plan.go)
+	go s.urgentLoop(ctx)         // urgent calls' retries and reminders (urgent_call_loop.go)
 	go s.channelLoop(ctx)        // the channels' runs that lost their watcher (channels.go)
 	go s.kbLoop(ctx)             // the knowledge base (kb.go)
 	go s.kbHistoryLoop(ctx)      // importing chats' older history into it, off by default (kbhistory/history.go)
@@ -1748,6 +1799,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
+	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
+	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
+	// retry: it goes on in the round's conversation, which has its earlier work, and its plans ask.
+	clean := t.SessionID == "" && !retried && t.grantEligible() && t.liveGrant() != nil
 	if t.SessionID != "" {
 		if m, ok := s.device(ctx, t.MachineID); ok {
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
@@ -1756,7 +1811,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
 			if err == nil {
-				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
+				s.noteRound(m.ID, t.SessionID, t.ID, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
+				if err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil); err != nil {
+					s.endRound(m.ID, t.SessionID, t.ID)
+				}
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
@@ -1776,6 +1834,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return proto.Session{}, err
 	}
 	launcher := strings.TrimPrefix(binding.Provider, "launcher.")
+	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {
+		clean = false // only Claude Code starts a conversation under the id the hub picks: another keeps its own
+	}
 	if t.RunSessionID != "" {
 		m, ok := s.device(ctx, t.RunMachineID)
 		switch {
@@ -1793,13 +1854,16 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 				s.tellWaitingSkip(ctx, t, m)
 			}
 			return proto.Session{}, err
-		case fresh:
+		case fresh || clean:
 			// Keep the prior session for busy detection, then start a new one below.
 		default:
 			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 			err := s.applyModel(ctx, "task."+t.ID, params)
 			if err == nil {
-				err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params)
+				s.noteRound(m.ID, t.RunSessionID, t.ID, time.Now())
+				if err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params); err != nil {
+					s.endRound(m.ID, t.RunSessionID, t.ID)
+				}
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
@@ -1810,8 +1874,18 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			s.logf("task %s into its conversation %s: %v; starting a new one", t.ID, short(t.RunSessionID), err)
 		}
 	}
-	sess, err := s.startConversation(ctx, startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
-		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID})
+	sp := startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
+		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID}
+	if clean {
+		sp.NewSessionID = newGuestSessionID()
+		// Before it starts: its first message's context asks, and its turn may plan at once.
+		s.noteCleanRound(sp.NewSessionID, t.ID)
+		s.noteRound(here, sp.NewSessionID, t.ID, time.Now().Add(-roundEarly))
+	}
+	sess, err := s.startConversation(ctx, sp)
+	if clean && (err != nil || sess.SessionID != sp.NewSessionID || sess.MachineID != here) {
+		s.endRound(here, sp.NewSessionID, t.ID) // not started as asked: an ordinary round, its plans ask
+	}
 	if err != nil {
 		s.logf("task %s: %v", t.ID, err)
 		run.Status, run.Error = runFailed, err.Error()
@@ -1820,6 +1894,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return proto.Session{}, err
 	}
 	run.MachineID, run.SessionID = sess.MachineID, sess.SessionID
+	s.noteRound(sess.MachineID, sess.SessionID, t.ID, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher)
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
@@ -1983,6 +2058,7 @@ func (s *Service) startScheduledRun(run ScheduleRun, t Task, m *Device) {
 	}
 	run.ID = s.recordRun(run)
 	if m == nil || run.ID == "" {
+		s.endRound(run.MachineID, run.SessionID, t.ID) // no watcher to see its turn end: its plans ask
 		// There's no watcher to confirm success. Discard the draft so the next run reads only the last saved note.
 		s.takeTaskStateDraft(t.stateRunKey)
 		return
@@ -1995,6 +2071,8 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	ctx, cancel := context.WithTimeout(context.Background(), runWatchTimeout)
 	defer cancel()
 	ended, ran := s.waitTurnEnd(ctx, m.ID, run.SessionID)
+	// Its turn ended (or is no longer followed): a later turn there is not its round, and a retry below notes its own.
+	s.endRound(m.ID, run.SessionID, t.ID)
 	if !ended {
 		return
 	}

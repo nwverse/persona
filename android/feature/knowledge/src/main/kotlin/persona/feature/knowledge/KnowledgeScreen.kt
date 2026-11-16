@@ -16,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
@@ -641,11 +640,11 @@ private fun KnowledgeMarkdown(text: String) {
                     textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
                 components = markdownComponents(
                     orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-                        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+                        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                     unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-                        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+                        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                     codeFence = { model ->
                         MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset)) { CurrentComponentsBridge.codeFence(model) }
                     },

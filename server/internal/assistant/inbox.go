@@ -62,6 +62,7 @@ type InboxItem struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	Tier        string     `json:"tier,omitempty"` // empty until triaged
 	Summary     string     `json:"summary,omitempty"`
+	Body        string     `json:"body,omitempty"` // an assistant row's text as Markdown (inbox_post.go, #9041)
 	Reason      string     `json:"reason,omitempty"`
 	Read        bool       `json:"read,omitempty"` // read somewhere else (Feishu, another mail client)
 	DoneAt      *time.Time `json:"done_at,omitempty"`

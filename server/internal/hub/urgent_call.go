@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -34,6 +35,33 @@ func init() {
 		}
 		return h.push.ringCall(ctx, c.managerID(), p.Call), nil
 	})
+	// A manager's tools changed (urgent_call comes with its switch): asked for again, so the conversations it starts
+	// from now on list them.
+	handleBusEvent(assistantwire.EventToolsChanged, func(h *Hub, c *busConn, _ json.RawMessage) {
+		id := c.managerID()
+		if id != assistantwire.AssistantID {
+			h.managerReconnected(id) // its tools are asked for when next needed
+			return
+		}
+		go h.refreshAssistantTools()
+	})
+}
+
+// refreshAssistantTools asks the assistant for its tools again and keeps them (assistantConnected does it on connect).
+func (h *Hub) refreshAssistantTools() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var res struct {
+		Tools []proto.Tool `json:"tools"`
+	}
+	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
+		h.logf("assistant: tools: %v", err)
+		return
+	}
+	a := &h.assistant
+	a.toolsMu.Lock()
+	a.tools = res.Tools
+	a.toolsMu.Unlock()
 }
 
 // The way a device is rung, beside its pushes' (pushRoute): Reason pushNoToken when it registered no PushKit token

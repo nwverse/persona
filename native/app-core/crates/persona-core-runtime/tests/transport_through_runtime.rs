@@ -331,6 +331,64 @@ fn raw_items(input_text: &str) -> Vec<String> {
 }
 
 #[test]
+fn a_wire_item_with_repeated_keys_restores_from_a_snapshot() {
+    let item = r#"{"id":"a#0","id":"b#0","seq":1,"role":"assistant","kind":"text"}"#;
+    let host = Arc::new(Recorder::default());
+    let runtime = open(&host);
+    assert!(runtime.dispatch(&wire::encode(&Action::WirePayload {
+        chat: CHAT.into(),
+        payload: Payload::Latest {
+            body: format!(r#"{{"items":[{item}],"has_more":false}}"#),
+        },
+    })));
+    let (patch, effects) = drain(&runtime, &host);
+    assert!(effects.is_empty(), "wire payload rejected: {effects:?}");
+    let [ListOp::Insert { id, json, .. }] = patch.ops.as_slice() else {
+        panic!("expected one inserted item: {:?}", patch.ops);
+    };
+    assert_eq!(id, "a#0");
+    assert_eq!(json, item, "the snapshot source keeps the original bytes");
+
+    let restored_host = Arc::new(Recorder::default());
+    let restored = Runtime::new(restored_host.clone());
+    assert!(restored.dispatch(&wire::encode(&Action::OpenChat {
+        chat: CHAT.into(),
+        snapshot: ChatSnapshot {
+            items_json: format!("[{json}]"),
+            covered: patch.covered,
+            has_more: patch.has_more,
+            loaded_once: patch.loaded_once,
+            ..ChatSnapshot::default()
+        },
+    })));
+    assert!(restored.flush(Duration::from_secs(5)));
+    assert!(
+        restored_host.effects.lock().unwrap().is_empty(),
+        "the snapshot must restore without rejection"
+    );
+    let opened = wire::decode::<ChatPatch>(&restored.drain(CHAT)).unwrap();
+    assert_eq!(opened.ops, patch.ops, "restoration publishes the same raw item");
+
+    assert!(restored.dispatch(&wire::encode(&Action::Chat {
+        chat: CHAT.into(),
+        event: ChatEvent::Pushed {
+            batch: WireBatch {
+                items_json: r#"[{"id":"a#1","seq":1,"role":"assistant","kind":"text","text":"next"}]"#.into(),
+                from_seq: Some(1),
+                to_seq: Some(1),
+                ..WireBatch::default()
+            },
+        },
+    })));
+    let (patch, effects) = drain(&restored, &restored_host);
+    assert!(effects.is_empty(), "the follow-up event must apply: {effects:?}");
+    assert_eq!(patch.ops.len(), 1);
+    assert!(matches!(&patch.ops[0], ListOp::Insert { id, .. } if id == "a#1"));
+    restored.shutdown();
+    runtime.shutdown();
+}
+
+#[test]
 fn a_byte_payload_and_a_hand_built_event_agree() {
     for case in cases().into_iter().filter(|case| case.decoder != "items_range") {
         let kind = payload_kind(&case.decoder);

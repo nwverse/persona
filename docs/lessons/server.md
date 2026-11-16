@@ -1,5 +1,34 @@
 # Lessons: hub / node and networking
 
+## A transport made for one request opens a connection for one request (2026-11-16, #9202)
+
+The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
+but each new relay stream is `extensions.accept` on the bus plus the manager's WebSocket back to the hub, about four round trips. Between a
+hub and a manager on a 142 ms link every relayed request took about a second, while the hub's own answers took a millisecond. The manager
+side had served many requests per stream all along; only the hub threw the stream away.
+
+- On a hop between machines, keep the transport, and with it the pool, for as long as what it dials through. Here that is the manager's
+  bus connection: a new connection gets a new transport, and the old one's idle streams are closed when that connection ends.
+- A pooled connection over a long link can die without a sound (a stalled tunnel, a NAT that forgot it). Ping the idle ones, so the next
+  request does not wait for an answer that is not coming.
+- net/http keeps upgrades apart: a request with `Upgrade` has its own pool key, so a WebSocket never takes a pooled stream and its stream
+  is never pooled after it. A request whose context ends closes its connection instead of pooling it, so revoking a caller still closes
+  the stream its request was on.
+- `httptrace`'s `PutIdleConn` runs after the connection is already back in the pool, so the next request may have taken it by then.
+  Count the uses (`GotConn`) and compare them, rather than setting an idle flag.
+
+## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
+
+The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
+`127.0.0.1:<listen port>`. A hub whose `listen` names one address (`<LAN address>:18660`) does not answer there, so each of
+them said the hub was not running while it served the LAN. Dialling the LAN address instead is only half the fix: the
+connection then comes from that address, and the hub's checks for the master token over loopback (pairing codes, admin,
+peers, extension installs) refuse it with 403. `managerconf.CLIHubURL` picks the address (listen's only when it is loopback
+or one of this machine's, never a name or an address the machine no longer has, so the token stays on the machine) and
+`managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
+A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
+the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
@@ -653,6 +682,24 @@ namespace; resolve the fallback into the ids of the table being written (the dev
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
+## A backup's runtime-file filter is not for the owner's files (2026-11-14, #5951)
+
+The whole-install backup skipped `*.log`, `*.lock`, `*.pid`, `*.sock` and `.tmp-` names in every directory it copied,
+the knowledge base included: a `meeting.log` or `yarn.lock` there was left out, the manifest listed only what was
+copied, so verification passed, and a restore replaced the directory with one missing them. Skip runtime artifacts
+only in directories the product itself writes (and sockets, by type, anywhere); copy the knowledge base, skills and
+extensions in full, and never filter on the restore side. The same review found two more gaps where a missing value
+read as "anything goes": a `password=` query parameter dropped before `pg_dump` (take the password from
+`pgx.ParseConfig`, as the connection does), and a manager database with no `sealing_key` row accepting any key
+(prove the bundled key opens its sealed values). A relative path from a manifest is checked against its root
+(`../victim` is clean but outside).
+
+libpq expands a connection URI only when it is the explicit `dbname` argument, never from `PGDATABASE`: the backup's
+`PGDATABASE=postgres://…` made `pg_dump` ignore host, port and user and try the default socket, and PostgreSQL 18's
+`pg_restore` without `-d` refuses to run at all. Fake clients in unit tests accepted both, so only a real server
+showed it. Pass `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE=<name>` and the ssl* variables, the password in `PGPASSWORD`,
+and `--dbname=<plain name>` to `pg_restore`.
 
 ## A failed swap must not look like a new install
 
@@ -2231,7 +2278,7 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
 
 On TestFlight 224 an extension's **Review** spun for two minutes and then failed. The operations list (`GET /api/v1/extensions/-/operations`) told the story the access log could not: the settings page's synchronous `catalog/preview` was downloading a 13 MB package at about 33 KB/s from the hub machine; the app's 120 s request timeout closed the request, the hub's relay to the manager closed with it, and the preview's context (the request's) took the download down at 4.5 MB (`context canceled`). Tapping again on the reopened page started a second download of the same package beside the first, which got nothing for 30 s (`download_stalled`, `400 invalid_plugin`). A read-only preview with no client timeout then showed the deeper problem: the download kept moving and was cut at 10.1 MB by `Download`'s fixed five-minute budget, so on that link it could never succeed, synchronous or not.
-- A long download must not belong to one request. The manager now has one download per package at a time (by cache and sha256, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for.
+- A long download must not belong to one request. The manager now has one download per package at a time (by cache, sha256 and declared size, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for. Keep size in the sharing key: equal digests with conflicting declared sizes must be validated independently, regardless of which request arrived first (#9400).
 - Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
 - When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
 - Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.
@@ -2510,15 +2557,21 @@ nothing ran the old build after the new one.
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
 
-## A probe on the caller's context must not cache its failure (2026-11-16, #8859)
+## On a Mac with a resident node, the hub's node deploy doesn't reach it (2026-11-16, #8859)
 
-- The node's ffmpeg probe for the live screen's x264 ran on the status call's context and cached its answer per file,
-  pass or fail. On the first deployed node a fresh process found Homebrew's ffmpeg in 0.12 s under the node's own
-  environment, yet the node kept reporting none: its first probe had failed, and nothing would try again until the
-  ffmpeg file changed. The probe logged nothing, so why it failed couldn't be read back.
-- A check whose answer is kept runs on a deadline of its own (`context.WithoutCancel` plus its timeout), not the
-  caller's: a cancelled or nearly expired call must not decide what every later call sees.
-- Keep a pass as long as what it checked is unchanged; keep a failure only for a while (a minute here), then try again.
-- Log each outcome once, with the reason for a failure, so the next "it says none" is read from the log, not guessed.
-- Verify on the real machine before calling a probe done: the tests passed with a fake and with the real ffmpeg in a
-  fresh process; only the long-running node showed the cached failure.
+- On a computer where Persona Link installed the resident node (`com.persona.node` → `~/.persona/bin/persona-node node
+  --attach`), the `personad node --stdio` the hub starts over ssh only relays to it. A hub deploy replaces `personad`
+  on that computer, but the program that answers is still the resident one. `scripts/app/mac-link.sh install` installs
+  that resident node once (a Mac without one gets it: "Installed and started the resident node service") and leaves it
+  alone after that ("already installed … leaving it unchanged", `docs/operations/node-update.md`).
+- So a node change can look deployed and still not run. The live screen's x264 probe (#8883) never reported on such a
+  Mac: its resident node predated the probe. A first guess blamed a cached failed probe and changed the probe (#8989:
+  its own deadline, a failure retried after a minute, each outcome logged), which is sound but wasn't the cause.
+- Before debugging a node's behaviour, read the version the hub has for it: `node_version` / `node_mismatch` in `GET
+  /api/v1/machines`, or the hub's connect line "[<machine>] node <version> is not build <hub's>: an update is offered".
+- **Redeploy** (`POST /api/v1/machines/{mid}/deploy`) and automatic node updates send the hub's own node packages,
+  `$PERSONA_HOME/bin/nodes` on the hub machine. `scripts/deploy/deploy.sh`'s hub step refreshes them (`personad-<plat>`,
+  `persona-node-<plat>` and its `.version`). A deploy that skips that step leaves them at an older build, and Redeploy
+  then installs that older build: here it moved a resident node back five days, to a build without the live screen's
+  video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
+  `node_mismatch`.

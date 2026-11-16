@@ -735,8 +735,16 @@ extension Theme {
         static let sideSessions = "rectangle.portrait.on.rectangle.portrait"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
-        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording, the drawer's
+        /// Meetings, #8731).
         static let meeting = "person.2.wave.2"
+        /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
+        static let invite = "person.badge.plus"
+        /// Leave the meeting room for the rest of the app while the meeting records (#8731: the room's collapse).
+        static let minimizeRoom = "chevron.compact.down"
+        /// Persona says its answers out loud in the meeting / only on screen (#8731: the meeting room's speaker).
+        static let answersAloud = "speaker.wave.2"
+        static let answersOnScreen = "speaker.slash"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.

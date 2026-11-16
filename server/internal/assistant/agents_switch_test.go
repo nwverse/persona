@@ -125,14 +125,15 @@ func TestAgentsSwitchEachByItsState(t *testing.T) {
 // queued one the user moved to another launcher meanwhile is dropped with nothing done.
 func TestAgentsSwitchFilterBusyAndMovedMeanwhile(t *testing.T) {
 	ft, _ := switchRig(t)
-	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
-	// Drain the initial list event so it cannot start a delayed queue run during the move below.
-	waitFleetOrder(t, ft.s)
 	ft.f.nodes = map[string]nodeAnswer{
 		DeviceSessionSwitch: func(string, json.RawMessage) (any, error) {
 			return nil, &rpc.Error{Code: proto.CodeSwitchBusy, Message: "a background command runs"}
 		},
 	}
+	ft.sessions("mac", agentRow("s1dflt0001", "", proto.StatusIdle), agentRow("s2other001", "sub", proto.StatusIdle))
+	// Finish the initial inventory event before creating the queued request. Otherwise
+	// that older event can start a retry before the test reports the user's move.
+	waitFleetOrder(t, ft.s)
 	res, err := batchSwitch(ft, map[string]any{"launcher": "work", "from_launcher": "claude"})
 	if err != nil {
 		t.Fatal(err)

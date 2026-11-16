@@ -337,13 +337,15 @@ Chat page:
     Mac `NSClipView` clamps beyond-latest offsets on layout, so glide manually sets each frame and restores any displacement in the same layout (`ChatPin+Mac.swift`).
     Tapping thinking/tools/BeautifulUI tool-pill groups within open work keeps both title and tapped row still (no borrowing remaining title rise or replacing persistent hold with normal 1.5 s).
     Reduce Motion disables rise/glide and content fades (`Theme.Motion.reduced`, #1123).
-  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. The latest Agent text after a
-    wake is the answer, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783). Before new
-    words arrive, the previous answer stays in place while the new work joins its execution summary instead of opening
-    a second segment (#2796). Everything before the answer, including wake notices and intermediate narration, stays
-    inspectable by opening that ordinary work row. Tasks completing during work (not waking) remain a work step.
-    Pitfall: Claude Code's idle-session away recap closes the turn; a later wake must reopen and merge into it,
-    keeping recap in place, or post-wake replies show directly (`ChatBlock.build` `lastRaw` / `reopenedAt`).
+  - Background tasks wake idle Claude (`wake`: a background command's notice, or a subagent's report as its call's
+    result): the wake opens a turn of its own (`ChatBlock.build`, `Turn.wakes`, #9140). The turn before it had ended,
+    so its last words stay its answer; the woken turn draws the notice where a message would be (a subagent's report
+    is drawn under its call instead), then its own work row and its own last words, so the chat still ends on the
+    newest words (#3783). Its work row is known by the wake (`w-<wake id>`) from before its first step, and is the
+    live one while the woken agent works. Tasks completing during work (not waking) remain a work step, and a wake
+    after an away recap follows the recap. Until #9140 the woken work stayed in the turn before it and its newest
+    words took the answer's place, which folded a complete answer to a newer question into the work row once an older
+    background command reported back. The per-reply token count follows the same exchanges (`chatUsage`).
   - Away recaps resemble background tasks: small "↺ Away recap · 21 min ago ›" strip opens `RecapCard` / `RecapDrawer` with full text. Consecutive recaps with nothing between merge into "↺ Away recap · 3 times · 3 min ago ›", newest first in drawer (`ChatLines.foldRecaps`, requested 2026-10-31); mock `MOCK_RECAPS=1`.
     On returning, if latest recap is the chat's last item and never closed, it expands at the end as a full card (`RecapStrip`, `ChatLines.openRecap`):
     same plane as Agent replies, newest inverted-list row, scrolling away with content and fully visible when following bottom, not above input
@@ -517,7 +519,7 @@ Chat page:
   slim Back + "●" and the session's title fade in during latter half; dragging toward history restores it. Release never stays halfway: collapse at latest,
   otherwise snap nearest end (`.smooth`, 0.3 s). Following new content also collapses after user has touched list; tap slim bar / switch tabs expands.
   After 3 idle seconds (`ChatView.chromeIdleSeconds`: no list/header touch, info card closed, no sheet/menu), auto-collapse; header interaction (swiping Agents), expand and tab switch reset timer.
-  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed hides full layer while keeping measurement, VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
+  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed swaps the full layer for a clear placeholder of its measured height (a `.hidden()` copy rebuilt the whole header at every fold and unfold, #9103), VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
   - Smooth because collapse lives in separate `@Observable` `ChatChrome`, redrawing only header per frame; floating above fixed-frame list (header-height margins only at oldest end),
     so messages never move a pixel. Former toggle animated system navigation plus two labels independently and changed list height, abrupt.
   - User tracking/interacting and immediately subsequent decelerating only (`onScrollPhaseChange`), not keyboard-driven offset changes.
@@ -800,8 +802,12 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
-    With the list folded, the chat's ‹ brings it back (#963). On iPhone Duo open on its side the chat has no ‹ then either (#3680): its actions are in the system's side bars, whose
-    Show Sidebar at the top left brings the list back, and a ‹ that did the same was read as a Back that opened the sidebar instead of going back. Upright (#3641) keeps #963's ‹.
+    With the list folded, the chat's leading button brings it back (#963): the sidebar's button (`Theme.Icon.sidebar`, "Show Sidebar", with how many Agents need the user), as on the
+    main conversation, not a ‹ (#8603). What the button shows follows how the page was reached, not what it is: a chat picked in the list is a root and has the sidebar's button; the
+    same chat pushed from inside another page (a waiting Agent on the main conversation, Inbox's) has ‹, which goes back to that page. On iPhone Duo open on its side the chat has
+    neither (#3680): its actions are in the system's side bars, whose Show Sidebar at the top left brings the list back.
+  - The Separate layout's tabs at regular width (#8596): the split makes the floating tab bar's room in its columns, and UIKit held it a second time in the tab's own top safe
+    area for a tab first shown after a switch (the Agents tab's column head 64 pt lower). `TabBarRoomOnce` (ChatsView) takes the tab's top beyond the window's own back off.
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
   - Settings entry points all use values (`SettingsPage`); view-based `NavigationLink { page }` pushes the left column's own stack and opens in the narrow column.
 - **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (the shell's places and Settings at its foot), with the top-left button showing / hiding it; on iPhone Duo open the
@@ -833,14 +839,34 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
 - **The shell's side rail** (2026-11-07, TestFlight: on the outer screen every button was at the top, out of reach of the hand holding the phone): with bars on the side, the shell's
   top bars (Assistant's, Agents', Messages' when it is on, and the moving bar while the strip slides) become a rail in that column (`ShellSideRail`; `ShellView` reads the edge once with `readsVerticalBarEdge` and
   hands it down as `\.shellRailEdge`; a page whose bar skipped it put the bar back across the top while it was in front, #2318). Following Apple's iPhone Duo guidance (navigation first, then the prominent action, the tab bar below), the face (the drawer) and the page's
-  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol over its name,
-  the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
+  action (New Chat / New Session / Lark Settings) sit low in the column and the switch is a vertical capsule at its foot (`ShellSwitch(axis: .vertical)`: each page's symbol alone in a
+  tap target since #4231, its name spoken and shown large on a long press, the pill gliding down with the strip), all within the thumb's reach; the status bar keeps the column's top. The pages drop the top room the bar had
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **The Separate layout's switch on both displays** (#4231, the owner, after the design of #4206 drawn on 2026-11-11 / 12): one component,
+  the shell's upright switch (`ShellSwitch(axis: .vertical)`: Assistant, Agents, Messages when it is on, each its symbol alone in a 44 pt
+  tap target, a 52 × 140 pt glass capsule, 52 × 96 pt without Messages), at the bottom-trailing corner in every posture
+  (`TabSwitchLayout`, `apple/Persona/DesignSystem/TabSwitchDock.swift`). The outer display has it at the foot of the shell's rail. On the
+  open Duo `RootTabs` hides the system's tab bar on every tab (`PhoneTabBarHidden`, set once at each tab's root, never toggled) and
+  draws the switch over the tabs (`TabSwitchOverlay`), outside the splits and stacks, so it stays put on a push and a pop: on its side
+  at the foot of the system's column down the right (`ShellSideRail`, outside the content), upright floating over the page's
+  bottom-trailing corner, 12 pt from the edge and its foot level with the composer's. Where the bars are is read in the same update
+  as the tabs (`toolbarVerticalEdge`), so neither starts in the other posture. Upright, what sits at the page's foot leaves it room
+  (`tabSwitchRoom`: the chats' footer and Jump to Latest, a new conversation's composer and Needs You, `floatingFooter`, the Inbox
+  hand-off bar, the Lark, connector and Personal Agent composers, Health's, the Recordings and meeting bars and a meeting's Jump to
+  Latest, Git's commit bar and Files' bar; `tabSwitchBottomBarRoom` for a mail's bottom toolbar and, only while selecting, the Inbox's
+  and Browser Sign-ins'), and the main lists keep room past their last
+  row (`tabSwitchListRoom`); a sheet over the tabs leaves none (`overTabSwitch`). While the keyboard is up the switch fades away
+  (on the outer display too) and the composer takes the whole width back. The counts hang off a segment's corner toward the page:
+  Agents' Needs You, and Persona's as its system tab showed it (`TabBadges.assistant`). Merged (the default where the Duo is open) is
+  unchanged; the iPad keeps the system's tab bar, an ordinary iPhone the top switch. Tests: `TabSwitchLayoutTests` (the placement, the
+  sizes, the rooms, the choice kept), `DuoTabSwitchTests` (UI, each posture: one capsule of symbols at the corner, the count toward the
+  page, each segment's page, the keyboard, Merged and Separate at once and after a relaunch). Built with Xcode 26 the bar edge is never
+  read, so the open Duo on its side gets the floating switch.
 - **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout; replaced on 2026-11-14 by the
-  Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column. What follows is
-  the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
+  Separate layout's new look, #4206, "Sidebar layout (#6332)": the system's tab bar, the one sidebar's column; on 2026-11-16 the
+  system's tab bar gave way to the upright switch, #4231, above. What follows is the history; its code was removed for #8305): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
   hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
   (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
   (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
@@ -946,16 +972,27 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   styles whose list paints the page's own color: three bands down the column.
 - **Under side bars** (the open iPhone Duo on its side, `SidebarRoot` reading `readsVerticalBarEdge` into
   `\.splitSideBars`): nothing is above the columns there, so the column's head and the page's top bar sat at the
-  display's edge, the mark under its rounded corner (#4853). Both columns start `Theme.Space.l` lower, or as low as the
-  lower of their own tops (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the page's top stay on one line.
-- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`),
-  whose detail starts at the Persona conversation: `AssistantView` without a stack of its own (`embedded`), pushing on
-  the split's one path (`\.unifiedPath`). A pick in the sidebar replaces what is over the conversation, as the web's
-  routes: an Agent's chat (its row, a card), a place (`ShellRoute` / `SidebarRoute`, the split's first page without a back),
-  the conversation itself (its row, `ShellPage.conversation`). Every page the Persona page opens is a value there, never a
-  flag, so the next pick does not land under it. The conversation's sidebar button folds and brings back the split's
-  column (`SplitShowList.hide`). The shaded row follows what is beside the sidebar (`UnifiedSidebar.atRoot`,
-  `shownPlace`).
+  display's edge, the mark under its rounded corner (#4853). Both columns start at least `Theme.Space.l` lower
+  (`SplitNavigation.topPad`), as ChatGPT's open Duo: the head and the conversation's top bar stay on one line. The
+  column's head never follows the page's own top (#8359): that is the root's navigation bar (0 on the conversation,
+  82 pt on a place, 24 on an Agent's chat), and the head dropped by that much on every root but the conversation.
+  `SidebarRootsUITests.testTheSidebarHeadStaysPutOnEveryRoot` holds the head, the main conversation and the Pages
+  heading within 1 pt on the conversation, Recordings, Inbox and an Agent.
+- **The page beside it**: the Agents page's split (`ChatsView` under `\.unifiedSidebar`, `SidebarRoot` in `RootView`;
+  the Persona tab's in the Separate layout too). **Switching area replaces the page's root; only drilling down pushes**
+  (#8359, docs/design/sidebar-navigation.md section 6): each sidebar item is a root of its own, the main conversation, a
+  place (`ShellRoute`), Health or Messages (`SidebarRoute`), an Agent's chat (its row, a card, a route) or another page the
+  Agents list opens. A pick replaces the root at once, with no push, pop or Back; the split's path (`\.unifiedPath`) holds
+  only what is opened inside the page (an Inbox item, a machine, a recording), pushed with Back. Each root keeps its
+  drill-down while the user is elsewhere, and the root in front picked again goes back to it (`SidebarPageRoots`, held by
+  `UnifiedSidebar`). `AssistantView` without a stack of its own (`embedded`) stays the stack's root and draws the root picked
+  (`sidebarRootPage`); `SplitNavigation(rootsSwap:)` counts the root as the first page. The conversation's sidebar button
+  folds and brings back the split's column (`SplitShowList.hide`). The shaded row follows the root, also while drilled in
+  (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from the root). Laid over the page (the open Duo upright) the
+  column slides away on a pick, the only motion. DEBUG: `-probes YES` writes `probe.sidebar-page` (the root, the path, how
+  many animated navigation transitions ran; `SidebarRootsUITests`). The conversation's `RootBarHidden` (which hides the
+  stack's bar again after a pop) stops once the conversation is taken away: a hide still waiting from its last update hid
+  the next root's bar, its title and, on the open Duo upright, the button that brings the sidebar back.
 - **On a phone** (`SplitNavigation`'s drawer layout, `\.splitDrawer`, `SplitDetail.drawer`): the same column in the
   drawer (`AssistantDrawerLayout`, the shell's drawer: 82% of the width, at most 380 pt), the Persona conversation the root
   of one stack under it, and what the drawer opens that stack's first page. The conversation's bar has no Assistant |
@@ -977,11 +1014,12 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   (`agentsListReveal`) scrolls the sidebar to the Agents' heading and leaves the page beside it. `selectedTab` follows
   what is in front, so a relaunch goes back to the Agent's chat that was open.
 - **The Separate layout at regular width** (#4206, the owner's new look; it replaced #6332's pixel-for-pixel tabs and
-  #2623's switch drawn on the open Duo's pages): the system's tab bar (at the top on the iPad, down the side on the open
-  Duo on its side), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
+  #2623's switch drawn on the open Duo's pages): the system's tab bar at the top on the iPad; on the open Duo the shell's
+  upright switch in its place at the bottom-trailing corner (#4231, "iPhone Duo"), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
   and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
   `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
-  it. Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
+  it until an Agent is picked, which then is the page's root, put in place with no push (#8603, as the Sidebar layout's
+  roots). Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
   Persona's tab. Each tab's column is kept as before (`assistant.list`, `agents.list`); an Agent asked for from outside
   opens on the Agents tab only. At compact width the shell is drawn as before.
 - **The head's fold** (both layouts, beside a page; #4206 as the earlier one sidebar had it): the column's head ends in
@@ -990,12 +1028,13 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   phone's drawer the face opens it, as before.
 - Tests: `SidebarLayoutRoutingTests` (the router), `SidebarLayoutTests` (iPad UI: the column, a pick replacing the
   page, the routes), `SidebarLayoutPhoneTests` (iPhone UI: the drawer, a pick replacing the page, the face where a back
-  would be, the setting switching both ways at once, nothing picked: Separate). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
+  would be, the setting switching both ways at once, nothing picked: Separate), `SidebarRootsUITests` (a pick replaces the
+  root, a drill-down pushes, each root keeps its drill-down; iPad, open Duo, iPhone), `SidebarPageRootsTests` (the rule), `DuoTabSwitchTests` (iPhone Duo: Merged and Separate switched at once and kept, #4231). DEBUG: `-app.navigation sidebar` launches in the Sidebar layout, `-app.navigation ""` with nothing picked; `-openAppearance navigation` opens
   the setting's page.
 
 ## Home-screen quick actions (#3199)
 
-Long-press the Persona icon: the last conversation opened on this device, then "Record" (a meeting recording; `docs/apple/recording.md`), "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it), and the menu has one recent conversation, not two.
+Long-press the Persona icon: the last conversation opened on this device, then "Start Meeting" (a meeting recording, "Record" until #8731; `docs/apple/recording.md`), "New chat" and "Inbox" (`Persona/App/QuickActions.swift`). The system shows four at most, so "Agents" is not among them since #2191 (the tab bar has it), and the menu has one recent conversation, not two.
 
 - **Recently opened** (#2191, `Persona/App/RecentChats.swift`): every chat that comes on screen (`AppModel.visibleSession`, an Agent's or a Persona conversation) goes first in a list of ten `SessionKey.path`s kept in `StateCache` (`recent-chats`; keys only, never a title or a message; never sent to a hub). The rules are shared with the web's ⌘K (`spec/fixtures/recents/README.md`). The menu lists the newest one the app still has (`RecentChats.homeScreen`), title and "computer · folder" (or "Persona"), with `Theme.Icon.recent`; tapped, it opens like a notification (`AppModel.open`). `shortcutItems` is set at launch, when a new conversation is opened and when the app goes to the background (the titles as they are then).
 - Navigation only, except Record, which starts recording: Inbox pushes onto the assistant, New chat follows the drawer's New chat route (`ShellState.show(.newConversation)`), returning already-pushed pages such as Inbox to the root. Without hub pairing, remain on Welcome.
@@ -2462,6 +2501,13 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
   field, put back if the hub says no. The Mac's own banners (`MacAttention.managerMuted`) skip a muted manager's agents and cards
   of the hub-level group (another group's hub keeps its own prefs); its Dock badge still counts them. A prefs read already on its
   way when a page saves doesn't put the old prefs back (`AppModel.savedNotifyPrefs`).
+- **The built-in assistant in the switcher** (#9055): its page (`ManagerDetailView`) has **Show in Switcher** (on: the roster's
+  `hide` is false), sent alone as `PATCH /api/v1/managers/assistant {"hide": …}` (`APIClient.hideManager`,
+  `ManagersModel.showInSwitcher`), shown at once and put back if the hub says no (`409 builtin_in_use` while it is the default
+  or has a computer, in plain words). It can't be turned off while the built-in one is the default, and its footer says so
+  (`ManagersText.switcherLocked`, `switcherNote`); turned off while it is in use, the footer says it is listed for now and why.
+  An older hub answers yes and keeps nothing: the list read after it still says shown, the switch goes back and a toast says to
+  update the hub. While the hub marks it `hidden` its row in the list carries a Hidden chip. Tests `ManagersModelTests`.
 - **Low-distraction mode** (#8157): the last section of Settings › Notifications, after this device's own rows, is the hub's
   push grading switch (`APIClient.pushLnMode` / `setPushLnMode`, `GET` / `PUT /api/v1/push/ln-mode`); its footer says it holds
   for every device and what still notifies. A hub without the route, or one that does not answer, shows no section; a change
@@ -2579,7 +2625,10 @@ then those still installing, each with its first letter on a disc in its color (
 client; the letter in the panel's color) and the state's dot at the disc's foot, its state line, a Default chip and a check on
 the current one or, beside any other with something waiting, its count ("The pages show the current assistant" above), on a
 solid panel (`Theme.card`); an offline row is dimmed as a whole (`Theme.Fade.offline`) and can still be
-picked. The dot (`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
+picked. A manager the roster marks `hidden` (the built-in assistant while the user hides it and it isn't used, #9055;
+Settings › Assistants) has no row (`AssistantSwitcherText.rows`); it still counts as installed (`ManagerRoster.installed`,
+`isMulti`), so the pages still scope by assistant, its badge still counts and the Default chip still shows. The dot
+(`AssistantStateDot`) is green online, gray offline and orange while installing, ringed in the color it sits on;
 Settings › Assistants keeps its dot beside the words. Under them **New Assistant** (asks for a
 name, then the install code sheet of Settings › Assistants) and **Manage Assistants…** (Settings › Assistants). A row still
 installing opens its install code: the one this header made while it lasts, else a new one (`ManagersModel.showCode`; the hub
@@ -2592,8 +2641,9 @@ roster has no Default chip, and **New Assistant** and **Manage Assistants…** s
 `AppModel.showsAssistantSwitcher` is false and the sidebar keeps the persona's name as its title.
 
 The pick is the manager's id per group (`AppModel.assistantPicks`), kept on this device across launches (`AssistantPickStore`,
-the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster goes back to the default, and one
-that becomes the default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
+the app's defaults); no pick follows the hub's default. A pick whose manager leaves the roster, or that the roster marks
+`hidden`, goes back to the default (`ManagerRoster.canPick`; a hidden one can't be picked either), and one that becomes the
+default stays picked. Each group's snapshot keeps the roster and the picked manager's settings, so a launch
 starts on the current assistant before the hub answers. Switching closes the Persona page's pushed pages (`assistantSwitches`:
 they read the assistant before and would write to the next); re-reading the same assistant (back online, the default moving
 under a pick) doesn't. While another assistant is current, the default's settings are read once a run all the same
@@ -2630,9 +2680,9 @@ default assistant.
   and gives way to the current assistant's main conversation only when the user switches. A hand-off sent as a plain message goes to the item's manager's main conversation. A summary started from an extension's chat page stays on the default
   manager.
 - **Tests**: `ManagerSwitchTests` (the route rule and real requests, the pick's start, fallback and one manager, the pick kept
-  across launches and through a change of the default, each manager's settings held, a manager leaving the roster, the lists,
-  another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the rows and
-  their words, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
+  across launches and through a change of the default, each manager's settings held, a manager leaving the roster or hidden,
+  the lists, another assistant's conversation opened without switching, an offline manager) and `AssistantSwitcherTests` (the
+  rows and their words, a hidden one left out but still counted, the colors, the kept roster, a row still installing); UI suite `AssistantSwitcherUITests` (New Assistant → name →
   code sheet, Manage Assistants… → Settings › Assistants, a row still installing → code sheet; against the mock hub with
   `TEST_RUNNER_PERSONA_SWITCHER_HUB`). By hand, against the mock hub (`MOCK_MANAGER_NAS=1`):
   `-openAssistantManager m-3fa21c` (工作, no main conversation yet) or `m-8b04d2` (家里, offline) makes that manager the current

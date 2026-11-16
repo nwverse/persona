@@ -123,6 +123,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   Merging files only rescues aliases: a function's `--settings` isn't readable (#1411). Persona additions therefore use composable flags (`--plugin-dir`, `--mcp-config`),
   not `--settings`: hooks are a plugin (`docs/integrations/claude-integration.md` ("Hooks")); only older Claude Code versions still merge. Having users recognize Persona's `--settings` by its directory name
   inside their launcher function and yield to it is also wrong: changing the data directory from `~/.persona` to `~/.persona` breaks that detection.
+- A launcher function can write its `--settings` to a temporary file for each start and remove it when claude exits (an `EXIT` trap; #9119). The probe's stub claude
+  exits at once, so the path the probe reports is gone by the time a start reads it, and each probe names a new one. Every assistant message then failed with HTTP 502
+  (`open …/settings-XXXXXXXX.json: no such file or directory`, a new name each time) because `assistantCompactionSettings` returned that error. Treat a launcher
+  settings file that is gone as nothing to merge, as the other readers do; only one that is there but does not read stops a start. The launcher writes it again when it runs claude.
 - Windows inline `--mcp-config` JSON can be corrupted before Claude starts (#3402). A native argv recorder launched directly by Go preserved doubled backslashes;
   Git Bash's builtin `printf '%s\n' "$@"` already saw single backslashes instead. The loss is in `bash.exe`/MSYS parsing the incoming native command line, not Bash
   forwarding arguments to a Windows child. The installed Claude was a native executable, not an npm shim. With the same `-p` stream-json flags and empty stdin,
@@ -374,6 +378,32 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
   the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
   from 32,000 to 128,000 reserves exactly as much as before.
+
+## Claude Code plugins from a folder marketplace (2026-11-16, 2.1.291 and 2.1.308)
+
+Measured with `claude plugin … --json` in throwaway `CLAUDE_CONFIG_DIR`s while building the node's plugin keeper
+(`server/internal/claudeplugin`, `docs/operations/link.md` "Claude Code plugin"):
+
+- Every CLI run, even `claude plugin list`, writes the config directory's `.claude.json` (and a `backups/` copy). With
+  `CLAUDE_CONFIG_DIR` set to `~/.claude` that file lands inside `~/.claude` instead of the user's `~/.claude.json`: a second global
+  config. Run commands for the user's own directory with `CLAUDE_CONFIG_DIR` unset; name any other directory. Tests decide "the user's
+  own" from the process's real home, never a home a test passed in, so a test cannot reach the real `~/.claude`.
+- `claude plugin install` on a plugin that is installed but turned off turns it back on. Never call it to "make sure": read
+  `plugin list --json` first and leave a disabled plugin alone (`update` keeps it disabled, but updating a plugin the user turned off is
+  not ours to do either).
+- A marketplace that is a folder, with the plugin at a relative `source`, is read from that folder: `list --json` shows `readFromFolder`
+  and `folderVersion` beside the recorded `version`. Writing new files there reaches new sessions at once; `claude plugin update` moves
+  the recorded version (`updateOutcome: updated | up_to_date`). The folder must stay where it was added: `list` keeps showing the plugin
+  after the folder is gone, but nothing loads.
+- `marketplace add` of another folder under a name already added re-points that marketplace silently ("now points at …"), and adding the
+  same folder again is a no-op. Failures print `{"outcome":"failed","failureCode":…}` on stdout and exit 1:
+  `already_in_goal_state` (enable / disable), `not_installed` (uninstall), `not_configured` (marketplace remove), `not_found`.
+- Uninstalling leaves `"enabledPlugins": {}` and `"extraKnownMarketplaces": {}` in `settings.json`; every other key stays as it was.
+- Each command takes about 1.5 s on Windows. The desktop app (the Store build, Claude-3p) ships its own, newer CLI under
+  `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<build>\claude.exe` (2.1.308 there while `PATH` had 2.1.291): a computer with only the
+  desktop app still has a CLI to install with.
+- Its Code sessions use `~/.claude` (the node already starts desktop sessions without `CLAUDE_CONFIG_DIR`, `node/claudedesktop_new.go`), and a
+  user-scope plugin installed from the CLI loads there; inside the app `/plugin` is not available, only **+ › Plugins**.
 
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
@@ -1014,6 +1044,15 @@ screen, saw a queue in the transcript and no hint.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
+## An installed CLI is not an explicit runtime override (#9181)
+
+Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
+assistant task chats then failed the launcher-agent guard. Preserve internal provenance when listing the ordinary
+executable: it is a terminal fallback, while real shell aliases, functions and helper entries remain authoritative.
+Use the same ownership rule for published launchers, models, starts and assistant validation. Exercise discovery plus
+the normal launcher-list and assistant-send paths with the CLI installed, explicit overrides and disconnects; a runtime
+test with an empty shell cache misses the collision. Never mutate the cached shell list while publishing runtime rows.
+
 ## Antigravity planner message completion can be progress narration (#3389)
 
 A text-only `PLANNER_RESPONSE` with `status: DONE` can precede more reasoning and tools. It closes that message, not the
@@ -1193,3 +1232,48 @@ AskUserQuestion, often with several questions. Read the open call from the trans
 rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
+
+## A plugin's asUser prompt is the only way in that counts as the person's (Persona's Claude Code plugin)
+
+The peer inbox frames every message as another session's, and no wording in it makes the model take a go-ahead from
+it: the same "I approve: create the file" was refused through the inbox and when a plugin submitted it framed, and
+accepted only through `$.prompt.submit({ asUser: true })` (Claude Code 2.1.291, 2.1.299 and 2.1.308). Do not try to
+argue the model round in the inbox prompt (#5965). Things that cost time while measuring it:
+
+- A `claude` started from inside a desktop-app session inherits that host's provider variables
+  (`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`, its `ANTHROPIC_BASE_URL`) but not its credentials, and answers "Not logged
+  in". Start it without the parent's `CLAUDE_CODE_*` variables (`node/ccplugin_live_test.go` `childEnv`).
+- A `claude -p --input-format stream-json` session is a good throwaway session for a plugin (it keeps running while
+  stdin is open, and has a peer inbox), but its `sessions/<pid>.json` says `entrypoint: "sdk-cli"`, which the node
+  leaves to its own host: such a claude is not "outside Persona's terminals".
+- A plugin's `$.http.fetch` gives up after 30 s, so a long poll must answer sooner. On Windows, its first connections
+  over a Unix socket a moment after the listener appeared failed (`FailedToOpenSocket`); a retry got through.
+- `$.ui.log(text)` writes a dim row into the transcript by default; a plugin that must stay quiet passes `{ to: 'debug' }`.
+- The plugin API types are written per Claude Code build (`plugin-authoring` skill, `types/claude-code.d.ts`); read the
+  build you test against, not an older copy.
+
+## A check before every message must not start a login shell (2026-11-16, #8947)
+
+The assistant's profile check (#4310) ran the launcher probe before every message. That probe is an interactive login
+shell sourcing the user's startup files, and some resume paths ran it twice. On one install every message to a running
+conversation waited about a second per probe, and in three days none reached it within a second. A check on the send
+path reuses its probe the way `launcherProbeCached` and `modelProbeCache` do: kept for a bounded time, and taken again at
+once when the files it depends on change (`shellStamp` in `server/internal/node/assistant_profile_probe.go`). A change the
+stamp cannot see waits out the bound. In a test, count the shells a send starts with a launcher that appends to a file
+each time it runs, not only the send's result.
+
+The start of a conversation's process took the same probe again (#9097): its compaction settings and, on a resume, the
+model it would run on, each with a login shell of its own, and the agent, profile and model checks each kept a copy that
+aged out on its own clock. A start after a quiet spell waited for four probes one after another, about two seconds each
+on a busy machine. Every caller now reads one kept probe per launcher and arguments (`keptProbe`): callers asking at
+once share one shell, and a probe in use is renewed in the background shortly before it ages out, so the bound still
+holds but no message waits for it. A renewal is not a use, or it would keep itself going forever.
+
+
+## A Paseo pin belongs to a workspace, not its project (#9300)
+
+Paseo's “Pin chat” persists on its workspace descriptor (`pinnedAt`). Persona's Paseo space is the entire project, which
+can contain multiple workspaces sharing a directory; importing a pin into `pins.spaces` would pin siblings too. Carry
+the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
+old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
+pin while the final catalog bytes equal the earlier unpinned snapshot.

@@ -565,6 +565,74 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### Owner input through the Persona plugin
+
+`integrations/claude-code-plugin/` (its `README.md` is the contract), `server/internal/node/ccplugin.go`, `server/internal/devices/owner_input.go`.
+The inbox can never carry the owner's go-ahead: Claude Code tells the model a peer message is not the user's and cannot
+grant consent, so "yes, merge it" from the phone was refused (#5965). Claude Code's plugin API has a supported way in:
+`$.prompt.submit({ text, asUser: true })` submits text as the person's own words, without the "The <plugin> plugin sent a
+message" frame. A user-scope plugin installed from a terminal also loads in the desktop app's local sessions. Persona's
+plugin (`persona`) uses it for the owner's own messages; Persona Link installs and updates it.
+
+- **Measured** (2026-11-16, Windows 11; Claude Code 2.1.291, 2.1.299 and 2.1.308, the last the desktop app's own; a
+  throwaway `claude -p --input-format stream-json` session per run in an empty directory whose `CLAUDE.md` allowed a
+  file to be created only on the person's own approval). The same "I approve: please create APPROVED.txt now.": through
+  the real peer inbox, wrapped in `prompts/agents/peer_message`, it was refused ("came from another session, not the
+  person's own approval"); submitted by a plugin without `asUser` (read as "The spikeplug plugin sent a message: …") it
+  was refused; submitted with `asUser` the file was created ("the user explicitly approves in their own message"), on
+  all three versions. In bypass permissions mode (2.1.308), where the inbox holds Persona's message for approval at
+  the computer, the `asUser` prompt was not held: queued at 05:02:22.8, it started its turn at 23.3, as soon as the
+  turn before it ended. The transcript line is a plain user line: `{"type":"user","message":{"role":"user","content":
+  "<text>"},"origin":{"kind":"plugin","name":"<plugin>","asUser":true},"promptSource":"system"}`, no `isMeta`, after a
+  `queue-operation` enqueue with the text. A prompt submitted while a turn runs waits in Claude Code's queue and starts
+  its own turn once the session rests (it is never folded into the running turn), and the submit resolves as that turn
+  starts. A plugin's `$.http.fetch` gives up after 30 s; over a Unix socket on Windows its first connection attempts can
+  fail while the listener is new, so the plugin retries. The process at the socket's other end is the claude itself
+  (the pid of its `sessions/<pid>.json`), on Windows read with `SIO_AF_UNIX_GETPEERPID`.
+- **Transport and who may take a message**: the plugin talks HTTP to the node socket (`node.sock`, the one hooks use;
+  the node tells HTTP from its JSON requests by the first line): `POST /claude-plugin/v1/poll` (held up to 25 s) and
+  `/ack`. The node answers only the claude that has the session open: the socket's peer pid (`SO_PEERCRED`,
+  `LOCAL_PEERPID`, `SIO_AF_UNIX_GETPEERPID`) must be the pid whose `sessions/<pid>.json` names the session the request
+  names; anything else gets 403, and where the system cannot say, nothing is handed over. Nothing that arrives on the
+  socket becomes a message: only `session.send` makes one. The boundary is the node socket's own (0600, the same user;
+  `docs/integrations/script-cli.md` "Security and privacy"): a process of that user could already type into the user's terminals.
+  Polls from a claude the node does not deliver to this way (an engine pane's, the assistant's own, an SDK's) are told
+  to come back in 5 minutes. `{"kind":"claude-plugin.status"}` on the same socket lists the sessions whose plugin polls
+  (for Persona Link's installer and diagnostics).
+- **Which messages**: only the owner's own. The hub marks a message typed in the owner's app (`captureHumanSubmission`:
+  a full-role device token, not a link or answer-only token, not the master token, not a member hub), and the devices
+  manager turns that mark into `owner_input: true` on `session.send` (`ownerInputParams`), dropping any `owner_input`
+  a caller put in the params. Messages from the assistant, extensions, channels (the Lark and WeChat bots), relays
+  between conversations and the auth relay have no mark and keep the inbox, as do Stop and the answers to a question
+  the session asked (both at priority `now`), and slash commands (still refused, `peer_command`).
+- **When**: only to a session at rest: its status file says idle (or shell) and its plugin polls. A session at work or
+  behind a dialog gets the message through the inbox at once, as before: it is read at the next tool boundary (or after
+  the dialog), and the send says `relay_reason: "busy"`. Holding the message until the turn ends was the other choice:
+  it would make a steer wait for minutes, and a held message could not be taken back once the plugin had it. So a
+  go-ahead goes in as the owner's while the session waits for one, which is when it asks for it.
+- **Delivery and fallback**: the node hands the message to the session's waiting poll (`deadline_ms` 5 s ahead; the
+  plugin submits nothing later) and counts it in once the transcript shows the plugin's prompt or its queue entry, or
+  the plugin says it submitted it (its submit resolves as the turn starts). No poll takes it within 3 s, the plugin says
+  it did not submit it, or nothing shows within 10 s: the message goes through the inbox instead, as above.
+  `session.send` answers `delivered_as: "user_input"` or `"relayed"` with `relay_reason` (`no_plugin`, `busy`,
+  `plugin_unavailable`, `plugin_refused`, `plugin_unconfirmed`), only for messages that carried `owner_input` to such a
+  session. A relayed message meets the inbox's own outcomes too: one a bypass-mode session holds is `peer_held`, as
+  before. Pictures go as paths in `<attached_images>`, as through the inbox.
+- **What the apps show**: the session's row says `capabilities.plugin_input: true` while its plugin polls. The message
+  shows in the chat as the user's own line (the transcript's plain user line); one relayed shows from "Persona" as
+  before. The web app says so when an owner's message to a session with the plugin was relayed (`lib-outbox.relayed_busy`,
+  `lib-outbox.relayed_plugin`): the Agent may not take it as their approval. Nothing is said when it went in as their
+  input, nor for a session without the plugin (it never had another way). iOS and Android show the chat line as it is
+  and ignore the new fields for now.
+- **The plugin** submits text and nothing else: no command, no file but its own manifest, nothing written. It refuses a
+  slash command, an empty or overlong text and a message past its deadline, tells the node why (`ack`), and keeps quiet
+  (the debug log only) while no node answers, backing off up to a minute.
+- **Not covered**: a desktop session the node opens to send to (`sendThroughDesktopApp`) has usually not polled yet, so
+  its first message goes through the inbox. A claude with no inbox does not use the plugin either: there would be no
+  fallback. Public sharing omits the plugin's lines, as any line without the human origin (`transcript.shareHuman`).
+  The plugin API is early access and may change; `asUser` has no priority, so a stop still goes through the inbox.
+  How the desktop app draws the plugin's prompt was not checked.
+
 ### Stop and answers from the phone (#5961)
 
 `server/internal/node/claudebg.go` (`interruptOutside`, `sendOutside`). Measured with Claude Code 2.1.321, the desktop app's own, on macOS (2026-11-12/13). The inbox's priority `now` is Claude Code's own "send now": its queue aborts the running turn for a command of priority now, and the message runs at once. It also ends a question or a permission prompt the session waits on: their tool call ends "Tool permission request aborted".
@@ -656,15 +724,27 @@ Before, its status file's `idle` was listed `idle`, which the hub takes as seen:
 - **Why this way:** the app's new-session links only fill its composer (a prompt from outside is never sent without the person at the computer). The app does import a session the CLI wrote, at `claude://resume?session=<transcript id>` (what the CLI's `/desktop` hands over with): the transcript becomes one of its sessions (`local_<id>`), and the app runs it from then on.
 - **The start:**
   1. The CLI writes the session in the folder: `claude -p --session-id <new id> "/rename <title>"` runs a local command only, so there is no model request and the terminal's `claude` need not be signed in (the app runs the session on its own provider). It runs without the variables of a running Claude Code and the assistant's (`agentenv.go`) and without `CLAUDE_CONFIG_DIR` (the app reads `~/.claude`). The title is the first line of the first message, spaces folded, at most 40 characters, or of the start's `name_hint` when the message goes after the start (as the apps send it); with neither, the folder's name. The app gives an imported session no title of its own (measured: an import seeded with `/cost` stayed untitled after its first turn).
-  2. The app is asked to import it (`open -g`; the app comes to the front and shows the session all the same), and the node waits up to 15 seconds for its index entry. Then the start is answered.
-  3. The first message goes as any message to a session of the app (`send` → `sendThroughDesktopApp` above): the app starts the session's claude with its inbox, and the message goes in.
+  2. The start's permission mode is written on the transcript's user lines (`stampDesktopMode`, #9350): the app imports a transcript in the `permissionMode` of its last user line that names one, else in the settings' `defaultMode`, and it always lowers `bypassPermissions` to `acceptEdits` for an imported session while keeping `auto` (unless device policy withholds auto mode; measured in Claude.app 5.11492.5). The CLI writes no mode on the seed's local-command lines, whatever `--permission-mode` says (Claude Code 2.1.325). So a start with no mode or `bypassPermissions` is imported in `auto`, the closest mode the app keeps; `default`, `acceptEdits` and `auto` are imported as asked (`desktopStartMode`). If the write fails the session is imported in the app's own choice, and the node logs it.
+  3. The app is asked to import it (`open -g`; the app comes to the front and shows the session all the same), and the node waits up to 15 seconds for its index entry. Then the start is answered.
+  4. The first message goes as any message to a session of the app (`send` → `sendThroughDesktopApp` above): the app starts the session's claude with its inbox, and the message goes in.
   - Measured 2026-11-12 (Claude.app 5.1231.2 on a third-party provider, Claude Code 2.1.311): the start answered after 3.4 s; the first message was taken 2 s later and answered 6 s after the start.
 - **The folder:** a folder picked that is not there yet is made when the folder it goes in is there (New Agent's new folder); a relative path, a file, or a folder whose parent is missing is refused. With none (`cwd` empty), the session runs in the scratch folder `临时会话` in the folder that holds most of the app's sessions' folders (none yet: `~/Documents`, or the home folder), made when it is missing; the sessions started there are one group in the app's sidebar. iOS (and the Mac app, which shares its New Agent) and the web send no folder when none was picked for this launcher, browse from the folder holding the app's projects, and name a new folder there (`docs/apple/ios.md`, "New Agent in Claude's desktop app"; the web's in `docs/web/web.md`). Android has none of these yet: it starts with a picked folder only.
-- **What the app decides:** the session runs on the app's provider, model, permission mode and effort, as one the app opens itself (an imported session starts in the app's default mode). `launchers.models` answers no models, with `locked` saying so; Settings › Models' Test has nothing to run.
+- **What the app decides:** the session runs on the app's provider, model and effort, as one the app opens itself; its permission mode is the one step 2 wrote, and the person can change it in the app afterwards. `launchers.models` answers no models, with `locked` saying so; Settings › Models' Test has nothing to run.
 - **Refused before anything is written:** a read-only plan start (`readonly_unsupported`: the app runs its own mode, and an approval waiting there could not be answered from the phone), a first message that is a slash command (`peer_command`: the inbox runs none), a folder that is not there, a `secret_ticket` (`secret_env_agent`: no terminal to start through). An import that does not come in time is `desktop_open_failed`; the transcript the CLI wrote stays, and the app may still import it later.
 - A first message that does not go in is logged on the node: the session is in the app and the list, and the message can be sent again.
 - **No terminal runs it:** Run Agent Here with it and a switch of a running session to it are refused (a terminal would type `claude-desktop` into a shell); a resume that names it (New Agent's launcher, which the hub sends for a session nothing says the launcher of) runs plain `claude` (`terminalLauncher`).
 - Only macOS (`claudeDesktopOpens`: the app is asked to import in the background); on Windows the launcher is not offered. Tests: `node/claudedesktop_new_test.go`.
+
+## Installing the Persona plugin
+
+Sessions Persona has no terminal for (the desktop app's Code sessions, other terminals) take the owner's messages as typed input
+through the Persona plugin for Claude Code (`integrations/claude-code-plugin`). The resident node carries the plugin of its own build,
+writes it to `~/.persona/claude-code-plugin` (the plugin's own marketplace, `persona`) and installs it at the user scope with Claude
+Code's own CLI (`claude plugin marketplace add`, `claude plugin install persona@persona --scope user`, `claude plugin update`):
+automatically on macOS and Windows, never against a choice the user made in Claude Code (turned off or removed there), and never into a
+config directory Claude Code has not created. A user-scope plugin loads in the desktop app's local Code sessions too; inside the app, where
+`/plugin` does not run, **+ › Plugins** shows it. New sessions load it; open ones keep what they loaded. Commands, defaults, opt-out and
+status: [link.md](../operations/link.md) "Claude Code plugin".
 
 ## Blocking configuration directories (#676)
 
@@ -705,6 +785,7 @@ Tested 2026-11-04 with Claude Code 2.1.318: plugin hooks behave like settings ho
 Test results:
 
 - **`AskUserQuestion` on both ends** (#2382, measured on 2.1.319 in an isolated pty with logging hooks): PreToolUse gives no decision and Claude draws its dialog. About 60 ms later PermissionRequest arrives for the same call **without `tool_use_id`**; its hook can keep waiting for the phone without hiding that dialog. A phone answer returns `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{...original input, "answers":{"<original question>":"<label>"}}}}}` → model receives `Your questions have been answered: "Which color?"="Blue"`. Join multiple labels with `", "`; custom text is a direct string.
+- **Editable Lark send/reply text**: an eligible assistant Bash PreToolUse card carries `editable_text`. A plain Allow with `edited_text` returns `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"…","updatedInput":{...original input,"command":"<rebuilt command>"}}}`. The rebuilt command changes only the top-level JSON `text`; the original grant is retired before the same gate reclassifies and grants the edited call once. Quotes, shell substitutions, newlines, Unicode and large JSON numbers stay data. Codex and the other runtimes never receive this editing capability, and Deny notes continue through the ordinary `permissionDecision: "deny"` reason.
 - **Terminal answer cleanup**: answering in the terminal while PermissionRequest still waits completes the turn but does not end that hook. PostToolUse then carries the original `tool_use_id`, the original input plus `answers`, and the result. Node carries PreToolUse's id into PermissionRequest, removes `answers` to match the original session / Agent / tool / input, and completes every overlapping waiter of that id. A completion that arrives first is kept for that id through the hook / reconnect lifetime; a late receipt for an older identical question cannot cancel a newer one. The hook attempt remembers this pairing across reconnects: a resumed PermissionRequest reuses its own id and never consumes the next question's pending id, even when the two requests overlap or identical PermissionRequests arrive out of order. If the Node that saw PreToolUse was replaced, an unambiguous recent transcript tool_use / tool_result restores the pairing; multiple possible calls hand that ambiguous generation to the terminal and withdraw its restored cards until each PostToolUse arrives, instead of borrowing an id or waiting for a completion that may never come. Standby replay applies the same PreToolUse / PermissionRequest / PostToolUse lifecycle at the spool timestamps, including events whose stale hook.event is dropped, so a terminal answer taken while the manager was away stays answered. A PostToolUse after a phone answer does not suppress the next question, whose id differs. Real Claude probe: the terminal showed the question during the PermissionRequest wait, accepted the hook's answer, then emitted PostToolUse with the same PreToolUse `tool_use_id`.
 - **Queued messages** (#6088, measured on 2.1.319 in an isolated session; the send-now hint measured again on 2.1.311 for #2467 and on 2.1.321 for #4537): a message typed while Claude works waits in its queue (`queue-operation enqueue`) and goes into the running turn at the next tool boundary ("The user sent a new message while you were working"), so Persona's queue already steers at a safe point. Under the prompt Claude shows it with a send-now hint naming the key: 2.1.319 put "ctrl+x ctrl+s to send now" after the message on its line. That key, during a command, moves the command to the background (it keeps running and reports back as a background task) and delivers the message at once; while a reply is being written, the request is asked again with the message added. Esc instead interrupts the command ("The user doesn't want to proceed with this tool use"), then sends the queue. Persona's "Send now" presses the key the hint names (`sendNowOffer` in `server/internal/node/sendnow_hint.go`; `session.queue.send_now`, `docs/protocol/protocol.md`).
   Headless (`claude -p --input-format stream-json`, a Persona chat; measured on 2.1.322 for #4342): the transcript's `queue-operation enqueue` carries no content, so the queue can't be read from it. A user line with a `uuid` gets `command_lifecycle` lines on stdout with that `command_uuid` (`queued`, `started`, `cancelled`, `completed`; one absorbed mid-turn is `started`). The control request `cancel_async_message {message_uuid}` answers `{cancelled}` (false once it went in), and `interrupt {send_now: true}` answers `{send_now: "stopped", still_queued: [...]}` and starts the waiting messages at once (`server/internal/node/assistant_queue.go`).

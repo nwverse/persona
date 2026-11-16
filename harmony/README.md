@@ -41,4 +41,12 @@ builds `native/app-core`'s `host_replay` example and runs `tests/core-host/repla
 Rust bytes for independently built values. It found the `u32` width defect (#7485). It exercises neither the NAPI glue
 (argument conversion, thread-safe callbacks) nor a HAP, so `coreReplay` above remains the only device test of those.
 
+The Agents list's production adapter calls `coreProjectSort` directly. The temporary ArkTS sorter and DEBUG shadow
+have been removed. By Status is the default, with By Machine and By Project available from the existing grouping
+control; the core owns pinned/quiet/folded groups, quick filters, search and ordering. Localized group labels and
+fold controls use the existing native tokens and components. The core lane's `tests/core-host/agent-sort-adapter.test.mjs`
+verifies **30/30** unchanged `agents_list` fixtures through the production adapter and real core. The portable
+`agent-workspace` suite also uses a synchronous real-core host fake, checking row identity, folds, preferences and
+offline-history membership. These are host checks, not HAP/NAPI or physical-device qualification. Build the actual HAP and collect the three-category native evidence in the verification guide; record unavailable real-device capabilities separately.
+
 The application icon reuses Persona's approved artwork. Run `python3 scripts/export-icons.py` from this directory to regenerate its layers, startup image and provenance manifest. The system applies its own launcher mask.

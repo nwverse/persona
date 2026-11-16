@@ -4,7 +4,7 @@ import Testing
 /// Pages keep no hold of their own (docs/apple/ios-state.md「Step 4」): how long a change waits while the user scrolls or
 /// cannot see the page, and when it lands, is `Hold`'s; a page only says what it is doing (`Hold.set`). Each page used
 /// to wait out its scrolls and cap its waits itself (#131, #178, #215), and one left out came back as a bug. Reads the
-/// sources next to this file, like `BackgroundCallbackTests`.
+/// sources next to this file, like `IconVocabularyTests`.
 struct HoldSourceTests {
     private static let ios = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     private static let waits = try! NSRegularExpression(pattern: #"Task\.sleep|asyncAfter|Timer\.(scheduled|publish)"#)

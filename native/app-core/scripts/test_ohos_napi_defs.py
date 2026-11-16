@@ -26,7 +26,9 @@ RECORDS = [
     "function coreProjectAnswer(input: string): string",
     "function coreDisplayAnswer(label: string): string",
     "function coreProjectStreamChunks(input: string): string",
+    "function coreProjectStreamRepair(input: string): string",
     "function coreProjectTaskIndex(input: string): string",
+    "function coreProjectTurns(input: string): string",
 ]
 
 

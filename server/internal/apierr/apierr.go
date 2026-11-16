@@ -76,6 +76,10 @@ func Body(status int, code string, err error) map[string]any {
 	}
 	body := map[string]any{"error": err.Error(), "code": code}
 	switch code {
+	case "search_changed":
+		body["retryable"] = true
+	case "conversation_deleted", "conversation_protected", "conversation_busy":
+		body["retryable"], body["delivered"] = false, "none"
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
@@ -144,6 +148,10 @@ func Call(w http.ResponseWriter, err error) {
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
 		switch re.Code {
+		case "conversation_deleted":
+			status = http.StatusGone
+		case "conversation_protected":
+			status = http.StatusBadRequest
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
 		case proto.CodeTerminalNotReady: // the node's new tab would not take the start command; nothing ran
