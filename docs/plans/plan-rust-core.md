@@ -551,8 +551,26 @@ Phase 3 lands in several PRs.
     object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
     client source or release library fails rather than skips.
   - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
-    performance claim. The Swift adapters and the real-C XCTest still need macOS and remain with #6793 / #7401; the
+    performance claim. The Swift adapters and their real-C replay are covered by #8952; the
     turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
+
+- **The six pure projections reach the Swift C binding (#8952).**
+  - `PersonaCoreProjections` calls `persona_core_project_sort`, `persona_core_project_answer`,
+    `persona_core_display_answer`, `persona_core_project_stream_chunks`, `persona_core_project_turns` and
+    `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
+    every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
+    production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
+    applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
+    complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact
+    scalar types; exact-name manifests, malformed inputs and deliberately wrong expectations are checked per domain.
+  - Fixture reads and the overlay live in `PersonaCoreTestSupport`, not the shipped library. This is **macOS-host
+    SwiftPM evidence, not iOS simulator or physical-device evidence**. It does not establish production adapters,
+    rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
+    projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
+    **26.0 not verified**.
 
 ### Migration rules (each domain)
 
@@ -604,13 +622,14 @@ and D1 stays. Filling in this table does not itself close #6871 or approve produ
    Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
    All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
    Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
-2. **[Retained iOS evidence readme, PR #7639 head](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/README.md)** —
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in docs/archive/apple/reference-measurements-6871/ at the head commit
+   [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
    exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
    uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
-   [Dispatch raw report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-boundary.json)
+   Dispatch raw report (`raw/core-boundary.json`)
    includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
-   [100-item drain report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-large-page.json)
-   covers drain/bincode decode/string-list apply, not a presented frame. [Lifecycle report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-lifecycle.json)
+   100-item drain report (`raw/core-large-page.json`)
+   covers drain/bincode decode/string-list apply, not a presented frame. Lifecycle report (`raw/core-lifecycle.json`)
    has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
    `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
    are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`
