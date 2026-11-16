@@ -310,6 +310,7 @@ describe("收件箱事件：详情", () => {
     expect(host.querySelector("[data-event-summary]")).toBeNull();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-chain-id="c1"] button')!.click());
     expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail]')?.textContent).toBe("**Briefing · Mon** Today: one tutorial. **Classes** - **Tut…");
+    expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail] p')?.className).toContain("line-clamp-3"); // its whole text is above
     act(() => root.render(<EventBody item={{ ...assistant, body: undefined, summary: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tutorial** - Short quiz" }} onSource={() => {}} />));
     expect(host.querySelector("[data-event-text] strong")?.textContent).toBe("Briefing · Mon");
     expect(host.querySelector('[data-chain-id="c1"] [data-chain-detail]')?.textContent).toBe("Briefing · Mon Today: one tutorial. Classes Tut…");

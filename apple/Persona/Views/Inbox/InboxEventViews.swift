@@ -680,6 +680,8 @@ struct InboxChainSection: View {
     @State private var todo: TodoDetailRoute?
     /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
     @State private var whole: [InboxItem.ChainEntry]?
+    /// An assistant row's received message: its whole text is drawn above (#9041), so a few lines say which, cut with "…".
+    private static let assistantMessageLines = 3
 
     var body: some View {
         let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
@@ -851,6 +853,7 @@ struct InboxChainSection: View {
                 let text = item.markdownInSummary ? InboxItem.withoutMarks(m.text) : m.text
                 Text(m.sender.map { String(localized: "\($0): \(text)", comment: "Who wrote it: what they wrote") } ?? text)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .lineLimit(item.isAssistantRow ? Self.assistantMessageLines : nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let d = InboxEventText.expansionDetail(e) {

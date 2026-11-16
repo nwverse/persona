@@ -615,7 +615,8 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
         <div className="mx-1.5 mb-1 flex flex-col gap-1 rounded-[10px] bg-inset px-3 py-2 text-[12.5px] leading-relaxed text-ink-2" data-chain-detail>
           {e.detail && <p className="whitespace-pre-wrap">{e.detail}</p>}
           {(e.messages ?? []).map((m, i) => (
-            <p key={i} className="min-w-0">
+            // an assistant row's message: its whole text is above (#9041), so three lines say which
+            <p key={i} className={cx("min-w-0", item.source === "assistant" && "line-clamp-3")}>
               {m.sender && <span className="font-medium text-ink">{t("inbox-inboxevent.message_sender", { sender: m.sender })}</span>}
               {/* an older assistant row's message is its Markdown run into one line: said without the marks (#9041) */}
               <span className="whitespace-pre-wrap">{markdownInSummary(item) ? withoutMarks(m.text) : m.text}</span>
