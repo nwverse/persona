@@ -139,9 +139,48 @@ class AgentsReadingRestoreTest {
 
         assertEquals(0, state.firstVisibleItemIndex)
         assertEquals(0, state.firstVisibleItemScrollOffset)
+        // The row is given a bounded moment to follow; past it the place is let go.
+        rule.mainClock.advanceTimeBy(RESTORE_SETTLE_MILLIS + 100)
+        rule.waitForIdle()
         rule.runOnIdle { rows = original }
         rule.waitForIdle()
         assertEquals("the list is the list as it is, from the top", 0, state.firstVisibleItemIndex)
+    }
+
+    /**
+     * The failure seen on a device: the hub's status says the list is loaded while the page the list draws is still the
+     * build before it, with no rows. That used to give the place up at once, and the rows that followed opened at the top.
+     */
+    @Test fun aListThatSaysLoadedBeforeItsRowsAreInStillGetsItsRowBackWhenTheyFollow() {
+        val restoration = StateRestorationTester(rule)
+        show(restoration)
+        scrollTo("session:demo/s-40")
+        val (key, offset) = firstRow()
+
+        restore(restoration) { rows = emptyList(); loaded = true }
+        assertEquals("nothing to scroll to yet", 0, state.firstVisibleItemIndex)
+
+        rule.runOnIdle { rows = original }
+        rule.waitForIdle()
+        rule.waitForIdle()
+        assertEquals("the row that followed the loaded line is put back", key to offset, firstRow())
+    }
+
+    @Test fun aRowThatNeverFollowsIsGivenUpAfterTheBoundedWaitAndTheListStaysWhereItIs() {
+        val restoration = StateRestorationTester(rule)
+        show(restoration)
+        scrollTo("session:demo/s-40")
+        val (key, _) = firstRow()
+
+        restore(restoration) { rows = original.filterNot { it.key == key }; loaded = true }
+        assertEquals(0, state.firstVisibleItemIndex)
+        rule.mainClock.advanceTimeBy(RESTORE_SETTLE_MILLIS + 100)
+        rule.waitForIdle()
+        // A late return of the row after that is the list as it is: it does not drag the reader back.
+        rule.runOnIdle { rows = original }
+        rule.waitForIdle()
+        rule.waitForIdle()
+        assertEquals(0, state.firstVisibleItemIndex)
     }
 
     @Test fun aListLeftAtTheTopOpensAtTheTop() {

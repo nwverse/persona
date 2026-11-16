@@ -900,6 +900,14 @@ command created process death. On a rooted test emulator, a direct signal after 
 restoration without `force-stop` clearing the task; record that distinction and keep the same-PID `am kill` attempt as a
 no-op, not as restoration evidence.
 
+A joined flow can say "loaded" about a list it has not caught up with. The Agents page joined the hub's latest status to a
+page built on a throttled context, so a status that turned loaded right after a build was reported with that build's empty
+rows: on a loaded emulator under CPU load, the saved row was missing from a list that said it was in, and the restore gave up
+and opened at the top (one failure in 64 recorded runs of the old build; logs showed loaded with no tree rows, the rows 266 ms
+later in that single run, not a measure of delay). Stamp loaded on the page from the status it was built from, and make the
+restore keep the saved place for a bounded time after a loaded list without the row, so a late row is still put back. Test the
+old order directly (rows after a loaded line, a status flipping right after the first build) rather than lengthening a wait.
+
 ## Cleanup warnings are acknowledged per operation, not consumed on arrival
 
 A hub retry of an extension uninstall creates a new operation id, so it needs the same in-flight pairing phase as the first

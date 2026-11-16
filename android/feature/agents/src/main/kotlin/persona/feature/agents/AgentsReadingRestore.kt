@@ -11,6 +11,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -26,13 +27,22 @@ internal data class SavedReadingAnchor(val key: String, val offset: Int)
 internal fun savedAnchorOf(items: List<Pair<Any, Int>>, treeKeys: Set<String>): SavedReadingAnchor? =
     items.firstOrNull { it.first in treeKeys }?.let { (key, offset) -> SavedReadingAnchor(key as String, offset) }
 
+/**
+ * How long a saved row may be missing from a list that reports itself loaded before it is given up (a local setting, not
+ * a measured value): the page the list draws is built apart from the hub's load and can trail it by a build or two.
+ */
+internal const val RESTORE_SETTLE_MILLIS = 1_500L
+
 /** What to do with a saved place, given the tree as it is now. */
 internal sealed interface ReadingRestore {
     /** The list is not in yet: look again when it is. */
     data object Wait : ReadingRestore
     /** The row is in the tree at [index] (among the tree's rows): put it back at [offset]. */
     data class Scroll(val index: Int, val offset: Int) : ReadingRestore
-    /** The list is in and the row is not (gone, closed, or on a page the list does not hold): start from the top. */
+    /**
+     * The list is in and the row is not (gone, closed, or on a page the list does not hold): start from the top. The list
+     * can be one build behind the hub's load, so the place is kept for a moment ([RESTORE_SETTLE_MILLIS]) in case the row follows.
+     */
     data object Top : ReadingRestore
 }
 
@@ -72,7 +82,13 @@ internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentT
     LaunchedEffect(action) {
         when (action) {
             null, ReadingRestore.Wait -> Unit
-            ReadingRestore.Top -> { state.scrollToItem(0); pending = null }
+            ReadingRestore.Top -> {
+                // Start from the top at once, but keep the place for a bounded time: a row that arrives in it (this effect
+                // restarts as a scroll) is still put back; past it the list is the list as it is, and the next load is not moved back.
+                state.scrollToItem(0)
+                delay(RESTORE_SETTLE_MILLIS)
+                pending = null
+            }
             is ReadingRestore.Scroll -> {
                 // The tree follows whatever sits above it, and ends before the optional footer.
                 snapshotFlow { state.layoutInfo.totalItemsCount }.first { it >= keysNow.size + (if (footer) 1 else 0) }
