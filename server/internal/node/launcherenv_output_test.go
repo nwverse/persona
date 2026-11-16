@@ -41,9 +41,9 @@ func unreportedProviders() []struct {
 	}
 }
 
-// A provider whose models report no output limit and no "no thinking level" launches exactly as before #8798. The first
-// four declare a gateway model list without Claude Code's refusal fallback models, so they also turn that fallback off
-// (#7319, lacksRefusalFallback); the last declares no list and keeps it.
+// A provider whose models report no output limit and no "no thinking level" launches exactly as before #8798. Every one
+// but the fifth declares a gateway model list without Claude Code's refusal fallback models, so it also turns that
+// fallback off (#7319, lacksRefusalFallback); the fifth declares no list and keeps it.
 func TestProviderEnvUnchangedWithoutReportedLimits(t *testing.T) {
 	golden := []struct{ env, clear []string }{
 		{
@@ -67,7 +67,7 @@ func TestProviderEnvUnchangedWithoutReportedLimits(t *testing.T) {
 			clear: []string{"ANTHROPIC_*", "CLAUDE_CODE_USE_BEDROCK*", "CLAUDE_CODE_USE_VERTEX*", "CLAUDE_CODE_USE_FOUNDRY*", "CLAUDE_CODE_OAUTH_TOKEN*", "CLAUDE_CODE_SUBAGENT_MODEL*", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "API_TIMEOUT_MS", "NO_PROXY", "no_proxy"},
 		},
 		{
-			env:   []string{"ANTHROPIC_BASE_URL=https://gw.example.com", "ANTHROPIC_API_KEY=sk-test-k", "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_MODEL=big[1m]", "ANTHROPIC_DEFAULT_FABLE_MODEL=big[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL=big[1m]", "ANTHROPIC_DEFAULT_SONNET_MODEL=big[1m]", "CLAUDE_CODE_SUBAGENT_MODEL=big[1m]", "ANTHROPIC_DEFAULT_HAIKU_MODEL=big[1m]", "ANTHROPIC_SMALL_FAST_MODEL=big[1m]", "CLAUDE_CODE_DISABLE_ARTIFACT=1", "API_TIMEOUT_MS=3000000", "BAR=2", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000", "FOO=1"},
+			env:   []string{"ANTHROPIC_BASE_URL=https://gw.example.com", "ANTHROPIC_API_KEY=sk-test-k", "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_MODEL=big[1m]", "ANTHROPIC_DEFAULT_FABLE_MODEL=big[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL=big[1m]", "ANTHROPIC_DEFAULT_SONNET_MODEL=big[1m]", "CLAUDE_CODE_SUBAGENT_MODEL=big[1m]", "ANTHROPIC_DEFAULT_HAIKU_MODEL=big[1m]", "ANTHROPIC_SMALL_FAST_MODEL=big[1m]", "CLAUDE_CODE_DISABLE_ARTIFACT=1", "API_TIMEOUT_MS=3000000", "BAR=2", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000", "FOO=1"},
 			clear: []string{"ANTHROPIC_*", "CLAUDE_CODE_USE_BEDROCK*", "CLAUDE_CODE_USE_VERTEX*", "CLAUDE_CODE_USE_FOUNDRY*", "CLAUDE_CODE_OAUTH_TOKEN*", "CLAUDE_CODE_SUBAGENT_MODEL*", "CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "API_TIMEOUT_MS", "FOO", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "BAR"},
 		},
 	}
