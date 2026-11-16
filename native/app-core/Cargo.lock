@@ -367,6 +367,7 @@ dependencies = [
 name = "persona-core-ohos"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "napi-build-ohos",
  "napi-derive-ohos",
  "napi-ohos",
