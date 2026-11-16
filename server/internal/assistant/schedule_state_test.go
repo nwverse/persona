@@ -288,28 +288,140 @@ func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
 	}
 }
 
-func TestCurrentTurnTaskStateRun(t *testing.T) {
+func TestCurrentTaskStateRun(t *testing.T) {
 	user := func(text string) proto.Item { return proto.Item{Role: "user", Kind: proto.KindText, Text: text} }
 	marker := func(key string) string {
 		return "call schedule_state_set with run_key " + key + " and the updated state text"
 	}
 	queued := user("another message")
 	queued.Queued = true
+	queuedRun := user(marker("aaa"))
+	queuedRun.Queued = true
+	peer := user("from another conversation")
+	peer.From = "other"
+	woke := proto.Item{Role: "system", Kind: proto.KindNotice, Text: "background task finished", Wake: true}
+	reply := proto.Item{Role: "assistant", Kind: proto.KindText, Text: "ok"}
 	for name, tc := range map[string]struct {
 		items []proto.Item
 		key   string
 		want  bool
 	}{
-		"only turn":          {[]proto.Item{user(marker("aaa"))}, "aaa", true},
-		"paged back a turn":  {[]proto.Item{user(marker("old")), user(marker("aaa"))}, "aaa", true},
-		"previous key":       {[]proto.Item{user(marker("old")), {Role: "assistant", Kind: proto.KindText, Text: "ok"}, user(marker("aaa"))}, "old", false},
-		"queued is no turn":  {[]proto.Item{user(marker("old")), user(marker("aaa")), queued}, "aaa", true},
-		"later plain prompt": {[]proto.Item{user(marker("aaa")), user("do something else")}, "aaa", false},
-		"no items":           {nil, "aaa", false},
-		"prefix of the key":  {[]proto.Item{user(marker("aaab"))}, "aaa", false},
+		"only turn":         {[]proto.Item{user(marker("aaa"))}, "aaa", true},
+		"paged back a turn": {[]proto.Item{user(marker("old")), user(marker("aaa"))}, "aaa", true},
+		"previous key":      {[]proto.Item{user(marker("old")), reply, user(marker("aaa"))}, "old", false},
+		"queued is no turn": {[]proto.Item{user(marker("old")), user(marker("aaa")), queued}, "aaa", true},
+		// #8913: what comes after the run's prompt goes on with the run.
+		"later plain prompt":   {[]proto.Item{user(marker("aaa")), reply, user("📋 督办：check the PR")}, "aaa", true},
+		"woken by its notice":  {[]proto.Item{user(marker("aaa")), reply, woke, reply}, "aaa", true},
+		"another chat's words": {[]proto.Item{user(marker("aaa")), reply, peer, reply}, "aaa", true},
+		"queued run prompt":    {[]proto.Item{user(marker("old")), reply, user("busy"), queuedRun}, "aaa", true},
+		"next run's prompt":    {[]proto.Item{user(marker("old")), reply, user("📋 督办"), reply, user(marker("aaa"))}, "old", false},
+		"in no prompt here":    {[]proto.Item{user(marker("aaa")), reply, user("x")}, "bbb", false},
+		"no items":             {nil, "aaa", false},
+		"prefix of the key":    {[]proto.Item{user(marker("aaab"))}, "aaa", false},
 	} {
-		if got := currentTurnHasTaskStateRun(tc.items, tc.key); got != tc.want {
+		if got := currentTaskStateRun(tc.items, tc.key); got != tc.want {
 			t.Errorf("%s: got %v, want %v", name, got, tc.want)
 		}
 	}
+}
+
+// #8913: a run's turn ends while a background subagent it started still runs. An assistant conversation then reads as
+// done, not working; the subagent's notice wakes it later, and a supervision message and another conversation's message
+// come in between. The run stages its state with its own key once all that is in; the draft stays open until the
+// background work is over and the conversation idle, and then the state is saved. An earlier run's key (its draft still
+// open: only the key check can refuse it), a key no prompt in this conversation carries, and the run's own key after the
+// run is over are refused.
+func TestTaskStateRunGoesOnAfterItsBackgroundWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		node := newFakeHub().withMachine()
+		node.pageTurns = true
+		s := New(Options{Hub: node, Logf: testLogf(t)})
+		s.turnPoll = time.Second
+		s.runRetry = time.Minute
+		setTasks(s, Task{ID: "patrol", Title: "Patrol", Prompt: "Report only new issues", Repeat: repeatInterval, EveryMinutes: 120, Enabled: true})
+		earlier := Task{ID: "patrol", Repeat: repeatInterval}
+		earlier.stateRunKey = s.openTaskStateDraft()
+		elsewhere := s.openTaskStateDraft() // a run in another conversation: its prompt is not here
+		session, err := runNow(t, s, "patrol")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sid := session.SessionID
+		prompt := node.lastSend(t)["text"].(string)
+		_, suffix, ok := strings.Cut(prompt, "call schedule_state_set with run_key ")
+		if !ok {
+			t.Fatal("the run's prompt lacks a state key")
+		}
+		key, _, _ := strings.Cut(suffix, " ")
+		stage := func(key, text string) (string, error) {
+			args, _ := json.Marshal(map[string]string{"run_key": key, "text": text})
+			return s.runTool(t.Context(), "server", sid, "schedule_state_set", args)
+		}
+		items := []proto.Item{
+			{ID: "earlier", Role: "user", Kind: proto.KindText, Text: "⏰ Patrol" + taskStatePrompt(earlier)},
+			{ID: "earlier-report", Role: "assistant", Kind: proto.KindText, Text: "New issue #100"},
+			{ID: "run", Role: "user", Kind: proto.KindText, Text: prompt},
+			{ID: "launch", Role: "assistant", Kind: proto.KindToolUse, ToolName: "Agent"},
+		}
+		node.setItems(items...)
+		node.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusWorking, State: proto.StateWorking})
+		synctest.Wait()
+		<-time.After(2 * s.turnPoll)
+		synctest.Wait()
+
+		// The turn ends; the subagent it started runs on.
+		items = append(items, proto.Item{ID: "wait", Role: "assistant", Kind: proto.KindText, Text: "Waiting for the subagent."})
+		node.setItems(items...)
+		subagent := []proto.Subagent{{ID: "a1", Description: "check the tracker", Running: true}}
+		node.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusDone, State: proto.StateUnread, Subagents: subagent})
+		<-time.After(20 * s.turnPoll)
+		synctest.Wait()
+		s.sched.mu.Lock()
+		_, open := s.sched.stateDrafts[key]
+		s.sched.mu.Unlock()
+		if !open {
+			t.Fatal("the run was over while its background work still ran")
+		}
+
+		// A supervision message and another conversation's message come in, then the subagent's notice wakes it.
+		peer := proto.Item{ID: "peer", Role: "user", Kind: proto.KindText, Text: "the build is green", From: "other"}
+		items = append(items,
+			proto.Item{ID: "supervision", Role: "user", Kind: proto.KindText, Text: "📋 督办：how far is the patrol?"},
+			proto.Item{ID: "answer", Role: "assistant", Kind: proto.KindText, Text: "Still waiting."},
+			peer,
+			proto.Item{ID: "thanks", Role: "assistant", Kind: proto.KindText, Text: "Noted."},
+			proto.Item{ID: "notice", Role: "system", Kind: proto.KindNotice, Text: "subagent finished", Wake: true},
+		)
+		node.setItems(items...)
+		subagent[0].Running = false
+		node.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusWorking, State: proto.StateWorking, Subagents: subagent})
+		synctest.Wait()
+
+		if _, err := stage(earlier.stateRunKey, "stale"); err == nil || !strings.Contains(err.Error(), "current scheduled turn") {
+			t.Fatalf("an earlier run's key was accepted: %v", err)
+		}
+		if _, err := stage(elsewhere, "elsewhere"); err == nil || !strings.Contains(err.Error(), "current scheduled turn") {
+			t.Fatalf("a key from no prompt here was accepted: %v", err)
+		}
+		if result, err := stage(key, "last reported #101"); err != nil || !strings.Contains(result, "not yet saved") {
+			t.Fatalf("the run's key was refused after its background work woke it: %q, %v", result, err)
+		}
+		if task, _ := taskByID(s, "patrol"); task.StateNote != nil {
+			t.Fatal("a run still at work saved its state")
+		}
+
+		items = append(items, proto.Item{ID: "report", Role: "assistant", Kind: proto.KindText, Text: "New issue #101"})
+		node.setItems(items...)
+		node.setSessions("server", proto.Session{SessionID: sid, Assistant: true, Status: proto.StatusDone, State: proto.StateUnread, Subagents: subagent})
+		<-time.After(4 * s.turnPoll)
+		synctest.Wait()
+		task, _ := taskByID(s, "patrol")
+		if task.StateNote == nil || task.StateNote.Text != "last reported #101" {
+			t.Fatalf("the run's state was not saved: %+v", task.StateNote)
+		}
+		if _, err := stage(key, "late"); err == nil || !strings.Contains(err.Error(), "no longer accepting") {
+			t.Fatalf("a run that is over took state: %v", err)
+		}
+	})
 }
