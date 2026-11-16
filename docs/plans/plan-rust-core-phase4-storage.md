@@ -18,21 +18,24 @@ where D6 (`docs/archive/redesign/README.md`, "D6. Local data and scopes") differ
 
 | Store | Location | Format | Versioning |
 | --- | --- | --- | --- |
-| `ChatCache` (`apple/Shared/ChatStore.swift`) | `Caches/chats-v19/[group-<id>/]<machine>_<session>.json` | One JSON `Entry { items, hasMore, history, covered }`, atomic `Data.write(options: .atomic)` | Folder name `chats-vN`; bump drops all older folders on next launch. Currently v19; v15 was skipped (v14 → v16) |
+| `ChatCache` (`apple/Shared/ChatStore.swift`) | `Caches/chats-v19/[group-<id>/]<machine>_<session>.json` | One JSON `Entry { items, hasMore, history, covered }`, atomic `Data.write(options: .atomic)` | Folder name `chats-vN`; bump drops all older folders on next launch. Currently v19; v15 was intentionally skipped (v14 → v16) |
 | `StateCache` (`apple/Packages/PersonaWire/Sources/PersonaWire/StateCache.swift`) | `Caches/state/<name>.json` (63 call sites) | One JSON value per name, atomic write, writes on a detached utility task | No version field; each consumer owns its name and shape |
-| Launch snapshot (`AppModel.DevSnapshot`) | `Caches/state/dev.json`, `dev.<group>.json` | `{ machines, sessions, interactions, assistant, managers, default_manager, picked, picked_manager }` | Unversioned; a decode failure is silently skipped (`guard let … else { continue }`) |
-| `AgentSync` revs | `Caches/state/agent-sync.json` | `[String: Int64]` of `<machine>/<session>` → last pulled rev | Unversioned |
+| Launch snapshot (`AppModel.DevSnapshot`) | `Caches/state/dev.json`, `dev.<group>.json` | `{ machines, sessions, interactions, assistant, managers, default_manager, picked, picked_manager }`; `sessions` is wrapped per element in `NativeSessionEnvelope` on encode | Unversioned; a decode failure is silently skipped (`guard let … else { continue }`) |
+| `AgentSync` revs | `Caches/state/agent-sync.json` | `[String: Int64]` of `<machine>/<session>` → last pulled rev | Unversioned; its phase-4 home is Q8 |
 | Secrets (hub token, push keys) | Keychain, `WhenUnlockedThisDeviceOnly` | — | Out of scope; stays native through `PlatformHost` |
 
 Cold-launch read order (P10 in `docs/apple/performance.md`): `App.init` and the first `body` read only the cached
 snapshot; network, most keychain reads and migrations wait until after the first frame. `PerfTrace.event("Snapshot
-restored")` marks the decode, `First frame (root appeared)` the paint, `Connected` the hub. The snapshot write is
-throttled to at most one per minute (`snapshotWriter`, #4684) and flushed on backgrounding; it is about 390 KB on a
+restored")` marks the decode, `First frame (root appeared)` the paint, `Connected` the hub. The launch snapshot's
+coalescing is `AppModel.snapshotWriter`, a `Throttle(first: 2 s, gap: 60 s)` on the MainActor: the first save after a
+quiet spell lands about 2 s after it is requested, later saves at most once a minute (#4684), and the app leaving the
+foreground flushes what is waiting. Each write itself is atomic through `StateCache`; the file is about 390 KB on a
 hub with about 230 sessions.
 
 `ChatStore.init` reads its `ChatCache` synchronously, keeps the last two user-question turns plus the exchanges that
-launched any retained subagent task (`ChatCache.tail`), caps one chat's file at 6 MiB and drops image items when the
-cap is exceeded. `AgentSync` warms the disk cache of up to 40 recent sessions (24 h window, three concurrent pulls)
+launched any retained subagent task (`ChatCache.tail`), caps one chat's file at 6 MiB and, when the encoded entry
+exceeds that cap, drops image items once and saves whatever results (no further turn trimming).
+`AgentSync` warms the disk cache of up to 40 recent sessions (24 h window, three concurrent pulls)
 so a chat that was never opened this launch still paints instantly.
 
 Multi-hub separation: the default group lives at the top of `chats-v19/` and `state/`; every other group's files sit
@@ -47,8 +50,8 @@ must reproduce, not a recommendation to change it (see Q6).
 
 | Store | Location | Format | Versioning |
 | --- | --- | --- | --- |
-| `ItemsDatabase` (Room, `core/data/DataDatabases.kt`) | `cacheDir/hub-data/<scope>/items.db` | SQLite, `items(scope, machine, session, seq, part, id, json)` + `cursors(scope, machine, session, history, covered, has_more)` | Room `version = 6`; migrations 3→4, 4→5, 5→6 each `DELETE FROM items/cursors` (cache rows only, refilled from hub) |
-| `PersistentDatabase` (outbox, drafts, main conversation) | `filesDir/hub-data/<scope>/data.db` | SQLite, version 6 | Out of phase-4 scope: durable, not a cache |
+| `ItemsDatabase` (Room, `core/data/DataDatabases.kt`) | `cacheDir/hub-data/<scope>/items.db` | SQLite, `items(scope, machine, session, seq, part, id, json)` + `cursors(scope, machine, session, history, covered, has_more)` | Room `version = 6`. 1→2 adds the `cursors` table, 2→3 is an auto schema migration; the cache-invalidation migrations are 3→4, 4→5, 5→6, each `DELETE FROM items/cursors` (cache rows only, refilled from hub) |
+| `PersistentDatabase` (outbox, drafts, main conversation) | `filesDir/hub-data/<scope>/data.db` | SQLite, also `version = 6` (a coincidence of numbering, not a shared schema) | Out of phase-4 scope: durable, not a cache |
 | Images / inbox media | `cacheDir` file caches with LRU budgets | Raw bytes | Unversioned |
 | Credentials | Keystore-generated key + Tink | — | Out of scope |
 
@@ -71,7 +74,7 @@ snapshot gives Android the same cold-start behavior iOS already has.
 
 | Store | Location | Format | Versioning |
 | --- | --- | --- | --- |
-| `LocalStore` (`platform/LocalStore.ets`) | RDB `persona.db`, table `client_state(key TEXT PRIMARY KEY, value TEXT)` | JSON strings, security level S3 | None |
+| `LocalStore` (`platform/LocalStore.ets`) | RDB `persona.db`, table `client_state(key TEXT PRIMARY KEY, value TEXT)` | JSON strings, opened with `SecurityLevel.S3` (the RDB security label; whether this encrypts the file at rest is an OS property, not something the app adds — see Q6) | None |
 | Transcript cache (`core/TranscriptCache.ts` + `models/TranscriptModel.ets`) | One `client_state` row per chat | `TranscriptSnapshot { items, covered, history, hasMore, loadedOnce }` as JSON, bounded to 384 KiB / 256 items, complete suffix only | None |
 | Credentials | Asset Store | — | Out of scope |
 
@@ -94,13 +97,18 @@ adopt for every platform: a snapshot must only ever contain items the reducer co
 - PlatformHost (phase 4 row): the host passes the per-hub scope directories when it creates the core. Storage is not
   a host effect; only the directories and, if needed, file-protection attributes come from the host.
 - #8227 (being fixed in #8922): the core accepts repeated item keys on the wire with first-value-wins semantics and
-  preserves the original JSON, so its snapshot reader must accept those same bytes. Whatever byte format phase 4
-  chooses, the snapshot restore path must use the same `Item` parsing as the wire path (`Item::from_wire` semantics,
-  first value wins), not a stricter derived deserializer. This is a hard constraint, not an option: any design that
-  re-serializes items through a normalizing encoder and re-reads them with a strict decoder reintroduces the bug.
+  preserves the original JSON, so its snapshot reader must accept those same bytes. The snapshot restore path today
+  is `Action::OpenChat` → `items_from` → `Item::list_from_json` → `Item::from_raw`, which currently deserializes a
+  derived `Head` and therefore rejects duplicate keys — that is the bug. #8922 makes `from_raw` use the same
+  first-value-wins keyed reader the wire decoder uses, while keeping cache-specific defaults and positional errors.
+  The constraint on phase 4 is therefore: whatever byte format is chosen, restore must go through that same
+  `items_from` / `list_from_json` / `from_raw` chain (post-#8922), so bytes the core itself wrote (raw hub JSON)
+  round-trip by construction. A design that re-serializes items through a normalizing encoder, or that restores
+  through the stricter `Item::from_wire` validator (which requires keys a cached item may legitimately lack), would
+  either reintroduce the bug or tighten restore semantics beyond what the cache accepts today. Neither is allowed.
 - The runtime's existing `Action::OpenChat { chat, snapshot }` already carries `ChatSnapshot { items_json, history,
-  covered, has_more, loaded_once }`. Phase 4 is about who produces and persists those bytes, not about changing the
-  action's shape.
+  covered, has_more, loaded_once }`. Phase 4 is primarily about who produces and persists those bytes; one new
+  sibling action for "open from core-owned storage" is proposed in Q5, and the base `OpenChat` shape is unchanged.
 
 ## 3. The proposed design (recommended)
 
@@ -109,7 +117,7 @@ adopt for every platform: a snapshot must only ever contain items the reducer co
 One directory per hub scope, handed to the core at creation:
 
 ```text
-<core-root>/<scope>/                       scope = group id on iOS, hub_id+generation on Android/HarmonyOS
+<core-root>/<scope>/                       scope = an opaque id the host supplies: group id on iOS, HubScope.path on Android/HarmonyOS (Q1)
   snapshot.bin                             the launch snapshot (Agents list, interactions, assistant roster)
   snapshot.bin.tmp                         in-flight atomic write
   chats/
@@ -140,7 +148,8 @@ bincode payload         the same wire types the boundary uses
 - The launch snapshot payload is a new wire type `LaunchSnapshot` (see 3.3).
 - The chat-tail payload is exactly `ChatSnapshot` from `persona-core-runtime/src/wire.rs`: `items_json` holds the raw
   item JSON array **byte for byte as the hub sent it**, which is what makes #8227's first-value-wins restore rule
-  natural: the restore path is the same `items_from` the runtime already uses for `Action::OpenChat`.
+  natural: the restore path is the same `items_from` / `list_from_json` / `from_raw` chain the runtime already uses
+  for `Action::OpenChat`, fixed by #8922 to accept duplicate keys first-value-wins.
 - No per-file checksum in v1: a torn write is prevented by the atomic rename, and a semantically corrupt file is
   caught by the bincode decode plus `items_from` validation. Adding a CRC32 of the payload (4 bytes) is cheap
   insurance against silent disk corruption and is Q4 below.
@@ -170,7 +179,9 @@ Raw-JSON-string fields, rather than typed Rust structs for `Machine`, `Session`,
 those types have not been ported into the core, and phase 4 is not the phase that ports them. The core treats the
 lists as opaque payloads it persists and hands back; decoding them into view models stays native until a later
 phase moves those domains. This keeps phase 4 small and avoids freezing a typed schema for structures the hub is
-still changing.
+still changing. Two details the native decode side must preserve: on iOS `sessions` is encoded per element in
+`NativeSessionEnvelope`, so the restore path is the envelope decode, not a bare `[Session]` decode; and the shadow
+comparison's fixtures must match that same envelope shape.
 
 ### 3.4 Versioning and migration
 
@@ -206,23 +217,28 @@ explicitly out of phase 4; when they later move, they get a real versioned envel
 
 The core owns the byte budget the way Android's `SessionItemsCache` does today, since it is the only writer:
 
-- Per-chat cap: 6 MiB after the window is applied (iOS's `maxBytes`), dropping image items first, then trimming
-  further turns if still over.
+- Per-chat cap: 6 MiB after the window is applied (iOS's `maxBytes`). Today's behavior is to drop image items once
+  when the encoded entry exceeds the cap and save whatever results, with no further turn trimming; phase 4 keeps
+  exactly that (any "trim further turns" behavior would be a new change needing its own acceptance, not part of this
+  port).
 - Window: the last two user-question turns plus the exchanges that launched retained subagent tasks. This logic is
   currently duplicated (`ChatCache.tail`, `SessionItemsCache.save`, `boundedTranscriptCache`); phase 4 moves it into
   `persona-core` as a pure function over the reducer's items, with fixtures from the existing iOS behavior (it is a
   small domain of its own and follows the migration rules: fixtures first).
 - Scope budget: 32 MiB of chat tails per scope (Android's default), LRU by last access, chats on screen pinned.
   iOS has no scope budget today; adopting Android's is a behavior change for iOS and is Q3.
-- The launch snapshot is exempt from eviction (one file per scope, hundreds of KB) but is written at most once a
-  minute with a flush on backgrounding, reproducing iOS's throttle. The core has no clock, so "a minute has passed"
-  and "the app is backgrounding" arrive as actions (`Action::Tick`, `Action::FlushStorage`) from the host.
+- The launch snapshot is exempt from eviction (one file per scope, hundreds of KB) and reproduces iOS's
+  `Throttle(first: 2 s, gap: 60 s)`: the first save after a quiet spell lands about 2 s after it is requested (so an
+  app killed within its first minute still has a snapshot), later saves at most once a minute, with a flush on
+  backgrounding. The core has no clock, so the delays are driven by `Action::Tick { now_unix }` from the host (the
+  host's scheduler already owns the 2 s / 60 s timing; the core only compares timestamps) and
+  `Action::FlushStorage` on backgrounding.
 
 ### 3.7 PlatformHost capabilities to add
 
 | Capability | Why | Shape |
 | --- | --- | --- |
-| Scope directories | Only the OS knows the sandbox; decided already (phase 4 row) | `CoreConfig.scopes: Vec<(ScopeId, PathBuf)>` at creation; adding/removing a hub is a new core or an action |
+| Scope directories | Only the OS knows the sandbox; decided already (phase 4 row) | `CoreConfig.scopes: Vec<(ScopeId, PathBuf)>` at creation. Adding or removing a hub at runtime (iOS adds and removes groups without recreating `AppModel`) is `Action::AddScope { id, path }` / `Action::RemoveScope { id }`, never core recreation: the core owns per-scope state and open chats, so tearing it down on every pairing change would drop live sessions |
 | Clock reads for throttling | The pure core has no clock | `Action::Tick { now_unix: i64 }` from the host; writes compare against the last write's timestamp |
 | Background/quit flush | iOS flushes the snapshot writer on backgrounding | `Action::FlushStorage`; the worker finishes the pending write before acknowledging |
 | File protection level (iOS) | Caches inherit the directory's protection; the core must not accidentally raise it | Host sets attributes on `<core-root>` at creation; the core never changes them (Q6) |
@@ -238,8 +254,11 @@ phase 4:
 1. The host asks the core to open a chat (`Action::OpenChat` gains a `from_storage: bool`, or a new
    `Action::OpenChatStored { chat }`; Q5).
 2. The worker reads `chats/<machine>__<session>.bin`, decodes `ChatSnapshot`, and restores the session through the
-   same `session.restore` the action uses today. Items go through `items_from`, which after #8922 accepts
-   duplicate keys first-value-wins, so any bytes the core itself wrote (raw hub JSON) round-trip by construction.
+   same `session.restore` the action uses today. Items go through `items_from` → `list_from_json` → `from_raw`,
+   which after #8922 accepts duplicate keys first-value-wins, so any bytes the core itself wrote (raw hub JSON)
+   round-trip by construction. A missing or unreadable file is not an error: the worker restores from
+   `ChatSnapshot::default()` (the same empty snapshot the runtime's tests already construct), publishes that, and
+   lets continuity's normal fetch effects fill the chat — exactly today's cold path when no cache exists.
 3. The first `ChatPatch` the client drains is therefore the cached tail, before any network effect is emitted. The
    fetch effects that continuity would issue after a restore (`FetchAfter` for a gap, etc.) are unchanged: the
    snapshot is a starting state, not a sync replacement.
@@ -259,7 +278,10 @@ Following the migration rules (adapter, shadow run, delete) and "iOS shadow firs
 1. **iOS shadow.** `ChatCache` and the `DevSnapshot` path gain a behind-the-scenes mirror: the native code stays
    authoritative, and every save also dispatches to a DEBUG-only core that writes its own files. On every load, the
    shadow compares what it would have restored (item ids/order, `history`, `covered`, `hasMore`, snapshot field
-   hashes) and reports mismatches to diagnostics with no content. One TestFlight cycle, mirroring #8970's approach.
+   hashes) and reports mismatches to diagnostics with no content. The comparison is keyed by the semantic
+   `(group, machine, session)` triple, not by file path — the core's `<machine>__<session>` file naming differs
+   from iOS's `<machine>_<session>` on purpose, and the shadow must not depend on the two layouts matching. One
+   TestFlight cycle, mirroring #8970's approach.
 2. **iOS authoritative.** After a clean shadow, `ChatStore.init` and `restoreSaved()` read from the core. The old
    `chats-v19` and `state/dev*.json` files are left in place for one release (read-only fallback if the core file is
    absent) and then deleted; the folder version is bumped so old copies are not misread.
@@ -281,7 +303,7 @@ All compared against the current native implementation on the same device, build
 | Metric | Budget / expectation |
 | --- | --- |
 | Cold launch to first frame | No regression beyond run-to-run noise; snapshot read happens off the main thread and before sync, as today |
-| Snapshot read latency (decode + restore) | Reported per scope size; target: not slower than today's `StateCache.load` + JSON decode of ~390 KB |
+| Snapshot read latency (decode + restore) | iOS-only baseline: Android and HarmonyOS have no launch-snapshot equivalent today (§1.2), so they gain the behavior rather than compare against it. Target on iOS: not slower than today's `StateCache.load` + JSON decode of ~390 KB (a hub with ~230 sessions); report per scope size |
 | Chat tail read latency | Reported; compared with Room `load` on Android and `ChatCache.load` on iOS |
 | Snapshot write cost on the worker | Reported; writes are throttled as today and must not delay patches |
 | File sizes | Chat tails comparable to today's JSON (bincode envelope + raw JSON items adds ~9 bytes per file); snapshot comparable |
@@ -322,12 +344,19 @@ must beat or match.
 
 ## 5. Questions for the maintainer
 
-**Q1. Scope identity: group id (iOS model) or hub id + pairing generation (Android/HarmonyOS model)?**
-Recommendation: **hub id + pairing generation everywhere**, with the group id kept as an additional key inside the
-scope for iOS's multi-hub grouping. Rationale: D6 already specifies `<hub_id>/<pairing generation>/`, and
-generation-scoped directories make "re-pairing starts clean" a filesystem property instead of per-key epoch checks
-(HarmonyOS) or group bookkeeping (iOS). Cost: iOS gains a scope-mapping step at pairing time and a one-time move of
-existing caches (or accepts a cold cache on upgrade — caches are disposable).
+**Q1. Scope identity: how does the core key a "hub scope" when iOS groups hubs and Android/HarmonyOS key by hub id +
+pairing generation?** This is the hardest open question, because the two models are not isomorphic. iOS's `groupIDs`
+is a list of independent *user-facing* groups: the same physical hub may appear under two groups, and a re-pair that
+keeps the user's group must not wipe that group's caches. Android's `HubScope(hubId, generation).path` is a
+*storage* key: re-pairing deliberately creates a fresh empty directory. A single "hub id + generation everywhere,
+group as an inner key" scheme breaks both iOS invariants (two groups, one hub; re-pair, same group). Recommendation:
+**key scopes by the platform's own existing scope identifier — group id on iOS, `HubScope.path` on Android/HarmonyOS —
+and treat the scope id as an opaque string inside the core.** The core never interprets it; it only uses it as a
+directory name and a key prefix. This keeps "nothing the user sees changes" true on iOS (group semantics untouched)
+and on Android (re-pair semantics untouched), at the cost of the core not enforcing D6's `<hub_id>/<generation>/`
+layout uniformly. The alternative — migrate iOS to hub id + generation — is a user-visible multi-hub behavior change
+and belongs in its own issue with its own acceptance, not smuggled into a storage port. If the maintainer prefers
+uniformity over minimal change, that alternative is a deliberate product decision to make here, explicitly.
 
 **Q2. Is dropping-and-refetching on every content-version bump acceptable as the only migration strategy for phase
 4?** Recommendation: **yes**, matching iOS's folder bumps and Android's `DELETE FROM` migrations. The risk is a
@@ -347,12 +376,14 @@ would otherwise pass off as a decode error) and **quarantine one copy** per file
 the next successful write. Both are cheap and align with D6's "preserve the original file" instinct without
 treating caches as durable.
 
-**Q5. Does opening a chat from storage reuse `Action::OpenChat` (with the core reading the file when the snapshot
-is empty) or a separate `Action::OpenChatStored`?** Recommendation: **a separate action**. `OpenChat` today takes
-its snapshot from the caller; overloading "empty snapshot means read from disk" hides an IO operation inside an
-action whose current contract is pure. A separate action keeps the boundary honest and makes the shadow-run
-comparison (native-loaded snapshot vs core-loaded snapshot) trivial to wire. Cost: one more wire variant and codec
-regeneration.
+**Q5. Does opening a chat from storage reuse `Action::OpenChat` or a new `Action::OpenChatStored`?** Recommendation:
+**a new sibling variant `OpenChatStored { chat }`**, with `OpenChat`'s existing shape unchanged (§2 frames the base
+shape as stable; adding a sibling is a compatible extension, not a contradiction). `OpenChat` today takes its
+snapshot from the caller, which is exactly what the iOS shadow run needs: the native loader produces the snapshot,
+the core mirrors it, and the two are compared. `OpenChatStored` is the post-shadow production path, where the core
+reads its own file. Overloading `OpenChat` with "empty snapshot means read from disk" would hide an IO operation
+inside an action whose contract is pure and would make the shadow comparison ambiguous. Cost: one more wire variant
+and codec regeneration; the existing `OpenChat` and its tests are untouched.
 
 **Q6. Any change to the encryption / file-protection posture?** Recommendation: **no change in phase 4**. Caches
 stay plain bytes in the OS sandbox with the platform default protection, exactly as on all three platforms today;
@@ -366,6 +397,30 @@ as a new pure domain `cache_window`**, with fixtures derived from current iOS `C
 the subagent-launch retention and the same-seq continuation rule), replayed by Android and HarmonyOS the way every
 moved domain is. It is small, but it is real behavior with real edge cases, and treating it as "just part of
 storage" would skip the fixtures-first rule.
+
+**Q8. Where does `AgentSync`'s rev ledger (`agent-sync.json`) live?** §1.1 lists it but the design above does not
+place it. It is per-hub, read on every launch, and drives which of the ~40 recent sessions get warmed — so it is on
+the cold-launch path even though it is not user-visible. Recommendation: **move it into the core as part of the
+launch snapshot's scope**, stored as its own small file (`sync-revs.bin`) beside `snapshot.bin`, because the core
+will own "which chats need refreshing" once it owns the caches; the alternative (leave it in native `StateCache`)
+keeps a second per-hub JSON file with its own write coalescing alive precisely where phase 4 is trying to
+consolidate. Flagging because it is easy to overlook and would otherwise be a leftover.
+
+**Q9. Core lifetime versus `AppModel` lifetime.** iOS creates one `AppModel` for the app, not one per hub, and adds
+and removes groups at runtime. §3.7 therefore commits to `Action::AddScope` / `Action::RemoveScope` rather than
+core recreation. Recommendation: **one core per app process, scopes added and removed by action**, and that is a
+design commitment, not an open fork. It is listed here so the maintainer sees that "one core per hub" was considered
+and rejected: per-hub cores would each carry their own worker thread and runtime registry entry, and iOS's group
+merging (`HubDataStore`'s openGroup/home distinction) would force core teardown on a routine operation.
+
+**Q10. Downgrade safety: an older app version opens a scope a newer version wrote.** D6's durable rule is "newer
+reads older, older refuses to overwrite newer". Caches are exempt from that rule's *migration* half (drop and
+refetch), but the manifest is JSON the older core can still parse. Recommendation: **the manifest carries the
+envelope magic version, and an older core that sees a higher version treats the whole scope directory as
+not-mine** — it neither reads the `.bin` files (their magic would refuse anyway) nor writes into the directory,
+falling back to an empty cache and a sync. This prevents an older build from racing a newer build's files after a
+downgrade, and matches how iOS's folder-name version bump already makes old folders invisible to new builds and vice
+versa. No cross-version writes are allowed in either direction.
 
 ## 6. Out of scope for phase 4
 
