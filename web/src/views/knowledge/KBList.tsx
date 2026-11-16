@@ -5,13 +5,14 @@ import { createPortal } from "react-dom";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
 import {
-  countLabel,
   groupEntries,
   groupResults,
   hitView,
-  KB_KINDS,
   KIND_TITLE,
+  LIST_KINDS,
+  mergeMeetingLists,
   projectInfo,
+  recordingKindTag,
   rowTags,
   statusLabel,
   topicPointCount,
@@ -21,12 +22,13 @@ import {
   type KBResult,
 } from "../../lib/kb";
 import { href, navigate } from "../../lib/router";
+import { onHubEvent } from "../../lib/store";
 import { Button, Collapse, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import type { MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { lists, listKey, remember, searches, searchKey } from "./cache";
-import { Badges, Card, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile } from "./KBParts";
+import { Badges, Card, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
 /** Rows drawn at once in a section; more on "Show more" (people run to thousands). */
@@ -58,7 +60,9 @@ export function ListPane({
     setList(lists.get(key));
     setError("");
     const ac = new AbortController();
-    api<KBList>(`/kb/${kind}${tag ? `?tag=${enc(tag)}` : ""}`, { signal: ac.signal })
+    const read = (k: string) => api<KBList>(`/kb/${k}${tag ? `?tag=${enc(tag)}` : ""}`, { signal: ac.signal });
+    // Meetings are one list with the recordings (#8871): both are read, and either failing fails the page.
+    (kind === "meetings" ? Promise.all([read("meetings"), read("recordings")]).then(([m, r]) => mergeMeetingLists(m, r)) : read(kind))
       .then((l) => {
         const v = { items: l.items ?? [], tags: l.tags ?? [] };
         lists.set(key, v);
@@ -107,6 +111,16 @@ export function ListPane({
       ac.abort();
     };
   }, [q, reloadKey, searchRetry]);
+
+  // A read that failed while the hub was away is read again once it is back (its hello), as Retry would, so the page
+  // does not stay on the error. Reads that went through are not repeated on a hello.
+  useEffect(() => {
+    if (!error && !searchError) return;
+    return onHubEvent("hello", () => {
+      if (error) setRetry((x) => x + 1);
+      if (searchError) setSearchRetry((x) => x + 1);
+    });
+  }, [error, searchError]);
 
   const sections = useMemo(() => (list?.items ? groupEntries(kind, list.items, tag) : []), [list, kind, tag]);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -192,19 +206,16 @@ export function ListPane({
               onOpen={onOpen}
               onRetry={() => setSearchRetry((x) => x + 1)}
             />
-          ) : !list && !error ? (
-            // Paint the chips with their count and rows, so the count cannot wrap an already visible chip row.
-            <div className="py-10">
-              <Loading />
-            </div>
           ) : (
             <>
               <div className="mt-3 flex items-start gap-2">
-                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching. */}
+                {/* Search covers every kind: the chips (one of them lit) would say otherwise, so they go while searching.
+                    The chips carry no count: a count on the selected one only changed its width, so picking another kind
+                    re-wrapped the row and moved every chip after it; each section under them says how many it holds. With
+                    nothing that changes their width they stay put, while a kind loads too. */}
                 <div role="tablist" aria-label={t("knowledge-kblist.kinds")} className="flex min-w-0 flex-1 flex-wrap gap-1">
-                  {KB_KINDS.map((k) => {
+                  {LIST_KINDS.map((k) => {
                     const on = k === kind;
-                    const n = on ? list?.items?.length : undefined;
                     return (
                       <a
                         key={k}
@@ -218,7 +229,6 @@ export function ListPane({
                         )}
                       >
                         {KIND_TITLE[k]}
-                        {n !== undefined && <span className="tabular-nums opacity-70">{countLabel(n)}</span>}
                       </a>
                     );
                   })}
@@ -236,6 +246,11 @@ export function ListPane({
               )}
 
               <div className="mt-4 flex flex-col gap-5">
+                {!list && !error && (
+                  <div className="py-6">
+                    <Loading />
+                  </div>
+                )}
                 {error && !list && <ErrorBox text={error} onRetry={() => setRetry((x) => x + 1)} />}
                 {list && sections.length === 0 && <Empty kind={kind} tag={tag} />}
                 {sections.map((s) => {
@@ -315,8 +330,9 @@ export function ListPane({
 function EntryRow({ e, tag, selected, onOpen, onMenu }: { e: KBEntry; tag?: string; selected: boolean; onOpen: (e: KBEntry) => void; onMenu?: (at: MenuAt) => void }) {
   const tags = rowTags(e, tag);
   const when = ago(e.updated);
+  const recordingTag = recordingKindTag(e);
   const status = projectInfo(e)?.status === "paused" ? statusLabel("paused") : null;
-  const badges = e.importance || e.relevance > 0 || tags.length || status || e.kind === "projects" || topicPointCount(e) !== null;
+  const badges = recordingTag || e.importance || e.relevance > 0 || tags.length || status || e.kind === "projects" || topicPointCount(e) !== null;
   return (
     <a
       href={href({ name: "kb", kind: e.kind, id: e.id })}
@@ -337,6 +353,7 @@ function EntryRow({ e, tag, selected, onOpen, onMenu }: { e: KBEntry; tag?: stri
         {badges && (
           // One line high: tags that would wrap fall below it and out of sight, so only whole ones show.
           <span className="mt-1.5 flex h-[18px] flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden">
+            {recordingTag && <TonePill>{recordingTag}</TonePill>}
             <Badges entry={e} status={status} />
             {tags.map((t) => (
               <span key={t} className="whitespace-nowrap text-[11px] text-ink-3">
@@ -449,6 +466,16 @@ const EMPTY_TITLE: Record<KBKind, string> = {
   topics: t("knowledge-kblist.empty_topics"),
 };
 
+/** Where a kind's entries come from, for its empty page: topics are curated, events come from a connected calendar and
+ *  recordings from the phone; the rest from the archived chats. Under a tag the page is empty because of the filter, so
+ *  it says how to see the rest instead. */
+const EMPTY_BODY: Partial<Record<KBKind, string>> = {
+  meetings: t("knowledge-kblist.empty_meetings_body"),
+  topics: t("knowledge-kblist.empty_topics_body"),
+  events: t("knowledge-kblist.empty_events_body"),
+  recordings: t("knowledge-kblist.empty_recordings_body"),
+};
+
 function Empty({ kind, tag }: { kind: KBKind; tag?: string }) {
   return (
     <div className="flex flex-col items-center px-6 py-10 text-center">
@@ -456,7 +483,7 @@ function Empty({ kind, tag }: { kind: KBKind; tag?: string }) {
         <KBIcon name={KIND_ICON[kind]} size={18} />
       </span>
       <p className="text-[13.5px] font-medium text-ink">{tag ? t("knowledge-kblist.empty_tag", { tag, kind: KIND_TITLE[kind] }) : EMPTY_TITLE[kind]}</p>
-      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{kind === "topics" && !tag ? t("knowledge-kblist.empty_topics_body") : t("knowledge-kblist.empty_body")}</p>
+      <p className="mt-1 max-w-[340px] text-[12.5px] leading-relaxed text-ink-3">{tag ? t("knowledge-kblist.empty_tag_body", { kind: KIND_TITLE[kind] }) : EMPTY_BODY[kind] ?? t("knowledge-kblist.empty_body")}</p>
     </div>
   );
 }

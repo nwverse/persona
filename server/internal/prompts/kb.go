@@ -141,6 +141,23 @@ type KBRecordingInput struct {
 
 func RenderKBRecordingInput(in KBRecordingInput) string { return render("kb/recording_input", in) }
 
+// RenderKBRecordingTitle is the system prompt naming a recording while it records (kb/recording_title, #8873).
+func RenderKBRecordingTitle(o KBOwner) string { return render("kb/recording_title", o) }
+
+// KBRecordingTitleInput is a recording still recording, to name (kb/recording_title_input): a meeting or a note, its
+// start in the user's zone, the minutes recorded so far, the phone's language, the title the last call gave ("" none)
+// and the transcript so far, its start and its latest part when it is long.
+type KBRecordingTitleInput struct {
+	Meeting                       bool
+	Start                         time.Time
+	Minutes                       int
+	Language, Current, Transcript string
+}
+
+func RenderKBRecordingTitleInput(in KBRecordingTitleInput) string {
+	return render("kb/recording_title_input", in)
+}
+
 // RenderKBMinutes is the system prompt for a meeting recording's minutes, or a part's notes (kb/minutes).
 func RenderKBMinutes(o KBOwner) string { return render("kb/minutes", o) }
 
@@ -164,10 +181,10 @@ type KBMinutesInput struct {
 func RenderKBMinutesInput(in KBMinutesInput) string { return render("kb/minutes_input", in) }
 
 // KBMinutesNote is an item of a part's notes: Line the transcript line it cites, or Photo the photo (Line 0 then); Who,
-// By and DueDate as the part said.
+// By and DueDate as the part said; Topic the title of the part's topic a point or decision is in ("" none, #6563).
 type KBMinutesNote struct {
-	Line, Photo            int
-	Text, Who, By, DueDate string
+	Line, Photo                   int
+	Text, Who, By, DueDate, Topic string
 }
 
 // KBMinutesPart is a part's notes, From and To its first and last lines' clock times.

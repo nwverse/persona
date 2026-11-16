@@ -24,6 +24,10 @@
   "deleting": "Orca is still deleting this worktree; refresh to check its status",
   "source_changed": "The selected GitHub source changed; select it again",
   "branch_taken": "Branch {branch} is already checked out at {path}",
+  "checkout_changed": "The checkout at {path} no longer matches branch {branch} in this repository",
+  "checkout_unverified": "Cannot verify that branch {branch} at {path} is safe to reuse: {reason}",
+  "checkout_in_use": "Branch {branch} is checked out at {path} and is in use by Agent {owner}",
+  "checkout_dirty": "Branch {branch} is checked out at {path} and has uncommitted changes; use that checkout explicitly or keep the changes before retrying",
   "dirty": "The worktree has uncommitted changes",
   "github_unavailable": "Some GitHub sources could not be loaded. Check Orca's GitHub connection or try another search.",
   "workspace_ambiguous": "The workspace identity is ambiguous; refresh Orca before continuing",
@@ -55,5 +59,13 @@
   "runtime_folder_name": "{engine} can’t name a worktree folder “{name}”; use letters a–z or digits",
   "runtime_folder_taken": "{path} already exists, so {engine} would put the worktree somewhere else; choose another name",
   "runtime_slow": "{engine} didn’t finish making the worktree in time; refresh to see whether it appeared before retrying",
-  "agent_branch_exhausted": "No branch name is free for the Agent’s worktree: its name and the next 49 are all taken"
+  "agent_branch_exhausted": "No branch name is free for the Agent’s worktree: its name and the next 49 are all taken",
+  "runtime_not_owned": "{engine} did not make this worktree, so Persona does not delete it; remove it in {engine}",
+  "runtime_folder_kept": "This {engine} workspace is a folder, not a worktree; Persona deletes only worktrees {engine} made",
+  "runtime_busy": "An Agent is still working in this worktree; wait until it is done or stop it, then try again",
+  "runtime_folder_gone": "The worktree’s folder {path} is gone; refresh to see what {engine} lists now",
+  "runtime_git_gone": "{path} is no longer a Git worktree: its record in the repository is gone, so Persona does not delete it; remove it in {engine}",
+  "runtime_not_toplevel": "{path} is a folder inside a worktree, not the worktree itself; Persona deletes only a whole worktree",
+  "runtime_folder_left": "{engine} archived the workspace but kept its folder {path}; remove the folder in {engine} or by hand",
+  "runtime_remove_unanswered": "{engine} didn’t answer while removing the worktree; refresh to see whether it is gone before trying again"
 }

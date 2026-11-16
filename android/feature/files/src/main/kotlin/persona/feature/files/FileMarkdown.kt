@@ -168,6 +168,7 @@ private fun fileMarkdownComponents() = markdownComponents(
     unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
         markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
         listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
+    table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table) },
     codeFence = { model ->
         MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset)) { JCodeBlock(it.code, small = true) }
     },

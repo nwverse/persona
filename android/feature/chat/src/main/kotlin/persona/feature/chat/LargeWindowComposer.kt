@@ -54,10 +54,12 @@ fun LargeWindowComposer(
     sending: Boolean,
     canClear: Boolean,
     service: ChatComposerService?,
+    uploadDestination: String? = null,
     onSend: () -> Unit,
     onCommand: (String) -> Unit,
     onNotice: (String) -> Unit,
     extraContent: Boolean = false,
+    assistantChat: Boolean = false,
     enabled: Boolean = true,
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     leading: (@Composable RowScope.() -> Unit)? = null,
@@ -81,8 +83,8 @@ fun LargeWindowComposer(
     val composer: @Composable () -> Unit = {
         ChatComposer(
             session = session, state = state, working = working, sending = sending, canClear = canClear,
-            service = service, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
-            extraContent = extraContent, enabled = enabled, placeholder = placeholder, leading = leading,
+            service = service, uploadDestination = uploadDestination, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
+            extraContent = extraContent, assistantChat = assistantChat, enabled = enabled, placeholder = placeholder, leading = leading,
             accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible,
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
             onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, loop = loop,

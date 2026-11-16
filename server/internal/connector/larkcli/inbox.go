@@ -48,11 +48,12 @@ type StateStore interface {
 const inboxStateKey = "connector.larkcli.inbox"
 
 type persistedInboxState struct {
-	Cursor       string   `json:"cursor,omitempty"`
-	PageToken    string   `json:"page_token,omitempty"`
-	Topics       []string `json:"topics,omitempty"`
-	Seen         []string `json:"seen,omitempty"`
-	TopicsSeeded bool     `json:"topics_seeded,omitempty"`
+	Cursor       string                          `json:"cursor,omitempty"`
+	PageToken    string                          `json:"page_token,omitempty"`
+	Topics       []string                        `json:"topics,omitempty"`
+	Seen         []string                        `json:"seen,omitempty"`
+	TopicsSeeded bool                            `json:"topics_seeded,omitempty"`
+	Things       map[string]connector.InboxThing `json:"things,omitempty"`
 }
 
 type inboxGroup struct {
@@ -487,6 +488,11 @@ func (c *Connector) loadInboxStateLocked(ctx context.Context) error {
 		return nil
 	}
 	c.inboxState = saved
+	for thread, thing := range saved.Things {
+		if thread != "" {
+			c.inboxThings[thread] = thing
+		}
+	}
 	for _, id := range saved.Seen {
 		if id != "" {
 			c.inboxSeen[id] = struct{}{}
@@ -504,7 +510,11 @@ func (c *Connector) saveInboxStateLocked(ctx context.Context) error {
 	if c.inboxStore == nil {
 		return nil
 	}
-	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded}
+	state := persistedInboxState{Cursor: c.inboxState.Cursor, PageToken: c.inboxState.PageToken, TopicsSeeded: c.inboxState.TopicsSeeded,
+		Things: make(map[string]connector.InboxThing, len(c.inboxThings))}
+	for thread, thing := range c.inboxThings {
+		state.Things[thread] = thing
+	}
 	for topic := range c.inboxTopics {
 		state.Topics = append(state.Topics, topic)
 	}
@@ -977,7 +987,14 @@ func messageKey(message adapter.Message) string {
 	return message.ChatID
 }
 
+// atAll is an @all written in the content: lark-cli lists only people in mentions, so an @all reaches the Inbox as
+// "@_all" in a text message and as <at user_id="all"> in a post.
+var atAll = lazyre.New(`(?:^|\s)@_all(?:\s|$)|<at\s+user_id="all"`)
+
 func messageMentions(message adapter.Message, me string) bool {
+	if atAll.MatchString(rawText(message.Content)) {
+		return true
+	}
 	for _, mention := range message.Mentions {
 		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
 		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name

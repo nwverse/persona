@@ -197,16 +197,25 @@ func (b *syncBuf) close() {
 }
 
 // screenDial is screen.dial: start the live-screen video helper for a signed-in pair and join its socket to the
-// stream `id`. Errors: video_unavailable (no helper or no Screen Recording grant), not_signed_in (the paired RFB
+// stream `id`. `x264`: x264 is on for this Mac (#8859), so the helper gets the user's ffmpeg when there is one. Errors: video_unavailable (no helper or no Screen Recording grant), not_signed_in (the paired RFB
 // stream has not passed Screen Sharing's SecurityResult), busy (two video streams already open).
 func (n *Node) screenDial(ctx context.Context, params json.RawMessage) (any, error) {
 	var p struct {
 		ID        string `json:"id"`
 		Pair      string `json:"pair"`
 		KeepAwake bool   `json:"keep_awake"`
+		// Link: the video joins the pair's screen session as a channel (#6398); Attach: a relay rejoining the
+		// session's live video channel, as for port.dial.
+		Link   bool `json:"link"`
+		Attach bool `json:"attach"`
+		X264   bool `json:"x264"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil || p.ID == "" || p.Pair == "" {
 		return nil, &rpc.Error{Code: "video_unavailable", Message: "screen.dial: need id and pair"}
+	}
+	link := p.Link && n.links != nil && n.links.Get(p.Pair) != nil
+	if link && p.Attach {
+		return n.reattachScreen(p.ID, p.Pair, true)
 	}
 	if n.screenStart == nil {
 		return nil, &rpc.Error{Code: "video_unavailable", Message: "no live-screen video helper on this node"}
@@ -218,9 +227,13 @@ func (n *Node) screenDial(ctx context.Context, params json.RawMessage) (any, err
 		return nil, &rpc.Error{Code: "busy", Message: "two live-screen video streams are already open"}
 	}
 	// screenStart owns the stream until it closes, then calls the done callback so the busy counter is released.
-	if err := n.screenStart(ctx, p.ID, p.Pair, p.KeepAwake, n.screens.leave); err != nil {
+	linked, err := n.screenStart(ctx, p.ID, p.Pair, p.KeepAwake, link, p.X264, n.screens.leave)
+	if err != nil {
 		n.screens.leave()
 		return nil, err
+	}
+	if linked {
+		return map[string]any{"link": 1}, nil
 	}
 	return map[string]any{}, nil
 }

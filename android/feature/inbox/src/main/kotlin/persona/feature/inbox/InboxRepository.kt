@@ -40,6 +40,8 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     val preferences: Flow<InboxPreferences> get() = flowOf(InboxPreferences())
     /** Whether the hub shows source subscriptions (#2041, `source_subscriptions`): their entry joins the Inbox's other settings. */
     val subscriptionsShown: Flow<Boolean> get() = flowOf(false)
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`): the menu uses that name only then. */
+    val inboxSourcesShown: Flow<Boolean> get() = flowOf(false)
     suspend fun savePreferences(value: InboxPreferences) = Unit
     /** Where Hand to AI last sent each source's items (#2121, [InboxHandOffMemory]): the group's own, latest first. */
     val handOffMemory: Flow<List<HandOffMemoryEntry>> get() = flowOf(emptyList())
@@ -63,6 +65,12 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
      */
     suspend fun actOnSuggestion(request: SuggestionRequest): SuggestionOutcome =
         error("建议尚未接入") // i18n-ignore: developer error for a repository without the hub
+
+    /** The item's ancestry and direct children; null from a hub without the tree route. */
+    suspend fun inboxLine(item: InboxRecord): InboxLineage? = error("Inbox tree unavailable")
+    /** Clears or sets an item's parent, then applies the returned item to the snapshot. Call [inboxLine] again for the new line. */
+    suspend fun setInboxParent(item: InboxRecord, parent: persona.core.contracts.api.InboxParentRef?): Unit =
+        error("Inbox parent route unavailable")
 
     /** "Hand to AI": the item as context with what to do, queued for Persona's main conversation or a running Agent. */
     suspend fun handOff(request: InboxHandOffRequest): SessionKey? = error("交给 AI 尚未接入") // i18n-ignore: developer error for a repository without the hub
@@ -216,9 +224,29 @@ data class InboxRecord(
     /** A hub connector's item (not Feishu's, not mail): it opens as its connector's thread. */
     val isConnector: Boolean get() = connector != null && !isLark && !isMail && moment == null
 
+    /** A conversation the assistant itself put into the Inbox. */
+    val isAssistantRow: Boolean get() = source == "assistant"
+
+    /** Its preview already starts with the summary, so the row draws that text once. */
+    val repeatsSummary: Boolean get() {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        val preview = item.preview.trim()
+        return preview.isNotEmpty() && preview.startsWith(summary)
+    }
+
     val isLark: Boolean get() = feedId != null || source == "lark"
     /** A mail item: only these open the mail page; the kind says it too in records cached without their source. */
     val isMail: Boolean get() = mail != null || source == "mail" || (source.isEmpty() && item.kind == "mail")
+
+    /** The assistant's text adds nothing beyond the title and summary already on its page. */
+    fun onlyTitleAndSummary(context: String?): Boolean {
+        if (!isAssistantRow) return false
+        val summary = item.summary?.takeIf { it.isNotBlank() } ?: return false
+        fun flat(text: String) = text.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val text = flat(context ?: item.preview)
+        return text.isEmpty() || text == flat("${item.title} $summary") || text == flat(summary)
+    }
 
     /** The item's id on the hub (its requests name it there; [InboxItemKey]). */
     val hubItemId: String get() = InboxItemKey.hubId(item.id)
@@ -263,6 +291,8 @@ data class InboxConnectorRef(
     val label: String? = null,
     val canReply: Boolean = false,
     val replyTo: String? = null,
+    /** The source page; for the assistant's own row, its conversation in the web app. */
+    val url: String? = null,
 )
 
 /** A Moments post reference on an inbox item. */

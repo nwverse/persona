@@ -15,6 +15,7 @@ import java.time.Instant
 import java.util.UUID
 
 private data class GroupListCounts(val filter: SessionListFilter, val revision: String, val counts: SessionListCounts)
+private data class ListInputs(val settings: AgentListSettings, val group: GroupFilter?, val assistant: persona.core.contracts.api.CurrentAssistant?, val visible: SessionKey?)
 
 /** What the hub's paged search matches: the search's words, not its conditions ([AgentQuery]), which it does not read. */
 internal fun hubQuery(query: String): String = AgentQuery.parse(query).text.take(256)
@@ -75,6 +76,9 @@ internal class AgentsViewModel(
      */
     listContext: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
     archiveService: AgentArchives? = null,
+    private val listAdapter: persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create(),
+    private val visibleChat: kotlinx.coroutines.flow.StateFlow<SessionKey?> = kotlinx.coroutines.flow.MutableStateFlow(null),
+    /** The shell's visible Agent chat, null while the list itself is on screen. */
 ) : ViewModel() {
     val archives = archiveService?.let { api -> AgentArchivesState(api, viewModelScope) { key, archived ->
         if (archived) bindings?.onSessionClosed?.invoke(key)
@@ -129,6 +133,8 @@ internal class AgentsViewModel(
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.
     @Volatile private var previous: AgentListResult? = null
+    /** Set only while that Agent chat remains visible and its row was Unread there; shadow input only. */
+    private var heldInList: String? = null
     // Only touched while building [page]: one build at a time, so it needs no more.
     private var previousContext: List<Any?>? = null
     private val _delivery = MutableStateFlow<Map<String, RequestDelivery>>(emptyMap())
@@ -220,9 +226,10 @@ internal class AgentsViewModel(
         bindings?.assistant?.assistant?.map { it.directionTree }?.distinctUntilChanged() ?: flowOf(null)
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        combine(settings, groupFilter, assistant, ::Triple),
-        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todosAndTree, todosSupported) ->
+        combine(settings, groupFilter, assistant, visibleChat, ::ListInputs),
+        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant, visible), (ops, todosAndTree, todosSupported) ->
         val (todos, directions) = todosAndTree
+        val now = Instant.now()
         // The current assistant's (the hub's lists are every manager's, each row with its own).
         val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
         val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
@@ -231,7 +238,12 @@ internal class AgentsViewModel(
         val sessions = ops.project(source)
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
             grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
-        val rows = sessions.map { it.listSession(prefs) }
+        val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy")) }
+        val heldSession = visible?.path?.takeIf { key ->
+            if (heldInList != key) heldInList = null
+            if (heldInList == null && rows.any { it.id == key && it.state == AgentState.Unread }) heldInList = key
+            heldInList != null
+        }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)
@@ -242,12 +254,14 @@ internal class AgentsViewModel(
         // Server row search uses complete index text; searching the truncated summary again would lose matches.
         // A paged list: the hub matched the words ([hubQuery]); the conditions (machine:, is:pinned…) are checked here.
         val projectionSettings = if (pagination.paged) effective.copy(query = AgentQuery.parse(effective.query).conditions) else effective
-        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept), directions)
+        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept), directions,
+            listAdapter, held = heldSession, now = now)
         val result = retainOpenedRows(sorted, previous, effective.kept).also { previous = it }
         val all = scopedAgentList(rows, knownMachines, prefs,
-            projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos, directions = directions)
+            projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos, directions = directions, now = now)
         // The chips count what each computer would show under the current range, search and quick filter.
-        val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos, directions = directions)
+        val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos,
+            directions = directions, now = now)
             .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }
         AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.isNestedSubtask } },
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),
@@ -481,7 +495,9 @@ internal class AgentsViewModel(
         settings: AgentListSettings, ops: AgentOperationsSnapshot): Map<String?, Int> {
         // One group (no suffixed ids anywhere): no group chips, nothing to count.
         if (machines.none { GroupKeys.namespaceOf(it.id) != null } && all.none { GroupKeys.namespaceOf(it.machineId) != null }) return emptyMap()
-        val rows = ops.project(all).map { it.listSession(prefs) }
+        val rows = ops.project(all).map { session ->
+            session.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(session.machineId, "sessions_hierarchy"))
+        }
         return scopedAgentList(rows, machines, prefs, settings.copy(machineFilter = "", kept = emptySet()))
             .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }.distinctBy { it.id }
             .groupingBy { GroupKeys.namespaceOf(it.session.machineId) }.eachCount()
@@ -677,7 +693,7 @@ internal class AgentsViewModel(
     /** A section's rows past [AgentRowCap]: all of them ([open]), or the first ones again. */
     fun showAll(group: AgentListGroup, open: Boolean) {
         val key = AgentRowCap.key(group.id)
-        settings.update { it.copy(expandedIdle = if (open) it.expandedIdle + key else it.expandedIdle - key) }
+        settings.update { it.copy(expandedAll = if (open) it.expandedAll + key else it.expandedAll - key) }
     }
     fun showIdle(group: AgentListGroup) {
         settings.update { it.copy(expandedIdle = it.expandedIdle + group.idleKey) }
@@ -800,10 +816,12 @@ internal class AgentsViewModel(
         _delivery.update { it + (interaction.id to RequestDelivery.Sending) }
         viewModelScope.launch {
             try {
-                interactions.resolve(interaction.id, resolution)
+                val outcome = interactions.resolveOutcome(interaction.id, resolution)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
+                val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).
-                _notice.value = AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, resolution.copy(values = null)))
+                _notice.value = if (effective == null) AgentText(persona.feature.chat.R.string.chat_interaction_already)
+                else AgentText.receipt(persona.feature.chat.AnswerReceipt(latest, effective.copy(values = null)))
                 _haptics.tryEmit(Haptic.Success)
             } catch (e: CancellationException) {
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }

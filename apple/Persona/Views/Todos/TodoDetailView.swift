@@ -6,6 +6,8 @@ struct TodoDetailView: View {
     @Environment(\.tabIsActive) private var inFront
     @Environment(\.dismiss) private var dismiss
     var todoID: String
+    /// Not `openAgent`: a stored property's name stays in the Release binary, and that is a DEBUG launch switch (#8306).
+    var onOpenAgent: ((SessionKey) -> Void)? = nil
 
     @State private var store = TodoStore.shared
     @State private var text = TodoEditorText()
@@ -401,8 +403,12 @@ struct TodoDetailView: View {
         }()
 
         return Button {
-            dismiss()
-            openTodoAgentChat(key, in: model)
+            if let onOpenAgent {
+                onOpenAgent(key)
+            } else {
+                dismiss()
+                openTodoAgentChat(key, in: model)
+            }
         } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 if isFailed {

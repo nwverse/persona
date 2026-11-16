@@ -90,7 +90,7 @@ func answerFixtures(t *testing.T, domain string) []answerFixture {
 func TestResolutionFixtures(t *testing.T) {
 	names := map[string]bool{}
 	policies := map[string]int{}
-	for _, domain := range []string{"answer", "approval"} {
+	for _, domain := range []string{"answer", "question-review", "approval"} {
 		for _, c := range answerFixtures(t, domain) {
 			t.Run(c.Name, func(t *testing.T) {
 				if !regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`).MatchString(c.Name) {
@@ -241,6 +241,11 @@ func TestResolutionFixtures(t *testing.T) {
 			})
 		}
 	}
+	for _, name := range reviewConfirmedCases {
+		if !names[name] {
+			t.Errorf("review-confirmed case missing: %s", name)
+		}
+	}
 	for _, profile := range []string{"ios_current", "unified"} {
 		for _, entry := range []string{"conversation", "notification", "lock_screen", "watch", "siri_shortcut"} {
 			for _, kind := range []string{IxPlan, IxPermission, IxQuestion, IxScreen} {
@@ -278,7 +283,28 @@ func swiftBlock(t *testing.T, source, marker string) string {
 	return ""
 }
 
-// The generated Swift executable only lives in t.TempDir. Enable this on macOS for source-backed checks.
+// swiftCallEnd returns the index just past the parenthesis closing the first call in s, or -1.
+func swiftCallEnd(s string) int {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+// The generated Swift executables only live in t.TempDir. Enable this on macOS for source-backed checks.
+//
+// Two programs compile from the same copied declarations, so one contract drifting from its source does not hide the
+// others: "answers" replays every answer fixture except `resolve`, and "transport" adds AppModel.resolve for the
+// `resolve` cases.
 func TestResolutionFixturesIOS(t *testing.T) {
 	if os.Getenv("PERSONA_VERIFY_IOS_FIXTURES") != "1" {
 		t.Skip("set PERSONA_VERIFY_IOS_FIXTURES=1 on macOS to run the read-only Swift oracle")
@@ -295,23 +321,63 @@ func TestResolutionFixturesIOS(t *testing.T) {
 	views := read("apple/Persona/Views/Interactions/InteractionViews.swift")
 	chat := read("apple/Shared/ChatStore.swift")
 	notification := read("apple/Persona/App/NotificationActions.swift")
-	source := "import Foundation\n" + read("apple/Shared/JSONValue.swift") + "\n"
-	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "nonisolated struct Interaction:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
+	source := "import Foundation\n" + read("apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift") + "\n"
+	for _, marker := range []string{"nonisolated struct SessionKey", "nonisolated struct MachineRef", "nonisolated enum InteractionKind", "nonisolated struct QuestionOption", "nonisolated struct Question:", "nonisolated struct Interaction:", "nonisolated struct Delegate:", "nonisolated struct InteractionField:", "nonisolated struct LenientText:", "nonisolated struct Resolution:", "nonisolated struct ScreenDialog:"} {
 		source += swiftBlock(t, models, marker) + "\n"
 	}
+	rules := read("apple/Shared/RuleSuggestion.swift")
+	source += swiftBlock(t, rules, "nonisolated struct RuleScope:") + "\n" + swiftBlock(t, rules, "nonisolated struct RuleSuggestion:") + "\n"
+	text := read("apple/Shared/InteractionText.swift")
+	for _, marker := range []string{"nonisolated enum SecretRun {", "nonisolated enum SecretHandoff {", "nonisolated extension Interaction {"} {
+		source += swiftBlock(t, text, marker) + "\n"
+	}
+	source += swiftBlock(t, read("apple/Shared/Elicitation.swift"), "nonisolated struct ElicitationRequest:") + "\n"
+	source += swiftBlock(t, read("apple/Shared/CommandAsk.swift"), "nonisolated struct CommandAsk:") + "\n"
 	// Whether a card offers Always (#3590), as the view decides it.
 	source += "extension Interaction {\n" + swiftBlock(t, views, "var offersAlways: Bool {") + "\n" + swiftBlock(t, views, "var agentName: String? {") + "\n}\n"
 	source += swiftBlock(t, chat, "nonisolated enum ScreenParser") + "\n" + swiftBlock(t, chat, "nonisolated private extension Character") + "\n"
 	source += "enum NotificationActions {\n" + notification[strings.Index(notification, "    static let allow"):strings.Index(notification, "    static func category")] + swiftBlock(t, notification, "static func resolution(action:") + "\n}\n"
 	source += "enum ApproveFirstIntent {\n" + swiftBlock(t, read("apple/Persona/Intents/ApproveFirstIntent.swift"), "static func resolution(for ix:") + "\n}\n"
+	// Several questions get steps and a review before they go (#2970). The review is drawn on iPhone and iPad only
+	// (`#if os(iOS)`); this macOS program replays that branch, kept in step with the source below.
+	stepsEnabled := swiftBlock(t, read("apple/Persona/Views/Interactions/ScreenStepsLogic.swift"), "static var enabled: Bool {")
+	if strings.Join(strings.Fields(stepsEnabled), " ") != "static var enabled: Bool { #if os(iOS) true #else false #endif }" {
+		t.Fatalf("ScreenStepsLogic.enabled changed: revisit the review replay\n%s", stepsEnabled)
+	}
+	source += "enum ScreenStepsLogic { static let enabled = true }\n"
+	source += "enum QuestionSteps {\n" + swiftBlock(t, read("apple/Persona/Views/Interactions/QuestionSteps.swift"), "static func enabled(") + "\n}\n"
 	source += swiftQuestionSupport + "\n"
-	source += swiftResolveSupport + "\n@MainActor final class ResolveProbe {\n" + swiftResolveFields + swiftBlock(t, read("apple/Persona/App/AppModel.swift"), "func resolve(_ ix:") + "\n}\n"
+	source += "#if TRANSPORT\n" + swiftResolveSupport + "\n@MainActor final class ResolveProbe {\n" + swiftResolveFields + swiftBlock(t, read("apple/Persona/App/AppModel.swift"), "func resolve(_ ix:") + "\n}\n#endif\n"
 	question := swiftBlock(t, views, "struct QuestionForm:")
 	source += "@MainActor final class QuestionProbe {\n" + swiftQuestionFields
-	for _, marker := range []string{"private var questions:", "private var needsFooter:", "private func pick(", "private var isLast:", "private func advance(", "private func answer(", "private var allAnswered:", "private var canAdvance:", "private func submit("} {
+	for _, marker := range []string{"private var questions:", "private var stepped:", "private var isSending:", "private var needsFooter:", "private func pick(", "private var isLast:", "private func advance(", "private func answer(", "private var allAnswered:", "private var canAdvance:", "private func submit(", "private func send("} {
 		source += swiftBlock(t, question, marker) + "\n"
 	}
+	// The review footer's own Previous and Submit closures, compiled as written in the form.
+	footer := strings.Index(question, "ScreenReviewFooter(")
+	if footer < 0 {
+		t.Fatal("QuestionForm review footer missing")
+	}
+	// Only the footer call itself, so a missing label cannot pick up the inline ScreenReview's closure.
+	review := question[footer:]
+	if end := swiftCallEnd(review); end < 0 {
+		t.Fatal("QuestionForm review footer call unterminated")
+	} else {
+		review = review[:end]
+	}
+	for _, pair := range [][2]string{{"back: ", "reviewBack"}, {"submit: ", "reviewSubmit"}} {
+		at := strings.Index(review, pair[0])
+		if at < 0 || !strings.HasPrefix(review[at+len(pair[0]):], "{") {
+			t.Fatalf("review footer closure changed: %s", pair[0])
+		}
+		source += "func " + pair[1] + "() " + swiftBlock(t, review[at:], pair[0]+"{")[len(pair[0]):] + "\n"
+	}
 	source += swiftQuestionRun + "\n}\n"
+	confirmed := make([]string, len(reviewConfirmedCases))
+	for i, name := range reviewConfirmedCases {
+		confirmed[i] = `"` + name + `"`
+	}
+	source += "let confirmedThroughReview: Set<String> = [" + strings.Join(confirmed, ", ") + "]\n"
 	source += "struct ScreenProbe { var interaction: Interaction\n" + swiftBlock(t, views, "private func answer(_ opt: ScreenParser.Dialog.Option") + "\nfunc run(_ key: String, _ text: String?) -> Resolution { answer(interaction.screenDialog!.options.first { $0.key == key }!, text: text) }\n}\n"
 	// Compile the literal button constructors from the actual view, rather than duplicate their modes.
 	source += "func button(_ action: String, _ feedback: String) -> Resolution {\nswitch action {\n"
@@ -334,31 +400,54 @@ func TestResolutionFixturesIOS(t *testing.T) {
 		t.Fatal("watch plan constructor changed")
 	}
 	source += "func watchPlan() -> Resolution { " + watch[at:at+len(watchExpr)] + " }\n" + swiftFixtureMain
-	dir := t.TempDir()
-	file := filepath.Join(dir, "main.swift")
-	binary := filepath.Join(dir, "verify")
-	if err := os.WriteFile(file, []byte(source), 0600); err != nil {
-		t.Fatal(err)
+	run := func(t *testing.T, flags ...string) {
+		dir := t.TempDir()
+		file := filepath.Join(dir, "main.swift")
+		binary := filepath.Join(dir, "verify")
+		if err := os.WriteFile(file, []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		compile := exec.CommandContext(ctx, "swiftc", append([]string{"-parse-as-library", file, "-o", binary}, flags...)...)
+		if out, err := compile.CombinedOutput(); err != nil {
+			t.Fatalf("swiftc: %v\n%s", err, out)
+		}
+		verify := exec.CommandContext(ctx, binary, filepath.Join(root, "spec/fixtures/approval/ios_current.json"), filepath.Join(root, "spec/fixtures/answer"), filepath.Join(root, "spec/fixtures/question-review"))
+		if out, err := verify.CombinedOutput(); err != nil {
+			t.Fatalf("Swift fixtures: %v\n%s", err, out)
+		} else {
+			t.Log(string(out))
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	compile := exec.CommandContext(ctx, "swiftc", "-parse-as-library", file, "-o", binary)
-	if out, err := compile.CombinedOutput(); err != nil {
-		t.Fatalf("swiftc: %v\n%s", err, out)
-	}
-	run := exec.CommandContext(ctx, binary, filepath.Join(root, "spec/fixtures/answer"), filepath.Join(root, "spec/fixtures/approval/ios_current.json"))
-	if out, err := run.CombinedOutput(); err != nil {
-		t.Fatalf("Swift fixtures: %v\n%s", err, out)
-	} else {
-		t.Log(string(out))
-	}
+	t.Run("answers", func(t *testing.T) { run(t) })
+	t.Run("transport", func(t *testing.T) {
+		t.Skip(transportReplayGap)
+		run(t, "-D", "TRANSPORT")
+	})
 }
+
+// reviewConfirmedCases are the questions.json cases whose expected Resolution is what the review's Submit sends: on a
+// card of several questions their click opens the review (#2970), and the replay then confirms it (#8483).
+// spec/fixtures/question-review/review.json asserts the click itself. Every other question case must leave the review
+// closed.
+var reviewConfirmedCases = []string{"multiple_questions_send_original_keys", "all_answered_can_submit_from_earlier_page"}
+
+// transportReplayGap keeps the `resolve` replay out until it is brought in line with the current AppModel.resolve.
+const transportReplayGap = "the transport replay has drifted from AppModel.resolve (#8915)"
 
 const swiftQuestionSupport = `
 enum Haptics { static func tap() {}; static func success() {}; static func attention() {} }
 struct Animation { static var snappy: Self { .init() }; static func snappy(duration: Double) -> Self { .init() } }
+enum Theme { enum Motion { static var standard: Animation { .init() } } }
 func withAnimation(_ animation: Animation, _ body: () -> Void) { body() }
-@MainActor final class Spy { var result: Resolution?; func resolve(_ ix: Interaction, _ r: Resolution) async { result = r } }
+enum AnswerProgress: Equatable { case sending; case failed(String) }
+@MainActor final class Spy {
+ var result: Resolution?
+ func resolve(_ ix: Interaction, _ r: Resolution) async { result = r }
+ // The fixtures' "sending" is this form's own flag; the model reports no answer of its own on the way.
+ func answerProgress(_ uid: String) -> AnswerProgress? { nil }
+}
 `
 const swiftQuestionFields = `
 var interaction: Interaction
@@ -367,25 +456,44 @@ var other: [String: String] = [:]
 var page = 0
 var sending = false
 var writing = false
+var reviewing = false
 var otherFocused = false
 let model = Spy()
 init(_ ix: Interaction) { interaction = ix }
 `
 const swiftQuestionRun = `
-func run(_ op: [String: Any]) async -> [String: Any] {
+// One click on the snapshot in op, then (confirm) the review's Submit when that click opened the review.
+func run(_ op: [String: Any], confirm: Bool) async -> [String: Any] {
  page = op["page"] as? Int ?? 0
  sending = op["sending"] as? Bool ?? false
+ reviewing = op["reviewing"] as? Bool ?? false
  picks = (op["picks"] as? [String: [String]] ?? [:]).mapValues { Set($0) }
  other = op["other"] as? [String: String] ?? [:]
  let action = op["action"] as! String
- let allowed = action == "pick_option" ? !sending : canAdvance && !sending
+ let inReview = stepped && reviewing
+ let allowed: Bool
+ switch action {
+ // The review replaces the options and the footer; its own footer is disabled while the answer is on its way.
+ case "confirm_review", "review_back": allowed = inReview && !isSending
+ case "pick_option": allowed = !inReview && !isSending
+ default: allowed = !inReview && canAdvance && !isSending
+ }
  if allowed {
-  if action == "pick_option" { pick(questions[page], questions[page].options[op["option_index"] as! Int]) }
-  else if action == "advance" { advance() }
-  else { submit() }
+  switch action {
+  case "pick_option": pick(questions[page], questions[page].options[op["option_index"] as! Int])
+  case "advance": advance()
+  case "confirm_review": reviewSubmit()
+  case "review_back": reviewBack()
+  default: submit()
+  }
+ }
+ let opened = !inReview && stepped && reviewing
+ if confirm {
+  precondition(opened, "the click must open the review before its Submit is confirmed")
+  reviewSubmit()
  }
  for _ in 0..<100 where model.result == nil && sending { try! await Task.sleep(for: .milliseconds(10)) }
- var out: [String: Any] = ["allowed": allowed, "resolution": wire(model.result), "next_page": page, "picks": picks.mapValues { $0.sorted() }]
+ var out: [String: Any] = ["allowed": allowed, "resolution": wire(model.result), "next_page": page, "picks": picks.mapValues { $0.sorted() }, "reviewing": reviewing]
  if let q = questions.first, let option = q.options.first {
   let d = QuestionOption.display(option.label)
   out["display"] = ["text": d.0, "recommended": d.1]
@@ -404,9 +512,12 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
 }
 @main struct Main {
  @MainActor static func main() async throws {
-  let folder = URL(fileURLWithPath: CommandLine.arguments[1])
-  let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.path < $1.path }
-  var count = 0
+  var files: [URL] = []
+  for folder in CommandLine.arguments.dropFirst(2) {
+   files += try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.path < $1.path }
+  }
+  var count = 0, transport = 0
+  var confirmed = Set<String>()
   for file in files {
    let doc = try JSONSerialization.jsonObject(with: Data(contentsOf:file)) as! [String:Any]
    for c in doc["cases"] as! [[String:Any]] {
@@ -417,6 +528,7 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
     let action = op["action"] as! String
     var actual: [String:Any]
     if action == "resolve" {
+     #if TRANSPORT
      let p = ResolveProbe()
      p.api = (op["api_available"] as! Bool) ? ProbeAPI(op["outcome"] as! String) : nil
      p.connection.networkUp = op["network_up"] as! Bool
@@ -424,11 +536,20 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
      let r = try JSONDecoder().decode(Resolution.self, from: JSONSerialization.data(withJSONObject: op["resolution"]!))
      await p.resolve(ix,r)
      actual = ["allowed": p.api != nil && p.connection.networkUp, "resolution": wire(p.api?.sent), "card_present": p.interactions[ix.id] != nil]
+     #else
+     transport += 1; continue
+     #endif
     } else if action == "inspect_dialog" {
      var dialog: Any = NSNull()
      if let d = ix.screenDialog { dialog = ["question": d.question, "detail": d.detail as Any? ?? NSNull(), "steps": d.steps.map { ["label": $0.label, "done": $0.done] as [String: Any] }] }
      actual = ["allowed": true, "resolution": NSNull(), "dialog": dialog]
-    } else if ix.kind == .question && action != "dismiss" { actual = await QuestionProbe(ix).run(op) }
+    } else if ix.kind == .question && action != "dismiss" {
+     let confirm = confirmedThroughReview.contains(name)
+     actual = await QuestionProbe(ix).run(op, confirm: confirm)
+     // A click that opens the review sends nothing; a case that does not assert the review must not open it.
+     if expected["reviewing"] == nil && actual["reviewing"] as! Bool != confirm { fatalError("\(name): the review is \(actual["reviewing"]!) here; say so in the fixture") }
+     if confirm { confirmed.insert(name) }
+    }
     else {
      var allowed = true; var r: Resolution?
      if op["entry"] as? String == "notification" { r = NotificationActions.resolution(action:action,text:op["text"] as? String) }
@@ -450,8 +571,9 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
     check(expected,actual,name); count += 1
    }
   }
-  print("Verified \(count) iOS answer fixtures against source declarations and button constructors")
-  let policies = try JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2]))) as! [String:Any]
+  precondition(confirmed == confirmedThroughReview, "review-confirmed cases missing: \(confirmedThroughReview.subtracting(confirmed).sorted())")
+  print("Verified \(count) iOS answer fixtures against source declarations and button constructors (\(confirmed.count) through the review; \(transport) transport cases left to the transport replay)")
+  let policies = try JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))) as! [String:Any]
   var modes = 0
   for c in policies["cases"] as! [[String:Any]] {
    let input = c["input"] as! [String:Any], expected = c["expected"] as! [String:Any]
@@ -511,6 +633,9 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 			"let t = text.trimmingCharacters(in: .whitespacesAndNewlines)",
 			"Resolution(keys: [\"enter\"], text: t)", "Resolution(keys: keys)",
 		},
+		"apple/Persona/Views/Interactions/ScreenReview.swift": {
+			".disabled(sending != nil)",
+		},
 		"apple/PersonaWatch/PersonaWatchApp.swift": {
 			"Resolution(approve: true, mode: \"acceptEdits\")", "Resolution(approve: false, feedback: \"请重新考虑这个计划\")",
 			"Resolution(allow: true)", "Resolution(allow: false)", "Resolution(option: opt.key)", "Resolution(keys: [opt.key])",
@@ -544,6 +669,23 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 			if !strings.Contains(string(data), snippet) {
 				t.Errorf("source evidence changed in %s: %s", path, snippet)
 			}
+		}
+	}
+
+	// The review of several questions (#2970) replaces the options and the form's footer, and its own footer shows the
+	// answer on its way and is then disabled. Checked inside QuestionForm: the BeautifulUI form has lookalikes.
+	views, err := os.ReadFile(filepath.Join(root, "apple/Persona/Views/Interactions/InteractionViews.swift"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := swiftBlock(t, string(views), "struct QuestionForm:")
+	for _, snippet := range []string{
+		"private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }",
+		"private var showsReviewFooter: Bool { stepped && reviewing }",
+		"if stepped, reviewing {", "ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? \"submit\" : nil,",
+	} {
+		if !strings.Contains(question, snippet) {
+			t.Errorf("source evidence changed in QuestionForm: %s", snippet)
 		}
 	}
 

@@ -1,0 +1,793 @@
+{
+  "schema_version": 1,
+  "domain": "lines",
+  "description": "Current iOS (apple/) only: a subagent's tool result that wakes the agent (task.kind agent, wake true). Not part of the shared corpus that Android's LinesFixtureTest replays; the iOS replay in ../README.md checks these cases exactly.",
+  "cases": [
+    {
+      "name": "agent_result_wake_stays_in_its_exchange",
+      "description": "A subagent's tool result that wakes the agent (task.kind agent, wake) stays in the same exchange: the call gets it as its result, it is neither a notice line nor a work step, and the words after it are the answer.",
+      "source": [
+        "apple/Shared/ChatStore.swift: buildRows (an agent tool_result with wake is a notice row) / ChatBlock.build / Turn.pickAnswerAcrossWakes / SubagentDelivery.isWake / TaskIndex.build",
+        "apple/Persona/Views/Chat/ChatLines.swift: build / flatLines / segments / photos / workItems / unfold",
+        "apple/PersonaTests/SubagentDeliveryTests.swift: wakesRemainTurnEvidenceWithoutCreatingAParentMessageCard"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "1#0",
+            "seq": 1,
+            "role": "user",
+            "kind": "text",
+            "text": "请审查示例改动"
+          },
+          {
+            "id": "2#0",
+            "seq": 2,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "agent_a",
+            "tool_name": "Agent",
+            "tool_input": {
+              "description": "示例审查",
+              "prompt": "审查示例改动"
+            }
+          },
+          {
+            "id": "3#0",
+            "seq": 3,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "Async agent launched successfully.\nagentId: worker_a",
+            "tool_use_id": "agent_a",
+            "task": {
+              "kind": "agent",
+              "status": "running",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a"
+            }
+          },
+          {
+            "id": "4#0",
+            "seq": 4,
+            "role": "assistant",
+            "kind": "text",
+            "text": "审查已在后台开始。"
+          },
+          {
+            "id": "5#0",
+            "seq": 5,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "审查完成：没有发现问题。",
+            "tool_use_id": "agent_a",
+            "wake": true,
+            "task": {
+              "kind": "agent",
+              "status": "completed",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a",
+              "detail": "审查完成：没有发现问题。"
+            }
+          },
+          {
+            "id": "6#0",
+            "seq": 6,
+            "role": "assistant",
+            "kind": "text",
+            "text": "审查通过，可以合并。"
+          }
+        ],
+        "open_work": [
+          "w-1#0"
+        ],
+        "check_prefixes": true
+      },
+      "expected": {
+        "lines": [
+          {
+            "id": "1#0",
+            "is_input": true,
+            "text": "请审查示例改动",
+            "type": "user"
+          },
+          {
+            "contains_fold": false,
+            "duration_text": "",
+            "elapsed_seconds": null,
+            "end": null,
+            "id": "w-1#0",
+            "is_input": false,
+            "known_failed_tools": 0,
+            "live": false,
+            "open": true,
+            "start": null,
+            "steps": [
+              {
+                "background_badge": {
+                  "failed": false,
+                  "text": "后台 · 已完成"
+                },
+                "call_id": "agent_a",
+                "failed": false,
+                "id": "2#0",
+                "image_count": 0,
+                "name": "Agent",
+                "result_id": "5#0",
+                "result_text": "审查完成：没有发现问题。",
+                "running": false,
+                "type": "tool"
+              },
+              {
+                "id": "t-4#0",
+                "item_id": "4#0",
+                "text": "审查已在后台开始。",
+                "type": "narration"
+              }
+            ],
+            "summary_full": [
+              "工具 1",
+              "回复 1"
+            ],
+            "summary_short": [
+              "工具 1"
+            ],
+            "thoughts": 0,
+            "tools": 1,
+            "type": "work",
+            "unresolved_tools": 0
+          },
+          {
+            "first": true,
+            "group_id": "w-1#0",
+            "id": "w-1#0/2#0",
+            "is_input": false,
+            "separator_before": false,
+            "step": {
+              "background_badge": {
+                "failed": false,
+                "text": "后台 · 已完成"
+              },
+              "call_id": "agent_a",
+              "failed": false,
+              "id": "2#0",
+              "image_count": 0,
+              "name": "Agent",
+              "result_id": "5#0",
+              "result_text": "审查完成：没有发现问题。",
+              "running": false,
+              "type": "tool"
+            },
+            "type": "work_step"
+          },
+          {
+            "first": false,
+            "group_id": "w-1#0",
+            "id": "w-1#0/t-4#0",
+            "is_input": false,
+            "separator_before": true,
+            "step": {
+              "id": "t-4#0",
+              "item_id": "4#0",
+              "text": "审查已在后台开始。",
+              "type": "narration"
+            },
+            "type": "work_step"
+          },
+          {
+            "count": 2,
+            "group_id": "w-1#0",
+            "id": "w-1#0-end",
+            "is_input": false,
+            "separator_before": true,
+            "type": "work_end"
+          },
+          {
+            "id": "6#0",
+            "is_input": false,
+            "text": "审查通过，可以合并。",
+            "type": "reply"
+          }
+        ],
+        "task_index": {
+          "calls": {
+            "3#0": "agent_a",
+            "5#0": "agent_a"
+          },
+          "descriptions": {
+            "agent_a": "示例审查"
+          },
+          "started": [
+            "agent_a"
+          ],
+          "started_at": {},
+          "statuses": {
+            "agent_a": [
+              "running",
+              "completed"
+            ]
+          }
+        },
+        "turns": [
+          {
+            "answer_id": "6#0",
+            "end": null,
+            "has_pending_wake": false,
+            "id": "1#0",
+            "interim_count": 1,
+            "ordered_ids": [
+              "1#0",
+              "tools-2#0",
+              "4#0",
+              "5#0",
+              "6#0"
+            ],
+            "process_ids": [
+              "tools-2#0",
+              "4#0",
+              "5#0"
+            ],
+            "start": null,
+            "tail_ids": [],
+            "thought_count": 0,
+            "tool_count": 1,
+            "trailing_ids": [],
+            "user_ids": [
+              "1#0"
+            ],
+            "wake_ids": [
+              "5#0"
+            ]
+          }
+        ]
+      },
+      "from_test": "wakesRemainTurnEvidenceWithoutCreatingAParentMessageCard"
+    },
+    {
+      "name": "agent_result_wake_pending_keeps_previous_answer",
+      "description": "After a subagent's result wakes the agent and before new words arrive, the turn has a pending wake: the wake and the tools after it stay in the live work line, and the words before them are still the answer.",
+      "source": [
+        "apple/Shared/ChatStore.swift: buildRows / ChatBlock.build / Turn.pickAnswerAcrossWakes / Turn.hasPendingWake",
+        "apple/Persona/Views/Chat/ChatLines.swift: build / flatLines / segments / photos / workItems / unfold",
+        "apple/PersonaTests/ChatLinesTests.swift: aWakeJoinsItsExchangesSummaryBeforeNewWordsArrive",
+        "apple/PersonaTests/WakeReplyOrderTests.swift: wakeReplacesThePreviousAnswerOnlyWhenItsOwnContinuationStreams"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "1#0",
+            "seq": 1,
+            "role": "user",
+            "kind": "text",
+            "text": "请审查示例改动"
+          },
+          {
+            "id": "2#0",
+            "seq": 2,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "agent_a",
+            "tool_name": "Agent",
+            "tool_input": {
+              "description": "示例审查",
+              "prompt": "审查示例改动"
+            }
+          },
+          {
+            "id": "3#0",
+            "seq": 3,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "Async agent launched successfully.\nagentId: worker_a",
+            "tool_use_id": "agent_a",
+            "task": {
+              "kind": "agent",
+              "status": "running",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a"
+            }
+          },
+          {
+            "id": "4#0",
+            "seq": 4,
+            "role": "assistant",
+            "kind": "text",
+            "text": "审查已在后台开始。"
+          },
+          {
+            "id": "5#0",
+            "seq": 5,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "审查完成：没有发现问题。",
+            "tool_use_id": "agent_a",
+            "wake": true,
+            "task": {
+              "kind": "agent",
+              "status": "completed",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a",
+              "detail": "审查完成：没有发现问题。"
+            }
+          },
+          {
+            "id": "6#0",
+            "seq": 6,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_b",
+            "tool_name": "Read"
+          }
+        ],
+        "live_turn_id": "1#0",
+        "check_prefixes": true
+      },
+      "expected": {
+        "lines": [
+          {
+            "id": "1#0",
+            "is_input": true,
+            "text": "请审查示例改动",
+            "type": "user"
+          },
+          {
+            "contains_fold": false,
+            "duration_text": "",
+            "elapsed_seconds": null,
+            "end": null,
+            "id": "w-1#0",
+            "is_input": false,
+            "known_failed_tools": 0,
+            "live": true,
+            "open": false,
+            "start": null,
+            "steps": [
+              {
+                "background_badge": {
+                  "failed": false,
+                  "text": "后台 · 已完成"
+                },
+                "call_id": "agent_a",
+                "failed": false,
+                "id": "2#0",
+                "image_count": 0,
+                "name": "Agent",
+                "result_id": "5#0",
+                "result_text": "审查完成：没有发现问题。",
+                "running": false,
+                "type": "tool"
+              },
+              {
+                "call_id": "call_b",
+                "failed": false,
+                "id": "6#0",
+                "image_count": 0,
+                "name": "Read",
+                "result_id": null,
+                "result_text": null,
+                "running": true,
+                "type": "tool"
+              }
+            ],
+            "summary_full": [
+              "工具 2"
+            ],
+            "summary_short": [
+              "工具 2"
+            ],
+            "thoughts": 0,
+            "tools": 2,
+            "type": "work",
+            "unresolved_tools": 1
+          },
+          {
+            "id": "4#0",
+            "is_input": false,
+            "text": "审查已在后台开始。",
+            "type": "reply"
+          }
+        ],
+        "task_index": {
+          "calls": {
+            "3#0": "agent_a",
+            "5#0": "agent_a"
+          },
+          "descriptions": {
+            "agent_a": "示例审查"
+          },
+          "started": [
+            "agent_a"
+          ],
+          "started_at": {},
+          "statuses": {
+            "agent_a": [
+              "running",
+              "completed"
+            ]
+          }
+        },
+        "turns": [
+          {
+            "answer_id": "4#0",
+            "end": null,
+            "has_pending_wake": true,
+            "id": "1#0",
+            "interim_count": 0,
+            "ordered_ids": [
+              "1#0",
+              "tools-2#0",
+              "4#0",
+              "5#0",
+              "tools-6#0"
+            ],
+            "process_ids": [
+              "tools-2#0",
+              "5#0",
+              "tools-6#0"
+            ],
+            "start": null,
+            "tail_ids": [],
+            "thought_count": 0,
+            "tool_count": 2,
+            "trailing_ids": [],
+            "user_ids": [
+              "1#0"
+            ],
+            "wake_ids": [
+              "5#0"
+            ]
+          }
+        ]
+      },
+      "derived": true
+    },
+    {
+      "name": "agent_result_wake_after_recap_reopens_turn",
+      "description": "A subagent's waking result that arrives after a recap reopens the exchange the recap closed: the words after it are that exchange's answer, and the recap stays after it.",
+      "source": [
+        "apple/Shared/ChatStore.swift: buildRows / ChatBlock.build (a wake after a recap reopens the exchange the recap closed) / Turn.pickAnswerAcrossWakes",
+        "apple/Persona/Views/Chat/ChatLines.swift: build / flatLines / segments / photos / workItems / unfold",
+        "apple/PersonaTests/ChatStoreTests.swift: wakeAfterARecapStaysInItsExchange",
+        "apple/PersonaTests/SubagentDeliveryTests.swift: wakesRemainTurnEvidenceWithoutCreatingAParentMessageCard"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "1#0",
+            "seq": 1,
+            "role": "user",
+            "kind": "text",
+            "text": "请审查示例改动"
+          },
+          {
+            "id": "2#0",
+            "seq": 2,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "agent_a",
+            "tool_name": "Agent",
+            "tool_input": {
+              "description": "示例审查",
+              "prompt": "审查示例改动"
+            }
+          },
+          {
+            "id": "3#0",
+            "seq": 3,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "Async agent launched successfully.\nagentId: worker_a",
+            "tool_use_id": "agent_a",
+            "task": {
+              "kind": "agent",
+              "status": "running",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a"
+            }
+          },
+          {
+            "id": "4#0",
+            "seq": 4,
+            "role": "assistant",
+            "kind": "text",
+            "text": "审查已在后台开始。"
+          },
+          {
+            "id": "5#0",
+            "seq": 5,
+            "role": "system",
+            "kind": "recap",
+            "text": "回顾：示例审查在后台进行"
+          },
+          {
+            "id": "6#0",
+            "seq": 6,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "审查完成：没有发现问题。",
+            "tool_use_id": "agent_a",
+            "wake": true,
+            "task": {
+              "kind": "agent",
+              "status": "completed",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a",
+              "detail": "审查完成：没有发现问题。"
+            }
+          },
+          {
+            "id": "7#0",
+            "seq": 7,
+            "role": "assistant",
+            "kind": "text",
+            "text": "审查通过，可以合并。"
+          }
+        ],
+        "check_prefixes": true
+      },
+      "expected": {
+        "lines": [
+          {
+            "id": "1#0",
+            "is_input": true,
+            "text": "请审查示例改动",
+            "type": "user"
+          },
+          {
+            "contains_fold": false,
+            "duration_text": "",
+            "elapsed_seconds": null,
+            "end": null,
+            "id": "w-1#0",
+            "is_input": false,
+            "known_failed_tools": 0,
+            "live": false,
+            "open": false,
+            "start": null,
+            "steps": [
+              {
+                "background_badge": {
+                  "failed": false,
+                  "text": "后台 · 已完成"
+                },
+                "call_id": "agent_a",
+                "failed": false,
+                "id": "2#0",
+                "image_count": 0,
+                "name": "Agent",
+                "result_id": "6#0",
+                "result_text": "审查完成：没有发现问题。",
+                "running": false,
+                "type": "tool"
+              },
+              {
+                "id": "t-4#0",
+                "item_id": "4#0",
+                "text": "审查已在后台开始。",
+                "type": "narration"
+              }
+            ],
+            "summary_full": [
+              "工具 1",
+              "回复 1"
+            ],
+            "summary_short": [
+              "工具 1"
+            ],
+            "thoughts": 0,
+            "tools": 1,
+            "type": "work",
+            "unresolved_tools": 0
+          },
+          {
+            "id": "7#0",
+            "is_input": false,
+            "text": "审查通过，可以合并。",
+            "type": "reply"
+          },
+          {
+            "id": "5#0",
+            "is_input": false,
+            "text": "回顾：示例审查在后台进行",
+            "type": "recap"
+          }
+        ],
+        "task_index": {
+          "calls": {
+            "3#0": "agent_a",
+            "6#0": "agent_a"
+          },
+          "descriptions": {
+            "agent_a": "示例审查"
+          },
+          "started": [
+            "agent_a"
+          ],
+          "started_at": {},
+          "statuses": {
+            "agent_a": [
+              "running",
+              "completed"
+            ]
+          }
+        },
+        "turns": [
+          {
+            "answer_id": "7#0",
+            "end": null,
+            "has_pending_wake": false,
+            "id": "1#0",
+            "interim_count": 1,
+            "ordered_ids": [
+              "1#0",
+              "tools-2#0",
+              "4#0",
+              "6#0",
+              "7#0"
+            ],
+            "process_ids": [
+              "tools-2#0",
+              "4#0",
+              "6#0"
+            ],
+            "start": null,
+            "tail_ids": [],
+            "thought_count": 0,
+            "tool_count": 1,
+            "trailing_ids": [],
+            "user_ids": [
+              "1#0"
+            ],
+            "wake_ids": [
+              "6#0"
+            ]
+          }
+        ]
+      },
+      "derived": true
+    },
+    {
+      "name": "orphan_agent_result_wake_draws_no_notice",
+      "description": "A window that opens with a subagent's waking result (its call is on an older page): it opens a turn without a message, but unlike a wake notice it is not drawn as a line, nor as a work step.",
+      "source": [
+        "apple/Shared/ChatStore.swift: buildRows / ChatBlock.build / SubagentDelivery.isWake",
+        "apple/Persona/Views/Chat/ChatLines.swift: flatLines (a turn opening with a wake draws that notice unless SubagentDelivery.isWake) / workItems",
+        "apple/PersonaTests/SubagentDeliveryTests.swift: wakesRemainTurnEvidenceWithoutCreatingAParentMessageCard"
+      ],
+      "input": {
+        "items": [
+          {
+            "id": "10#0",
+            "seq": 10,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "审查完成：没有发现问题。",
+            "tool_use_id": "agent_a",
+            "wake": true,
+            "task": {
+              "kind": "agent",
+              "status": "completed",
+              "title": "示例审查",
+              "task_id": "worker_a",
+              "tool_use_id": "agent_a",
+              "detail": "审查完成：没有发现问题。"
+            }
+          },
+          {
+            "id": "11#0",
+            "seq": 11,
+            "role": "assistant",
+            "kind": "tool_use",
+            "tool_use_id": "call_b",
+            "tool_name": "Read"
+          },
+          {
+            "id": "12#0",
+            "seq": 12,
+            "role": "user",
+            "kind": "tool_result",
+            "text": "ok",
+            "tool_use_id": "call_b"
+          },
+          {
+            "id": "13#0",
+            "seq": 13,
+            "role": "assistant",
+            "kind": "text",
+            "text": "已按审查结果更新示例文档。"
+          }
+        ],
+        "check_prefixes": true
+      },
+      "expected": {
+        "lines": [
+          {
+            "contains_fold": false,
+            "duration_text": "",
+            "elapsed_seconds": null,
+            "end": null,
+            "id": "w-tools-11#0",
+            "is_input": false,
+            "known_failed_tools": 0,
+            "live": false,
+            "open": false,
+            "start": null,
+            "steps": [
+              {
+                "call_id": "call_b",
+                "failed": false,
+                "id": "11#0",
+                "image_count": 0,
+                "name": "Read",
+                "result_id": "12#0",
+                "result_text": "ok",
+                "running": false,
+                "type": "tool"
+              }
+            ],
+            "summary_full": [
+              "工具 1"
+            ],
+            "summary_short": [
+              "工具 1"
+            ],
+            "thoughts": 0,
+            "tools": 1,
+            "type": "work",
+            "unresolved_tools": 0
+          },
+          {
+            "id": "13#0",
+            "is_input": false,
+            "text": "已按审查结果更新示例文档。",
+            "type": "reply"
+          }
+        ],
+        "task_index": {
+          "calls": {
+            "10#0": "agent_a"
+          },
+          "descriptions": {},
+          "started": [],
+          "started_at": {},
+          "statuses": {
+            "agent_a": [
+              "completed"
+            ]
+          }
+        },
+        "turns": [
+          {
+            "answer_id": "13#0",
+            "end": null,
+            "has_pending_wake": false,
+            "id": "10#0",
+            "interim_count": 0,
+            "ordered_ids": [
+              "10#0",
+              "tools-11#0",
+              "13#0"
+            ],
+            "process_ids": [
+              "10#0",
+              "tools-11#0"
+            ],
+            "start": null,
+            "tail_ids": [],
+            "thought_count": 0,
+            "tool_count": 1,
+            "trailing_ids": [],
+            "user_ids": [],
+            "wake_ids": []
+          }
+        ]
+      },
+      "derived": true
+    }
+  ]
+}

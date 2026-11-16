@@ -10,17 +10,15 @@
       "main" : 1
     }
   },
-  "apple/Mac/App/MacDemoSnapshotBatch.swift" : {
-    "file-read" : {
-      "main" : 1
+  "apple/Packages/PersonaWire/Sources/PersonaWire/Keychain.swift" : {
+    "keychain-read" : {
+      "main" : 2
     }
   },
-  "apple/Mac/App/MacExtensionSnapshotBatch.swift" : {
-    "file-read" : {
+  "apple/Packages/PersonaWire/Sources/PersonaWire/StateCache.swift" : {
+    "directory-listing" : {
       "main" : 1
-    }
-  },
-  "apple/Mac/App/MacRichSnapshotBatch.swift" : {
+    },
     "file-read" : {
       "main" : 1
     }
@@ -158,21 +156,6 @@
       "main" : 1
     }
   },
-  "apple/PersonaLink/Sources/PersonaLink/LinkModel.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/PersonaLink/Sources/PersonaLink/LinkStatePaths.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/PersonaLink/Sources/PersonaLink/NativeCompatibility.swift" : {
-    "keychain-read" : {
-      "main" : 1
-    }
-  },
   "apple/PersonaWatch/WatchPetView.swift" : {
     "directory-listing" : {
       "main" : 1
@@ -217,11 +200,6 @@
       "main" : 1
     }
   },
-  "apple/Shared/Keychain.swift" : {
-    "keychain-read" : {
-      "main" : 2
-    }
-  },
   "apple/Shared/NativeStateMigration.swift" : {
     "keychain-read" : {
       "main" : 1
@@ -246,14 +224,6 @@
     }
   },
   "apple/Shared/Recording/RecordingSegmentWriter.swift" : {
-    "file-read" : {
-      "main" : 1
-    }
-  },
-  "apple/Shared/StateCache.swift" : {
-    "directory-listing" : {
-      "main" : 1
-    },
     "file-read" : {
       "main" : 1
     }

@@ -23,7 +23,7 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return nil
 	}
 	switch method {
-	case devicewire.MethodCall:
+	case devicewire.MethodCall, devicewire.MethodFileCall:
 		var p devicewire.NodeCall
 		if err := decode(&p); err != nil {
 			return nil, true, err
@@ -185,12 +185,23 @@ func (d *Devices) withOwn(ctx context.Context, machine string, hub *devicewire.C
 func (d *Devices) rehook(ctx context.Context) {
 	for _, m := range d.machinesNow() {
 		m.mu.Lock()
-		peer, at := m.peer, m.connectedAt
+		peer, at, ready := m.peer, m.connectedAt, m.sessionsReady
 		m.mu.Unlock()
 		if peer == nil {
 			continue
 		}
 		go func() {
+			if ready != nil {
+				// A first list that is still out has no replay in BusUp. Its normal initial forward closes ready;
+				// configuring only afterwards keeps the hub's rehook behind that real snapshot.
+				select {
+				case <-ready:
+				case <-peer.Done():
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
 			if reply, _ := d.hubConnected(ctx, m, at); reply != nil {
 				m.configureNode(ctx, peer, d.withOwn(ctx, m.cfg.ID, reply), true)
 			}
@@ -277,6 +288,8 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	route("GET /api/v1/machines/{mid}/diagnosis", d.getDiagnosis)
+	route("POST /api/v1/machines/{mid}/cleanup", d.postCleanup)
 	route("GET /api/v1/machines/{mid}/claude-dirs", d.getClaudeDirs)
 	route("GET /api/v1/machines/{mid}/claude-live-replies", d.getLiveReplies)
 	route("PUT /api/v1/machines/{mid}/claude-live-replies", d.putLiveReplies)
@@ -286,6 +299,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("PUT /api/v1/machines/{mid}/clipboard/settings", d.putClipboardSettings)
 	route("GET /api/v1/machines/{mid}/file-transfer/settings", d.getFileTransferSettings)
 	route("PUT /api/v1/machines/{mid}/file-transfer/settings", d.putFileTransferSettings)
+	route("GET /api/v1/machines/{mid}/files/operations/{oid}", d.getFileOperation)
 	d.transferRoutes(mux)
 	d.metricsRoutes(mux)
 	d.usageRoutes(mux)

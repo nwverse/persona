@@ -1,3 +1,4 @@
+import { conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 // Where a link opens (CLAUDE.md "Links open inside the app", docs/web/web.md "Links"). In a browser the browser is the app:
 // ordinary pages open in a new tab (most sites refuse to be framed and the page cannot tell it was refused, so a
@@ -48,9 +49,9 @@ const FEISHU_HOSTS = ["larkoffice.com", "feishu.cn", "larksuite.com"];
 // First path segments the reader opens (FeishuLinks.isDoc).
 const DOC_PATHS = ["docx", "wiki", "docs", "sheets", "base", "mindnotes", "file", "slides"];
 
-function parse(url: string): URL | null {
+function parse(url: string, base?: string | URL): URL | null {
   try {
-    return new URL(url);
+    return new URL(url, base);
   } catch {
     return null;
   }
@@ -129,6 +130,16 @@ export function hubOrigins(endpoints: unknown): string[] {
 }
 
 const pageOrigin = () => (typeof location !== "undefined" ? [location.origin, ...advertised] : advertised);
+
+/** Whether an image URL is this page's or an advertised hub's own (its attachments and extension images), so it loads
+ *  inline. Relative and non-http(s) URLs are the hub's too; every other host stays behind the tap-to-load gate. */
+export function isOwnImageURL(src: string): boolean {
+  // Resolve protocol-relative URLs (//host/x) against the page origin: without a base they fail to parse and would be
+  // mistaken for the hub's own, letting a third-party image load past the gate (#8162).
+  const u = parse(src.trim(), typeof location !== "undefined" ? location.href : undefined);
+  if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return true;
+  return pageOrigin().includes(u.origin);
+}
 
 /** An agent, task or conversation page of the hub this page is served by (router.ts's /s/…, /todos, /persona/…, under the
  * sub-path the page is served at), or null. */
@@ -358,6 +369,7 @@ export function getContexts(key: string): ContextRef[] {
 }
 
 export function addContext(key: string, ref: ContextRef) {
+  if (conversationKeyDeleted(key)) return;
   const cur = getContexts(key);
   // the same passage of the same page once
   if (cur.some((c) => ref.kind === "skill" ? c.kind === "skill" && c.attrs?.ref === ref.attrs?.ref : c.url === ref.url && c.text === ref.text && c.kind === ref.kind)) return;
@@ -441,3 +453,8 @@ export function whenComposer(key: string | undefined, run: (c: ComposerHandle) =
     expired?.();
   }, ms);
 }
+
+onConversationDeleted((mid, sid) => {
+  pending.delete(`${mid}/${sid}`);
+  emitContexts();
+});
