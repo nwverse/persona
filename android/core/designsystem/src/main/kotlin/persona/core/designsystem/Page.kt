@@ -377,7 +377,7 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        CompositionLocalProvider(LocalPaneListToggle provides null) {
+        CompositionLocalProvider(LocalSplitDetail provides null) {
             Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
         }
     }
@@ -425,12 +425,13 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
-    val listToggle = LocalPaneListToggle.current
+    val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when {
-            listToggle != null -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), listToggle)
-            onBack != null -> JBackButton(onClick = onBack)
-            else -> LocalRootLeading.current?.invoke()
+        when (splitLeading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
+            is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> LocalRootLeading.current?.invoke()
         }
     }
     val titleBlock: @Composable RowScope.() -> Unit = {
