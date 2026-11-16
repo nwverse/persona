@@ -50,7 +50,7 @@ public enum ProjectionBindingReplay {
         )
         for (field, value) in [("page", 99), ("option_index", 99)] {
             var operation = try ProjectionFixture.require(question.input["operation"]?.object, "operation")
-            operation[field] = .number(Decimal(value))
+            operation[field] = .number(String(value))
             var input = try ProjectionFixture.require(question.input.object, "input")
             input["operation"] = .object(operation)
             do {
@@ -115,7 +115,7 @@ public enum ProjectionBindingReplay {
             }
             expectedPicks = .object(picks)
         }
-        let expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Decimal(page))
+        let expectedPage: ContinuityJSON = expected["next_page"] ?? .number(String(page))
         try ProjectionFixture.assertEqual(
             try ProjectionFixture.require(transition["page"], "page"), expectedPage, "answer/\(name)/page"
         )
@@ -158,13 +158,13 @@ public enum ProjectionBindingReplay {
                 ])]),
             ]),
             "operation": .object([
-                "action": .string("submit"), "page": .number(0),
+                "action": .string("submit"), "page": .number("0"),
                 "picks": .object([:]), "other": .object(["One": .string(" \u{200b} ")]),
             ]),
         ])
         let transition = try ProjectionFixture.project(input, "answer U+200B", using: PersonaCoreProjections.answer)
         try ProjectionFixture.assertEqual(transition, .object([
-            "allowed": .bool(false), "page": .number(0), "picks": .object([:]),
+            "allowed": .bool(false), "page": .number("0"), "picks": .object([:]),
             "other": .object(["One": .string(" \u{200b} ")]), "resolution": .null,
         ]), "answer U+200B")
         let display = try ProjectionFixture.project(
