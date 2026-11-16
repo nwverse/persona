@@ -37,9 +37,16 @@ afterEach(() => {
   host.remove();
 });
 
+async function settle(operation: () => void | Promise<void>) {
+  await act(async () => {
+    await operation();
+    await vi.dynamicImportSettled();
+  });
+}
+
 async function draw({ assistant = true, text = "Original reply", isUser = false, bar = true } = {}) {
   const actions: ChatActions = { assistant, draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Chat", images: () => [] };
-  await act(async () => {
+  await settle(async () => {
     root.render(
       <LinkManager.Provider value="chosen-assistant">
         <ChatActionsContext.Provider value={actions}>
@@ -48,7 +55,7 @@ async function draw({ assistant = true, text = "Original reply", isUser = false,
       </LinkManager.Provider>,
     );
   });
-  await act(async () => { await vi.dynamicImportSettled(); });
+  await settle(async () => { await vi.dynamicImportSettled(); });
 }
 
 function translationButton(): HTMLButtonElement {
@@ -63,7 +70,7 @@ describe("one-click reply translation", () => {
     await draw({ assistant });
     expect(request).not.toHaveBeenCalled();
     expect(translationButton().getAttribute("aria-label")).toBe(t("chat-messageactions.translate"));
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(request).toHaveBeenCalledExactlyOnceWith("/translate/message", expect.objectContaining({
       json: { text: "Original reply", target: "zh-Hans" },
       headers: { "X-Persona-Manager": "chosen-assistant" },
@@ -71,9 +78,9 @@ describe("one-click reply translation", () => {
     expect(host.querySelector("[data-reply-translation] strong")?.textContent).toBe("reply");
     expect(host.querySelector("[data-original]")).toBeNull();
     expect(translationButton().getAttribute("aria-label")).toBe(t("chat-messageactions.show_original"));
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(host.querySelector("[data-original]")?.textContent).toBe("Original reply");
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(host.querySelector("[data-reply-translation]")).not.toBeNull();
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -82,7 +89,7 @@ describe("one-click reply translation", () => {
     media.touch = true;
     await draw();
     expect(translationButton().className).toContain("touch-hit");
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(host.querySelector("[data-reply-translation]")).not.toBeNull();
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -91,11 +98,11 @@ describe("one-click reply translation", () => {
     let resolve!: (value: { text: string }) => void;
     request.mockReturnValue(new Promise((done) => { resolve = done; }));
     await draw();
-    await act(async () => { translationButton().click(); translationButton().click(); });
+    await settle(async () => { translationButton().click(); translationButton().click(); });
     expect(translationButton().disabled).toBe(true);
     expect(request).toHaveBeenCalledTimes(1);
     await draw({ text: "A different reply" });
-    await act(async () => resolve({ text: "Stale translation" }));
+    await settle(async () => resolve({ text: "Stale translation" }));
     expect(host.querySelector("[data-original]")?.textContent).toBe("A different reply");
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
   });
@@ -103,10 +110,10 @@ describe("one-click reply translation", () => {
   it("keeps the original on failure and retries only when explicitly clicked", async () => {
     request.mockRejectedValueOnce(new Error("Translation service unavailable"));
     await draw();
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(host.querySelector("[role=alert]")?.textContent).toContain("Translation service unavailable");
     expect(host.querySelector("[data-original]")).not.toBeNull();
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(host.querySelector("[role=alert]")).toBeNull();
     expect(host.querySelector("[data-reply-translation]")).not.toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
@@ -123,7 +130,7 @@ describe("one-click reply translation", () => {
   it.each(["en", "ja"])("uses the actual %s interface language, not translation preferences", async (language) => {
     await initI18n(language);
     await draw();
-    await act(async () => translationButton().click());
+    await settle(async () => translationButton().click());
     expect(request.mock.calls[0][1].json.target).toBe(language);
   });
 });

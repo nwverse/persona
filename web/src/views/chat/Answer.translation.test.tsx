@@ -47,9 +47,16 @@ afterEach(() => {
   host.remove();
 });
 
+async function settle(operation: () => void | Promise<void>) {
+  await act(async () => {
+    await operation();
+    await vi.dynamicImportSettled();
+  });
+}
+
 async function draw({ assistant = true, reply = item, sid = "s" } = {}) {
   const actions: ChatActions = { assistant, draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Chat", images: () => [] };
-  await act(async () => {
+  await settle(async () => {
     root.render(
       <LinkManager.Provider value="chosen-assistant">
         <ChatActionsContext.Provider value={actions}>
@@ -58,7 +65,7 @@ async function draw({ assistant = true, reply = item, sid = "s" } = {}) {
       </LinkManager.Provider>,
     );
   });
-  await act(async () => { await vi.dynamicImportSettled(); });
+  await settle(async () => { await vi.dynamicImportSettled(); });
 }
 
 function translate(): HTMLButtonElement {
@@ -84,7 +91,7 @@ describe("translation of hub-paged answers", () => {
     expect(fullItem).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[data-full-text]")).not.toBeNull();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     const sent = request.mock.calls[0]?.[1]?.json?.text as string | undefined;
     expect({
       fullItemCalls: fullItem.mock.calls.length,
@@ -97,10 +104,10 @@ describe("translation of hub-paged answers", () => {
       headers: { "X-Persona-Manager": "chosen-assistant" },
     }));
     expect(host.querySelector("[data-reply-translation] strong")?.textContent).toBe("whole");
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expectOriginal(whole);
     expect(host.querySelector("[data-full-text]")).toBeNull();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(host.querySelector("[data-reply-translation]")).not.toBeNull();
     expect(fullItem).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(1);
@@ -112,7 +119,7 @@ describe("translation of hub-paged answers", () => {
     fullItem.mockReturnValue(full.promise);
     request.mockReturnValue(translated.promise);
     await draw();
-    await act(async () => { translate().click(); translate().click(); });
+    await settle(async () => { translate().click(); translate().click(); });
     expect(fullItem).toHaveBeenCalledTimes(1);
     expect(request).not.toHaveBeenCalled();
     expect(translate().disabled).toBe(true);
@@ -120,11 +127,11 @@ describe("translation of hub-paged answers", () => {
     expect(more?.disabled).toBe(true);
     expect(host.querySelector("[data-answer]")?.textContent).toBe(prefix);
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
-    await act(async () => full.resolve({ ...item, text: whole }));
+    await settle(async () => full.resolve({ ...item, text: whole }));
     expect(request).toHaveBeenCalledTimes(1);
     expectOriginal(whole);
     expect(translate().disabled).toBe(true);
-    await act(async () => translated.resolve({ text: "The complete translation." }));
+    await settle(async () => translated.resolve({ text: "The complete translation." }));
     expect(translate().disabled).toBe(false);
     expect(host.querySelector("[data-reply-translation]")?.textContent).toBe("The complete translation.");
   });
@@ -132,13 +139,13 @@ describe("translation of hub-paged answers", () => {
   it("does not spend on a failed full-text load, keeps its retry control, and retries explicitly", async () => {
     fullItem.mockRejectedValueOnce(new Error("Full reply unavailable"));
     await draw();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[data-answer]")?.textContent).toBe(prefix);
     expect(host.querySelector("[data-full-text=failed]")).not.toBeNull();
     expect(host.querySelector("[role=alert]")?.textContent).toContain("Full reply unavailable");
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(fullItem).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0][1].json.text).toBe(whole);
@@ -147,9 +154,9 @@ describe("translation of hub-paged answers", () => {
 
   it("reuses a manually loaded full reply", async () => {
     await draw();
-    await act(async () => host.querySelector<HTMLButtonElement>("[data-full-text]")!.click());
+    await settle(async () => host.querySelector<HTMLButtonElement>("[data-full-text]")!.click());
     expectOriginal(whole);
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(fullItem).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0][1].json.text).toBe(whole);
   });
@@ -158,11 +165,11 @@ describe("translation of hub-paged answers", () => {
     const full = deferred<Item>();
     fullItem.mockReturnValue(full.promise);
     await draw();
-    await act(async () => host.querySelector<HTMLButtonElement>("[data-full-text]")!.click());
-    await act(async () => translate().click());
+    await settle(async () => host.querySelector<HTMLButtonElement>("[data-full-text]")!.click());
+    await settle(async () => translate().click());
     expect(request).not.toHaveBeenCalled();
     expect(fullItem).toHaveBeenCalledTimes(1);
-    await act(async () => full.resolve({ ...item, text: whole }));
+    await settle(async () => full.resolve({ ...item, text: whole }));
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0][1].json.text).toBe(whole);
   });
@@ -170,10 +177,10 @@ describe("translation of hub-paged answers", () => {
   it("reuses the loaded original when translation fails and is explicitly retried", async () => {
     request.mockRejectedValueOnce(new Error("Translation unavailable"));
     await draw();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expectOriginal(whole);
     expect(host.querySelector("[role=alert]")?.textContent).toContain("Translation unavailable");
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(fullItem).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1][1].json.text).toBe(whole);
@@ -184,16 +191,16 @@ describe("translation of hub-paged answers", () => {
     const full = deferred<Item>();
     fullItem.mockReturnValue(full.promise);
     await draw();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     setToken("test-paged-translation-other-owner");
-    await act(async () => full.resolve({ ...item, text: whole }));
+    await settle(async () => full.resolve({ ...item, text: whole }));
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
   });
 
   it("fails closed when a paged reply has no session to load its complete text from", async () => {
     await draw({ sid: "" });
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     expect(fullItem).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[role=alert]")).not.toBeNull();
@@ -204,10 +211,10 @@ describe("translation of hub-paged answers", () => {
     const full = deferred<Item>();
     fullItem.mockReturnValue(full.promise);
     await draw();
-    await act(async () => translate().click());
+    await settle(async () => translate().click());
     const replacement = { ...item, id: "replacement#0", text: "Another complete reply", full_size: undefined };
     await draw({ reply: replacement });
-    await act(async () => full.resolve({ ...item, text: whole }));
+    await settle(async () => full.resolve({ ...item, text: whole }));
     expect(request).not.toHaveBeenCalled();
     expect(host.querySelector("[data-answer]")?.textContent).toBe(replacement.text);
     expect(host.querySelector("[data-reply-translation]")).toBeNull();
@@ -217,9 +224,9 @@ describe("translation of hub-paged answers", () => {
     const full = deferred<Item>();
     fullItem.mockReturnValue(full.promise);
     await draw();
-    await act(async () => translate().click());
-    await act(async () => root.render(null));
-    await act(async () => full.resolve({ ...item, text: whole }));
+    await settle(async () => translate().click());
+    await settle(async () => root.render(null));
+    await settle(async () => full.resolve({ ...item, text: whole }));
     expect(request).not.toHaveBeenCalled();
   });
 });

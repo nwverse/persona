@@ -9,6 +9,9 @@ loading/failure control readable. Use the item's stable source identity while th
 translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
 not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
 
+The request/cache module loads only on the translation click, not with the first screen. Keep the owner/item/unmount
+check after both the full-text and module loads; moving it before either asynchronous load can charge a stale reply.
+
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
 Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
