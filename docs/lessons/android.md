@@ -36,6 +36,22 @@ these races: use real JNI with independently controlled worker completion, frame
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
 
+## A Robolectric FileProvider keeps the cache directory of the test that first used it (#9365)
+
+`FileProvider` takes the folders it serves the first time it is asked and keeps them for the life of the instance (`mLocalPathStrategy`); the
+static `sCache` only feeds that first binding and `getUriForFile`. Robolectric creates the provider when something first asks the content
+resolver for its authority, and forgets it after each test. A job an earlier test left on `Dispatchers.IO` can be that first asker once its test
+is over: when `NewAgentAttachmentsShotsTest`'s trip test ends, the photo's thumbnail is still decoding inside `FileProvider.getType` (every run), and
+`ImageDecoder` asks the content resolver again when its first open fails (a provider that emptied the registry and threw `FileNotFoundException` found a
+new `FileProvider` registered afterwards). A provider bound to another test's cache directory deletes nothing: `delete` returns 0, the page's `runCatching`
+hides it, and a cancelled camera's file stays. No wait helps: with such a provider registered by hand, the folder was still full after a 3 s `waitUntil`.
+
+Emptying `sCache` in `@Before` is not enough. Also register the manifest's provider there (`Robolectric.buildContentProvider(FileProvider::class.java).create()`)
+and make one harmless call (a `delete` of a file that is not there) so it takes its folders under this test; it replaces whatever was registered, and
+nothing creates another one later. `Robolectric.setupContentProvider(FileProvider::class.java, authority)` is not that: it builds a bare `ProviderInfo`
+and `FileProvider.attachInfo` throws `Provider must grant uri permissions`. And before choosing a wait for a file a page deletes, read where it deletes:
+the camera's cancel callback does it at once on the main thread, while `discard` runs on `Dispatchers.IO`.
+
 ## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
 
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
@@ -372,6 +388,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - The `BackHandler` registered last wins, and handlers register in composition order, not by nesting (2026-11-09, #2481). `SettingsScreen` composes its routed-back handler after `when (page)`, so on a destination that opens straight on a page (Settings › Pairing, `initialPage = "pair"`) it outranked that page's own steps, and Back from the manual form or the confirm page left the page with the typed address. Add hub worked only because its page is switched in later and registers after the host. A host fallback that should yield to a page goes before the page or is turned off for it. Test the host the way the shell wires it (`onBack` set): in place (no `onBack`) the fallback is composed before the page and the bug does not show.
 - Drag `ACTION_DRAG_STARTED` commonly exposes `ClipDescription` but not `ClipData`, and `text/plain` can mean either a plain-text drag or a `.txt` file. Use MIME only to register a candidate target; on DROP, import only `content` / `file` URIs and leave a text-only payload to the text field. Hold `DragAndDropPermissions` until the app-owned copy finishes. If a coroutine can be cancelled after the copy returns but before its result is attached, the result can be discarded and the private file orphaned: finish each item's copy, attach that result, then check cancellation before the next item.
 - A large-window wrapper must not move the wrapped composer between a direct compact call and a different large-window parent: that disposes its upload effects and any presentation-scoped cleanup. Keep one visually neutral composition identity and condition only key / drag modifiers and CompositionLocal values. Draft-owned file cleanup follows global draft snapshots, not whether the large-window presentation exists. Expanded-editor Escape and Send also have different collapse semantics: Escape restores field focus, while Send must not increment the field's focus request.
+- A strip that fades its edges must place what the user chose out of the fade (#9121). Scrolling a chosen chip wider than the strip to the start of the content put its first word inside the 32 dp leading fade, dimmed to about half, and the clock icon was nearly gone. `JAgentFilterCapsule` moves such a chip to where the clear middle (the strip less a fade at each end) begins, and centres one that fits in it; the middle is tested with real widths at 200% text (`AgentFilterCapsuleTest`), and the screenshots show the longest label chosen at 200% in every language.
+- Three Compose test traps when proving a label is whole (#9121). `TextLayoutResult.didOverflowWidth` is true for any one-line `Text` laid out with no width limit (a `LazyRow` item, `softWrap = false`), because the paragraph is laid out at the maximum constraint: compare the layout's width with `multiParagraph.maxIntrinsicWidth`, check `isLineEllipsized(0)` and the text itself. `SemanticsNode.boundsInRoot` is clipped to a scrolling parent, so a chip wider than its strip reports the strip's width and a "fits in the strip" assertion passes by construction: use `positionInRoot` and `size`. `Modifier.clearAndSetSemantics { }` on a `Text` itself removes the `Text`'s own semantics even from the unmerged tree, so a test cannot read its layout; put the modifier on a wrapper (`Box`), which clears the merged tree and keeps the unmerged one. A shot test that must run unchanged on `main` too, for a before/after comparison, uses only test tags and public API; capture `main` first in the same worktree by restoring the sources with `git checkout -- <files>` (never `git stash`), then the branch.
 
 ## Native extension streams (#5956)
 

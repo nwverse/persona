@@ -1199,7 +1199,11 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		} else if ix.Kind == proto.IxScreen {
 			what = "终端对话框等你处理"
 		}
-		k := [2]string{ix.MachineID, ix.SessionID}
+		session := ix.SessionID
+		if ix.FoldedUnder != "" {
+			session = ix.FoldedUnder
+		}
+		k := [2]string{ix.MachineID, session}
 		what += " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], clip(what, 400))
 	}
@@ -1222,9 +1226,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant {
+			if c.Assistant || c.FoldedUnder() != "" {
 				continue
 			}
+			c.State = c.FoldedState()
 			// Archived ones are out of the apps' lists: only "archived" lists them, and "all" with them marked.
 			switch state {
 			case "all":
