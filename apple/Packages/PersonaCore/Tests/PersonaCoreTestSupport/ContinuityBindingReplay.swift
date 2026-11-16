@@ -42,10 +42,11 @@ public struct ContinuityBindingReplay: Sendable {
             switch effect {
             case let .fetch(chat: effectChat, request: request):
                 guard effectChat == chat else { throw ContinuityFixtureError.invalidFixture("\(name) initial: wrong chat") }
-                initialRequests.append(request.requestJSON ?? .null)
+                initialRequests.append(try effect.requestJSON ?? .null)
             case let .rejected(reason: reason): throw ContinuityFixtureError.rejected("\(name) initial: \(reason)")
             }
         }
+        try compare(initialPatch, list, try expectedInitial(initial, initialRequests), "\(name) initial", actions: .array(initialRequests))
         for (index, event) in `case`.events.enumerated() {
             let label = "\(name) step \(index)"
             let action: Action

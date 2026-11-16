@@ -8,6 +8,21 @@ public enum ContinuityJSON: Equatable, Sendable {
     case null
     case bool(Bool)
     case number(String)
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.number(let left), .number(let right)):
+            if let left = ExactJSONNumbers.normalizedInteger(left),
+               let right = ExactJSONNumbers.normalizedInteger(right) { return left == right }
+            return left == right
+        case (.null, .null): true
+        case (.bool(let left), .bool(let right)): left == right
+        case (.string(let left), .string(let right)): left == right
+        case (.array(let left), .array(let right)): left == right
+        case (.object(let left), .object(let right)): left == right
+        default: false
+        }
+    }
     case string(String)
     case array([ContinuityJSON])
     case object([String: ContinuityJSON])
@@ -26,8 +41,9 @@ public enum ContinuityJSON: Equatable, Sendable {
     public subscript(_ key: String) -> ContinuityJSON? { object?[key] }
 
     public static func load(file: URL) throws -> ContinuityJSON {
-        let value = try JSONSerialization.jsonObject(with: Data(contentsOf: file))
-        return try from(value)
+        let data = try Data(contentsOf: file)
+        try ExactJSONNumbers.validate(data: data)
+        return try from(try JSONSerialization.jsonObject(with: data))
     }
 
     public static func from(_ value: Any) throws -> ContinuityJSON {
@@ -45,7 +61,7 @@ public enum ContinuityJSON: Equatable, Sendable {
 
     public func encoded() throws -> String {
         if case .number(let text) = self {
-            guard Self.isExactJSONNumber(text) else {
+            guard ExactJSONNumbers.isValid(text) else {
                 throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
             }
             return text
@@ -69,21 +85,11 @@ public enum ContinuityJSON: Equatable, Sendable {
     }
 
     private static func jsonNumber(_ value: NSNumber) throws -> ContinuityJSON {
-        guard JSONSerialization.isValidJSONObject([value]) else {
-            throw ContinuityFixtureError.invalidFixture("non-finite JSON number")
-        }
         let text = value.stringValue
-        guard isExactJSONNumber(text) else {
+        guard ExactJSONNumbers.isValid(text) else {
             throw ContinuityFixtureError.invalidFixture("out-of-range JSON number")
         }
         return .number(text)
-    }
-
-    private static func isExactJSONNumber(_ text: String) -> Bool {
-        guard JSONSerialization.isValidJSONObject([text]),
-              let value = try? JSONSerialization.jsonObject(with: Data("[\(text)]".utf8)) as? [NSNumber],
-              let number = value.first else { return false }
-        return number.stringValue == text
     }
 }
 

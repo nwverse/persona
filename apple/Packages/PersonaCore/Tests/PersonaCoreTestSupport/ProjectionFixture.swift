@@ -84,6 +84,7 @@ public struct ProjectionFixture {
         guard let data = json.data(using: .utf8), !data.isEmpty else {
             throw ProjectionFixtureError.invalidFixture("\(label): the C binding returned no JSON")
         }
+        try ExactJSONNumbers.validate(data: data)
         return try ContinuityJSON.from(JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
     }
 

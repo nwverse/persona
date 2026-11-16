@@ -56,8 +56,8 @@ final class PersonaCoreProjectionTests: XCTestCase {
         )
         // Programmatic invalid numeric text must throw rather than reach Foundation's non-finite exception.
         XCTAssertThrowsError(try ContinuityJSON.number("nan").encoded())
-        let exponent = try ProjectionFixture.decode("1e1000", "out-of-range exponent")
-        XCTAssertThrowsError(try exponent.encoded())
+        XCTAssertThrowsError(try ContinuityJSON.array([.number("nan")]).encoded())
+        XCTAssertThrowsError(try ProjectionFixture.decode("1e1000", "out-of-range exponent"))
     }
 
     func testMalformedInputMapsToTheCErrorResult() throws {
