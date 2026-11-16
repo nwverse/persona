@@ -786,6 +786,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     public var connectors: [ExtensionConnectorItem]?
     public var voice: [ExtensionNamedItem]?
     public var transcription: [ExtensionNamedItem]?
+    public var speech: [ExtensionNamedItem]?
     public var computer: [ExtensionNamedItem]?
     public var browser: [ExtensionNamedItem]?
     public var iphone: [ExtensionNamedItem]?
@@ -813,10 +814,11 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     public var additionalProperties: [String: JSONValue]
 
-    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.transcription = transcription
+        self.speech = speech
         self.computer = computer
         self.browser = browser
         self.iphone = iphone
@@ -848,6 +850,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case connectors
         case voice
         case transcription
+        case speech
         case computer
         case browser
         case iphone
@@ -879,6 +882,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.connectors = ExtensionWireJSON.decode([ExtensionConnectorItem].self, from: raw["connectors"])
         self.voice = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["voice"])
         self.transcription = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["transcription"])
+        self.speech = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["speech"])
         self.computer = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["computer"])
         self.browser = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["browser"])
         self.iphone = ExtensionWireJSON.decode([ExtensionNamedItem].self, from: raw["iphone"])
@@ -903,16 +907,17 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.authRelay = ExtensionWireJSON.decode([ExtensionAuthRelayItem].self, from: raw["auth_relay"])
         self.secretProviders = ExtensionWireJSON.decode([ExtensionSecretProviderItem].self, from: raw["secret_providers"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     public func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
         if let value = transcription { fields["transcription"] = try ExtensionWireJSON.encode(value) }
+        if let value = speech { fields["speech"] = try ExtensionWireJSON.encode(value) }
         if let value = computer { fields["computer"] = try ExtensionWireJSON.encode(value) }
         if let value = browser { fields["browser"] = try ExtensionWireJSON.encode(value) }
         if let value = iphone { fields["iphone"] = try ExtensionWireJSON.encode(value) }
@@ -1641,7 +1646,7 @@ public nonisolated struct ExtensionConnectorItem: Codable, Hashable, Sendable {
     }
 }
 
-/// A contribution with only an id and a name: voice, transcription, computer, browser.
+/// A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 public nonisolated struct ExtensionNamedItem: Codable, Hashable, Sendable {
     public var id: String
     public var name: String?

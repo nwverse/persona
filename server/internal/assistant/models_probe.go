@@ -426,8 +426,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 
 // atAnthropic: the target is Anthropic's own API (not a relay or another vendor).
 func (t probeTarget) atAnthropic() bool {
-	u, err := url.Parse(strings.TrimSpace(t.base))
-	return err == nil && strings.EqualFold(u.Hostname(), "api.anthropic.com")
+	return proto.AnthropicAPI(t.base)
 }
 
 // regionBlocked: a 403 body is Anthropic's region block, {"type":"error","error":{"type":"forbidden","message":
@@ -527,6 +526,9 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
+	if t.api == "chat" && ai.OmitChatEffort(t.base, t.key, t.model, t.via, t.effort) {
+		t.effort = ""
+	}
 	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
 		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
 		out["code"] = "unsupported_effort"
@@ -536,6 +538,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	auto := t.auth == probeAuthAuto
 	var res *http.Response
 	renamedTokens, droppedEffort := false, false
+	// A compatibility attempt changes the rejected request; X-Should-Retry: false only suppresses resending it unchanged.
 	for {
 		body, _ := json.Marshal(payload)
 		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
@@ -544,15 +547,22 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		noRetry := ai.NoRetry(res.Header)
-		if readErr == nil && !noRetry && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+		// Recognized machine codes win over compatibility wording and keep their original response for failure().
+		if ai.HasRecognizedErrorCode(raw) {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
+		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
+		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+			ai.RememberChatEffortRejection(t.base, t.key, t.model, t.via, offValueRejected)
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
 			t.effort = "" // the answer did not verify the requested effort
 			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
 			continue
 		}
-		if readErr == nil && !noRetry && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
 			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256

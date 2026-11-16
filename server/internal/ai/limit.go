@@ -364,7 +364,7 @@ func (g *gate) done(t turn, probe, answered bool, err error) error {
 	// the connection and the probes count.
 	counts := !g.held || probe
 	pause := after
-	if reason == ReasonQuota && pause <= 0 && !hasExplicitQuotaCooldown(err) {
+	if reason == ReasonQuota && pause <= 0 {
 		pause = quotaPause
 	}
 	if reason == ReasonBusy {
@@ -407,40 +407,32 @@ func (g *gate) changed() {
 // httpError is an answer other than 200. body keeps the established clipped text; the full parsed envelope is retained
 // for failure classification and gate logs.
 type httpError struct {
-	status          int
-	body            string
-	retryAfter      time.Duration
-	retryAfterGiven bool
-	code            string
-	message         string
-	errorType       string
-	envelope        bool
-	noRetry         bool
+	status     int
+	body       string
+	retryAfter time.Duration
+	code       string
+	message    string
+	errorType  string
+	envelope   bool
+	noRetry    bool
 }
 
 func newHTTPError(resp *http.Response, raw []byte) *httpError {
 	code, message, errorType, envelope := gatewayErrorDetailsWithType(raw)
-	after, validAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+	after := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
-		retryAfter: after, retryAfterGiven: validAfter, code: code, message: message, errorType: errorType,
-		envelope: envelope, noRetry: NoRetry(resp.Header)}
+		retryAfter: after, code: code, message: message, errorType: errorType,
+		envelope: envelope, noRetry: noRetryHeader(resp.Header)}
 }
 
-// NoRetry reports whether the gateway explicitly forbids retrying this response.
-func NoRetry(header http.Header) bool {
+// noRetryHeader reports whether the gateway explicitly forbids retrying this response.
+func noRetryHeader(header http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
-}
-
-// hasExplicitQuotaCooldown distinguishes an explicit Retry-After of zero from no Retry-After at all. The former
-// pauses only until now; only the latter gets the default quota pause in gate.done.
-func hasExplicitQuotaCooldown(err error) bool {
-	var h *httpError
-	return errors.As(err, &h) && h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("ai: HTTP %d: %s", e.status, e.body) }
 func (e *httpError) failureKind() FailureKind {
-	return failureKindFor(e.status, e.code, e.message)
+	return failureKindFor(e.status, e.code, e.message, e.errorType)
 }
 
 // Transient: the same request tried again may get an answer: the call ran out of time, the connection failed (before
@@ -477,12 +469,12 @@ func Transient(err error) bool {
 }
 
 // parseRetryAfter reads digits-only Retry-After seconds or an HTTP date. Malformed and absent values are not a
-// cooldown; valid zero remains distinct so an explicit reset can expire immediately. Large values cap before the
+// cooldown; callers require a positive duration for the 429 quota-reset exception. Large values cap before the
 // duration multiplication can overflow.
-func parseRetryAfter(v string) (time.Duration, bool) {
+func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return 0, false
+		return 0
 	}
 	digits := true
 	for i := 0; i < len(v); i++ {
@@ -494,24 +486,23 @@ func parseRetryAfter(v string) (time.Duration, bool) {
 	if digits {
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
-			return 0, false
+			return 0
 		}
 		if n >= uint64(afterMost/time.Second) {
-			return afterMost, true
+			return afterMost
 		}
-		return time.Duration(n) * time.Second, true
+		return time.Duration(n) * time.Second
 	}
 	t, err := http.ParseTime(v)
 	if err != nil {
-		return 0, false
+		return 0
 	}
-	return min(max(t.Sub(now()), 0), afterMost), true
+	return min(max(t.Sub(now()), 0), afterMost)
 }
 
 // retryAfter reads Retry-After: seconds or an HTTP date, returning zero when it is absent or malformed.
 func retryAfter(v string) time.Duration {
-	d, _ := parseRetryAfter(v)
-	return d
+	return parseRetryAfter(v)
 }
 
 var quotaWords = lazyre.New(`quota|usage limit|exhaust|insufficient|credit|billing`)
@@ -648,12 +639,10 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		reason = ReasonQuota
 	case h.status == http.StatusPaymentRequired:
 		reason = ReasonQuota
-	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven:
-		// A valid explicit cooldown is a quota reset, not a busy answer to back off from exponentially.
+	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfter > 0:
+		// Only a valid positive 429 cooldown is a quota reset instead of an ordinary busy answer. Other no-retry
+		// statuses retain their raw behavior; busy statuses without one still use the gate.
 		reason = ReasonQuota
-	case h.noRetry:
-		// Every other explicit no-retry response returns its raw error without a busy pause, cap or probe.
-		return "", 0, ""
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
 	case coded:

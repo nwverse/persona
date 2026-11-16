@@ -304,11 +304,7 @@ func modelCallError(ctx context.Context, l i18n.Lang, err error) error {
 		return &rpc.Error{Code: assistantwire.CodeModelTimeout, Message: "model.complete: timed out"}
 	}
 	if explanation := directCallFailureExplanation(l, err); explanation != "" {
-		code := assistantwire.CodeModelFailed
-		if ai.IsModelUnavailable(err) {
-			code = assistantwire.CodeModelUnavailable
-		}
-		return &rpc.Error{Code: code, Message: "model.complete: " + explanation + ": " + err.Error()}
+		return &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "model.complete: " + explanation + ": " + err.Error()}
 	}
 	return &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "model.complete: " + err.Error()}
 }
