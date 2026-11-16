@@ -1,5 +1,17 @@
 # Bounded Agents list verification
 
+## Paseo workspace pins
+
+```sh
+node web/e2e/paseo-workspace-pins.mjs <loopback-web-origin> <artifact-directory> [Chromium-executable]
+```
+
+Uses the real Agents page and sidebar against an owned local web server, with all hub HTTP and WebSocket requests
+answered by synthetic data. Checks a pinned empty workspace ahead of its main sibling and an unrelated repository,
+refreshes an unpin, and verifies that selection, disclosure and Persona's separate session pin survive. Covers desktop
+and phone widths, light and dark, and standard and large text. No preference or Agent writes are allowed. Screenshots
+and `results.json` are written outside the repository; a 180-second watchdog bounds the run.
+
 ## Direct completion of a decision task
 
 ```sh
@@ -47,6 +59,24 @@ both widths no short code chip in a cell is broken across lines (#9146). `--big`
 drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
+## An extension's dashboard page: UI version 8's columns layout (#9158)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-columns.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 the five cards are in reading order in two columns,
+the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
+each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
+its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
+(the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
+run, and the last line is the verdict.
 
 ## User-input navigation acceptance
 

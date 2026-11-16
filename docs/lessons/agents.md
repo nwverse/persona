@@ -1220,3 +1220,19 @@ path reuses its probe the way `launcherProbeCached` and `modelProbeCache` do: ke
 once when the files it depends on change (`shellStamp` in `server/internal/node/assistant_profile_probe.go`). A change the
 stamp cannot see waits out the bound. In a test, count the shells a send starts with a launcher that appends to a file
 each time it runs, not only the send's result.
+
+The start of a conversation's process took the same probe again (#9097): its compaction settings and, on a resume, the
+model it would run on, each with a login shell of its own, and the agent, profile and model checks each kept a copy that
+aged out on its own clock. A start after a quiet spell waited for four probes one after another, about two seconds each
+on a busy machine. Every caller now reads one kept probe per launcher and arguments (`keptProbe`): callers asking at
+once share one shell, and a probe in use is renewed in the background shortly before it ages out, so the bound still
+holds but no message waits for it. A renewal is not a use, or it would keep itself going forever.
+
+
+## A Paseo pin belongs to a workspace, not its project (#9300)
+
+Paseo's “Pin chat” persists on its workspace descriptor (`pinnedAt`). Persona's Paseo space is the entire project, which
+can contain multiple workspaces sharing a directory; importing a pin into `pins.spaces` would pin siblings too. Carry
+the timestamp on the workspace catalog and match machine, source and source ID. An unpin must also release retained
+old sessions even if pin and unpin happen before the coalesced catalog push: a session push can observe the temporary
+pin while the final catalog bytes equal the earlier unpinned snapshot.

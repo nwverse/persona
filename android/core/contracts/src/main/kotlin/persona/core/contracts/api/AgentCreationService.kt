@@ -65,7 +65,13 @@ interface AgentCreationService {
      * choice: empty from an older hub (404) and on any failure, which then shows no choice.
      */
     suspend fun workspaces(machineId: String): List<AgentWorkspace> = emptyList()
+
+    /** A catalog refresh, including usable hub-cache rows when a source cannot refresh; transport failures propagate. */
+    suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog = AgentWorkspaceCatalog(workspaces(machineId))
 }
+
+/** A complete response replaces the inventory. A partial response updates returned rows but does not remove missing ones. */
+data class AgentWorkspaceCatalog(val workspaces: List<AgentWorkspace>, val complete: Boolean = true)
 
 /**
  * One workspace of the hub's catalog (`GET /api/v1/workspaces`, docs/protocol/protocol.md): a start with
@@ -92,6 +98,8 @@ data class AgentWorkspace(
     val online: Boolean? = null,
     val available: Boolean? = null,
     val owned: Boolean? = null,
+    /** The source's workspace pin, independent of Persona's session/project preferences. */
+    @SerialName("pinned_at") val pinnedAt: String? = null,
 )
 
 /**

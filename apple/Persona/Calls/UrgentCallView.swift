@@ -166,12 +166,19 @@ private struct UrgentCallFooter: View {
     }
 }
 
+/// The answered call the page shows, as `UrgentCallCenter` sets it. The cover reads only this, so launching never makes
+/// the call center (nor LiveCommunicationKit's manager, which the system calls back on its own queue).
+@MainActor @Observable final class UrgentCallPresenter {
+    static let shared = UrgentCallPresenter()
+    var session: UrgentCallSession?
+}
+
 /// Puts the call page over the app while a call is answered.
 struct UrgentCallCover: ViewModifier {
-    @State private var center = UrgentCallCenter.shared
+    @State private var presenter = UrgentCallPresenter.shared
 
     func body(content: Content) -> some View {
-        content.fullScreenCover(item: Binding(get: { center.session }, set: { _ in })) { session in
+        content.fullScreenCover(item: Binding(get: { presenter.session }, set: { _ in })) { session in
             UrgentCallView(session: session)
         }
     }
