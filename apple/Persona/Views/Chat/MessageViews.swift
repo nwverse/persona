@@ -1345,6 +1345,11 @@ nonisolated enum RowMemo {
     /// A chat's scope: its machine and session.
     static func scope(_ key: SessionKey) -> String { MemoScope.of(machine: key.machineID, session: key.sessionID) }
 
+    /// Whether rows are prewarmed while the app's scene is in `phase`: not in the background, where nothing draws them
+    /// and the app may be running only for a recording; iOS kills an app that uses too much CPU there, and the
+    /// recording with it (#9108: a row's path detection did). Back in front, the chat prewarms what came meanwhile.
+    static func prewarms(in phase: ScenePhase) -> Bool { phase != .background }
+
     /// Fills both memos off the main thread for messages just loaded (of the chat of `scope`), so a row scrolling
     /// into view only lays out.
     static func prewarm(_ items: [Item], scope: String) {

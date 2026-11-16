@@ -33,12 +33,20 @@ export function storedCredentials(store: Storage = localStorage): { token: strin
   const oldId = store.getItem(STORAGE_ALIASES["persona.tokenId"]);
   // An orphan canonical id is not evidence it belongs to the legacy token.
   if (token === null && id === null && oldToken !== null) {
-    store.setItem("persona.token", oldToken);
-    if (oldToken && oldId !== null) store.setItem("persona.tokenId", oldId);
+    try {
+      store.setItem("persona.token", oldToken);
+      if (oldToken && oldId !== null) store.setItem("persona.tokenId", oldId);
+    } catch {
+      // A full or blocked store cannot stop using the legacy pair that was already read.
+    }
     return { token: oldToken, tokenId: oldToken ? oldId ?? "" : "" };
   }
   if (token && token === oldToken && id === null && oldId !== null) {
-    store.setItem("persona.tokenId", oldId);
+    try {
+      store.setItem("persona.tokenId", oldId);
+    } catch {
+      // Keep the legacy device id paired with this same token.
+    }
     return { token, tokenId: oldId };
   }
   return { token: token ?? "", tokenId: token ? id ?? "" : "" };
@@ -46,8 +54,13 @@ export function storedCredentials(store: Storage = localStorage): { token: strin
 
 export function storedValue(key: string, store: Storage = localStorage): string | null {
   if (key === "persona.token" || key === "persona.tokenId") {
-    storedCredentials(store);
-    return store.getItem(key);
+    const credentials = storedCredentials(store);
+    const current = store.getItem(key);
+    const old = store.getItem(STORAGE_ALIASES[key]);
+    const restored = key === "persona.token" ? credentials.token : credentials.tokenId;
+    // A failed migration write leaves no canonical value; keep the legacy value only when the credential reader
+    // actually accepted it, never for an orphan canonical id or a credential belonging to another token.
+    return current ?? (old !== null && restored === old ? old : current);
   }
   const current = store.getItem(key);
   if (current !== null || !STORAGE_ALIASES[key]) return current;

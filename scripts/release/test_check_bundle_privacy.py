@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -470,7 +471,28 @@ class GoDependenciesTests(unittest.TestCase):
         self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
-class BundleScanIntegrationTests(unittest.TestCase):
+    def test_archive_members_preserve_public_go_context_and_reject_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "personad"
+            exe.write_bytes(b"public binary")
+            with patch.object(cbp, "go_dependencies", return_value={"tailscale.com"}):
+                with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="Persona-0.6.0-linux-amd64/personad")
+                members = list(cbp.archive_members(str(root / "release.tar.gz")))
+                self.assertEqual(members, [("Persona-0.6.0-linux-amd64/personad", b"public binary")])
+                with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                    archive.write(exe, "Persona-0.6.0-windows-amd64/personad.exe")
+                    archive.writestr("Persona-0.6.0-windows-amd64/persona-link-windows-amd64.exe", b"link")
+                self.assertEqual(len(list(cbp.archive_members(str(root / "release.zip")))), 2)
+                with tarfile.open(root / "unsafe.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="../outside")
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    list(cbp.archive_members(str(root / "unsafe.tar.gz")))
+                self.assertEqual(cbp.public_archive_dependencies("personad", True), {"tailscale.com"})
+                self.assertEqual(cbp.public_archive_dependencies("other.exe", True), set())
+                self.assertEqual(cbp.public_archive_dependencies("other", True), set())
+
     def scan(self, text, words=(), public=True, config=None, dependencies=DEPENDENCIES):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-test-") as directory:
             (Path(directory) / "binary").write_bytes(text if isinstance(text, bytes) else text.encode())

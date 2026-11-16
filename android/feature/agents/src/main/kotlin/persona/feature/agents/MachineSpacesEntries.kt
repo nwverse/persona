@@ -52,7 +52,8 @@ private fun MachineSpacesDestination(route: MachineSpacesRoute, navigator: Navig
         val model = viewModel(key = "machine-spaces:${wiring.scope}:${operations?.operations?.scope.orEmpty()}") {
             AgentsViewModel(dependencies.sessions(), dependencies.interactions(), dependencies.connection(), dependencies.sender(),
                 dependencies.preferences(), operations, wiring.mainSender, scope, renamer, hubGroups = dependencies.groups(),
-                listContext = kotlinx.coroutines.Dispatchers.Default)
+                listContext = kotlinx.coroutines.Dispatchers.Default, listAdapter = dependencies.listAdapter(),
+                visibleChat = dependencies.visibleChat())
         }
         MachineSpacesPage(route, model, navigator)
     }

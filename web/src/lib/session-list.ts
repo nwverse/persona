@@ -119,6 +119,10 @@ export class SessionList<T> {
   private overlay = new Map<string, T | null>();
   private prefixSize = PAGE_SIZE;
   private invalidationQueued = false;
+  /** The next scheduled invalidation's read, shared by every hint in its window (`invalidate`). */
+  private invalidationTimer?: ReturnType<typeof setTimeout>;
+  /** When the last invalidation's read went out (0 when none): a hint inside the window waits for the trailing read. */
+  private invalidatedAt = 0;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
   private roots: boolean;
@@ -195,16 +199,33 @@ export class SessionList<T> {
     return this.lastFailure === "more" && (this.snapshot.counts || !this.counted) ? this.more() : this.load();
   }
 
+  /** A hint burst from a busy fleet (every working agent's update broadcasts a sessions_list notice) must not become
+   *  a read per hint: the hints of one 2 s window share its read; one that lands while a read is out shares that
+   *  read's trailing one (docs/design/PRINCIPLES.md, fast and local-first). */
   invalidate(): void {
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
     const generation = this.generation;
     queueMicrotask(() => {
-      if (!this.current(generation)) return;
+      if (!this.current(generation) || !this.invalidationQueued) return;
+      // A read is out: it takes the hints in, and one trailing read follows it (the work loop's), without a wait.
+      if (!this.work.promise && this.invalidatedAt !== 0) {
+        const wait = this.invalidatedAt + 2_000 - Date.now();
+        if (wait > 0) {
+          // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
+          // first, or its own invalidate would return at once too and no hint would ever read again.
+          this.invalidationTimer = setTimeout(() => {
+            this.invalidationTimer = undefined;
+            this.invalidationQueued = false;
+            this.invalidate();
+          }, wait);
+          return;
+        }
+      }
       this.invalidationQueued = false;
-      // Unlike an explicit duplicate load, a hint during a read needs one trailing read.
-      this.work.load = true;
-      void this.enqueue("load").catch(() => {});
+      this.invalidatedAt = Date.now();
+      if (this.work.promise) this.work.load = true; // a hint during a read: one trailing read after it
+      else this.load().catch(() => {});
     });
   }
 
@@ -213,6 +234,9 @@ export class SessionList<T> {
     this.generation++;
     this.work = { generation: this.generation, load: false, more: false, kind: null };
     this.invalidationQueued = false;
+    clearTimeout(this.invalidationTimer); // undefined (none pending) is a no-op
+    this.invalidationTimer = undefined;
+    this.invalidatedAt = 0;
     this.clearBaseline();
   }
 

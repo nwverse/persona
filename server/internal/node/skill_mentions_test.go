@@ -89,7 +89,7 @@ func TestSkillCatalogToClaudeSDKDelivery(t *testing.T) {
 	}
 	sdkWait(t, "explicit instruction delivery", func() bool { return strings.Contains(f.file("stdin.jsonl"), "Instruction file:") })
 	delivered := f.file("stdin.jsonl")
-	if !strings.Contains(delivered, file) || !strings.Contains(delivered, catalog.Skills[0].ID) || strings.Contains(delivered, "must-not-execute") || strings.Contains(delivered, "allowed-tools: Bash") {
+	if !strings.Contains(delivered, resolved(t, file)) || !strings.Contains(delivered, catalog.Skills[0].ID) || strings.Contains(delivered, "must-not-execute") || strings.Contains(delivered, "allowed-tools: Bash") {
 		t.Fatalf("not exact metadata-safe delivery: %s", delivered)
 	}
 }
