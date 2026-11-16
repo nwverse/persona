@@ -30,6 +30,36 @@ test("concurrent window and hub writes preserve both fields and clean temporary 
   assert.deepEqual(await readdir(directory), ["desktop-state.json"]);
 });
 
+const pendingWrites = () => (JSONStore as unknown as { pendingWrites: Map<string, Promise<void>> }).pendingWrites;
+
+test("settled writes release the shared queue after success and failure", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "persona-store-queue-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "desktop-state.json");
+  const store = new JSONStore(file);
+  const other = new JSONStore(file);
+  await Promise.all([store.saveWindow({ x: 1, y: 2, width: 800, height: 600, maximized: false }), other.update({ hub: "https://example.test/" })]);
+  assert.equal(pendingWrites().size, 0);
+  const originalRead = store.read.bind(store);
+  let releaseRead: (() => void) | undefined;
+  let failRead = false;
+  store.read = async <T,>(): Promise<T | undefined> => {
+    if (!releaseRead) await new Promise<void>(done => { releaseRead = done; });
+    if (failRead) throw new Error("synthetic queue failure");
+    return originalRead<T>();
+  };
+  const first = store.update({ hub: "https://first.example/" });
+  const second = other.update({ window: { width: 1000 } });
+  await new Promise(done => setImmediate(done));
+  failRead = true;
+  releaseRead?.();
+  await assert.rejects(first, /synthetic queue failure/);
+  await second;
+  assert.equal(pendingWrites().size, 0);
+  assert.equal(pendingWrites().size, 0);
+  await other.update({ window: { width: 1200 } });
+  assert.equal(pendingWrites().size, 0);
+});
 test("a failed update leaves the original state and permits a later serialized write", async t => {
   const directory = await mkdtemp(join(tmpdir(), "persona-store-failure-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

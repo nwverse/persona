@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { startGateway } from "./smoke-gateway.mjs";
+import { startHub } from "./child-process.mjs";
 
 /**
  * Development-only acceptance smoke: a real Electron process against the repository's synthetic hub, serving the built
@@ -24,8 +24,8 @@ const desktop = join(root, "desktop");
 const output = resolve(process.argv[2] ?? process.env.PERSONA_DESKTOP_SMOKE ?? join(desktop, "release", "smoke"));
 const dist = resolve(process.env.PERSONA_DESKTOP_SMOKE_WEB ?? join(root, "web", "dist"));
 const windows = process.platform === "win32";
-const python = windows ? "python" : "python3";
 const npm = windows ? "npm.cmd" : "npm";
+const python = windows ? "python" : "python3";
 const PREFIX = "/persona";
 
 function run(command, args, options = {}) {
@@ -34,55 +34,6 @@ function run(command, args, options = {}) {
     child.once("error", () => done(127));
     child.once("close", code => done(code ?? 1));
   });
-}
-
-async function freePort() {
-  const probe = createServer();
-  await new Promise(done => probe.listen(0, "127.0.0.1", done));
-  const { port } = probe.address();
-  await new Promise(done => probe.close(done));
-  return port;
-}
-
-/** The synthetic hub on its own port. A start that hangs is reported with where Python stood, then tried once more. */
-async function startHub(env, attempt = 1) {
-  const port = await freePort();
-  let log = "";
-  const child = spawn(python, ["-I", "-X", "faulthandler", join("scripts", "mock", "mock_hub.py")], {
-    cwd: root, env: { ...process.env, PORT: String(port), PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", ...env }, stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.on("data", data => { log = (log + data).slice(-8000); });
-  child.stderr.on("data", data => { log = (log + data).slice(-8000); });
-  const started = Date.now(), deadline = started + 90_000;
-  for (;;) {
-    if (child.exitCode !== null) throw new Error(`The synthetic hub exited before it was ready:\n${log}`);
-    try { if ((await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(800) })).ok) break; } catch { /* still starting */ }
-    if (Date.now() > deadline) {
-      // SIGABRT makes Python's fault handler write every thread's stack before it dies (elsewhere it only ends it).
-      const gone = new Promise(done => child.once("close", done));
-      child.kill("SIGABRT");
-      await Promise.race([gone, new Promise(done => setTimeout(done, 3000))]);
-      child.kill("SIGKILL");
-      console.error(`The synthetic hub was not ready in 90 s (attempt ${attempt}); where it stood:\n${log.slice(-4000)}`);
-      if (attempt >= 2) throw new Error(`The synthetic hub was not ready in 90 s, twice:\n${log.slice(-1500)}`);
-      return startHub(env, attempt + 1);
-    }
-    await new Promise(done => setTimeout(done, 150));
-  }
-  return {
-    port,
-    startMs: Date.now() - started,
-    attempts: attempt,
-    log: () => log,
-    async stop() {
-      if (child.exitCode !== null) return;
-      const gone = new Promise(done => child.once("close", done));
-      child.kill("SIGTERM");
-      const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
-      await gone;
-      clearTimeout(timer);
-    },
-  };
 }
 
 async function scenario(name, { prefix, token, starting }) {
@@ -100,7 +51,7 @@ async function scenario(name, { prefix, token, starting }) {
       // A second hub proves that Continue replaces both the live window and its partition. The prefix-parent case
       // deliberately shares the origin: /old/ is inside /, but it is not the same hub session.
       const token = `jp_${randomBytes(18).toString("hex")}`;
-      other = await startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "30", MOCK_DESKTOPS: "1" });
+      other = await startHub(root, { MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "30", MOCK_DESKTOPS: "1" }, 1, { python });
       other.token = token;
       otherGateway = await startGateway({ dist, mockPort: other.port, prefix: "" });
     }
@@ -144,11 +95,13 @@ async function scenario(name, { prefix, token, starting }) {
     result = { ok: false, error: error instanceof Error ? error.message : String(error), steps: [] };
     console.error(`${name}: ${result.error}`);
   } finally {
-    await otherGateway?.close().catch(() => {});
-    await other?.stop().catch(() => {});
-    await gateway?.close().catch(() => {});
-    await (await starting).hub?.stop().catch(() => {});
-    if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
+    const cleanupFailures = [];
+    await otherGateway?.close().catch(error => { cleanupFailures.push(error); });
+    await other?.stop().catch(error => { cleanupFailures.push(error); });
+    await gateway?.close().catch(error => { cleanupFailures.push(error); });
+    await (await starting).hub?.stop().catch(error => { cleanupFailures.push(error); });
+    if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(error => { cleanupFailures.push(error); });
+    if (cleanupFailures.length) result = { ...result, ok: false, error: result.error ?? `Cleanup failed: ${cleanupFailures.map(error => error instanceof Error ? error.message : String(error)).join("; ")}` };
   }
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
@@ -171,7 +124,7 @@ try {
   // own device credential): on a hosted macOS runner a hub started after the first Electron run took over 30 s.
   plans = [["root", "", { MOCK_DESKTOPS: "1" }], ["subpath", PREFIX, {}], ["hub-change", "", { MOCK_DESKTOPS: "1" }], ["hub-prefix-parent", PREFIX, { MOCK_DESKTOPS: "1" }]].map(([name, prefix, hubEnv]) => {
     const token = `jp_${randomBytes(18).toString("hex")}`;
-    const starting = startHub({ MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv }).then(hub => ({ hub }), error => ({ error }));
+    const starting = startHub(root, { MOCK_PAIR_TOKEN: token, MOCK_PAIR_GRACE: "2", ...hubEnv }, 1, { python }).then(hub => ({ hub }), error => ({ error }));
     return { name, prefix, token, starting };
   });
   for (const plan of plans) scenarios[plan.name] = await scenario(plan.name, plan);

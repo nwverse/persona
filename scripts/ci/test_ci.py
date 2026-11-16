@@ -314,7 +314,46 @@ class DesktopWorkflowTests(unittest.TestCase):
         workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows', 'update'})
         self.assertEqual(workflow['on']['workflow_call'], '')
-        self.assertEqual(workflow['on']['workflow_dispatch'], '')
+        dispatch = workflow['on']['workflow_dispatch']['inputs']['acceptance']
+        self.assertEqual(dispatch['type'], 'choice')
+        self.assertEqual(dispatch['default'], 'full')
+        self.assertEqual(dispatch['options'], ['full', 'first-run'])
+        first_run = "${{ !cancelled() && inputs.acceptance != 'first-run' }}"
+        smoke_upload = "${{ always() && inputs.acceptance != 'first-run' }}"
+        self.assertEqual(workflow['jobs']['update']['if'], first_run)
+        for platform in ('linux', 'macos', 'windows'):
+            steps = workflow['jobs'][platform]['steps']
+            smoke = next(step for step in steps if ' Electron acceptance smoke' in step.get('name', ''))
+            self.assertEqual(smoke['if'], first_run)
+            checks = next(step for step in steps if step.get('name') == 'Desktop checks')
+            self.assertEqual(checks['if'], first_run)
+            install = next(step for step in steps if step.get('name') == 'Install desktop dependencies for isolated first-run')
+            self.assertEqual(install['if'], "${{ inputs.acceptance == 'first-run' }}")
+            self.assertEqual(install['run'], 'npm --prefix desktop ci --ignore-scripts')
+            if platform != 'linux':
+                download = next(step for step in steps if step.get('uses') == 'actions/download-artifact@v4')
+                self.assertEqual(download['if'], '${{ !cancelled() }}')
+            upload = next(step for step in steps if step.get('with', {}).get('name') == f'persona-desktop-{platform}-smoke')
+            self.assertEqual(upload['if'], smoke_upload)
+            evidence = next(step for step in steps if step.get('with', {}).get('name') == f'persona-desktop-{platform}-first-run')
+            self.assertEqual(evidence['if'], 'always()')
+            for step in steps:
+                self.assertNotIn('if', step.get('with', {}))
+            package_upload = next((step for step in steps if step.get('with', {}).get('name') == f'persona-desktop-{platform}-unsigned'), None)
+            if package_upload:
+                self.assertEqual(package_upload['if'], first_run)
+        for step in workflow['jobs']['linux']['steps'] + workflow['jobs']['macos']['steps'] + workflow['jobs']['windows']['steps']:
+            if 'first-run' in step.get('name', '').lower():
+                self.assertNotIn('update-test', step.get('run', ''))
+        for platform, package_step in (('macos', 'Build universal macOS packages'), ('windows', 'Build Windows NSIS')):
+            steps = workflow['jobs'][platform]['steps']
+            package = next(step for step in steps if step.get('name') == package_step)
+            self.assertEqual(package['if'], '${{ !cancelled() }}')
+            first = next(step for step in steps if 'first-run acceptance' in step.get('name', '') or 'packaged setup' in step.get('name', ''))
+            self.assertEqual(first['if'], '${{ !cancelled() }}')
+            self.assertNotIn('PERSONA_DESKTOP_TEST_PACKAGE', first.get('env', {}))
+            if platform != 'linux':
+                self.assertEqual(first['env']['PERSONA_DESKTOP_SMOKE_WEB'], 'web/dist')
         text = (root / '.github/workflows/desktop-test.yml').read_text()
         self.assertNotIn('inputs.signed', text)
         self.assertNotIn('CSC_LINK', text)

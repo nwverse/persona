@@ -49,3 +49,12 @@ else
   printf 'desktop-package: no signing certificate supplied; producing an explicitly unsigned development package\n'
   ci_run 'Desktop unsigned package' 2400 npm --prefix desktop run dist:unsigned -- "${args[@]}"
 fi
+if [[ "$target" == win ]]; then
+  # Keep NSIS and its update metadata in the original build. A second directory-only build supplies the exact app
+  # for first-run testing without executing an installer on a persistent machine.
+  config=electron-builder.yml
+  if [[ -z "${CSC_LINK:-}" ]]; then
+    config=electron-builder.unsigned.yml
+  fi
+  ci_run 'Desktop unpacked first-run package' 2400 node desktop/node_modules/electron-builder/cli.js --projectDir desktop --config "$config" --win dir --x64 --publish never
+fi

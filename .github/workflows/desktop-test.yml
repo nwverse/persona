@@ -5,6 +5,12 @@ on:
   # unsigned artifacts, so this workflow never receives a certificate or a notarization key.
   workflow_call:
   workflow_dispatch:
+    inputs:
+      acceptance:
+        description: 'full: all acceptance including update installation; first-run: native packaged first-run only'
+        type: choice
+        options: [full, first-run]
+        default: full
 
 permissions:
   contents: read
@@ -27,7 +33,11 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
+      - name: Install desktop dependencies for isolated first-run
+        if: ${{ inputs.acceptance == 'first-run' }}
+        run: npm --prefix desktop ci --ignore-scripts
       - name: Desktop checks
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop.sh
       # The acceptance smoke loads the built web client the way the hub serves it. It is built once here (its sign-in
       # module needs Go) and handed to the macOS and Windows jobs, which need neither Go nor the web's dependencies.
@@ -40,9 +50,20 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Linux Electron acceptance smoke (headless)
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop-smoke.sh
+      - name: Linux packaged first-run acceptance (headless)
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: persona-desktop-linux-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-linux-smoke
           path: desktop/release/smoke
@@ -66,28 +87,46 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies for isolated first-run
+        if: ${{ inputs.acceptance == 'first-run' }}
+        run: npm --prefix desktop ci --ignore-scripts
       - name: Desktop checks
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop.sh
       - uses: actions/download-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: persona-desktop-web-dist
           path: web/dist
       - name: macOS Electron acceptance smoke
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         run: scripts/ci/desktop-smoke.sh
       - name: Build universal macOS packages
         if: ${{ !cancelled() }} # the package and the smoke report separately
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh mac
+      - name: Unsigned macOS packaged setup; hub acceptance requires a valid signature
+        if: ${{ !cancelled() }}
+        env:
+          PERSONA_DESKTOP_SMOKE_WEB: web/dist
+        run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: persona-desktop-macos-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-macos-smoke
           path: desktop/release/smoke
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-macos-unsigned
           path: |
@@ -112,14 +151,21 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies for isolated first-run
+        if: ${{ inputs.acceptance == 'first-run' }}
+        shell: bash
+        run: npm --prefix desktop ci --ignore-scripts
       - name: Desktop checks
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         shell: bash
         run: scripts/ci/desktop.sh
       - uses: actions/download-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: persona-desktop-web-dist
           path: web/dist
       - name: Windows Electron acceptance smoke
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         shell: bash
         run: scripts/ci/desktop-smoke.sh
       - name: Build Windows NSIS
@@ -128,15 +174,28 @@ jobs:
         env:
           PERSONA_DESKTOP_APP_ID: com.example.persona.desktop
         run: scripts/ci/desktop-package.sh win
+      - name: Packaged Windows app first-run acceptance
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PERSONA_DESKTOP_SMOKE_WEB: web/dist
+        run: node desktop/scripts/first-run-test.mjs desktop/release/first-run
       - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: persona-desktop-windows-first-run
+          path: desktop/release/first-run
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-windows-smoke
           path: desktop/release/smoke
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
         with:
           name: persona-desktop-windows-unsigned
           path: |
@@ -148,6 +207,7 @@ jobs:
   # A real update with no certificate and no published release: the packaged old version finds, downloads and
   # verifies a new one from a feed served on the runner (desktop/scripts/update-test.mjs).
   update:
+    if: ${{ !cancelled() && inputs.acceptance != 'first-run' }}
     name: Update from a local feed (${{ matrix.name }})
     strategy:
       fail-fast: false

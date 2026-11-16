@@ -105,10 +105,11 @@ export function installDesktopIPC(window: BrowserWindow, deps: {
     return { enabled: settings.openAtLogin, requiresApproval: process.platform === "darwin" && settings.status === "requires-approval" };
   });
   return () => {
+    // Per-window notifications belong to this renderer, independently of which window currently owns process-wide IPC.
+    deps.notifications.closeAll();
     releaseOwnership();
     if (ipcOwner.active) return;
     for (const name of names) ipcMain.removeAllListeners(name);
     for (const name of ["desktop:login-get", "desktop:login-set"]) ipcMain.removeHandler(name);
-    deps.notifications.closeAll();
   };
 }

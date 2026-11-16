@@ -10,8 +10,8 @@ import { extname, join, resolve, sep } from "node:path";
  * With a prefix it behaves like a reverse proxy that mounts the hub below the origin root: only paths inside the
  * prefix exist, the prefix is stripped before forwarding, and `index.html` gets `<base href="/<prefix>/">` as the hub
  * writes it for `X-Forwarded-Prefix` (docs/web/web.md "Subpaths"). Every request outside the prefix is answered 404
- * and the page's own are listed, so a page that builds a root path instead of a prefixed one fails the smoke rather
- * than passing by luck.
+ * and recorded without its query. The isolated acceptance scenario fails closed on any such request; the loopback
+ * listener cannot establish from optional headers whether Electron or another local client sent it.
  */
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".json": "application/json",
@@ -26,12 +26,11 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   if (!index.includes('<base href="/" />')) throw new Error("web/dist/index.html has no <base href=\"/\" /> to rewrite");
   const page = Buffer.from(prefix ? index.replace('<base href="/" />', `<base href="${prefix}/" />`) : index, "utf8");
   const outside = [];
-  let strangers = 0;
-  /** A request outside the prefix. Chromium marks what a page asks for (fetch metadata, a socket's Origin); a request
-   *  with neither is another local program trying the port, not the app, and is only counted. */
+  const requests = [];
+  /** A request outside the prefix fails acceptance even without browser metadata. Optional headers are recorded only
+   *  as diagnostic labels, not as evidence of which local process sent the request. */
   const escaped = (req, method) => {
-    if (!req.headers["sec-fetch-mode"] && !req.headers.origin) { strangers += 1; return; }
-    outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? "socket"})`);
+    outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? (req.headers.origin ? "socket" : "request")})`);
   };
   const sockets = new Set();
 
@@ -44,6 +43,9 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
 
   const server = createServer(async (req, res) => {
     const path = inner(req.url ?? "/");
+    const entry = { method: req.method, path: (req.url ?? "/").split("?")[0] };
+    requests.push(entry);
+    res.on("finish", () => { entry.status = res.statusCode; });
     if (path === undefined) {
       escaped(req, req.method);
       res.writeHead(404, { "Content-Type": "text/plain" }).end("outside the hub prefix");
@@ -97,16 +99,24 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
 
   await new Promise((done, fail) => { server.once("error", fail); server.listen(0, "127.0.0.1", done); });
   const port = server.address().port;
+  let closed;
+  const close = () => {
+    if (!closed) {
+      closed = (async () => {
+        for (const socket of sockets) socket.destroy();
+        server.closeAllConnections();
+        await new Promise((done, fail) => server.close(error => { if (error) fail(error); else done(); }));
+      })();
+    }
+    return closed;
+  };
   return {
     port,
     url: `http://127.0.0.1:${port}${prefix}/`,
-    /** The page's requests that escaped the prefix, as "METHOD path (destination)" without their query (it can carry a credential). */
+    /** Unattributed requests that reached this test-owned listener, as "METHOD path (diagnostic label)" without their query. */
     outside: () => [...outside],
-    strangers: () => strangers,
-    async close() {
-      for (const socket of sockets) socket.destroy();
-      server.closeAllConnections();
-      await new Promise(done => server.close(done));
-    },
+    /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
+    requests: () => [...requests],
+    async close() { await close(); },
   };
 }

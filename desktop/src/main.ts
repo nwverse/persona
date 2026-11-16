@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification } from "electron";
+import { BrowserWindow, app, dialog, screen, shell, powerMonitor, Notification, protocol } from "electron";
 import { parseDeepLink, parseHubAddress, externalBrowserURL, inHub } from "./urls.js";
 import type { HubAddress } from "./urls.js";
 import { appPairingURL } from "./pairing.js";
@@ -15,12 +15,17 @@ import type { UpdateMenuItem } from "./update-state.js";
 import { hubPartition } from "./sessions.js";
 import { installSmokeCapture } from "./smoke.js";
 import { installAutoUpdate } from "./updater.js";
-import { HubWindowLifecycle } from "./hub-window-lifecycle.js";
+import { installSetupProtocol, SETUP_SCHEME } from "./setup-protocol.js";
+import { SETUP_URL } from "./setup-resources.js";
 import { desktopPresence } from "./presence.js";
+import { HubWindowLifecycle, sameHubWindow } from "./hub-window-lifecycle.js";
 
 installSmokeCapture();
+// Register the scheme before any ready callback. Its file handler is installed with the app's other ready-time setup.
+protocol.registerSchemesAsPrivileged([{ scheme: SETUP_SCHEME, privileges: { standard: true, secure: true } }]);
 
 let mainWindow: BrowserWindow | undefined;
+let mainWindowHub: string | undefined;
 let hub: HubAddress | undefined;
 let quitting = false;
 let pendingDeepLink: string | undefined;
@@ -80,120 +85,147 @@ function secureHubWindow(window: BrowserWindow): void {
 async function replaceMainWindow(next: HubAddress, close: (window: BrowserWindow) => void): Promise<void> {
   const previous = mainWindow;
   if (!previous || previous.isDestroyed()) { hubWindow.replace(); return; }
-  // Sub-path containment is not equality: /old/ is inside a new / hub, but still needs its own origin-isolated session.
-  if (inHub(next, previous.webContents.getURL()) && (() => { try { return parseHubAddress(previous.webContents.getURL()).url.href === next.url.href; } catch { return false; } })()) return;
-  // Setting hub first lets closeToTray destroy this window without putting the old hub back on screen.
+  if (mainWindowHub === next.url.href && sameHubWindow(next, previous.webContents.getURL())) {
+    await hubWindow.show(async () => { previous.show(); return previous; });
+    return;
+  }
+  // Set hub first so closeToTray cannot resurrect the retired window. A pending creation from the old generation
+  // cannot borrow this generation's promise or install IPC into its immutable session.
   hub = next;
   hubWindow.replace();
   const closed = new Promise<void>(done => previous.once("closed", done));
   close(previous);
   await closed;
-  mainWindow = undefined;
+  if (mainWindow === previous) {
+    mainWindow = undefined;
+    mainWindowHub = undefined;
+  }
 }
 
 async function showMain(): Promise<BrowserWindow | undefined> {
   return hubWindow.show(async (): Promise<BrowserWindow | undefined> => {
-  const generation = hubWindow.generation;
-  const owner = hub;
-  if (!owner) {
-    if (!setupWindow || setupWindow.isDestroyed()) await showSetup();
-    return undefined;
-  }
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); return mainWindow; }
-  const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
-  if (owner !== hub || generation !== hubWindow.generation) return undefined;
-  const current = new BrowserWindow({
-    ...DEFAULT_WINDOW,
-    ...state,
-    show: false,
-    title: "Persona",
-    autoHideMenuBar: true,
-    backgroundColor: "#111111",
-    webPreferences: {
-      preload: join(import.meta.dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      devTools: !app.isPackaged,
-      nodeIntegrationInWorker: false,
-      nodeIntegrationInSubFrames: false,
-      webviewTag: false,
-      backgroundThrottling: false,
-      spellcheck: true,
-      ...(owner ? { partition: hubPartition(owner) } : {}),
-    },
-  });
-  mainWindow = current;
-  if (!app.isPackaged && process.env.PERSONA_DESKTOP_DEBUG === "1") {
-    const log = (value: unknown) => {
-      const line = `${typeof value === "string" ? value : JSON.stringify(value)}\n`;
-      void import("node:fs/promises").then(({ appendFile }) => appendFile(process.env.PERSONA_DESKTOP_DEBUG_LOG ?? "/tmp/persona-desktop-debug.log", line, "utf8"));
-    };
-    current.webContents.openDevTools({ mode: "detach" });
-    current.webContents.on("console-message", event => log(event.message));
-    current.webContents.on("preload-error", (_event, _path, error) => log(error));
-    current.webContents.on("render-process-gone", (_event, details) => log(details));
-    current.webContents.on("did-finish-load", () => {
-      void current.webContents.executeJavaScript("({title: document.title, text: document.body.innerText.slice(0, 500), html: document.body.innerHTML.slice(0, 500)})").then(value => log(value));
+    const generation = hubWindow.generation;
+    const owner = hub;
+    if (!owner) {
+      if (!setupWindow || setupWindow.isDestroyed()) await showSetup();
+      return undefined;
+    }
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindowHub === owner.url.href && sameHubWindow(owner, mainWindow.webContents.getURL())) {
+      mainWindow.show();
+      return mainWindow;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const previous = mainWindow;
+      mainWindow = undefined;
+      mainWindowHub = undefined;
+      hubWindow.replace();
+      previous.destroy();
+    }
+    const state = restoreWindow((await store().read<{ window?: unknown }>())?.window, screen.getAllDisplays().map(d => d.workArea));
+    if (owner !== hub || generation !== hubWindow.generation) return undefined;
+    const current = new BrowserWindow({
+      ...DEFAULT_WINDOW,
+      ...state,
+      show: false,
+      title: "Persona",
+      autoHideMenuBar: true,
+      backgroundColor: "#111111",
+      webPreferences: {
+        preload: join(import.meta.dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        devTools: !app.isPackaged,
+        nodeIntegrationInWorker: false,
+        nodeIntegrationInSubFrames: false,
+        webviewTag: false,
+        backgroundThrottling: false,
+        spellcheck: true,
+        partition: hubPartition(owner),
+      },
     });
-  }
-  secureHubWindow(current);
-  closeToTray(current, () => quitting);
-  const removeIPC = installDesktopIPC(current, {
-    // The partition is immutable, so derive authorization from this window's actual origin, never a later global hub.
-    hub: () => {
-      const url = current.webContents.getURL();
-      if (owner && inHub(owner, url)) return owner;
-      try { return parseHubAddress(url); } catch { return undefined; }
-    },
-    presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
-    openLocalSettings: () => { void showSetup(); },
-    notifications: new DesktopNotifications(route => {
+    mainWindow = current;
+    mainWindowHub = owner.url.href;
+    let usable = true;
+    const discard = () => {
+      if (!usable) return;
+      usable = false;
+      removeIPC();
+      if (mainWindow === current) {
+        mainWindow = undefined;
+        mainWindowHub = undefined;
+      }
+      if (!current.isDestroyed()) current.destroy();
+    };
+    if (!app.isPackaged && process.env.PERSONA_DESKTOP_DEBUG === "1") {
+      const log = (value: unknown) => {
+        const line = `${typeof value === "string" ? value : JSON.stringify(value)}\n`;
+        void import("node:fs/promises").then(({ appendFile }) => appendFile(process.env.PERSONA_DESKTOP_DEBUG_LOG ?? "/tmp/persona-desktop-debug.log", line, "utf8"));
+      };
+      current.webContents.openDevTools({ mode: "detach" });
+      current.webContents.on("console-message", event => log(event.message));
+      current.webContents.on("preload-error", (_event, _path, error) => log(error));
+      current.webContents.on("render-process-gone", (_event, details) => log(details));
+      current.webContents.on("did-finish-load", () => {
+        void current.webContents.executeJavaScript("({title: document.title, text: document.body.innerText.slice(0, 500), html: document.body.innerHTML.slice(0, 500)})").then(value => log(value));
+      });
+    }
+    secureHubWindow(current);
+    closeToTray(current, () => quitting);
+    const removeIPC = installDesktopIPC(current, {
+      // The partition is immutable; only the owner captured for this window can authorize its actual page.
+      hub: () => {
+        const url = current.webContents.getURL();
+        return inHub(owner, url) ? owner : undefined;
+      },
+      presence: () => desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported()),
+      openLocalSettings: () => { void showSetup(); },
+      notifications: new DesktopNotifications(route => {
+        current.show();
+        current.focus();
+        current.webContents.send("desktop:notification-open", route);
+      }),
+    });
+    const save = () => {
+      if (current.isDestroyed() || current.isMinimized()) return;
+      const maximized = current.isMaximized();
+      const bounds = maximized ? current.getNormalBounds() : current.getBounds();
+      void store().saveWindow({ ...bounds, maximized }).catch(() => {
+        // Geometry persistence is local and recoverable; it must not become an unhandled main-process rejection or
+        // be confused with the separately awaited hub-connection write.
+        console.error("Could not save the window position");
+      });
+    };
+    current.on("resize", save);
+    current.on("move", save);
+    current.on("maximize", save);
+    current.on("unmaximize", save);
+    current.on("close", save);
+    current.once("ready-to-show", () => {
+      if (!usable || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) { discard(); return; }
+      if (state.maximized) current.maximize();
       current.show();
-      current.focus();
-      current.webContents.send("desktop:notification-open", route);
-    }),
-  });
-  const save = () => {
-    if (current.isDestroyed() || current.isMinimized()) return;
-    const maximized = current.isMaximized();
-    const bounds = maximized ? current.getNormalBounds() : current.getBounds();
-    void store().saveWindow({ ...bounds, maximized });
-  };
-  current.on("resize", save);
-  current.on("move", save);
-  current.on("maximize", save);
-  current.on("unmaximize", save);
-  current.on("close", save);
-  current.once("ready-to-show", () => {
-    if (owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) return;
-    if (state.maximized) current.maximize();
-    current.show();
-    if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
-    pendingDeepLink = undefined;
-  });
-  current.once("closed", () => { removeIPC(); if (mainWindow === current) mainWindow = undefined; });
-  if (owner) {
+      if (pendingDeepLink) navigateFromDeepLink(pendingDeepLink);
+      pendingDeepLink = undefined;
+    });
+    current.once("closed", discard);
     try {
       await current.loadURL(owner.url.href);
     } catch (error) {
-      removeIPC();
-      if (mainWindow === current) mainWindow = undefined;
-      if (!current.isDestroyed()) current.destroy();
-      if (owner === hub && generation === hubWindow.generation) throw error;
+      const retired = owner !== hub || generation !== hubWindow.generation;
+      discard();
+      // A retired window's rejected load is expected cleanup. Destruction during a real load failure does not
+      // turn that failure into a replacement: only the captured owner/generation can make it obsolete.
+      if (!retired) throw error;
       return undefined;
     }
-    if (owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) {
-      removeIPC();
-      if (mainWindow === current) mainWindow = undefined;
-      if (!current.isDestroyed()) current.destroy();
+    if (!usable || owner !== hub || generation !== hubWindow.generation || current.isDestroyed()) {
+      discard();
       return undefined;
     }
     return current;
-  }
-  return undefined;
   });
 }
 
@@ -210,7 +242,10 @@ async function showSetup(): Promise<void> {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      allowRunningInsecureContent: false,
       devTools: !app.isPackaged,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
       webviewTag: false,
     },
   });
@@ -232,60 +267,61 @@ async function showSetup(): Promise<void> {
       const previous = connectQueue;
       let generation: number | undefined;
       const run = async (): Promise<{ ok: boolean; error?: string }> => {
-      try {
-        await replaceMainWindow(next, window => window.destroy());
-        const generationValue = hubWindow.generation;
-        generation = generationValue;
-        hub = next;
-        const loadedWindow = await showMain();
-        // An obsolete or destroyed load cannot persist or close setup.
-        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
-            !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
-        }
         try {
-          await store().update({ hub: next.url.href });
-        } catch (error) {
-          // Do not leave a live window using a hub that the setup state no longer owns.
-          if (generation === hubWindow.generation && hub?.url.href === next.url.href) {
-            hub = undefined;
-            hubWindow.replace();
-            const failedWindow = mainWindow;
-            mainWindow = undefined;
-            if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
+          await replaceMainWindow(next, window => window.destroy());
+          generation = hubWindow.generation;
+          hub = next;
+          const loadedWindow = await showMain();
+          // An obsolete or destroyed load cannot persist or close setup.
+          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+              !loadedWindow || loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
+            return { ok: false, error: "The hub connection was replaced before it finished." };
           }
-          if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
-          return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
-        }
-        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
-            loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
-        }
-        if (!setup.isDestroyed()) setup.close();
-        return { ok: true };
-      } catch (error) {
-        if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
-          return { ok: false, error: "The hub connection was replaced before it finished." };
-        }
-        const failedWindow = mainWindow;
-        if (failedWindow && !failedWindow.isDestroyed()) {
-          // A failed connection must not leave a live window after its global owner is cleared.
-          mainWindow = undefined;
+          try {
+            await store().update({ hub: next.url.href });
+          } catch (error) {
+            // Do not leave a live window using a hub that the setup state no longer owns.
+            if (generation === hubWindow.generation && hub?.url.href === next.url.href) {
+              hub = undefined;
+              hubWindow.replace();
+              const failedWindow = mainWindow;
+              mainWindow = undefined;
+              mainWindowHub = undefined;
+              if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
+            }
+            if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+            return { ok: false, error: error instanceof Error ? error.message : "Could not save the hub connection." };
+          }
+          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href ||
+              loadedWindow !== mainWindow || loadedWindow.isDestroyed()) {
+            return { ok: false, error: "The hub connection was replaced before it finished." };
+          }
+          if (!setup.isDestroyed()) setup.close();
+          return { ok: true };
+        } catch (error) {
+          if (generation !== hubWindow.generation || hub?.url.href !== next.url.href) {
+            return { ok: false, error: "The hub connection was replaced before it finished." };
+          }
+          const failedWindow = mainWindow;
+          if (failedWindow && !failedWindow.isDestroyed()) {
+            // A failed connection must not leave a live window after its global owner is cleared.
+            mainWindow = undefined;
+            mainWindowHub = undefined;
+            hubWindow.replace();
+            failedWindow.destroy();
+          }
+          hub = undefined;
           hubWindow.replace();
-          failedWindow.destroy();
+          if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
+          return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
         }
-        hub = undefined;
-        hubWindow.replace();
-        if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {});
-        return { ok: false, error: error instanceof Error ? error.message : "Could not connect to the hub." };
-      }
       };
       const result = previous.catch(() => {}).then(run);
       connectQueue = result.catch(() => {});
       return result;
     },
   });
-  await setup.loadFile(join(import.meta.dirname, "setup.html"));
+  await setup.loadURL(SETUP_URL);
 }
 
 const locked = app.requestSingleInstanceLock();
@@ -303,6 +339,7 @@ else {
     else pendingDeepLink = raw;
   });
   app.whenReady().then(async () => {
+    installSetupProtocol();
     const publishPresence = () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       const presence = desktopPresence(powerMonitor.getSystemIdleTime(), screenLocked, Notification.isSupported());
@@ -324,14 +361,22 @@ else {
     });
     const saved = await store().read<{ hub?: string }>();
     try { hub = parseHubAddress(process.env.PERSONA_HUB_URL ?? saved?.hub ?? ""); } catch { hub = undefined; }
-    for (const scheme of ["persona", "jarvis"]) {
-      if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+    if (process.env.PERSONA_DESKTOP_TEST_NO_PROTOCOL_REGISTRATION !== "1") {
+      for (const scheme of ["persona", "jarvis"]) {
+        if (!app.isDefaultProtocolClient(scheme)) app.setAsDefaultProtocolClient(scheme);
+      }
     }
-    if (hub) await showMain().catch(() => { hub = undefined; hubWindow.replace(); });
+    if (hub) await showMain().catch(error => {
+      if (hub) throw error;
+      // Only an owner cleared by a deliberate replacement may enter setup here. A current startup failure remains
+      // an error for the outer startup handler instead of being silently converted into setup.
+      hubWindow.replace();
+    });
     if (!hub) await showSetup();
     tray = installTray({ open: strings.tray_open ?? "Open Persona", quit: strings.tray_quit ?? "Quit Persona" }, () => {
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); }
-      else void showMain();
+      else if (hub) void showMain().catch(() => { if (!setupWindow || setupWindow.isDestroyed()) void showSetup().catch(() => {}); });
+      else void showSetup().catch(() => {});
     }, () => { quitting = true; app.quit(); }, action => {
       if (action === "restart") updates?.restart();
       else updates?.check();

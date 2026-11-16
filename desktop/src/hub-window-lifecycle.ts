@@ -1,5 +1,8 @@
-/** Share one asynchronous hub-window creation. A hub change starts a new generation, so a retired pending create
- * cannot replace the current window or its IPC. */
+import { inHub } from "./urls.js";
+import type { HubAddress } from "./urls.js";
+
+/** A window belongs to the hub captured at creation. A hub transition creates a new generation, even if the old
+ * window is still loading or being destroyed; its asynchronous callbacks must never own the next hub. */
 export class HubWindowLifecycle<T> {
   #pending: Promise<T> | undefined;
   #generation = 0;
@@ -22,4 +25,11 @@ export class HubWindowLifecycle<T> {
     this.#pending = undefined;
     return this.#generation;
   }
+}
+
+export function sameHubWindow(hub: HubAddress | undefined, currentURL: string): boolean {
+  if (!hub) return false;
+  try {
+    return inHub(hub, currentURL);
+  } catch { return false; }
 }

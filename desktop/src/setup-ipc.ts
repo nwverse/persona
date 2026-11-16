@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { ipcMain, shell, app } from "electron";
 import type { BrowserWindow } from "electron";
 import { parseHubAddress, externalBrowserURL } from "./urls.js";
@@ -7,14 +6,14 @@ import type { HubAddress } from "./urls.js";
 import { linkStatus, runPersonaLink } from "./link.js";
 import type { LinkCommand } from "./link-contract.cjs";
 import { desktopLocale, loadStrings } from "./strings.js";
+import { SETUP_URL } from "./setup-resources.js";
 
-/** Setup is a local file window. Its sender is validated again on every privileged action. */
+/** Setup uses its trusted local origin. Its sender is validated again on every privileged action. */
 export function installSetupIPC(window: BrowserWindow, deps: {
   readonly hub: () => HubAddress | undefined;
   readonly connect: (raw: string) => Promise<{ ok: boolean; error?: string }>;
 }): () => void {
-  const setupURL = pathToFileURL(join(import.meta.dirname, "setup.html")).href;
-  const fromSetup = (sender: Electron.WebContents, frame: Electron.WebFrameMain | null): boolean => sender === window.webContents && !window.isDestroyed() && frame === sender.mainFrame && sender.getURL() === setupURL;
+  const fromSetup = (sender: Electron.WebContents, frame: Electron.WebFrameMain | null): boolean => sender === window.webContents && !window.isDestroyed() && frame === sender.mainFrame && sender.getURL() === SETUP_URL;
   // Setup owns separate channels: closing it must not remove the hub window's login-item handlers.
   const names = ["desktop:hub-get", "desktop:hub-set", "desktop:open-external", "desktop:link-status", "desktop:link-command", "desktop:setup-login-get", "desktop:setup-login-set"];
   for (const name of names) ipcMain.removeHandler(name);
