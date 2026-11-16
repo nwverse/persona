@@ -4,12 +4,15 @@ import { browserStore, composing, HISTORY_PREFIX, plainCtrl, readHistory, type H
 export const SEARCH_MAX = 100;
 
 /** Every conversation's sent messages, newest first: the candidates of the search. */
-export function readAllHistory(store: HistoryStore | undefined = browserStore()): SentEntry[] {
-  const all: SentEntry[] = [];
+export function readAllHistory(store: HistoryStore | undefined = browserStore()): (SentEntry & { draftKey: string })[] {
+  const all: (SentEntry & { draftKey: string })[] = [];
   try {
     if (store) for (let i = 0; i < store.length; i++) {
       const k = store.key(i);
-      if (k?.startsWith(HISTORY_PREFIX)) all.push(...readHistory(k.slice(HISTORY_PREFIX.length), store));
+      if (k?.startsWith(HISTORY_PREFIX)) {
+        const draftKey = k.slice(HISTORY_PREFIX.length);
+        all.push(...readHistory(draftKey, store).map((entry) => ({ ...entry, draftKey })));
+      }
     }
   } catch {
     /* unreadable storage: no candidates */
