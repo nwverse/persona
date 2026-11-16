@@ -1,7 +1,9 @@
+// @vitest-environment jsdom
 // A composer's files (#8361): uploaded three at a time, ready ones go with the message as tags after the words, a
 // failed one stays to retry, an older hub's refusal of dest=attachment falls back to the temp directory.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
+import { clearConversationDeletions, rememberConversationDeleted } from "./conversation-deleted";
 import { parseUserText } from "./turns";
 
 type Upload = { name: string; dest?: string; resolve: (v: { path: string; name: string; size: number }) => void; reject: (e: unknown) => void };
@@ -34,6 +36,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearConversationDeletions();
   uploads.length = 0;
   features.length = 0;
   key = `m/s${++n}`;
@@ -116,5 +119,29 @@ describe("composer files", () => {
     const left = restoreFiles(key, [{ kind: "file", path: "/u/x", name: "x" }, { kind: "file", path: "/u/y", name: "y" }]);
     expect(left.map((f) => f.name)).toEqual(["y"]);
     expect(getComposerFiles(key)).toHaveLength(MAX_FILES);
+  });
+});
+
+// Deleted conversations cannot regain file tiles from an in-flight upload or a refused send.
+describe("deleted conversation files", () => {
+  it("clears pending and ready files and rejects a late upload completion", async () => {
+    addFiles(key, "m", [file("kept-ready.pdf"), file("pending-private.pdf")]);
+    await settle();
+    uploads[0].resolve({ path: "/synthetic/kept-ready.pdf", name: "kept-ready.pdf", size: 7 });
+    await settle();
+    expect(readyFiles(key)).toHaveLength(1);
+    rememberConversationDeleted("m", key.slice(2));
+    uploads[1].resolve({ path: "/synthetic/pending-private.pdf", name: "pending-private.pdf", size: 7 });
+    await settle();
+    expect(getComposerFiles(key)).toEqual([]);
+    expect(readyFiles(key)).toEqual([]);
+  });
+  it("rejects a late restore and a new pick for a deleted source", async () => {
+    rememberConversationDeleted("m", key.slice(2));
+    restoreFiles(key, [{ kind: "file", path: "/synthetic/private.pdf", name: "private.pdf", size: 7 }]);
+    addFiles(key, "m", [file("new-private.pdf")]);
+    await settle();
+    expect(getComposerFiles(key)).toEqual([]);
+    expect(uploads).toEqual([]);
   });
 });

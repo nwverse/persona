@@ -177,6 +177,9 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
+		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
+			s.Capabilities.PluginInput = true // the owner's messages go in as their input while it rests (ccplugin.go)
+		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
 		if pane := outsidePane(c); pane != "" {
@@ -336,6 +339,17 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 			if forced == "" && asking(c, n.metaNow(path, st)) {
 				priority = peerNow
 			}
+		}
+	}
+	// The owner's own message to a session at rest goes in as their input through Persona's plugin when the session has
+	// it (ccplugin.go); otherwise, and when the plugin does not take it, through the inbox, which the answer says.
+	if owner := ownerDeliveryOf(ctx); owner != nil && forced == "" && priority == peerNext {
+		if ok, why := n.ccPluginSend(ctx, c, id, text); ok {
+			log.Printf("send %s: claude %d (%s) took it as the user's input through Persona's plugin", id, c.pid, c.Entrypoint)
+			owner.as, owner.reason = deliveredUserInput, ""
+			return true, nil
+		} else {
+			owner.as, owner.reason = deliveredRelayed, why
 		}
 	}
 	err = peerSendAt(ctx, p, id, text, priority)

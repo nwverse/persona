@@ -324,7 +324,7 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	// "start these directly" remembers. A task without a workspace runs where it was planned: nothing to ask again
 	// unless it is to be remembered.
 	repo := t.Repo
-	if t.repoOf != t.Machine+"\x00"+proto.NodeClean(t.Cwd) && (keep || t.rememberKind) {
+	if t.repoOf != t.Machine+"\x00"+proto.NodeClean(t.Cwd) && (keep || t.rememberKind || t.grantSchedule != "") {
 		s.resolveTaskRepo(ctx, t)
 	}
 	if t.Workspace.Mode != workspaceNone {
