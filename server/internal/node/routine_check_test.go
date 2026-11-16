@@ -67,7 +67,12 @@ func TestRoutineCheckShellInitBoundary(t *testing.T) {
 			if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf 'from configured PATH\\n'\nexit 3\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			rc := "printf 'startup stdout\\n'; printf 'startup stderr without newline' >&2\n" +
+			// i18n-ignore: exact historical shell diagnostics, including Bash's zh_CN translation (#8876).
+			diagnostics := "bash: cannot set terminal process group (-1): Inappropriate ioctl for device\n" +
+				"bash: no job control in this shell\nzsh: can't set tty pgrp: inappropriate ioctl for device\n" +
+				"bash: 无法设定终端进程组 (-1): 对设备不适当的 ioctl 操作\nbash: 此 shell 中无任务控制\nexit\nlogout"
+			rc := "printf '%s\\n' " + shellQuote(diagnostics) + " >&2\n" +
+				"printf 'startup stdout\\n'; printf 'startup stderr without newline' >&2\n" +
 				"export PATH=" + shellQuote(home) + ":$PATH\n" +
 				"synthetic_check() { printf 'from configured function\\n' >&2; return 1; }\n" +
 				"alias synthetic_alias=" + shellQuote("printf 'from configured alias\\n'") + "\n"
@@ -85,6 +90,11 @@ func TestRoutineCheckShellInitBoundary(t *testing.T) {
 				{"stderr exit", "printf 'exit\\n' >&2; exit 4", "exit", 4},
 				{"logout", "printf 'logout\\n'; exit 1", "logout", 1},
 				{"literal warning", "printf 'bash: no job control in this shell\\n'; exit 1", "bash: no job control in this shell", 1},
+				{"stderr warning", "printf '%s\\n' " + shellQuote("bash: cannot set terminal process group (-1): Inappropriate ioctl for device") + " >&2; exit 4", "bash: cannot set terminal process group (-1): Inappropriate ioctl for device", 4},
+				{"zsh warning", "printf '%s\\n' " + shellQuote("zsh: can't set tty pgrp: inappropriate ioctl for device") + " >&2; exit 4", "zsh: can't set tty pgrp: inappropriate ioctl for device", 4},
+				// i18n-ignore: a command may legitimately report these exact diagnostics on stderr.
+				{"translated warning", "printf '%s\\n' " + shellQuote("bash: 无法设定终端进程组 (-1): 对设备不适当的 ioctl 操作") + " >&2; exit 4", "bash: 无法设定终端进程组 (-1): 对设备不适当的 ioctl 操作", 4},
+				{"translated monitor warning", "printf '%s\\n' " + shellQuote("bash: 此 shell 中无任务控制") + " >&2; exit 4", "bash: 此 shell 中无任务控制", 4},
 				{"function", "synthetic_check", "from configured function", 1},
 				{"alias", "synthetic_alias", "from configured alias", 0},
 				{"PATH", "routine-path-check", "from configured PATH", 3},

@@ -135,7 +135,7 @@
     ]
   },
   "kb": {
-    "count": 28,
+    "count": 29,
     "files": [
       "kb/compress.md",
       "kb/compress_input.md",
@@ -160,6 +160,7 @@
       "kb/project_input.md",
       "kb/readme.md",
       "kb/recording_input.md",
+      "kb/recording_title_input.md",
       "kb/topic_distill.md",
       "kb/topic_distill_input.md",
       "kb/topic_merge.md",
