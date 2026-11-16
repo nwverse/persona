@@ -219,7 +219,7 @@ Inbox item writes share synchronous admission across replies, attachments, hando
 
 Shared native Select controls retain a 48vp minimum target and leave their height to ArkUI content sizing; a fixed 48vp height would clip 3.2× text. See the [native Select sizing rules](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-basic-components-select).
 
-The Agent quick filter uses the existing native Select when the actual pane cannot fit all five full localized segment labels. Native text measurement and the explicit segment padding determine fit; a font scale of 1.5× or above also uses Select. Search and filter keep their compact row at ordinary text sizes. This content-filter fallback is independent of the two-icon Persona/Agents peer control.
+The Agent quick filter uses the existing native Select when the actual pane cannot fit all five full localized segment labels. Native text measurement and the explicit segment padding determine fit; a font scale of 1.5× or above also uses Select. Search and filter keep their compact row at ordinary text sizes. This content-filter fallback is independent of the two-icon Persona/Agents peer control. At accessibility sizes a narrow native selector may ellipsize its displayed value; its complete localized value and menu options remain available.
 
 ## Native data updates
 
