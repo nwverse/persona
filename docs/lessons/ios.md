@@ -1365,6 +1365,17 @@ Use an invalidation revision as the task key and handle the flag after completio
   multi-statement closures in long modifier chains (`.task { … }`) are inferred with the entire chain, with shifting error lines. Extract closure methods and computed ids (`ChatView.prewarmRows`).
 - Xcode 26.3 / Swift 6.2.4 also times out on long array-concatenated fixtures (`RFBClientTests.sessionFollowsDesktopSize`).
   Build `[UInt8]` arrays by protocol header, rectangle fields and encoding segments, preserving bytes / assertions; do not exclude tests to bypass original scheme builds.
+- **A page's modifier chain outgrows the type checker again, even in a property of its own** (2026-11-17, #9379, #7292, after #7302):
+  `ChatsView.listColumn` (15 modifiers, most with a closure of their own) is one expression, and Xcode 26.0 and 26.3 stop at "unable
+  to type-check this expression in reasonable time" on its first line, though no line in it is wrong. Raising the solver's limits
+  (`-solver-memory-threshold`, `-solver-scope-threshold`, `-solver-expression-time-threshold`) does not make it compile. Cut the
+  chain into stages, each a function of the one before it that returns `some View` (`listColumnProbes(_:)` and the three after it),
+  so Swift types each apart; move the body of a closure that has more than one statement into a method (`stackPathChanged(to:)`), and
+  give a value that feeds `onChange(of:)` a `let` with its type. Keep the modifiers' order and evaluate it all in the same getter: the type, the
+  identity and what the view reads stay what they were, and no `AnyView` is added at the cuts. On Xcode 26.3 the four stages type-check
+  in 1–11 ms each and the slowest method in 72 ms. A piece getting slow shows before it fails: the build's `expression took N ms to
+  type-check (limit: 150ms)` warnings (`OTHER_SWIFT_FLAGS` in `apple/project.yml`), and `-Xfrontend -debug-time-function-bodies` there
+  lists every function's time.
 - Swift evaluates arguments left-to-right: in `emit(s, i, word(…, &i, …))`, `emit` receives i before `word` changes it (file-viewer `println!` lost its !).
   Store results first when one argument changes a variable used by another.
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
