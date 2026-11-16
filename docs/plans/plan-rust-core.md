@@ -423,7 +423,7 @@ Phase 2 lands in several PRs.
 Phase 3 lands in several PRs.
 
 - **Source-derived WebSocket envelope tolerance (#8955).**
-  - `spec/fixtures/wire-envelope` holds 55 hand-derived current-iOS cases covering unknown types, missing/null and
+  - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
     wrong-typed known keys, extra and duplicate keys, raw JSON fields, `mesh` / `fleet` leniency and the routing
     requirements of six event types. Every case cites its Swift source; none was generated from Rust or run on iOS.
   - `persona_core::wire_envelope` is a separate pure diagnostic projection, not the continuity `decode_frame` path:

@@ -41,7 +41,10 @@ class WireEnvelopeBindingFixtureTest {
         val replayed = mutableSetOf<String>()
         for ((case, input) in cases.zip(inputs)) {
             val name = case.getValue("name").jsonPrimitive.content
-            assertTrue("$name: source", case.getValue("source").jsonArray.isNotEmpty())
+            assertTrue("$name: description", case.getValue("description").jsonPrimitive.content.isNotEmpty())
+            assertTrue("$name: source", case.getValue("source").jsonArray.any {
+                it.jsonPrimitive.content.contains(".swift")
+            })
             assertTrue("$name: hand-derived", case.getValue("derived").jsonPrimitive.content.toBoolean())
             val actual = project(input)
             assertExpected(name, case.getValue("expected"), actual)
@@ -105,6 +108,8 @@ class WireEnvelopeBindingFixtureTest {
             "hello_wrong_features_type_drops_event",
             "hello_features_keep_first_duplicate",
             "hello_unknown_field_is_ignored",
+            "inbox_shared_scalars_check_even_when_unused",
+            "hello_wrong_from_seq_drops_event",
             "hello_rows_must_be_integer",
             "hello_wrong_build_type_drops_event",
             "hello_raw_manager_accepts_mixed_json",
@@ -118,6 +123,7 @@ class WireEnvelopeBindingFixtureTest {
             "inbox_null_known_fields_are_ignored",
             "inbox_wrong_items_type_drops_event",
             "unknown_type_is_ignored_after_valid_envelope",
+            "unknown_type_wrong_backlog_drops_event",
             "unknown_type_still_checks_known_keys",
             "missing_type_is_dropped",
             "null_type_is_dropped",
@@ -138,13 +144,19 @@ class WireEnvelopeBindingFixtureTest {
             "mesh_non_object_is_lenient",
             "mesh_bad_hubs_element_drops_only_hubs",
             "mesh_valid_hubs_keep_identity",
+            "mesh_lenient_hub_field_keeps_identity",
+            "mesh_lenient_scalar_fields_keep_identity",
             "mesh_wrong_outer_key_type_drops_event",
             "inbox_fleet_tolerates_bad_stats",
             "inbox_fleet_bad_required_scalar_drops_event",
             "inbox_fleet_missing_item_id_drops_event",
             "inbox_fleet_bad_look_drops_only_look",
+            "inbox_fleet_bad_package_drops_whole_look",
             "inbox_fleet_phase_and_kind_are_lenient",
             "inbox_fleet_non_string_kind_large_integer_defaults_to_screen",
+            "inbox_fleet_lenient_item_fields_keep_event",
+            "inbox_fleet_lenient_slots_keep_event",
+            "inbox_fleet_bad_loads_drops_only_loads",
             "inbox_fleet_fractional_since_is_a_double",
             "inbox_fleet_string_since_drops_event",
             "fleet_requires_fleet_payload",

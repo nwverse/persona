@@ -169,14 +169,30 @@ struct Hub {
 keyed! {
     struct HubBody<'a> {
         hub_id = "hub_id": Seen<Cow<'a, str>>,
-        name = "name": Seen<Cow<'a, str>>,
-        online = "online": Seen<bool>,
-        is_self = "self": Seen<bool>,
-        endpoints = "endpoints": AnyValue,
-        tls_port = "tls_port": AnyValue,
-        fp = "fp": AnyValue,
-        center = "center": AnyValue,
+        name = "name": Raw,
+        online = "online": Raw,
+        is_self = "self": Raw,
+        endpoints = "endpoints": Raw,
+        tls_port = "tls_port": Raw,
+        fp = "fp": Raw,
+        center = "center": Raw,
     }
+}
+
+fn lenient_string(raw: Option<&RawValue>) -> Option<String> {
+    let raw = raw?;
+    if raw.get() == "null" {
+        return None;
+    }
+    serde_json::from_str(raw.get()).ok()
+}
+
+fn lenient_bool(raw: Option<&RawValue>) -> Option<bool> {
+    let raw = raw?;
+    if raw.get() == "null" {
+        return None;
+    }
+    serde_json::from_str(raw.get()).ok()
 }
 
 fn hub(raw: &RawValue) -> Option<Hub> {
@@ -184,9 +200,9 @@ fn hub(raw: &RawValue) -> Option<Hub> {
     Some(Hub {
         hub_id: body.hub_id.required("hub_id").ok()?.into_owned(),
         // MeshHub's remaining properties use try?: an odd one drops only that property.
-        name: body.name.optional_ref("name").ok().flatten().map(ToString::to_string),
-        online: body.online.optional("online").ok().flatten(),
-        is_self: body.is_self.optional("self").ok().flatten(),
+        name: lenient_string(body.name.0.as_deref()),
+        online: lenient_bool(body.online.0.as_deref()),
+        is_self: lenient_bool(body.is_self.0.as_deref()),
     })
 }
 
@@ -230,7 +246,7 @@ keyed! {
         tpm = "tpm": Seen<i64>,
         tokens = "tokens": Seen<i64>,
         requests = "requests": Seen<i64>,
-        loads = "loads": AnyValue,
+        loads = "loads": Raw,
     }
 }
 
@@ -255,18 +271,23 @@ keyed! {
         design = "design": Seen<Cow<'a, str>>,
         light = "light": Seen<i64>,
         dark = "dark": Seen<i64>,
-        package = "package": AnyValue,
+        package = "package": Raw,
     }
 }
 
 fn look(raw: &RawValue) -> Option<Look> {
     let body: LookBody<'_> = serde_json::from_str(raw.get()).ok()?;
     let unsigned = |value: Option<i64>| value.filter(|value| (0..=u32::MAX as i64).contains(value));
-    Some(Look {
+    let look = Look {
         design: body.design.required("design").ok()?.into_owned(),
         light: unsigned(body.light.required("light").ok())?,
         dark: unsigned(body.dark.required("dark").ok())?,
-    })
+    };
+    match body.package.0.as_deref() {
+        Some(raw) if raw.get() != "null" => serde_json::from_str::<Option<String>>(raw.get()).ok()?,
+        _ => None,
+    };
+    Some(look)
 }
 
 #[derive(Debug)]
@@ -284,8 +305,8 @@ keyed! {
         detail = "detail": Seen<AnyStr>,
         interaction = "interaction": Seen<AnyStr>,
         since = "since": OptionalFleetDouble,
-        background = "background": AnyValue,
-        progress = "progress": AnyValue,
+        background = "background": Raw,
+        progress = "progress": Raw,
     }
 }
 
@@ -411,8 +432,8 @@ keyed! {
         working_since = "workingSince": OptionalFleetDouble,
         details = "details": Seen<bool>,
         assistant = "assistant": Seen<bool>,
-        left = "left": AnyValue,
-        right = "right": AnyValue,
+        left = "left": Raw,
+        right = "right": Raw,
         stats = "stats": Raw,
         look = "look": Raw,
     }
@@ -802,6 +823,10 @@ fn check_envelope(body: &EnvelopeBody<'_>) -> Result<(), Value> {
         };
     }
     check! {
+        machine_id => "machine_id", session_id => "session_id", revision => "revision",
+        backlog => "backlog", has_more => "has_more", more_after => "more_after",
+        history => "history", from_seq => "from_seq", to_seq => "to_seq", text => "text",
+        status => "status", id => "id",
         machines => "machines", sessions => "sessions", upsert => "upsert", remove => "remove",
         interaction => "interaction", call_id => "call_id", name => "name",
         event => "event", message => "message", last_assistant_message => "last_assistant_message",

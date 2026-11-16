@@ -238,7 +238,7 @@ accepted, ignored or dropped with the documented projected fields; known event t
 `out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
 The existing continuity transport behavior and its known differences are unchanged.
 
-All 55 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
 whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
 the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
 malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`

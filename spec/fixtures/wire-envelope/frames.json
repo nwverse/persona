@@ -55,6 +55,22 @@
       "expected": { "outcome": "accepted", "event": "hello", "features": ["future"] }
     },
     {
+      "name": "inbox_shared_scalars_check_even_when_unused",
+      "description": "inbox 不使用这些键也会拒绝错误类型的共享标量，完整覆盖 12 个易漏字段。",
+      "source": ["apple/Shared/LiveConnection.swift: ServerEvent.Envelope scalar CodingKeys and decode guard"],
+      "derived": true,
+      "input": { "type": "inbox", "machine_id": 1, "session_id": 2, "revision": 3, "text": 4, "status": 5, "backlog": 6, "has_more": 7, "more_after": 8, "history": 9, "from_seq": "10", "to_seq": "11", "id": 12 },
+      "expected": { "outcome": "dropped", "key": "machine_id" }
+    },
+    {
+      "name": "hello_wrong_from_seq_drops_event",
+      "description": "hello 不使用 from_seq 也会因它不是整数而丢弃整个 Envelope。",
+      "source": ["apple/Shared/LiveConnection.swift: ServerEvent.Envelope fromSeq and case hello"],
+      "derived": true,
+      "input": { "type": "hello", "from_seq": "8" },
+      "expected": { "outcome": "dropped", "key": "from_seq" }
+    },
+    {
       "name": "hello_rows_must_be_integer",
       "description": "终端共用的 rows 在 hello 上也会参与 Envelope 解码，错误类型丢弃事件。",
       "source": [
@@ -130,7 +146,7 @@
     },
     {
       "name": "hello_public_url_is_not_rewritten",
-      "description": "public_url 先按字符串解码，URL(string:) 的结果单独投影。",
+      "description": "public_url 在 Envelope 中按原始字符串投影，URL(string:) 的 Foundation 转换不在本切片内。",
       "source": [
         "apple/Shared/LiveConnection.swift: ServerEvent.Envelope publicURL and ServerEvent.decode case hello"
       ],
@@ -188,6 +204,14 @@
       "derived": true,
       "input": { "type": "future_event", "extra": true },
       "expected": { "outcome": "ignored", "type": "future_event" }
+    },
+    {
+      "name": "unknown_type_wrong_backlog_drops_event",
+      "description": "未知事件也先检查共享 backlog 的布尔类型，不因事件未知而忽略错误。",
+      "source": ["apple/Shared/LiveConnection.swift: ServerEvent.Envelope backlog, decode guard before switch"],
+      "derived": true,
+      "input": { "type": "future_event", "backlog": "yes" },
+      "expected": { "outcome": "dropped", "key": "backlog" }
     },
     {
       "name": "unknown_type_still_checks_known_keys",
@@ -396,6 +420,28 @@
       "expected": { "outcome": "accepted", "event": "hello", "features": ["mesh"], "mesh": [{ "hub_id": "hub-a", "name": "Hub A", "online": null, "self": null }, { "hub_id": "hub-b", "name": null, "online": true, "self": null }] }
     },
     {
+      "name": "mesh_lenient_hub_field_keeps_identity",
+      "description": "mesh hub 的宽容 tls_port 失败只丢该字段，不丢 hub_id 与 name。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.MeshField.init(from:)",
+        "apple/Shared/Hubs.swift: MeshHub.init(from:) tlsPort try?"
+      ],
+      "derived": true,
+      "input": { "type": "hello", "mesh": { "hubs": [{ "hub_id": "hub-a", "name": "Hub A", "tls_port": 1e400 }] } },
+      "expected": { "outcome": "accepted", "event": "hello", "features": [], "mesh": [{ "hub_id": "hub-a", "name": "Hub A", "online": null, "self": null }] }
+    },
+    {
+      "name": "mesh_lenient_scalar_fields_keep_identity",
+      "description": "mesh hub 的 name/online/self 解码失败只丢各自字段，hub_id 仍保留。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.MeshField.init(from:)",
+        "apple/Shared/Hubs.swift: MeshHub.init(from:) name, online and self try?"
+      ],
+      "derived": true,
+      "input": { "type": "hello", "mesh": { "hubs": [{ "hub_id": "hub-a", "name": 1e400, "online": 1e400, "self": 1e400 }] } },
+      "expected": { "outcome": "accepted", "event": "hello", "features": [], "mesh": [{ "hub_id": "hub-a", "name": null, "online": null, "self": null }] }
+    },
+    {
       "name": "mesh_wrong_outer_key_type_drops_event",
       "description": "Envelope 的已知标量类型错误不会因为 mesh 本身宽容而被吞掉。",
       "source": [
@@ -450,6 +496,17 @@
       "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 2, "working": 0, "unread": 0, "stats": null, "look": null } }
     },
     {
+      "name": "inbox_fleet_bad_package_drops_whole_look",
+      "description": "FleetLook.package 使用普通 decodeIfPresent，非字符串会使整个 look 被外层 try? 丢弃。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope fleet and case inbox",
+        "apple/Shared/FleetState.swift: FleetState.init(from:) look try?, synthesized FleetLook Decodable"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "fleet": { "look": { "design": "example", "light": 1, "dark": 2, "package": 7 } } },
+      "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null } }
+    },
+    {
       "name": "inbox_fleet_phase_and_kind_are_lenient",
       "description": "fleet 未知 phase 和 item kind 分别按空阶段和 screen 处理，而非丢弃事件。",
       "source": [
@@ -470,6 +527,39 @@
       "derived": true,
       "input": { "type": "inbox", "fleet": { "items": [{ "id": "machine/session", "kind": 18446744073709551616 }] } },
       "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null, "items": [{ "id": "machine/session", "kind": "screen" }] } }
+    },
+    {
+      "name": "inbox_fleet_lenient_item_fields_keep_event",
+      "description": "fleet item 的 background 与 progress 解码失败只丢各自字段，不丢整个事件。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope fleet and case inbox",
+        "apple/Shared/FleetState.swift: FleetState.Item.init(from:) background and progress try?"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "fleet": { "items": [{ "id": "machine/session", "background": 1e400, "progress": 1e400 }] } },
+      "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null, "items": [{ "id": "machine/session", "kind": "screen" }] } }
+    },
+    {
+      "name": "inbox_fleet_lenient_slots_keep_event",
+      "description": "fleet 的 left/right 宽容 slot 失败回退为 status，不影响事件。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope fleet and case inbox",
+        "apple/Shared/FleetState.swift: FleetState.init(from:) left and right try?"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "fleet": { "left": 1e400, "right": 1e400 } },
+      "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null } }
+    },
+    {
+      "name": "inbox_fleet_bad_loads_drops_only_loads",
+      "description": "fleet stats 的 loads 解码失败只丢 loads，tpm 等严格计数继续保留。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope fleet and case inbox",
+        "apple/Shared/FleetState.swift: FleetState.Stats.init(from:) loads try?"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "fleet": { "stats": { "tpm": 4, "tokens": 5, "requests": 6, "loads": 1e400 } } },
+      "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": { "tpm": 4, "tokens": 5, "requests": 6 }, "look": null } }
     },
     {
       "name": "inbox_fleet_fractional_since_is_a_double",
