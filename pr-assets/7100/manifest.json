@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "pullRequest": 7121,
+  "originalCommit": "81a5fb9627017e1f3f17697064a0eb18f5780252",
+  "currentProductTrees": {
+    "predecessor": "81a5fb9627017e1f3f17697064a0eb18f5780252",
+    "main": "b08cf51fb0d3ae4c349225d7f54ee836037a4bcb",
+    "testedIndexTree": "cabde23bb95197cc305d587fa327d77403e73cf5",
+    "productTrees": {
+      "server": "82cc65a61d91b4bfb9ce26b5c87311b651c1b7ef",
+      "web": "ff4407f6ff1d74dc4c5a4be855d095f8322c7ccb",
+      "spec": "3ac3589457360d3aa857c49f8d4b2533647e4f28"
+    }
+  },
+  "captureMethod": "Chromium, real isolated Manager HTTP/PostgreSQL, synthetic Node metadata and unrelated mock routes; --text-scale 1/2, not browser or OS zoom. Editor crops use a 6000px-high viewport; control reachability separately checked at 1440x900 and 390x844.",
+  "limitations": [
+    "Coarse-pointer naming inputs stay 16px under --text-scale 2; desktop inputs 12.5px to 25px. Native single-line text can clip.",
+    "Author and independent Agent inspection do not replace human screenshot review or the maintainer visual-evidence verifier."
+  ],
+  "images": [
+    {
+      "path": "original/settings-200-dark-1440.png",
+      "bytes": 155968,
+      "sha256": "cd4a3edc8ed5c5404b20754383a6d7b3eabf32b7cbfb3a4d1bd5bfd3a8268081"
+    },
+    {
+      "path": "original/settings-200-dark-390.png",
+      "bytes": 169695,
+      "sha256": "17361ed4748f003b749480481b0e3f1a9438e2741ab6ecd57e0651dbac1704ba"
+    },
+    {
+      "path": "original/settings-200-light-1440.png",
+      "bytes": 154573,
+      "sha256": "2c9868946c5cf0cc572dc544c88e01c07426157f7d0b33306bf6362bd672792f"
+    },
+    {
+      "path": "original/settings-200-light-390.png",
+      "bytes": 167950,
+      "sha256": "d155371333cbf5dbfaf68f5afa16e6367966f4cbb762d81a277e985e187a5040"
+    },
+    {
+      "path": "original/settings-dark-1440.jpg",
+      "bytes": 46685,
+      "sha256": "5418147f850374ef3f9c579b723cf29b55ab2f713b3626a53e8014b0b002dd13"
+    },
+    {
+      "path": "original/settings-dark-390.jpg",
+      "bytes": 45074,
+      "sha256": "caab1077223383f111010cb6598652798e7d6ebc4b2c2ebec3e9d4d6e4ebe10c"
+    },
+    {
+      "path": "original/settings-light-1440.jpg",
+      "bytes": 50611,
+      "sha256": "4e1105ef7b68b0f24ffff6b39efbaf1f093376a8b08bbb5a7cf37f83b4d21c32"
+    },
+    {
+      "path": "original/settings-light-390.jpg",
+      "bytes": 48660,
+      "sha256": "ea3fe220e481eb90cc0799e86a3c5f26449daed9ea84dabcaa4a156a6c047154"
+    },
+    {
+      "path": "original/task-200-dark-1440.jpg",
+      "bytes": 114838,
+      "sha256": "388c4d9c08540a0f836bfc59d6b287b41c15b06362fe6863239123333483a214"
+    },
+    {
+      "path": "original/task-200-dark-390.jpg",
+      "bytes": 104867,
+      "sha256": "486012bdefd035b6ccfb78c461ad6b5106fb84f2ce9ada4f643c9ba8d3220af0"
+    },
+    {
+      "path": "original/task-200-light-1440.jpg",
+      "bytes": 124933,
+      "sha256": "00b601f1e411c7dcb57015eaff2a2095612b23ef8aae4a9f153ba6ffbcd12b11"
+    },
+    {
+      "path": "original/task-200-light-390.jpg",
+      "bytes": 112524,
+      "sha256": "1417ecce39dfea8181774b59f9ff6112d2c8f02e102cde710e78d40b9ec3d853"
+    },
+    {
+      "path": "original/task-dark-1440.jpg",
+      "bytes": 51285,
+      "sha256": "9c2bac04a52c30da5b7773e14a6ced0ab56b56e77777c499d2641e2584f19b2f"
+    },
+    {
+      "path": "original/task-dark-390.jpg",
+      "bytes": 50901,
+      "sha256": "926e08b2b1c0fa3031009caee2d0161cdce1b6c0b1bf51b643988e40cdcfde6b"
+    },
+    {
+      "path": "original/task-light-1440.jpg",
+      "bytes": 55947,
+      "sha256": "48ae721af8b79433b4fa11ee87a08ab69ad5858db8172080e207c4bcc3c79cfb"
+    },
+    {
+      "path": "original/task-light-390.jpg",
+      "bytes": 55074,
+      "sha256": "0bcffe6c41a199da806c44188c14387a1dfb83480cd7e760ee915d115677a0cc"
+    },
+    {
+      "path": "current/settings-light-1440.jpg",
+      "bytes": 64997,
+      "sha256": "dcf5dd5d67f1c67447eee9a4d1bbb285cccfce7231c85c953417f48d05ee4246"
+    },
+    {
+      "path": "current/settings-200-light-1440.jpg",
+      "bytes": 139289,
+      "sha256": "5c6aae5f6060c89cf2ea67bd87fbbc814a95b1fd04821d7fa44b6df360e49f99"
+    },
+    {
+      "path": "current/task-light-1440.jpg",
+      "bytes": 76434,
+      "sha256": "eea8551971a67c8f5efd9c68d41da96d1b41d207adcab0d6fda01ad1eb81be11"
+    },
+    {
+      "path": "current/task-200-light-1440.jpg",
+      "bytes": 171972,
+      "sha256": "380f2962c84d003648075728626947ecf38204f61d7cc989a3e7f1e76721e5b2"
+    },
+    {
+      "path": "current/settings-light-390.jpg",
+      "bytes": 62891,
+      "sha256": "f2c2616d7c332369c27aa4afb09333c3e2c5d153575762647d100fcdf00071a4"
+    },
+    {
+      "path": "current/settings-200-light-390.jpg",
+      "bytes": 128957,
+      "sha256": "66c292c2440183530cead459cebfd9861852d79aafdc04d7efbc12177f5beeb7"
+    },
+    {
+      "path": "current/task-light-390.jpg",
+      "bytes": 71220,
+      "sha256": "1c3df602cfb2c54b65b4e7de12ec43a7b4bb9b636965637c233961fc5cf6653c"
+    },
+    {
+      "path": "current/task-200-light-390.jpg",
+      "bytes": 147723,
+      "sha256": "0de27d12b39faf26af7248133fe0b45c2e982cce38bccb5e4a3fb7d30e903643"
+    },
+    {
+      "path": "current/settings-dark-1440.jpg",
+      "bytes": 60773,
+      "sha256": "ebd3fba995f6bed0ff495a5cea0c0ecb8a24ad74b4fe6c9907e792d388278861"
+    },
+    {
+      "path": "current/settings-200-dark-1440.jpg",
+      "bytes": 130841,
+      "sha256": "4210f574afe853f9c2675071e3c61943950bb5881806f241947252147e0fa7f8"
+    },
+    {
+      "path": "current/task-dark-1440.jpg",
+      "bytes": 70619,
+      "sha256": "0edb8225e047951d4a7ca561b0015fd92c3c292643e57a2b93ab2f717a3adacd"
+    },
+    {
+      "path": "current/task-200-dark-1440.jpg",
+      "bytes": 159783,
+      "sha256": "0a3f27eef238018f29bfaf043633986719c180488a08d0807b83b291ab2cd488"
+    },
+    {
+      "path": "current/settings-dark-390.jpg",
+      "bytes": 58767,
+      "sha256": "3fdcda921295a036c1bdbd9e184b2dd33bbda106432f95c5b47c82a6fac1b366"
+    },
+    {
+      "path": "current/settings-200-dark-390.jpg",
+      "bytes": 120658,
+      "sha256": "447be934e52c1e38a0ef41ce4066d89d9f68f154fc9f66c5f2eb304218e3d0eb"
+    },
+    {
+      "path": "current/task-dark-390.jpg",
+      "bytes": 66624,
+      "sha256": "b2c89069182de1b35c739b863172f5b918587dd7beded1f4c51ea2a348949dca"
+    },
+    {
+      "path": "current/task-200-dark-390.jpg",
+      "bytes": 138340,
+      "sha256": "6872342ebd154ed8a4a604f1d8ecc49364a3695e1be111b80708b1feaf550934"
+    }
+  ]
+}
