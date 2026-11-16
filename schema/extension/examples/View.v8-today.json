@@ -33,7 +33,7 @@
       "title": "Lark today",
       "icon": "chat",
       "icon_color": "blue",
-      "link": {"title": "Lark", "action": {"id": "open_lark"}},
+      "link": {"title": "Lark", "action": {"id": "open_chats"}},
       "items": [
         {"type": "text", "text": "12 unread in 4 chats", "style": "secondary"},
         {"type": "row", "key": "lark.1", "title": "Design team", "subtitle": "Kai: the new cards look good", "badge": {"text": "5"}},

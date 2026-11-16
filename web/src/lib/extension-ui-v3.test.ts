@@ -3,9 +3,9 @@ import { initials, MAX_STACK, outcome, pushPage, readView, rowIcon, tableRows, U
 import { readAction } from "./extension-ui-read";
 
 describe("UI 版本 3：新组件", () => {
-  it("asks for version 6", () => {
-    expect(UI_VERSION).toBe(6);
-    expect(uiContext().ui_version).toBe(6);
+  it("asks for version 8, which has all of 6", () => {
+    expect(UI_VERSION).toBe(8);
+    expect(uiContext().ui_version).toBe(8);
   });
 
   it("reads markdown, table, empty and loading, and leaves out what cannot be drawn", () => {
