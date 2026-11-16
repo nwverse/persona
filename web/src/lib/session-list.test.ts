@@ -971,6 +971,81 @@ describe("generation isolation and inflight coalescing", () => {
     expect(requestParams().at(-1)?.since).toBe("intermediate");
   });
 
+  it("throttles a hint storm into one read per window, with the changes of the whole window in it", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      expect(pages).toHaveBeenCalledTimes(1);
+      // A burst of hints (the fleet broadcasts one per working-agent update) reads a handful of times at most — the
+      // read that opens the window and a trailing read for hints that arrive while it is out — never a read per hint.
+      for (let i = 0; i < 100; i++) list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.mock.calls.length - 1).toBeLessThanOrEqual(2);
+      // The window's end settles the hints that arrived inside it, in one read, and nothing else does.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages.mock.calls.length - 1).toBeLessThanOrEqual(3);
+      // Nothing more while the list is quiet: no polling of its own.
+      const quiet = pages.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pages.mock.calls.length).toBe(quiet);
+      // The last read was a delta from the baseline the burst started at.
+      expect(requestParams().at(-1)?.since).toBe("baseline");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a hint that lands inside a quiet window when the window ends, and keeps reading the hints after it", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const calls = () => pages.mock.calls.length;
+      const before = calls();
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      const opened = calls();
+      expect(opened).toBeGreaterThan(before);
+      list.invalidate(); // inside the window, no read out: waits for the window's end
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBe(opened);
+      await vi.advanceTimersByTimeAsync(2_000); // the window's end reads it
+      expect(calls()).toBeGreaterThan(opened);
+      const settled = calls();
+      await vi.advanceTimersByTimeAsync(5_000);
+      list.invalidate(); // a later hint, after its window: read at once, never stuck behind the old one
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBeGreaterThan(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave the throttle's timer behind a reset (filters, projection), and a fresh window reads at once", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      for (let i = 0; i < 100; i++) list.invalidate();
+      await vi.advanceTimersByTimeAsync(1_000); // inside the window: a timer is pending
+      // A reset (setFilters → reset) drops the pending timer and checkpoint; the next hint reads at once (it may
+      // also share the read the reset's filters started, never a window's wait).
+      await list.setFilters({ machine_id: "demo" });
+      const afterFilters = pages.mock.calls.length;
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.mock.calls.length).toBeLessThanOrEqual(afterFilters + 2);
+      expect(pages.mock.calls.length).toBeGreaterThan(afterFilters);
+      // No timer fires later: a reset's generation guard leaves nothing of the old window.
+      const calls = pages.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pages.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records fire-and-forget invalidation failures without unhandled rejection", async () => {
     const list = make();
     await list.load();

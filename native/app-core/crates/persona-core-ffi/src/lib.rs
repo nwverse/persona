@@ -302,6 +302,30 @@ fn json_output<T: serde::Serialize>(projection: &T) -> PersonaCoreBytes {
     }
 }
 
+/// Decodes one WebSocket frame through the production transport decoder. The result is a JSON classification used by
+/// host binding tests; a refusal carries only the same code and protocol keys as `DecodeError`. No core handle.
+/// `Frame::Other` is `{"frame":"other"}`; an `items` frame reports its identity and count. This does not decode any
+/// other event's associated payload.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_transport_frame(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input = unsafe { slice(input, length) };
+        let result = match persona_core_domain::transport::decode_frame(input) {
+            Ok(persona_core_domain::transport::Frame::Other) => serde_json::json!({"frame": "other"}),
+            Ok(persona_core_domain::transport::Frame::Items(frame)) => serde_json::json!({
+                "frame": "items", "machine_id": frame.machine_id, "session_id": frame.session_id,
+                "item_count": frame.items.len(),
+            }),
+            Err(error) => serde_json::json!({"error": {"code": error.code(), "detail": error.detail()}}),
+        };
+        json_output(&result)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
 /// Projects the Agents list from a JSON input. The input is a UTF-8 JSON document matching `persona_core::sort::Input`;
 /// the returned bytes are a UTF-8 JSON document matching `persona_core::sort::Projection`. This is a pure function: no
 /// core handle, no dispatch, no drain. The caller frees the result with `persona_core_bytes_free`.

@@ -218,13 +218,65 @@ impl<'de> Deserialize<'de> for Key<'de> {
 /// that appears again is skipped too, so its first value stays (a derived reader would refuse the object). The
 /// caller checks beforehand that the value opens an object. `KEYS` lists the keys in declaration order.
 macro_rules! keyed {
+    ($(#[$meta:meta])* pub(crate) struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            $(#[$meta])* @with_visibility pub(crate), struct $name<$lt> {
+                $($(#[$note])* $field = $key: $slot,)+
+            }
+        }
+    };
+    ($(#[$meta:meta])* pub_fields struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            $(#[$meta])* @with_pub_fields pub(crate), struct $name<$lt> {
+                $($(#[$note])* $field = $key: $slot,)+
+            }
+        }
+    };
     ($(#[$meta:meta])* struct $name:ident<$lt:lifetime> {
         $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
     }) => {
+        $crate::transport::seen::keyed! {
+            $(#[$meta])* @with_visibility , struct $name<$lt> {
+                $($(#[$note])* $field = $key: $slot,)+
+            }
+        }
+    };
+    ($(#[$meta:meta])* @with_visibility $visibility:vis, struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            @impl $(#[$meta])* $visibility, struct $name<$lt> { $($(#[$note])* $field = $key: $slot,)+ }
+            @fields { $($(#[$note])* $field: $slot,)+ }
+        }
+    };
+    ($(#[$meta:meta])* @with_pub_fields $visibility:vis, struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            @impl $(#[$meta])* $visibility, struct $name<$lt> { $($(#[$note])* $field = $key: $slot,)+ }
+            @fields { $($(#[$note])* pub(crate) $field: $slot,)+ }
+        }
+    };
+    (@impl $(#[$meta:meta])* $visibility:vis, struct $name:ident<$lt:lifetime> { $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+ }
+     @fields { $($(#[$fmeta:meta])* $fvis:vis $ffield:ident: $fslot:ty,)+ }
+    ) => {
         $(#[$meta])*
-        struct $name<$lt> {
-            $($(#[$note])* $field: $slot,)+
+        $visibility struct $name<$lt> {
+            $($(#[$fmeta])* $fvis $ffield: $fslot,)+
             borrows: std::marker::PhantomData<&$lt ()>,
+        }
+
+        impl<$lt> Default for $name<$lt> {
+            fn default() -> Self {
+                Self {
+                    $($field: Default::default(),)+
+                    borrows: std::marker::PhantomData,
+                }
+            }
         }
 
         impl<$lt> $name<$lt> {

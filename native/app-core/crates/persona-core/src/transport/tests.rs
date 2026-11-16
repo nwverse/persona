@@ -58,10 +58,7 @@ fn frame_type() {
     assert_eq!(refused(decode_frame(br#"{"machine_id":"m1"}"#)), "missing_key: type");
     assert_eq!(refused(decode_frame(br#"{"type":null}"#)), "missing_key: type");
     assert_eq!(refused(decode_frame(br#"{"type":1}"#)), "wrong_type: type");
-    assert!(matches!(
-        decode_frame(br#"{"type":"future_event","to_seq":"x"}"#),
-        Ok(Frame::Other)
-    ));
+    assert!(matches!(decode_frame(br#"{"type":"future_event"}"#), Ok(Frame::Other)));
     assert!(matches!(decode_frame(br#"{"type":""}"#), Ok(Frame::Other)));
     // An escaped spelling is still the same string, in the value and in the key.
     assert!(matches!(
@@ -113,11 +110,41 @@ const ENVELOPE: [(&str, Declared); 10] = [
 ];
 
 /// Envelope keys only other events use, of every declared shape (a string, a boolean, a whole number, a list, a map,
-/// a struct, raw JSON), and a key nobody declares. The core does not check them on an `items` frame: the documented
-/// difference from iOS, which refuses the frame when one of the declared ones has the wrong type.
-const OTHER_EVENTS: [&str; 9] = [
-    "text", "git", "rows", "features", "revs", "fleet", "machines", "args", "future",
+/// a struct, raw JSON), and a key nobody declares. #8995 checks their declared shapes on every event.
+const OTHER_EVENTS: [(&str, &str); 9] = [
+    ("text", "7"),
+    ("git", "1"),
+    ("rows", r#""x""#),
+    ("features", "{}"),
+    ("revs", r#"{"a":1.5}"#),
+    ("fleet", "7"),
+    ("machines", "{}"),
+    ("args", "1e999"),
+    ("future", "7"),
 ];
+
+/// A scalar used only by another event has the same type requirement on an `items` frame as on iOS.
+#[test]
+fn other_event_scalars_are_checked() {
+    for (key, value) in OTHER_EVENTS {
+        let frame = frame_with(key, value);
+        if key == "future" {
+            assert_eq!(items_frame(&frame).items.len(), 1, "unknown keys are ignored");
+        } else if key == "args" {
+            assert_eq!(
+                refused(decode_frame(frame.as_bytes())).split(':').next(),
+                Some("malformed_json"),
+                "out-of-range raw JSON is malformed"
+            );
+        } else {
+            assert_eq!(
+                refused(decode_frame(frame.as_bytes())),
+                format!("wrong_type: {key}"),
+                "{key}: {value}"
+            );
+        }
+    }
+}
 
 /// An `items` frame with `key` set to `value`, in place of the frame's own value when it has one.
 fn frame_with(key: &str, value: &str) -> String {
@@ -175,40 +202,29 @@ fn frame_wrong_types_on_envelope_keys() {
     assert_eq!(refusals, 51, "wrong values tried");
 }
 
-// The documented difference: keys only other events use take anything on an `items` frame, also what the parser
-// could not hold as a value (the core skips them unread).
+// Other event types are not decoded as continuity events, but their shared Envelope is still checked first.
 #[test]
-fn keys_of_other_events_are_not_checked() {
-    for key in OTHER_EVENTS {
-        for value in [
-            "7",
-            "1.5",
-            "1e999",
-            r#""x""#,
-            r#""\ud83d""#,
-            r#"["x",1]"#,
-            "{}",
-            "false",
-            "null",
-            r#"{"deep":[1,2,{"x":null}]}"#,
-        ] {
-            assert_eq!(items_frame(&frame_with(key, value)).items.len(), 1, "{key}: {value}");
+fn other_frames_are_checked_before_becoming_other() {
+    for (json, code) in [
+        (r#"{"type":"hello","to_seq":"x","items":7}"#, "wrong_type"),
+        (r#"{"type":"hello","history":"\ud83d"}"#, "malformed_json"),
+        (r#"{"type":"hello","to_seq":1e999}"#, "malformed_json"),
+        (r#"{"type":"hello","zz":"\ud83d","zz":1e999}"#, "other"),
+        // The first `type` is the frame's.
+        (r#"{"type":"hello","type":"items","to_seq":1e999}"#, "malformed_json"),
+    ] {
+        let result = decode_frame(json.as_bytes());
+        if code == "other" {
+            assert!(matches!(result, Ok(Frame::Other)), "{json}");
+        } else {
+            let error = result.expect_err(json);
+            assert_eq!(error.to_string().split(':').next(), Some(code), "{json}");
         }
     }
-}
-
-// Frames of other types are not this decoder's: whatever their envelope holds, they are `Other`.
-#[test]
-fn other_frames_are_not_checked() {
     for json in [
-        r#"{"type":"hello","to_seq":"x","items":7}"#,
+        r#"{"type":"hello","features":["future_feature"]}"#,
         r#"{"type":"hello","id":"1","id":"2"}"#,
-        r#"{"type":"hello","to_seq":1e999}"#,
-        r#"{"type":"hello","history":"\ud83d"}"#,
         r#"{"type":"hello","items":[1,{"id":3}]}"#,
-        r#"{"type":"hello","zz":"\ud83d","zz":1e999}"#,
-        // The first `type` is the frame's.
-        r#"{"type":"hello","type":"items","to_seq":1e999}"#,
     ] {
         assert!(matches!(decode_frame(json.as_bytes()), Ok(Frame::Other)), "{json}");
     }
@@ -612,9 +628,9 @@ fn the_first_refused_item_is_reported() {
 fn nested_structs_the_core_does_not_check() {
     let item = r#"{"id":"a","seq":1,"role":"user","kind":"image","image":"x","task":3,"compact":[],"injected":1,"model_refusal":false}"#;
     assert!(decode_range(format!(r#"{{"items":[{item}]}}"#).as_bytes()).is_ok());
-    assert!(decode_frame(frame(r#","sessions":"x","fleet":7,"interaction":[]"#).as_bytes()).is_ok());
-    // iOS reads these as `JSONValue`, whose numbers must fit a double; the core does not read them.
-    assert!(decode_frame(frame(r#","args":1e999,"account":{"a":[1e-999]}"#).as_bytes()).is_ok());
+    assert!(decode_frame(frame(r#","sessions":"x","fleet":7,"interaction":[]"#).as_bytes()).is_err());
+    // Raw JSON numbers outside a finite Double are rejected without quoting the payload in the error.
+    assert!(decode_frame(frame(r#","args":1e999,"account":{"a":[1e-999]}"#).as_bytes()).is_err());
 }
 
 #[test]
@@ -818,9 +834,10 @@ fn deep_nesting_does_not_overflow_the_stack() {
     );
     assert!(decode_range(format!(r#"{{"items":[],"more":true,"more":{deep}}}"#).as_bytes()).is_ok());
     assert!(matches!(
-        decode_frame(format!(r#"{{"type":"hello","revs":{deep},"items":{deep}}}"#).as_bytes()),
+        decode_frame(format!(r#"{{"type":"hello","unknown":{deep},"items":{deep}}}"#).as_bytes()),
         Ok(Frame::Other)
     ));
+    assert!(decode_frame(format!(r#"{{"type":"hello","revs":{deep}}}"#).as_bytes()).is_err());
     // Unbalanced.
     for error in all("[".repeat(depth).as_bytes()) {
         assert_eq!(error.split(':').next(), Some("truncated_json"));

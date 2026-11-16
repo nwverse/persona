@@ -45,6 +45,11 @@ class PersonaApp : Application() {
         else { chat, _ -> persona.core.data.KotlinContinuityAdapter(chat) }
     }
 
+    /** Kotlin by default; the optional DEBUG observer is chosen before the graph starts, never on the UI hot path. */
+    val agentListAdapter: persona.core.data.AgentListAdapter by lazy {
+        AgentSortSelection.wrap(this, persona.core.data.AgentListAdapters.create())
+    }
+
     /** Settings › Interface style; device-wide, kept across pairings. */
     val appearance: persona.core.designsystem.AppStyleStore by lazy { persona.core.designsystem.AppStyleStore(this) }
 
@@ -75,6 +80,7 @@ class PersonaApp : Application() {
         // Before Hilt builds the graph, so a crash there is written too.
         errorReporting.installCrashHandler()
         continuityFactory // Capture before Hilt, and before a debug Activity can save the next selection.
+        agentListAdapter
         super.onCreate()
         // The core modules' words (errors, the data repositories' state) in the shown language (docs/protocol/i18n.md).
         persona.core.contracts.CoreText.words = { it.resolve(this) }

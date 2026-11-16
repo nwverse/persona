@@ -52,5 +52,8 @@
   "carry_dropped": "{computer} では {name} を使えないため、このコンピューターのデフォルトに戻しました。",
   "preset_picked": "プリセット {name} · {what}",
   "typed_now": "今回入力したモデル ID",
-  "temporary_session": "一時セッション"
+  "temporary_session": "一時セッション",
+  "runs": "実行回数",
+  "runs_hint": "このタスクを {count} 回、それぞれの worktree で起動して結果を比べます。",
+  "start_runs": "{count} 回起動"
 }

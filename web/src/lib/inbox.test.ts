@@ -11,6 +11,7 @@ vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 
 import { badgeCount, bulkMessage, cardText, connectorReference, connectorSources, contextXML, openTitle, openURL, conversationRoute, fromLine, getInbox, interactionAsk, interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, reloadInbox, resetInboxForTests, sections, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, muteCovers, muteItem, unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage } from "./inbox";
 import { bulkScope, bulkScopeName, canDraft, sourceLine, docChangeLine, emojiLabel, repeatsSummary, handOffMessage, momentText, nextLarkPosition, partRuns, replyLarkMessage, sendLarkMessage, TRIAGE_SETTINGS, listInboxMutes, muteLine, muteShortName, muteTitle, unmuteInbox } from "./inbox-page";
+import { lineSummary, markdownBody, markdownInSummary, withoutMarks } from "./inbox-markdown";
 import { toast } from "../ui/atoms";
 import type { AgentMutes } from "./agent-groups";
 import type { AssistantInfo, Interaction, Session } from "./types";
@@ -1012,5 +1013,34 @@ describe("the assistant's own rows (#6430)", () => {
     expect(repeatsSummary(row({ preview: "Something else" }))).toBe(false);
     expect(repeatsSummary(row({ summary: undefined }))).toBe(false);
     expect(repeatsSummary({ ...row(), source: "github" })).toBe(false); // other sources draw as before
+  });
+  it("a long summary's preview is its first words with an ellipsis: still said once", () => {
+    expect(repeatsSummary(row({ summary: "Three meetings today, the review moved to 15:00", preview: "Three meetings today, the…" }))).toBe(true);
+  });
+});
+
+describe("an assistant row's Markdown (#9041)", () => {
+  const md = "**Briefing · Mon**\nToday: one tutorial.\n\n**Classes**\n- **Tutorial: 10:30–12:20**\n- Short quiz";
+  const row = (patch: Partial<InboxItem> = {}) => item("assistant:s3", { source: "assistant", preview: "Briefing · Mon Today: one tutorial. Classes…", summary: "Briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20 Short quiz", body: md, connector: { thread: "m/s" }, ...patch });
+  it("draws a hub's body in the detail and its plain lines as they are", () => {
+    expect(markdownBody(row())).toBe(md);
+    expect(markdownInSummary(row())).toBe(false);
+    expect(lineSummary(row())).toBe(row().summary);
+    expect(fromLine(row())).toBe(row().preview);
+    expect(repeatsSummary(row())).toBe(true);
+  });
+  it("an older hub's row: its summary is the Markdown, drawn as Markdown in the detail and without marks in a line", () => {
+    const raw = "**Briefing · Mon** Today: one tutorial. **Classes** - **Tutorial: 10:30–12:20** - Short quiz, no make-…";
+    const old = row({ body: undefined, summary: raw, preview: "**Briefing · Mon** Today: one tutorial. **Classes** - **Tut…" });
+    expect(markdownInSummary(old)).toBe(true);
+    expect(markdownBody(old)).toBe(raw);
+    expect(lineSummary(old)).toBe("Briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20 Short quiz, no make-…");
+    expect(withoutMarks(old.preview)).toBe("Briefing · Mon Today: one tutorial. Classes Tut…"); // the row's line under it (InboxList)
+    expect(withoutMarks("Classes - **Tutorial** Due*…")).toBe("Classes Tutorial Due…"); // a mark the cut left alone goes too
+  });
+  it("leaves other rows' summaries alone", () => {
+    const lark = item("lark:f1:1", { summary: "10:00 - 11:00 **review** moved" });
+    expect(markdownBody(lark)).toBeUndefined();
+    expect(lineSummary(lark)).toBe("10:00 - 11:00 **review** moved");
   });
 });

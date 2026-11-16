@@ -1185,6 +1185,104 @@ static void check_task_index(const char *fixtures) {
     expect_empty(persona_core_project_task_index, "task_index", "invalid_json", "not JSON");
 }
 
+/* ---------- production WebSocket Envelope scalars (#8995) ---------- */
+
+static void check_transport_envelope(const char *fixtures) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/wire-envelope/frames.json", fixtures);
+    JValue *doc = load_json(path);
+    const JValue *cases = jget(doc, "cases");
+    if (!cases) fail("transport", "manifest", "missing #8955 fixture");
+    static const char *const expected[][3] = {
+        {"items_wrong_other_event_key_drops_event", "wrong_type", "rows"},
+        {"hello_wrong_features_type_drops_event", "wrong_type", "features"},
+        {"hello_rows_must_be_integer", "wrong_type", "rows"},
+        {"hello_non_object_is_not_an_event", "not_object", ""},
+        {"unknown_type_still_checks_known_keys", "wrong_type", "features"},
+        {"missing_type_is_dropped", "missing_key", "type"},
+        {"null_type_is_dropped", "missing_key", "type"},
+        {"numeric_type_is_dropped", "wrong_type", "type"},
+        {"items_missing_machine_id_drops_event", "missing_key", "machine_id"},
+        {"items_missing_session_id_drops_event", "missing_key", "session_id"},
+        {"items_from_seq_must_be_integer", "wrong_type", "from_seq"},
+        {"items_backlog_must_be_boolean", "wrong_type", "backlog"},
+        {"mesh_wrong_outer_key_type_drops_event", "wrong_type", "build"},
+        {"inbox_wrong_items_type_drops_event", "wrong_type", "items"},
+        {"unknown_type_wrong_backlog_drops_event", "wrong_type", "backlog"},
+        {"hello_wrong_from_seq_drops_event", "wrong_type", "from_seq"},
+        {"hello_wrong_build_type_drops_event", "wrong_type", "build"},
+        {"inbox_shared_scalars_check_even_when_unused", "wrong_type", "machine_id"},
+        {"items_data_must_be_string_or_null", "wrong_type", "data"},
+        {"screen_numeric_status_drops_event", "wrong_type", "status"},
+    };
+    size_t replayed = 0;
+    for (size_t i = 0; i < jcount(cases); i++) {
+        const JValue *c = jat(cases, i);
+        const char *name = jstr(jget(c, "name"));
+        const char *outcome = jstr(jget(jget(c, "expected"), "outcome"));
+        if (!name || !outcome || strcmp(outcome, "dropped") != 0) continue;
+        // Only the shared scalar cases belong to #8995. Full Item / Fleet / other event routing is out of scope.
+        if (strncmp(name, "items_missing_", 15) == 0 || strncmp(name, "inbox_fleet_", 12) == 0 ||
+            strcmp(name, "items_invalid_item_scalar_drops_event") == 0 ||
+            strcmp(name, "items_unprojected_number_never_panics") == 0 ||
+            strcmp(name, "fleet_requires_fleet_payload") == 0 ||
+            strcmp(name, "screen_missing_session_id_drops_event") == 0 ||
+            strcmp(name, "sessions_list_requires_revision") == 0) continue;
+        const JValue *expected_case = NULL;
+        for (size_t j = 0; j < sizeof(expected) / sizeof(expected[0]); j++) {
+            if (strcmp(name, expected[j][0]) == 0) { expected_case = c; break; }
+        }
+        if (!expected_case) {
+            char message[256];
+            snprintf(message, sizeof(message), "new shared-scalar dropped case is not placed: %s", name);
+            fail("transport", name, message);
+            continue;
+        }
+        JValue *actual = project_case(persona_core_transport_frame, jget(c, "input"));
+        const JValue *error = jget(actual, "error");
+        if (!error) { fail("transport", name, "wrong-known-key frame was not refused"); jfree(actual); continue; }
+        const char *code = jstr(jget(error, "code"));
+        const char *detail = jstr(jget(error, "detail"));
+        const char *expected_key = jstr(jget(jget(c, "expected"), "key"));
+        size_t j = 0;
+        while (j < sizeof(expected) / sizeof(expected[0]) && strcmp(name, expected[j][0]) != 0) j++;
+        if (!code || !detail || strcmp(code, expected[j][1]) != 0 ||
+            (expected_key ? strcmp(detail, expected_key) != 0 : detail[0] != 0))
+            fail("transport", name, "refusal code/key differs from the source-derived fixture");
+        jfree(actual);
+        replayed++;
+    }
+    if (replayed != sizeof(expected) / sizeof(expected[0]))
+        fail("transport", "manifest", "every named shared-scalar case must replay");
+    const char *mixed = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\",\"history\":\"\\ud83d\"}";
+    PersonaCoreBytes mixed_result = persona_core_transport_frame((const uint8_t *)mixed, strlen(mixed));
+    JValue *mixed_decoded = mixed_result.data && mixed_result.length ? json_parse(mixed_result.data, mixed_result.length) : NULL;
+    // Source-undetermined: the mixed rows/history input must be refused, never silently Other. Exact Foundation
+    // error priority is not asserted here; rows in isolation below has an unambiguous wrong_type expectation.
+    const char *mixed_code = jstr(jget(jget(mixed_decoded, "error"), "code"));
+    if (!mixed_code) fail("transport", "nested_malformed_scalar", "valid items must not hide another bad scalar");
+    jfree(mixed_decoded);
+    persona_core_bytes_free(mixed_result);
+    const char *rows = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\"}";
+    PersonaCoreBytes rows_result = persona_core_transport_frame((const uint8_t *)rows, strlen(rows));
+    JValue *rows_decoded = rows_result.data && rows_result.length ? json_parse(rows_result.data, rows_result.length) : NULL;
+    const char *rows_code = jstr(jget(jget(rows_decoded, "error"), "code"));
+    const char *rows_detail = jstr(jget(jget(rows_decoded, "error"), "detail"));
+    if (!rows_code || strcmp(rows_code, "wrong_type") != 0 || !rows_detail || strcmp(rows_detail, "rows") != 0)
+        fail("transport", "rows_type", "rows is Int? in LiveConnection.swift's Envelope");
+    jfree(rows_decoded);
+    persona_core_bytes_free(rows_result);
+    const char *other = "{\"type\":\"future_event\",\"unknown\":1.5}";
+    PersonaCoreBytes result = persona_core_transport_frame((const uint8_t *)other, strlen(other));
+    JValue *decoded = result.data && result.length ? json_parse(result.data, result.length) : NULL;
+    const char *frame = jstr(jget(decoded, "frame"));
+    if (!frame || strcmp(frame, "other") != 0) fail("transport", "unknown_event", "unknown type must remain Other");
+    jfree(decoded);
+    persona_core_bytes_free(result);
+    jfree(doc);
+    printf("c-abi: transport %zu shared-scalar refusals plus Other routing\n", replayed);
+}
+
 /* ---------- viewed images: real C ABI plus complete ordinary/folded expected objects ---------- */
 
 static JValue *named_case(const JValue *doc, const char *name) {
@@ -1312,7 +1410,7 @@ int main(int argc, char **argv) {
         "sort/filters.json", "stream-chunks/split.json", "answer/questions.json", "answer/recommended.json",
         "lines/ios/differences.json", "lines/folds.json", "lines/frozen.json", "lines/layout.json",
         "lines/queued.json", "lines/rebuild.json", "lines/structure.json", "lines/tasks.json",
-        "lines/wakes.json", "lines/work.json",
+        "lines/wakes.json", "lines/work.json", "wire-envelope/frames.json",
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
         char path[4096];
@@ -1331,11 +1429,12 @@ int main(int argc, char **argv) {
     check_answer_boundaries();
     check_turns(argv[1]);
     check_task_index(argv[1]);
+    check_transport_envelope(argv[1]);
     check_viewed_images(argv[1]);
     if (failures) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }

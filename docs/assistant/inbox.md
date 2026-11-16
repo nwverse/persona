@@ -62,6 +62,40 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 
+### Send failures (2026-11-16, #9125)
+
+A reply that did not go out says why, on `POST /api/v1/inbox/{id}/reply` and on a confirmed reply suggestion (`…/suggestion`), instead of a bare 502.
+The extension manager classifies the source's failure where it sends (`server/internal/extmgr/inbox_send_reason.go`) and answers `inbox.reply` /
+`inbox.reply_mail` with a coded `rpc.Error` whose message is a fixed sentence; the manager answers the app with the status below and
+`{code, error, delivered, retryable, retry_after?}`, `error` a sentence in the request's language (`inbox-errors.json`), no `detail`.
+Nothing the source printed reaches the response: no lark-cli stdout or stderr, extension or mail-server message, chat, thread or message id, path or token.
+The manager's log line names the item, the code and the request id (`X-Request-Id`); the extension manager's names the send id, the source, the code and an
+allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type).
+
+| Code | Status | `delivered` | `retryable` | When |
+| --- | --- | --- | --- | --- |
+| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat, a subscription's row whose item or `reply_to` is gone (#9194). Reply in the source's own app. |
+| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, lark-cli is not installed or too old, or a subscription is gone or its connector can't be called now. |
+| `inbox_source_signed_out` | 503 | `none` | false | lark-cli is not signed in, or its sign-in expired. |
+| `inbox_send_denied` | 502 | `none` | false | The source refused the send: a missing permission or scope, or the chat or message is gone or closed to the bot. |
+| `inbox_send_rate_limited` | 429 | `none` | true | The source is rate limited (lark-cli, or an extension's `rate_limited` error); `retry_after` seconds and a `Retry-After` header when it said how long. |
+| `inbox_send_failed` | 502 | `none` | true | The source answered with any other error (lark-cli exited with an error it doesn't classify, an extension's or a mail server's error). |
+| `inbox_send_unrecorded` | 503 | `none` | true | The once-only record (`sent_messages`) could not be claimed, so nothing was tried. |
+| `assistant_in_doubt` | 502 | `unknown` | false | Unchanged: it may have gone out (see "Send once" above). |
+
+**Not sent versus in doubt.** Every code but `assistant_in_doubt` means nothing went out: the failure came before the send (no connector, no record, no way to
+reply) or the source answered that it refused it. Such a send's record is forgotten, so the same reply asked again is really tried again; `retryable: true`
+says the cause is passing, `retryable: false` that the same request fails the same way until the user acts (signs in, turns the source on, replies in the
+source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included),
+a mail whose SMTP server got the whole message and never answered it (the connection dropped or the wait ran out, `mail.ErrMaybeSent`, #9166; a server's
+refusal of it is still not sent) or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`,
+and the same reply is not sent again.
+
+**For the apps** (their wording is #9126's): say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
+sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. A confirmed suggestion is taken even when its send
+fails, so confirming the same version again answers `409 suggestion_stale`; the event shows the failed send (Needs you). An older manager still answers these
+failures with a bare 502.
+
 ## One item = one row
 
 | Source | An item is | id |
@@ -375,6 +409,7 @@ The assistant can put one of its conversations into the Inbox as a row, so a res
 
 - **An internal source** `assistant`, made by the manager like a push subscription's: no connector, no hub reading; the hub only forwards `/api/v1/inbox`. Code: `assistant/inbox_post.go`.
 - **The generic row.** An item carries the `connector` block an app draws for a source it does not know (`thread` = `<machine>/<conversation>`, `label` Assistant, `url` the conversation's page in the web app at the hub's `public_url`), `kind` `assistant_post`, the tier the post asked for (`action` or `fyi`) with `reason` as its why, the title and a summary line. Without a `public_url` the row has no `url`: it still draws and its content is in the row. Checked on the mock hub (`MOCK_ASSISTANT_INBOX=1`): the web app draws it in its source group and opens the conversation in the side panel from the row's Open button; the iPhone app takes the same path for any item with a `connector` block (`InboxGroups`, `InboxConnectorViews`). An app that knows the source can open the conversation directly from `thread`.
+- **Its text is Markdown (#9041).** The row keeps it as written in `body` (line breaks kept, cut past 6000 characters), and its `summary`, `preview` and the chain's received message are the same words without the marks on one line (`textfmt.PlainMarkdown`), so a list row, the Timeline and an app that does not know `body` show words, never `**` or `- `; `context` is the title and the Markdown, for the assistant. A task set to every time posts the run's whole last reply, read from its conversation (the session list's `last_text` is one line cut at 200 characters; it is used only when the reply cannot be read). The iPhone and the web draw `body` in the detail with the chat's Markdown, folded to ten lines with Expand when it is long, and the Timeline's received message under it to three lines (the whole text is above); a row from before has no `body`: its summary is drawn as Markdown there and without its marks in the list row and the Timeline. Checked on the mock hub (`MOCK_ASSISTANT_INBOX=1`, the row `assistant:s3`; `GET /mock/assistant_inbox?mode=before|1` switches it to how older hubs kept it and back): UI suite `InboxAssistantMarkdownUITests` (`TEST_RUNNER_PERSONA_MOCK_HUB`, `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `assistant-body-<phase>-<hub|older-hub>-<light|dark>[-expanded|-timeline].png`); web `InboxEvent.test.tsx` and `lib/inbox.test.ts`.
 - **One row a conversation.** A post for a conversation within 30 minutes of its row's last one updates that row (title, summary, tier, the newest content) and opens it again if it was handled; a later post starts a new row. A task set to every time posts after each run that answered; a failed or empty run posts nothing.
 - **The user's rules still apply**: a policy set for the source (Rules, "Policies") changes the tier like any source's.
 - **One switch.** Inbox Sources lists an **Assistant** row (`b.assistant`, icon robot) whose Add to Inbox switch is `Settings.InboxPost` (`inbox.post` on the bus; on unless turned off). Off, `inbox_post` answers that nothing was added and says to tell the user in the conversation, and tasks set to every time add nothing; rows already there stay. The Relationships view shows it with the other Persona-side sources.
@@ -642,7 +677,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
   Without a current suggestion, `instruct` with `version: 0` records your words and wakes or queues the handling chat; `confirm`, `reject`, and nonzero versions still return `suggestion_stale`.
 - Responses: `200` item; `409 {"code":"suggestion_stale","error":"建议已更新","item":{…}}` ("Suggestion updated": version is no longer current or no suggestion exists; App shows the notice and redraws from the returned item,
   including the second tap on the same suggestion); `409 inbox_item_done`; `409 mail_reply_target_changed` (the message the reply suggestion answered is no longer the item's target; nothing was sent); `400`; `403`: reply-only devices (Watch) may confirm only replies / conclusions, as text (no Agent creation, handback, rejection, instructions, document-status changes, or `/agent …` sends;
-  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; confirming again gives 409); other 502 errors.
+  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; confirming again gives 409); a send that did not go out answers its reason ("Send failures": `409 inbox_cannot_reply`, `429 inbox_send_rate_limited`, `502`/`503 inbox_*`, `delivered: "none"`); other 502 errors.
 - **Direct reply**: `POST /api/v1/inbox/{id}/reply` without a card keeps an item with a processing conversation open in `waiting` with the default 24-hour follow, records `sent` then `waiting` (`via=user`), clears any remaining suggestion and its old-App draft mirror, and queues `NoteSent` without waking that conversation. Without a processing conversation it still files as replied; new messages arriving while the send is out keep the existing kept-open behavior. This mode does not change old-App card sends or replies confirmed in a handed-off conversation.
 - **Execution failure** (send fails / times out, Agent fails to start): `handling.state = failed`, return to Needs you without a suggestion; chain `failed` ("Send did not succeed").
 - **Persona's own sends are not your replies**: after Persona sends a reply, the next Lark-plugin round reports the chat's latest message as yours (`done: replied`). While the item awaits the other person's response and no new messages arrived (`last` unchanged),
@@ -792,11 +827,51 @@ which users saw as one action: clear this batch they do not need to handle now. 
   `hub/devicetokens_test.go` `TestAnswerRoleOnlyWhatTheWatchDoes` (Watch blocked), `hub/testdata/route_scopes.txt` (`inbox.write` required); web `inbox.test.ts`; Android `InboxBulkTest`, `InboxRepositoryTest`, `InboxAssistantTransportTest`;
   Apple `InboxBulkTests` (responses / `undo`, old-hub fallback, failure rollback, confirmation threshold), UI `InboxMarkAllTests` (Clean up all + returned Undo; confirmation with `MOCK_INBOX_EXTRA`); hub `TestInboxBulkOldClientsDoneAndDismiss` guards old clients' `done` / `dismiss`.
 
+## Section bar (2026-11-16, #9053)
+
+One row of choices at the top of the list picks which section the Inbox shows: **Needs you · In progress · FYI · Done · All**
+(zh-Hans 需要你 · 进行中 · 知悉即可 · 已处理 · 全部). It replaces scrolling past every Needs-you row to reach FYI or Done.
+Who it serves: everyone using the Inbox on the Assistant side; it adds no setting. Shared cases: `spec/fixtures/inbox/bar.json`,
+`bar_landing.json` and `bar_search.json`, replayed by web, iOS / iPadOS and Android (README "Section bar").
+
+- **Choices**: Needs you and All always; In progress and FYI while they have a row (or are chosen); Done while it has a row, the hub's
+  day counts name a done item (no filter or search on), or it is chosen. A choice shows that section alone, with its source or time
+  groups and their folds as in "Grouping and selection". **All** is the page as it was: every section stacked, folding as before.
+  Collapsed has no choice of its own; it stays folded near the end of All.
+- **Default**: the Inbox opens on Needs you each time it is entered (the sidebar, a widget, a quick action, "N more in Inbox", launch).
+  The choice stays while you are in the Inbox (an item opened and closed, a refresh, a filter) and is not kept across visits, so a
+  remembered FYI or Done never hides new requests.
+- **Counts**: Needs you shows its rows (items and waiting Agents under the filters and search, the section's own count) in the
+  Needs-you `CountBadge` tone; In progress and FYI show their rows in the neutral tone; Done and All show none. Zero hides the badge,
+  99+ caps it, and the number is part of the choice's spoken name ("Needs you, 12"). The sidebar's Inbox badge keeps counting unread
+  Needs-you items (#5974 decides one number).
+- **Inside a choice** the section's title stays as a heading with its actions (FYI's Mark All Seen, Done's Jump To and Fold All /
+  Unfold All) and does not fold, as Working's title already behaves. Done reads its history (day counts, groups, Show Older) while
+  Done is shown.
+- **Grouping**: By source / By time is the bar's trailing grouping menu, as on the Agents list (#7033), not a row of its own. It is
+  hidden while In progress or Done is chosen: neither is grouped by source or time.
+- **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
+  and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
+- **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words
+  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet) with the other counts right above it. The filtered and
+  no-match states stay as in "Nothing open" below.
+- **Opening an item from outside the list** (a link, ⌘K, a Needs-you line, another item's chain) moves the list to the item's choice:
+  Done for a done item, All with Collapsed open for a collapsed one. Back returns to where you were. No notification opens an Inbox
+  item today; one that does follows the same rule.
+- **Selection**: Select All picks the rows in sight. Picks survive a switch, and the pick bar counts the ones out of sight as it
+  counts folded rows. Clean up all keeps its scope (every open item under the filters).
+- **Wide screens** keep the same bar at the top of the list (iPad's detail column, the web's list column, Android's list pane). No
+  section sidebar: a third column beside the app sidebar and the item, and a control that only narrows a list drawn as navigation
+  (DESIGN_SYSTEM 3.4).
+- **Not chosen**: a dropdown (hides the state and its counts), filter chips (they already mean source and kind), only capping rows
+  with Show N more (FYI stays a long scroll away), sideways swipes between sections (a row's swipe marks it done, and the iPhone
+  shell pages sideways). The research and comparison are in #9053.
+
 ## Grouping and selection (2026-11-10, #2059)
 
 The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Persona/Views/Inbox/InboxGroups.swift`); Android follows in #2576. The retired native Mac app kept its earlier list behavior ([mac.md](../archive/apple/mac.md)).
 
-- **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched at the top of the list and kept on this device
+- **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched in the section bar's grouping menu ("Section bar") and kept on this device
   (web `localStorage` `inbox.grouping`, Apple `@StoredValue("inbox.grouping")`). Done always groups by when it was done. Working is never grouped.
   A section that would have one group shows no group titles. Waiting Agents get their own group first in Needs you ("Agents waiting on you"); they are counted but can't be picked.
 - **Time groups** are calendar days in local time, not 24-hour windows: Just now (within the hour, Done only, so a slip is easy to find and undo), Today, Yesterday,

@@ -1646,8 +1646,11 @@ nonisolated struct APIClient: Sendable {
         var lastStatus: String?   // of the last run: ok / failed / skipped
         var lastError: String?
         var nextRun: Date?
+        /// Read-only (#8045): the kinds of task this task's own runs start without the plan card. Only the owner adds to it,
+        /// on one of its runs' cards; the editor shows it and removes kinds (`revokeStartGrant`), and never sends it.
+        var startGrant: StartGrant?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox, startGrant = "start_grant"
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
@@ -1697,6 +1700,7 @@ nonisolated struct APIClient: Sendable {
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
+            startGrant = (try? c.decodeIfPresent(StartGrant.self, forKey: .startGrant)) ?? nil
         }
         func encode(to e: Encoder) throws { // only what the user edits; "" = the default
             var c = e.container(keyedBy: CodingKeys.self)
@@ -1714,6 +1718,44 @@ nonisolated struct APIClient: Sendable {
             }
         }
     }
+    /// A scheduled task's own start grant (#8045): the kinds of task its runs start without the plan card, each a trust key
+    /// ("machine|folder|read" or "…|edit", as Auto-Start Tasks' kinds), read into `kinds` once, as it is decoded.
+    struct StartGrant: Decodable, Hashable, Sendable {
+        /// One kind as the page names it: the computer, the folder (it covers the folders under it), whether the tasks only
+        /// read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it whole as the folder.
+        struct Kind: Hashable, Sendable {
+            var key: String
+            var machine: String
+            var folder: String
+            var readonly: Bool
+
+            init(key: String) {
+                self.key = key
+                let parts = key.components(separatedBy: "|")
+                let mode = parts.count > 1 ? parts[parts.count - 1] : ""
+                readonly = mode == "read"
+                if parts.count == 3, mode == "read" || mode == "edit" {
+                    machine = parts[0]; folder = parts[1]
+                } else {
+                    machine = ""
+                    folder = mode == "read" || mode == "edit" ? parts.dropLast().joined(separator: "|") : key
+                }
+            }
+        }
+        var kinds: [Kind]
+        var grantedAt: Date?
+        enum CodingKeys: String, CodingKey { case kinds, grantedAt = "granted_at" }
+
+        init(keys: [String], grantedAt: Date? = nil) {
+            kinds = keys.filter { !$0.isEmpty }.map(Kind.init(key:))
+            self.grantedAt = grantedAt
+        }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            self.init(keys: (try? c.decodeIfPresent([String].self, forKey: .kinds)) ?? [],
+                      grantedAt: (try? c.decodeIfPresent(Date.self, forKey: .grantedAt)) ?? nil)
+        }
+    }
     struct TasksBody: Decodable { var tasks: [ScheduledTask] }
     struct TaskBody: Codable { var task: ScheduledTask }
     func scheduledTasks() async throws -> [ScheduledTask] { try await get("/api/v1/assistant/tasks", as: TasksBody.self).tasks }
@@ -1726,6 +1768,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(TaskBody.self, from: data).task
     }
     func deleteTask(_ id: String) async throws { try await delete("/api/v1/assistant/tasks/\(id)") }
+    /// Stops one kind (a trust key) from starting without asking in task `id`'s runs (#8045); returns the task as the hub
+    /// then has it.
+    func revokeStartGrant(task id: String, kind: String) async throws -> ScheduledTask {
+        let data = try await request("DELETE", "/api/v1/assistant/tasks/\(TodosLogic.pathComponent(id))/start-grant", body: ["kind": kind])
+        return try JSON.decoder.decode(TaskBody.self, from: data).task
+    }
 
     /// A saved place (Settings › Assistant › Saved Places, #1598): what a reminder by place goes off at when the user says
     /// "home" or "the office". The hub keeps them; the assistant reads them (`list_places`).
