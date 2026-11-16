@@ -477,3 +477,33 @@ describe("the chosen Browse by", () => {
     expect(chosen()).toBe(t("paged-agents.recent"));
   });
 });
+
+describe("a section passes over hints about other sessions (#9176)", () => {
+  const sectionReads = () => calls().filter((path) => { const q = params(path); return q.has("machine_id") && !q.has("counts") && !q.has("catalog"); }).length;
+  async function changeHint(since: string, revision: string, changed: string[][]) {
+    await act(async () => {
+      for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") (entry.fn as (msg: unknown) => void)({ since, revision, changed });
+      await list.load(); // the root list reads on every hint (the store's), and with it the groups' numbers
+      await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh + 2_100);
+    });
+  }
+
+  it("reads an open section only for a hint that can concern its sessions, or when its heading's numbers change", async () => {
+    await show();
+    await browseBy("machine");
+    const mac = sections().find((s) => summary(s).startsWith("MacBook"))!;
+    expect(rowsIn(mac)).toEqual(["a1", "a2", "a3"]);
+    const before = sectionReads();
+    await changeHint("r", "r2", [["elsewhere", "zz"]]);
+    expect(sectionReads()).toBe(before);
+    // a session joins the section: no hint it could check names it, the heading's count does
+    ROWS.push(row("a4", "mac", "/Users/me/notes"));
+    try {
+      await changeHint("r2", "r3", [["mac", "a4"]]);
+      expect(sectionReads()).toBeGreaterThan(before);
+      expect(rowsIn(sections().find((s) => summary(s).startsWith("MacBook"))!)).toEqual(["a1", "a2", "a3", "a4"]);
+    } finally {
+      ROWS.pop();
+    }
+  });
+});

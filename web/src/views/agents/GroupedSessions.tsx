@@ -3,10 +3,12 @@
 // sections start open on their newest sessions (by to-do every to-do's, "Not on a to-do" folded);
 // a section reads its own sessions while it is open, a page at a time, and stops when it is folded, so the groups of a
 // long list cost nothing until someone looks into one.
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { shortPath } from "../../lib/format";
-import { filterQuery, PAGE_SIZE, SessionList, type ListFilters } from "../../lib/session-list";
+import { filterQuery, PAGE_SIZE, SessionList, type ListChangeHint, type ListFilters } from "../../lib/session-list";
+import { onHubEvent } from "../../lib/store";
+import { SectionList } from "../../lib/section-list";
 import { groupMachines, holdsPlace, type GroupDimension, type SessionGroup, type SessionPlace } from "../../lib/session-groups";
 import { onShownHint } from "../../lib/shown-hints";
 import { useFolded } from "../../lib/use-folded";
@@ -122,18 +124,33 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
   group: SessionGroup; dimension: GroupDimension; scope: ListFilters; source: GroupedSource<T>; renderRow: (row: T, within: GroupDimension, group: SessionGroup) => ReactNode;
 }) {
   const { path, identity, compare, removeIdentity, event, summary, roots, parentOf } = source;
-  // rows only: the section's numbers are the ones its heading already has
-  const list = useMemo(() => new SessionList<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
-    [path, identity, compare, removeIdentity, summary, roots]);
+  // rows only: the section's numbers are the ones its heading already has. A runtime section passes over the hints that
+  // name none of its rows (#9176): with several open, each read for every agent's update anywhere.
+  const follows = event === "sessions_list";
+  const list = useMemo(() => new (follows ? SectionList : SessionList)<T>(path, identity, compare, undefined, removeIdentity, { summary, roots, counts: false }),
+    [path, identity, compare, removeIdentity, summary, roots, follows]);
   // the groups are built again with every read: the list follows what they select, not which object says it
   const selected = filterQuery({ ...scope, ...group.filters }, {});
   const filters = useMemo(() => ({ ...scope, ...group.filters }), [selected]); // eslint-disable-line react-hooks/exhaustive-deps
   const page = useSyncExternalStore(list.subscribe, list.getSnapshot, list.getSnapshot);
   useEffect(() => {
     void list.setFilters(filters).catch(() => {});
-    const off = onShownHint(event, () => list.invalidate());
-    return () => { off(); list.reset(); };
+    // the hub's message for the hint onShownHint acts on (registered first, so it is the one the hint is for); after a
+    // hidden stretch the last of several, which then does not chain from where the list stands, so the list reads
+    let hint: ListChangeHint | undefined;
+    const offHint = onHubEvent(event, (msg) => { hint = msg; });
+    const off = onShownHint(event, () => list.invalidate(hint));
+    return () => { offHint(); off(); list.reset(); };
   }, [list, filters, event]);
+  // What no hint names, a session joining the section, shows in its heading's numbers (the read that named the groups):
+  // when they change, the section reads. Before its first read is in, that read brings them.
+  const heading = `${group.count}/${group.needs}`;
+  const headingRead = useRef(heading);
+  useEffect(() => {
+    if (headingRead.current === heading) return;
+    headingRead.current = heading;
+    if (list.getSnapshot().loaded) list.invalidate();
+  }, [list, heading]);
   // the newest few first, so several open sections fit a screen; "Load more" shows what is read, then reads on
   const [limit, setLimit] = useState<number>(SESSION_LIST_METRICS.groupPreview);
   const shown = page.rows.length > limit ? page.rows.slice(0, limit) : page.rows;
