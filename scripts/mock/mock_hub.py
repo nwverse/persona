@@ -21193,6 +21193,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 SCREEN_INPUT = {"mode": os.environ.get("MOCK_SCREEN_INPUT", "")}
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
+# MOCK_SCREEN_X264=1 (#8859): MacBook's node found the user's own ffmpeg with libx264 (`screen_video.x264`), so its page
+# offers x264 for the live screen.
+SCREEN_X264 = os.environ.get("MOCK_SCREEN_X264") == "1"
 _SCREEN_VIDEO_FIXTURE = {}
 _SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
@@ -22462,6 +22465,7 @@ def computer_of(machine_id, enabled):
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
                              "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
         if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
+        if SCREEN_X264: c["screen_video"]["x264"] = "ffmpeg 9.0.2"
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
         c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
         if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
@@ -23169,6 +23173,10 @@ if MOCK_COMPUTER:
                           {"name": "no_auto_lock", "type": "array", "title": "插件开着时不自动锁屏", "unique_items": True,
                            "description": "打开的 Mac 在插件开着时一直不因空闲锁屏（node 持有 caffeinate，不改系统设置）；和 hub 断开 30 分钟后自动恢复。手动锁屏、合盖照常",
                            "confirm": "打开后这台 Mac 在插件开着时一直不会因为空闲锁屏，坐在它前面的人能直接用它。和 hub 断开 30 分钟后自动恢复。",
+                           "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
+                          {"name": "screen_x264", "type": "array", "title": "实时屏幕用 x264 编码", "unique_items": True,  # #8859
+                           "description": "打开的 Mac 在局域网直连时用你自己装的 ffmpeg（带 libx264，比如 Homebrew 的）编码实时屏幕：每帧快约 6 ms，多用一些 CPU。Persona 不带 x264 或 ffmpeg；没装、离开局域网或跟不上时用系统自带的编码器",
+                           "confirm": "打开后，这台 Mac 在局域网直连时用你自己装的 ffmpeg 编码实时屏幕。x264 是 GPL 软件，Persona 不带它；它更费 CPU，跟不上时自动换回系统自带的编码器。",
                            "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
                           {"name": "keep_awake", "type": "boolean", "title": "操作或开着 VNC 时保持唤醒", "default": True,
                            "description": "助手操作那台 Mac、或有人在看它的画面时，它不睡、不因空闲锁屏；最后一次操作 10 分钟后、画面关掉后就撤掉，不改系统设置"},
@@ -24586,7 +24594,8 @@ def plugins_route(handler, p, body):
             for m in MACHINES:
                 if "computer" in m:
                     m["computer"] = {**computer_of(m["id"], m["id"] in (cfg.get("machines") or [])),
-                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or [])}  # #1507 b2
+                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or []),  # #1507 b2
+                                     "screen_x264": m["id"] in (cfg.get("screen_x264") or [])}  # #8859
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
@@ -26898,9 +26907,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "操控电脑的插件没打开，或这台不是 Mac"}, 404)
             body = json.loads(self.last_body or b"{}")
             if "enabled" in body:
-                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False)}
+                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False),
+                                       "screen_x264": machine["computer"].get("screen_x264", False)}
             if "no_auto_lock" in body:  # "Do not lock automatically while the plugin is open" (#1507 b2)
                 machine["computer"] = {**machine["computer"], "no_auto_lock": bool(body["no_auto_lock"]) and machine["computer"].get("enabled", False)}
+            if "screen_x264" in body:  # x264 for the live screen (#8859)
+                machine["computer"] = {**machine["computer"], "screen_x264": bool(body["screen_x264"]) and machine["computer"].get("enabled", False)}
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
