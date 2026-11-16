@@ -1166,6 +1166,28 @@
       },
       "extractionState" : "manual"
     },
+    "%@ in total · up to 200 MB per file" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ in total · up to 200 MB per file"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合計 %1$@ · 1ファイルあたり最大200 MB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共 %1$@ · 每个文件最多 200 MB"
+          }
+        }
+      }
+    },
     "%@ Is Offline" : {
       "localizations" : {
         "en" : {
@@ -78607,6 +78629,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Large uploads can take a few minutes. Keep this open until it's sent." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Large uploads can take a few minutes. Keep this open until it's sent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大きなファイルのアップロードには数分かかることがあります。送信が終わるまで閉じないでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件较大，上传可能要几分钟。发送完成前请不要关闭。"
+          }
+        }
+      }
     },
     "LCU isn't installed on this Mac yet" : {
       "localizations" : {
