@@ -49,7 +49,8 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
     val drafts = remember { mutableStateMapOf<String, String>() }
     LaunchedEffect(online.map { it.id }) { model.follow(online) }
     LaunchedEffect(state.machineId) { drafts.clear(); model.load() }
-    // "Blocked config directories" is Claude Code's alone.
+    // "Live Replies" and "Blocked config directories" are Claude Code's alone.
+    val (liveReplies, liveRepliesState) = rememberLiveReplies(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     val (dirs, dirsState) = rememberClaudeDirs(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     var dirInput by remember { mutableStateOf("") }
     val saveDirs = claudeDirsSaver(dirs) { dirInput = "" }
@@ -57,7 +58,15 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
         scope.launch { model.set(key, value, online)?.let { feedback?.notice(it.resolve(res)) } }
     }
     JListPage(title = stringResource(kind.title), onBack = onBack, actions = {
-        JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), { scope.launch { model.load(); if (kind == AgentSettingsKind.Claude) dirs.load(state.machineId) } }, enabled = !state.loading && state.machineId.isNotBlank())
+        JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), {
+            scope.launch {
+                model.load()
+                if (kind == AgentSettingsKind.Claude) {
+                    liveReplies.load(state.machineId)
+                    dirs.load(state.machineId)
+                }
+            }
+        }, enabled = !state.loading && state.machineId.isNotBlank())
     }) {
         item("target") {
             JGroupItem(GroupPosition.of(0, 2), Modifier.padding(top = Tokens.Space.s)) {
@@ -101,6 +110,21 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { commit() }))
                     }
                 }
+            }
+        }
+        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank()) {
+            // A frame can pass between picking another computer and its read starting: until it does, the section reads
+            // this computer's own state, or it would show - and a tap would write - the computer shown before (iOS
+            // draws the section only when `live.ref == ref`).
+            val live = liveRepliesState.forMachine(state.machineId)
+            if (!live.unsupported) {
+                val others = if (state.applyAll) online.filter { it.id != state.machineId } else emptyList()
+                val shownName = online.firstOrNull { it.id == state.machineId }?.displayName
+                liveRepliesSection(
+                    live,
+                    onToggle = { next -> scope.launch { liveReplies.set(next, others, shownName)?.let { feedback?.notice(it.resolve(res)) } } },
+                    onRetry = { scope.launch { liveReplies.load(state.machineId) } },
+                )
             }
         }
         if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !dirsState.unsupported) claudeDirsSection(dirsState, dirInput, { dirInput = it },

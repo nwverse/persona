@@ -340,11 +340,16 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #9146: a table cell's short code chips kept whole (ui/ReplyBlocks.tsx rehypeLinkedCode marks them data-chip; styles.css
 // keeps them on one line) add 69 B in each language, measured in one environment against main c53557621 (ja 480,666 B
 // to 480,735 B; en 477,537 B to 477,606 B, zh-Hans 478,356 B to 478,425 B). The cells' 40em cap is the same bytes.
-// #9158 (UI version 8) adds 109 B in each language, measured in one environment against main 7f2fecc42 (ja 480,734 B to
-// 480,843 B; en 477,605 B to 477,714 B, zh-Hans 478,424 B to 478,533 B): readView keeps the columns layout and a
+// #9175: the inbox reads the hub's deltas (lib/inbox.ts, its cursor and applyInboxDelta), 124 B in ja; the Feishu card
+// text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
+// 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459; merged
+// with main 27a828ec48 (#9146 above): en 477,579 B, ja 480,708 B, zh-Hans 478,398 B, 27 B of room.
+// #9158 (UI version 8) adds 84 B in each language, measured in one environment against main b48896c40 (ja 480,708 B to
+// 480,792 B; en 477,579 B to 477,663 B, zh-Hans 478,398 B to 478,482 B): readView keeps the columns layout and a
 // section's span, icon, link and columns (lib/extension-ui.ts readSection8), as it reads every other field, because the
-// assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx).
-export const FIRST_SCREEN_BUDGET = 480_844;
+// assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx). Main's
+// 27 B of room is kept on top.
+export const FIRST_SCREEN_BUDGET = 480_819;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -561,11 +566,11 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // Conversation-deletion guards, file retirement and open-search invalidation (#6172):
 // main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
 // The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
-// And 296 B for UI version 8 (#9158): main 7f2fecc42 sends 45,473 B at idle, the same tree with #9158 45,769 B, in one
+// And 302 B for UI version 8 (#9158): main b48896c40 sends 45,475 B at idle, the same tree with #9158 45,777 B, in one
 // environment. The idle renderer (ViewBody.tsx) gains a section's rows side by side in Run, the head hook and the
 // lazy registration of ViewBody8.tsx; the columns grid and the section heads themselves (1.2 KB) load on intent with
-// the first view that has them. Main's 58 B of room is kept on top.
-export const IDLE_TIER_BUDGET = 45_827;
+// the first view that has them. Main's 56 B of room is kept on top.
+export const IDLE_TIER_BUDGET = 45_833;
 
 const gzip = promisify(gzipCompress);
 
