@@ -1168,3 +1168,13 @@ AskUserQuestion, often with several questions. Read the open call from the trans
 rather than counting on the model to follow the prompt, and check a real transcript's `tool_use` input shape before
 parsing it. Once the card worked, the prompt went back to asking with AskUserQuestion as usual (#8558): a prompt's
 workaround that outlives the fix it stood in for is wrong advice to the model.
+
+## A check before every message must not start a login shell (2026-11-16, #8947)
+
+The assistant's profile check (#4310) ran the launcher probe before every message. That probe is an interactive login
+shell sourcing the user's startup files, and some resume paths ran it twice. On one install every message to a running
+conversation waited about a second per probe, and in three days none reached it within a second. A check on the send
+path reuses its probe the way `launcherProbeCached` and `modelProbeCache` do: kept for a bounded time, and taken again at
+once when the files it depends on change (`shellStamp` in `server/internal/node/assistant_profile_probe.go`). A change the
+stamp cannot see waits out the bound. In a test, count the shells a send starts with a launcher that appends to a file
+each time it runs, not only the send's result.
