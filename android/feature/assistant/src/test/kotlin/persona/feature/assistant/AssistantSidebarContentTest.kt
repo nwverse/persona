@@ -13,6 +13,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -209,6 +210,38 @@ class AssistantSidebarContentTest {
         fullWindow = true
         rule.waitForIdle()
         rule.onAllNodesWithTag("full-search").assertCountEquals(0)
+    }
+
+    @Test fun foldColumnButtonShowsOnlyWhenProvidedAndInvokesCallback() {
+        val choice = AssistantManagerChoice.current.value
+        val snapshot = AssistantSnapshot(conversations = emptyList(), manager = choice.manager, managerId = choice.shown)
+        val repository = object : AssistantRepository {
+            override val assistant = MutableStateFlow(snapshot)
+            override suspend fun refresh() = Unit
+        }
+        var canFold by mutableStateOf(true)
+        var folds = 0
+        rule.setContent {
+            PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                Box(Modifier.width(340.dp).height(800.dp)) {
+                    AssistantSidebarContent(
+                        snapshot, repository, null, operations, demo = true,
+                        onOpen = {}, onAction = {}, onSettings = {},
+                        onInbox = {}, onKnowledge = {}, onTodos = {}, todoCount = 0, showTodos = false,
+                        inboxCount = 0, settingsCount = 0, settingsDot = false, settingsBadge = null,
+                        pages = emptyList(), onPage = {}, onRetired = {},
+                        fullWindowSearch = true,
+                        onFoldColumn = if (canFold) ({ folds++ }) else null,
+                    )
+                }
+            }
+        }
+        rule.onNodeWithContentDescription("隐藏侧边栏").performClick()
+        assertEquals(1, folds)
+
+        canFold = false
+        rule.waitForIdle()
+        rule.onAllNodesWithContentDescription("隐藏侧边栏").assertCountEquals(0)
     }
 
     private fun testManagement(archived: List<Session>) = object : AssistantManagement {
