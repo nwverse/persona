@@ -30,7 +30,7 @@ public enum ProjectionBindingReplay {
                 let name = try ProjectionFixture.require(item.text("name"), "answer name")
                 let input = try ProjectionFixture.require(item["input"], "answer input")
                 let expected = try ProjectionFixture.require(item["expected"], "answer expected")
-                let actual = try answer(input, recommended: file == "recommended.json")
+                let actual = try answer(input, recommended: file == "recommended.json", name: name)
                 try ProjectionFixture.assertEqual(actual, expected, "answer/\(name)")
                 if var wrong = actual.object, let allowed = wrong["allowed"]?.bool {
                     wrong["allowed"] = .bool(!allowed)
@@ -79,12 +79,38 @@ public enum ProjectionBindingReplay {
         return fixtures.count
     }
 
-    private static func answer(_ input: ContinuityJSON, recommended: Bool) throws -> ContinuityJSON {
+    private static func answer(_ input: ContinuityJSON, recommended: Bool, name: String) throws -> ContinuityJSON {
         let transition = try ProjectionFixture.project(input, "answer", using: PersonaCoreProjections.answer)
         let operation = try ProjectionFixture.require(input["operation"], "operation")
         let page = try ProjectionFixture.require(operation.number("page"), "page")
         let questions = try ProjectionFixture.require(input["interaction"]?["questions"]?.array, "questions")
         let question = try ProjectionFixture.require(questions[safe: page], "question index")
+        let originalPicks = try ProjectionFixture.require(operation["picks"] ?? .object([:]), "input picks")
+        let originalOther = try ProjectionFixture.require(operation["other"] ?? .object([:]), "input other")
+        var expectedPicks = originalPicks
+        var expectedOther = originalOther
+        // The checked-in expected object intentionally selects only some Transition fields. Assert the remainder from
+        // the fixture's own input and documented cases, never from the Rust output, so state outside that object is
+        // still covered: single-select clears free text; multi-select toggles one option; other actions preserve both.
+        if operation.text("action") == "pick_option" {
+            if question.boolean("multi_select") == true {
+                let key = try ProjectionFixture.require(question.text("question"), "question")
+                let optionIndex = try ProjectionFixture.require(operation.number("option_index"), "option_index")
+                let options = try ProjectionFixture.require(question["options"]?.array, "options")
+                let option = try ProjectionFixture.require(options[safe: optionIndex], "option index")
+                let label = try ProjectionFixture.require(option.text("label"), "label")
+                var selected = Set(originalPicks[key]?.array?.compactMap(\.string) ?? [])
+                if selected.remove(label) == nil { selected.insert(label) }
+                expectedPicks = .object([key: .array(selected.sorted().map(ContinuityJSON.string))])
+            } else {
+                expectedOther = .object([try ProjectionFixture.require(question.text("question"), "question"): .string("")])
+            }
+        }
+        try ProjectionFixture.assertEqual(transition["page"], operation["page"], "answer/\(name)/page")
+        try ProjectionFixture.assertEqual(transition["other"], expectedOther, "answer/\(name)/other")
+        if name != "multiple_pick_waits_for_submit", name != "multiple_pick_toggles_off" {
+            try ProjectionFixture.assertEqual(transition["picks"], expectedPicks, "answer/\(name)/picks")
+        }
         var actual: [String: ContinuityJSON] = [
             "allowed": try ProjectionFixture.require(transition["allowed"], "allowed"),
             "resolution": try ProjectionFixture.require(transition["resolution"], "resolution"),
