@@ -12,6 +12,8 @@ import shlex
 
 # Compatibility spellings live here rather than in deployment callers.
 LEGACY_PREFIX = "JARVIS_"
+# Retained operation identity for mixed-version native transport fixtures.
+LEGACY_OP_HEADER = "X-Jarvis-Op-Id"
 HOME_KEYS = ("PERSONA_HOME", LEGACY_PREFIX + "HOME")
 SERVICE_NAMES = {
     "hub": ("personad", "jarvisd"),
