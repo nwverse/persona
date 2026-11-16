@@ -2754,3 +2754,12 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
   buttons stack at the largest size (#6151) and covered the stage bar in Japanese while the test, checking only the
   window, passed with a screenshot that didn't show it. Take the bottom from the frames of each page's own bottom
   controls (on the chat, the action bar's entries, which also reach above the band at the largest size).
+
+## A fixed-size overlay grows past the screen when a line gets longer (2026-11-16, #8859)
+
+- The live screen's Connection Stats panel is `.fixedSize()`: it is as wide as its longest line. At xxxLarge the
+  codec line ("3.4 Mbps · 60 fps · HEVC · 2268×1472") already fills an iPhone 17 Pro's width; appending "· x264" made
+  the panel wider than the screen, and the whole page laid out wider with it (the toolbar buttons were cut off at both
+  edges). At the default size it looked fine.
+- Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
+  screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.

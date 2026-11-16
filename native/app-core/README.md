@@ -160,9 +160,17 @@ binary; a missing helper or too-old Node fails the test rather than skipping it.
 replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
 The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
 from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
+`harmony/tests/core-host/projections.test.mjs` (#8937) replays the unchanged 15 answer + 8 display_answer,
+21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
+conditional next-page, picks and display fields. The receipt retains its description and started call with empty
+notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
+The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
+`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
+label, while the other three take JSON documents.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
-mistake, so it is not a substitute. These host projections do not exercise an ArkTS state codec, a loaded NAPI module,
-NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical device.
+mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
+a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
+device. No production client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
