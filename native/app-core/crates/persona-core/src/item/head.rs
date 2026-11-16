@@ -65,16 +65,11 @@ keyed! {
 /// A cache field read with its original serde type. Unlike `Seen<T>`, this does not turn a type error into a slot:
 /// the error stays at the original line/column. Presence is separate from `T`, so `null` can be a valid first value
 /// for `Option<String>` and a first `fold: null` still blocks later occurrences.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) enum CacheSeen<T> {
+    #[default]
     Missing,
     Value(T),
-}
-
-impl<T> Default for CacheSeen<T> {
-    fn default() -> Self {
-        Self::Missing
-    }
 }
 
 impl<T> Slot for CacheSeen<T> {
@@ -136,8 +131,10 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                let mut head = CacheHead::default();
-                head.id = CacheSeen::Value(seq.next_element()?.ok_or_else(|| A::Error::missing_field("id"))?);
+                let mut head = CacheHead {
+                    id: CacheSeen::Value(seq.next_element()?.ok_or_else(|| A::Error::missing_field("id"))?),
+                    ..CacheHead::default()
+                };
                 macro_rules! position {
                     ($field:ident, $type:ty) => {
                         head.$field = match seq.next_element::<$type>()? {
