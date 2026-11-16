@@ -36,9 +36,11 @@ the tapping test for the tap's own path.
 `PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
 session list in, the real page of a working agent (title, tabs, status, live work line, Stop), or without it, a generic
 page ("对话", no tabs, nothing live). The first reads about 50 ms/s of hitches, the second about 25, whatever the build.
-Once loaded its chat fits on one screen: the swipes scroll nothing and the header never folds, so the number is what a
-working chat costs sitting still (a SwiftUI animation keeps the display link running), not a long scroll. A fix to the
-header fold (#8793) was merged on an A/B whose "after" runs all happened to open the generic page; it was reverted.
+Once loaded its chat fits on one screen: the swipes scroll little, but each one folds and unfolds the header
+(`-holdChromeOpen` only stops the fold after 3 idle seconds), so the number is mostly what the header's fold costs on a
+working chat, not a long scroll. A fix to the header fold (#8793) was merged on an A/B whose "after" runs all happened to
+open the generic page; it was reverted. Since #8828 the test waits for the session's own title in the header and
+relaunches (up to three times) until the real page is there; about one run in five still never gets it and fails.
 
 Before trusting a before/after: take a screenshot during each run (`xcrun simctl io <udid> screenshot`) and check both
 builds measured the same page; sort runs by state before comparing. Also: Time Profiler leaves about nine samples in ten
@@ -55,6 +57,26 @@ inside the 60 seconds held, which it does every 5 seconds while streaming, the l
 trapped: every streaming hub-mode meeting about a minute in. `..<` and `...` check their bounds in Release too. Where
 positions come from two clocks (the tap's and the other side's acknowledgements), compare them before making a range,
 and test the ring full with an acknowledgement inside it, not only behind it.
+
+## A recording keeps the app under iOS's background CPU limit (#9108)
+
+A TestFlight iPhone's hub-mode meetings stopped one and two minutes in, in the background, with no crash log and the
+Dynamic Island still counting. iOS had killed the app ("cpu usage … Process killed", 80 % over 60 s, not frontmost):
+a chat the app had open was prewarming its rows (`ChatView.prewarmRows`, a detached utility task) and one user message,
+a relative path ending in a hash, sent `PathRefs`'s pattern of then (#8911) into exponential backtracking. In the
+foreground that is a busy thread nobody notices; a recording keeps the app running in the background, where the same
+thread gets it killed, and the recording ends at its last finished segment (`RecordingLibrary.recover` at the next
+launch writes the end). Find what spun from the system's CPU report: symbolicate against an archive of the same commit,
+and when the UUID differs (other build paths), check that every return address follows a `bl` to the next frame's
+function before trusting it.
+
+- Work the screen alone needs doesn't run in the background (`RowMemo.prewarms(in:)`): a recording may be what keeps the
+  app alive there.
+- `NSRegularExpression` has no time limit and a cancelled task doesn't stop a running match; text from messages goes
+  through `BoundedRegex`, whose `.reportProgress` enumeration stops at a deadline.
+- A killed app can't end its Live Activity, so a running recording's activity has to be told it is still running.
+- The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
+  under Analytics Data instead.
 
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
@@ -1212,7 +1234,8 @@ Use an invalidation revision as the task key and handle the flag after completio
   `ChromeHeader` had the same trap (2026-11-02): expanded / collapsed layers in ZStack used opacity / `allowsHitTesting`,
   leaving both Back buttons in accessibility. Expanded content moved into clipping after collapse; its Back was over the status bar, deemed hittable but tapping did not return.
   `accessibilityHidden` on layers or plain buttons still failed. Remove invisible layers from the tree (do not build collapsed strip before halfway;
-  expanded layer uses `.hidden()` after fading, retaining layout measurement). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
+  expanded layer gives way to a clear placeholder of its measured height after fading; a `.hidden()` copy kept measuring but
+  built the whole header again at every fold and unfold, #9103). Identity changes dismiss sheets / menus, so avoid automatic collapse while anything is presented
   (`ChatView.somethingPresented`, `ChatHeaderPresentationTests`).
 - Do not measure per-frame drag / animation main-thread cost under XCUITest: accessibility adds substantial SwiftUI work each frame. Script display-frame-driven execution of the same path in-app,
   launched with `simctl launch` (`DrawerAutoDrag`, `docs/operations/testing.md` ("Sidebar dragging")).

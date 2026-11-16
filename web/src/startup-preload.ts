@@ -332,8 +332,19 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // their own (chat-sessioninfo, out of chat-sessiondialogs): ja 481,208 B to 480,451 B (en 478,073 B to 477,315 B,
 // zh-Hans 478,862 B to 478,105 B). On top of #8380, merged with main 1941e2e779: en 473,455 B, ja 476,517 B, zh-Hans
 // 474,236 B, 4,122 B of room.
-export const FIRST_SCREEN_BUDGET = 480_639;
-
+// The sessions list's invalidation throttle (lib/session-list.ts, one read per 2 s hint window instead of one per
+// hint) takes 59 B of that room in ja, measured in one environment against its own main (ja 480,249 B to 480,308 B;
+// en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
+// Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
+// en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
+// #9146: a table cell's short code chips kept whole (ui/ReplyBlocks.tsx rehypeLinkedCode marks them data-chip; styles.css
+// keeps them on one line) add 69 B in each language, measured in one environment against main c53557621 (ja 480,666 B
+// to 480,735 B; en 477,537 B to 477,606 B, zh-Hans 478,356 B to 478,425 B). The cells' 40em cap is the same bytes.
+// #9175: the inbox reads the hub's deltas (lib/inbox.ts, its cursor and applyInboxDelta), 124 B in ja; the Feishu card
+// text (cardText) moves to the Inbox page's lib/inbox-page.ts and takes 150 B off: ja 480,666 B to 480,640 B (en
+// 477,537 B to 477,511 B, zh-Hans 478,356 B to 478,330 B), measured in one environment against main 576970b459; merged
+// with main 27a828ec48 (#9146 above): en 477,579 B, ja 480,708 B, zh-Hans 478,398 B, 27 B of room.
+export const FIRST_SCREEN_BUDGET = 480_735;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -541,12 +552,16 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * And 34 B of minifier drift (#8778, 2026-11-16): main at 168f8311e sent 45,025 B at idle, 3 B over, with no idle page's
  * own source changed; #8778's provider metadata adds nothing of its own there (its code is in the Settings chunk: 45,023 B
  * with it). 31 B of room so the next main does not tip it.
+ * And 31 B of minifier drift (#9069, 2026-11-16): hiding the built-in assistant from the switcher adds nothing at idle
+ * (its code is in the Settings chunk and the locale catalogs). A CI build of the PR merged with main measured 45,500 B,
+ * 8 B over; a local build of the same tree measured 45,476 B against main's 45,478 B, each of the 11 idle files within
+ * 5 B of main's either way (the chunk names they import). 31 B of room on top of the CI figure.
  */
 // Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
 // Conversation-deletion guards, file retirement and open-search invalidation (#6172):
 // main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
 // The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
-export const IDLE_TIER_BUDGET = 45_492;
+export const IDLE_TIER_BUDGET = 45_531;
 
 const gzip = promisify(gzipCompress);
 

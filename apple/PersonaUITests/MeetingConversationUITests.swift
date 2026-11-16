@@ -39,19 +39,24 @@ final class MeetingConversationUITests: XCTestCase {
 
     // MARK: Starting
 
-    /// A hub with the conversation: the start offers Private Meeting, off, and no Who Attends (the meeting's own room
-    /// attends).
+    /// A hub with the conversation: the quick start has Invite Persona (#8731) and no Who Attends (the meeting's own
+    /// room attends); the page's options menu has Private Meeting, off.
     @MainActor func testStartOffersPrivateMeetingAndNoAttendee() throws {
         let hub = try mockHub()
         let app = launch(hub)
         XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(element(app, "meeting-attendance-role").waitForExistence(timeout: 15), "no role: \(app.debugDescription)")
+        // Persona invited or not, by the hub's default (#8731): either way the quick start says who is in it.
+        XCTAssertTrue(waitFor(15) { self.element(app, "meeting-invite-persona").exists || self.element(app, "meeting-persona-invited").exists },
+                      "no Invite: \(app.debugDescription)")
         // A launch goes by what the last hub said until this one's hello is in.
+        let options = app.buttons["meeting-options"].firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 15), app.debugDescription)
+        options.tap()
         let privately = element(app, "meeting-private-start")
-        if !privately.waitForExistence(timeout: 15) { reveal(privately, in: app) }
-        XCTAssertTrue(privately.waitForExistence(timeout: 5), "no Private Meeting: \(app.debugDescription)")
+        XCTAssertTrue(privately.waitForExistence(timeout: 15), "no Private Meeting: \(app.debugDescription)")
         let control = privately.elementType == .switch ? privately : privately.switches.firstMatch
         if control.exists { XCTAssertEqual("\(control.value ?? "")", "0", "a meeting starts not private") }
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap() // the menu closes
         let attendee = app.buttons["meeting-attendee"]
         XCTAssertTrue(waitFor(15) { !attendee.exists }, "Who Attends beside the room: \(app.debugDescription)")
         sleep(2)

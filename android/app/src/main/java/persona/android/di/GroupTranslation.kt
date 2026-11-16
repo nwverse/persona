@@ -245,6 +245,9 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun claudeDirs(machineId: String) = source.claudeDirs(names.rawMachine(machineId))
         override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
             source.setBlockedClaudeDirs(names.rawMachine(machineId), blocked)
+        override suspend fun claudeLiveReplies(machineId: String) = source.claudeLiveReplies(names.rawMachine(machineId))
+        override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean) =
+            source.setClaudeLiveReplies(names.rawMachine(machineId), on)
         override suspend fun doctor(machineId: String) = source.doctor(names.rawMachine(machineId))
         override suspend fun fixDoctor(machineId: String) = source.fixDoctor(names.rawMachine(machineId))
         override suspend fun browser(machineId: String) = source.browser(names.rawMachine(machineId))
