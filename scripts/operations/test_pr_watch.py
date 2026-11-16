@@ -165,7 +165,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_stale_pr_with_multiple_activity_records_closes_despite_its_own_notice_extra(self):
         config = dict(self.watcher.config["repositories"][0], close_stale=True)
-        snapshot = pr(createdAt="2026-11-01T00:00:00Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-08T00:00:00Z")
         old = pr_watch_common.github_time("2026-11-01T00:00:00Z")
         notice = "This PR has had no substantive progress for more than seven days"
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice},
@@ -175,7 +175,7 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
         with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], [], []]):
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {}, ignore_notice=notice)
-        self.assertEqual(activity, old)
+        self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
 
     def test_recent_pr_activity_prevents_stale_close(self):
         self.github_pr = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-14T00:00:00Z")
@@ -196,6 +196,63 @@ class WatcherTests(unittest.TestCase):
         activity.assert_called_once()
         self.assertFalse(any(call.args[0][1:3] in (["pr", "close"], ["pr", "edit"])
                              for call in mutations.call_args_list))
+
+    def test_stale_uses_push_activity_not_commit_creation_time(self):
+        old = time.time() - 8 * 86400
+        snapshot = pr(createdAt=datetime.fromtimestamp(old - 86400, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      updatedAt=datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        with patch.object(pr_watch, "gh_json", side_effect=[[], []]):
+            progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {})
+        self.assertGreater(time.time() - progress, 0)
+        self.assertLess(time.time() - progress, 60)
+
+    def test_stale_marker_does_not_count_as_new_progress(self):
+        old = time.time() - 8 * 86400
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
+        notice = "watcher's own stale notice"
+        old_state = {"stale_head": snapshot["headRefOid"], "stale_notice": notice}
+        comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice}]
+        with patch.object(pr_watch, "gh_json", side_effect=[comments, []]):
+            progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, old_state)
+        self.assertEqual(progress, pr_watch_common.github_time(snapshot["createdAt"]))
+
+    def test_reopened_stale_pr_requires_fresh_semantic_review(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="stale_closed", semantic="passed",
+                               verification="passed", success_posted=True, findings=[], repair_rounds=2)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        verify.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
+
+    def test_review_only_p2_findings_continue_to_verification(self):
+        self.watcher.repositories["example/one"]["merge"] = False
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="reviewed", semantic="passed",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        verify.assert_called_once()
+        review.assert_not_called()
+
+    def test_paginated_json_records_and_page_arrays_are_flattened(self):
+        text = '{"createdAt": "2026-11-01T00:00:00Z"}\n{"createdAt": "2026-11-02T00:00:00Z"}\n'
+        with patch.object(pr_watch_common, "checked", return_value=text):
+            self.assertEqual(len(pr_watch_common.gh_json(["api", "activity"])), 2)
+        with patch.object(pr_watch_common, "checked", return_value='[{"id": 1}]\n[{"id": 2}]\n'):
+            self.assertEqual(pr_watch_common.gh_json(["api", "activity"]), [{"id": 1}, {"id": 2}])
+        with patch.object(pr_watch_common, "checked", return_value='[{"id": 1}]\n{"id": 2}'):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.gh_json(["api", "activity"])
 
     def test_failed_stale_comment_never_closes(self):
         old = time.time() - 8 * 86400
@@ -403,7 +460,7 @@ class WatcherTests(unittest.TestCase):
         publish.assert_called_once()
         args, kwargs = publish.call_args
         self.assertEqual(args[:2], ("example/one", 7))
-        self.assertEqual(args[2]["headRefOid"], SHA_B)
+        self.assertEqual(args[2]["head"], SHA_A)
         self.assertEqual(args[3], findings)
         self.assertEqual(kwargs, {"inline": False})
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)

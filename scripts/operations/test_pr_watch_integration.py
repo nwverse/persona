@@ -27,7 +27,7 @@ if args[:1] == ["api"]:
 if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
     kind = next((suffix for suffix in ("/comments", "/reviews", "/commits") if args[1].endswith(suffix)), "")
     records = {"comments": state.get("comments", []), "reviews": state.get("reviews", []), "commits": state.get("commits", [])}[kind[1:]]
-    print(json.dumps(records))
+    print("\n".join(json.dumps(record) for record in records))
     entry["returncode"] = 0
     with open(log_path, "a") as log:
         log.write(json.dumps(entry) + "\n")
@@ -46,11 +46,9 @@ elif args[:2] == ["pr", "list"]:
     out = json.dumps([] if state["pr"]["state"] != "OPEN" else [{k: state["pr"][k] for k in ("number", "headRefOid", "isDraft", "baseRefName")}])
 elif args[:2] == ["pr", "view"]:
     out = json.dumps(state["pr"])
-elif args[:2] == ["api"] and "/commits/" in args[1]:
+elif args[:1] == ["api"] and "/commits/" in args[1]:
     out = state["pr"]["baseRefOid"]
-elif args[:2] == ["api"] and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")):
-    out = "[]"
-elif args[:2] == ["api"] and args[1].endswith("/reviews"):
+elif args[:1] == ["api"] and args[1].endswith("/reviews"):
     payload = json.loads(sys.stdin.read())
     entry["review"] = payload
     if os.environ.get("FAKE_REJECT_INLINE") == "1":
@@ -193,6 +191,12 @@ class WatcherIntegrationTests(unittest.TestCase):
         config["repositories"][0]["close_stale"] = True
         self.config_path.write_text(json.dumps(config))
         self.state_path.write_text(json.dumps(state))
+        self.run_watch()  # initialize the reviewed configuration fingerprint
+        watcher_state = self.root / "watch-state.json"
+        watcher_state.write_text(json.dumps({"version": 1, "prs": {"example/one#7": {
+            "head": self.head, "evidence_key": "example/one#7@" + self.base + ".." + self.head,
+            "base": self.base, "outcome": "stale_close_pending", "stale_head": self.head,
+        }}}))
         calls = self.run_watch()
         current = json.loads(self.state_path.read_text())
         self.assertEqual(current["pr"]["state"], "CLOSED")

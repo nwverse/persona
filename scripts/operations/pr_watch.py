@@ -461,7 +461,8 @@ class Watcher:
                     alias["released_at"] = lease["released_at"]
                 if not path.exists():
                     leases.pop(str(path), None)
-                    leases.pop(str(path) + "-base-check", None)
+                    if not Path(str(path) + "-base-check").exists():
+                        leases.pop(str(path) + "-base-check", None)
                 pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
 
     def active_worktrees(self):
@@ -499,8 +500,11 @@ class Watcher:
             action = "Dry run: findings are recorded locally; no automatic verification publication or merge will be attempted."
         else:
             action = "These P2 findings are non-blocking under the maintainer-approved policy. Verification and exact-head merging continue."
-        body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
-            pr["headRefOid"][:9], len(findings), action)
+        if not inline:
+            body = "Findings from the previous head; this is not a review of the current head.\n\n%s" % action
+        else:
+            body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
+                pr["headRefOid"][:9], len(findings), action)
         comments = [{"path": f["path"], "line": f["line"], "side": "RIGHT",
                      "body": "**%s** — %s\n\n**Suggestion:** %s" % (f["severity"], f["summary"], f["suggestion"])}
                     for f in findings]
@@ -781,16 +785,27 @@ class Watcher:
     def stale_progress_at(self, repo, number, pr, old, ignore_notice=None):
         """Use actual GitHub activity, never repeated polling or retry state."""
         comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
-                            "--paginate", "--jq", "[.[] | {createdAt: .created_at, body: .body}]"], timeout=90)
+                            "--paginate", "--jq", ".[] | {createdAt: .created_at, body: .body}"], timeout=90)
         reviews = gh_json(["api", "repos/%s/pulls/%s/reviews" % (repo, number),
-                           "--paginate", "--jq", "[.[] | {createdAt: .submitted_at}]"], timeout=90)
-        commits = gh_json(["api", "repos/%s/pulls/%s/commits" % (repo, number),
-                           "--paginate", "--jq", "[.[] | {committedDate: .commit.committer.date}]"], timeout=90)
+                           "--paginate", "--jq", ".[] | {createdAt: .submitted_at}"], timeout=90)
+        if isinstance(comments, dict):
+            comments = [comments]
+        if isinstance(reviews, dict):
+            reviews = [reviews]
+        if not isinstance(comments, list) or not isinstance(reviews, list):
+            raise WatchError("stale activity endpoints must return JSON arrays")
+        if old.get("stale_notice"):
+            comments = [item for item in comments if item.get("body") != old["stale_notice"]]
         if ignore_notice is not None:
             # Only the exact notice posted by this invocation is excluded;
             # other new contributor comments still keep the PR open.
             comments = [item for item in comments if item.get("body") != ignore_notice]
-        progress = pr_watch_common.progress_timestamp(pr, comments, reviews, commits)
+        progress = pr_watch_common.progress_timestamp(pr, comments, reviews, [])
+        # GitHub's PR timestamp advances on a push, including an old commit,
+        # not just on commit creation. A marker alone never changes head, so
+        # the watcher's own stale bookkeeping cannot extend the interval.
+        if old.get("stale_head") != pr["headRefOid"]:
+            progress = max(progress, pr_watch_common.github_time(pr["updatedAt"]))
         return progress
 
     def mark_and_close_stale(self, config, pr, old):
@@ -814,8 +829,9 @@ class Watcher:
             # missing label is a failed marker, not permission to close silently.
             raise WatchError("could not mark the long-inactive PR: " + bounded(result.stderr, 1000))
         self.state.annotate(repo, number, last_progress_at=last_progress,
-                            stale_marked_at=int(time.time()))
+                            stale_marked_at=int(time.time()), stale_head=pr["headRefOid"])
         self.comment(repo, number, reason)
+        self.state.annotate(repo, number, stale_notice=reason)
         latest = pr_snapshot(repo, number)
         if latest["state"] != "OPEN" or latest["isDraft"]:
             return False
@@ -856,6 +872,16 @@ class Watcher:
             return
         head = pr["headRefOid"]
         old = self.state.get(repo, number)
+        if old.get("outcome") == "stale_closed":
+            # Reopening is new work, not permission to reuse the closed PR's
+            # old approval. Keep the repair budget and publication history,
+            # but require fresh semantic and verification evidence.
+            self.state.annotate(repo, number, outcome="retry", semantic=None,
+                                verification=None, verification_policy=None,
+                                checks=[], success_posted=False, review_posted=False,
+                                published_findings=[], published_fingerprint=None,
+                                base_failures=None, retry_reason=None, retry_after=0)
+            old = self.state.get(repo, number)
         try:
             if self.mark_and_close_stale(config, pr, old):
                 return
@@ -877,7 +903,7 @@ class Watcher:
                 # A changed head invalidates line anchors, not the usefulness
                 # of the complete old review. Publish it once as grouped text,
                 # then review the new head independently.
-                self.comment_findings(repo, number, pr, previous["findings"], inline=False)
+                self.comment_findings(repo, number, previous, previous["findings"], inline=False)
                 self.record_review_publication(repo, number, previous, previous["findings"], posted=True)
             old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if (old.get("head") == head and old.get("format") == FORMAT_VERSION
@@ -911,7 +937,8 @@ class Watcher:
         if old.get("outcome") == "continuation":
             return
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
-                and old.get("outcome") == "findings" and old.get("review_posted")
+                and old.get("outcome") == "findings" and old.get("semantic") == "findings" and old.get("review_posted")
+                and any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", []))
                 and not config["merge"]):
             return
         if old.get("outcome") == "repair_comment_pending":
@@ -970,7 +997,7 @@ class Watcher:
                 old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                      review_posted=True, published_findings=old["findings"],
                                      published_fingerprint=old.get("review_fingerprint"))
-            if not config["merge"]:
+            if not config["merge"] and old.get("semantic") == "findings":
                 old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                      outcome="findings")
                 return False

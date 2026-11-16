@@ -232,7 +232,7 @@ class RepairIntegrationTests(unittest.TestCase):
         self.git("add", "repair.txt")
         with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
                 patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid=rewritten)):
-            with self.assertRaisesRegex(pr_watch_repair.WatchError, "base moved"):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "head/base moved"):
                 pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
                                                        {"profile": "commands", "commands": [["true"]]})
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)

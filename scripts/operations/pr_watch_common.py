@@ -195,10 +195,37 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
 
 def gh_json(argv, timeout=90, environ=None, input_text=None):
     text = checked(["gh"] + argv, timeout=timeout, environ=environ, input_text=input_text)
+    if not text.strip():
+        # An empty --jq stream is an empty collection, not malformed JSON.
+        return []
     try:
         return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise WatchError("gh returned invalid JSON: %s" % exc)
+    except json.JSONDecodeError:
+        # --paginate applies --jq per page. Depending on the endpoint and gh
+        # version, that is several adjacent JSON values, not one array.
+        decoder = json.JSONDecoder()
+        values = []
+        index = 0
+        try:
+            while index < len(text):
+                while index < len(text) and text[index].isspace():
+                    index += 1
+                if index == len(text):
+                    break
+                value, index = decoder.raw_decode(text, index)
+                values.append(value)
+        except json.JSONDecodeError as exc:
+            raise WatchError("gh returned invalid JSON: %s" % exc)
+        if len(values) == 1:
+            return values[0]
+        if all(not isinstance(value, list) for value in values):
+            return values
+        flattened = []
+        for value in values:
+            if not isinstance(value, list):
+                raise WatchError("gh returned mixed paginated JSON values")
+            flattened.extend(value)
+        return flattened
 
 
 def pr_snapshot(repo, number, timeout=90, environ=None):
