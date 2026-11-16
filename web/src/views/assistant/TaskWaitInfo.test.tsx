@@ -43,7 +43,7 @@ afterEach(async () => {
 
 describe("task wait information", () => {
   it("shows the recorded person request, sender, age, wake and source without substituting the recorder", async () => {
-    const todo = makeTodo({ kind: "person_reply", target: "Design team", wake: "They confirm a date", contact, recorded_by: "Supervisor", url: "https://example.test/evidence/7" });
+    const todo = makeTodo({ kind: "person_reply", target: "Design team", wake: "They confirm a date", contact, recorded_by: "recorder-not-sender", url: "https://example.test/evidence/7" });
     await render(todo);
     const info = host.querySelector<HTMLElement>('[data-task-wait-info="wait-1"]')!;
     expect(info.dataset.waitKind).toBe("person_reply");
@@ -53,7 +53,7 @@ describe("task wait information", () => {
     expect(text("[data-wait-request]")).toContain(contact.request);
     expect(text("[data-wait-wake]")).toContain("They confirm a date");
     expect([...host.querySelectorAll<HTMLAnchorElement>("[data-wait-source]")].map(a => a.href)).toEqual(["https://example.test/evidence/7"]);
-    expect(info.textContent).not.toContain("Supervisor");
+    expect(info.textContent).not.toContain("recorder-not-sender");
     expect(info.dataset.waitOverdue).toBe("true");
     expect(host.querySelector("[data-wait-due]")).not.toBeNull();
   });
