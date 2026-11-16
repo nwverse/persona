@@ -2189,9 +2189,7 @@ final class AppModel {
             #endif
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
         } catch {
-            #if DEBUG
-            ProductionContinuityShadow.shared.failed(.fillFailed, in: store)
-            #endif
+            // The defer reports one failed completion for both transport errors and fence cancellation.
         }
     }
 

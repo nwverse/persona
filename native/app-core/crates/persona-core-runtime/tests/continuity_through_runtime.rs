@@ -292,8 +292,8 @@ fn drained_state_suppresses_noop_publishes_and_wakes() {
     let initial: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
     assert_eq!(initial.ops.len(), 1);
     host.changes.lock().unwrap().clear();
-    let verified: ChatPatch;
-    loop {
+    let mut verified: Option<ChatPatch> = None;
+    for _ in 0..2 {
         assert!(runtime.dispatch(&wire::encode(&Action::Chat {
             chat: "a".into(),
             event: ChatEvent::Latest {
@@ -310,7 +310,7 @@ fn drained_state_suppresses_noop_publishes_and_wakes() {
         assert!(runtime.flush(Duration::from_secs(5)));
         let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
         if host.changes.lock().unwrap().is_empty() {
-            verified = patch;
+            verified = Some(patch);
             break;
         }
         // The first latest page verifies this restored chat. Its changed state must be drained before testing no-ops.
@@ -318,6 +318,7 @@ fn drained_state_suppresses_noop_publishes_and_wakes() {
         assert!(patch.ops.is_empty());
         host.changes.lock().unwrap().clear();
     }
+    let verified = verified.expect("the first changed latest is followed by a no-op");
     for _ in 0..3 {
         assert!(runtime.dispatch(&wire::encode(&Action::Chat {
             chat: "a".into(),

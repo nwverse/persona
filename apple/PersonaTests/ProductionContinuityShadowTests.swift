@@ -107,11 +107,12 @@ struct ProductionContinuityShadowTests {
     @Test func pushWhileFillResponseIsOutstandingKeepsItsEvidence() async throws {
         let shadow = ProductionContinuityShadow.shared
         let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "outstanding-fill"))
-        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 1, to: 3)))
+        _ = store.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", to: 1), backlog: true))
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3)))
         // Another push while the first fetchAfter response is held must reuse, not expire, the in-flight request.
         _ = store.apply(.batch(.pushed, items: [item(4)], span: ItemSpan(history: "h", from: 3, to: 4)))
         let result = try await shadow.compare(store)
-        #expect(result.compared == 2)
+        #expect(result.compared == 3)
         #expect(result.mismatches == 0)
         shadow.close(store)
     }
@@ -242,6 +243,26 @@ struct ProductionContinuityShadowTests {
         #expect(result.compared == 6)
         #expect(result.mismatches == 0)
         ProductionContinuityShadow.shared.close(store)
+    }
+
+    @Test func lateInputForAClosedStoreCannotRecreateItsShadow() async throws {
+        let shadow = ProductionContinuityShadow()
+        shadow.installForTests()
+        var store: ChatStore? = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "retired-shadow"))
+        _ = store?.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", to: 1), backlog: true))
+        if let store {
+            shadow.accept(.event(.loadOlder), into: store, snapshot: store.nativeSnapshot(), native: store.nativeResult(), gap: nil)
+            shadow.close(store)
+        }
+        let input = NativeContinuityInput.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3))
+        if let store {
+            shadow.accept(input, into: store, snapshot: store.nativeSnapshot(), native: store.nativeResult(), gap: .fill)
+        }
+        weak var retired = store
+        store = nil
+        shadow.waitForTests()
+        #expect(retired == nil)
+        #expect(shadow.debugStateForTests.chats == 0, "unexpected lifecycle state: \(shadow.debugStateForTests)")
     }
 
     @Test func disabledShadowDoesNotCreateAClientForDirectSchedulingInputs() {

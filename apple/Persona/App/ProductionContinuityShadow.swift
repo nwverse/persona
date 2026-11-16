@@ -68,6 +68,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private var stores: [ObjectIdentifier: WeakChatStore] = [:]
     private var retiredChats: Set<UInt> = []
     private var retiredOrder: [UInt] = []
+    private var disabledStores: Set<ObjectIdentifier> = []
     private var nextGeneration: UInt = 1
     private var reportSink: @Sendable (Report) -> Void
     private var mismatches = 0
@@ -119,6 +120,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private func generation(for store: ChatStore) -> UInt? {
         let pointer = ObjectIdentifier(store)
+        guard !disabledStores.contains(pointer) || generations[pointer] != nil || stores[pointer]?.store != nil else { return nil }
         if let id = generations[pointer], stores[pointer]?.store === store {
             guard !retiredChats.contains(id) && !failedChats.contains(id) else {
                 Task { @MainActor in store.setContinuityShadowEnabledForFixtureReplay(false) }
@@ -137,6 +139,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     private func retire(_ id: UInt) {
+        if let pointer = generations.first(where: { $0.value == id })?.key {
+            disabledStores.insert(pointer)
+        }
         if retiredChats.insert(id).inserted { retiredOrder.append(id) }
         if retiredOrder.count > 256 {
             retiredChats.remove(retiredOrder.removeFirst())
@@ -202,11 +207,12 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     private func removeAllChats() {
-        for (_, id) in generations { retire(id) }
         for id in chats.keys { removeChat(id) }
-        for id in failedChats { removeChat(id) }
         generations.removeAll()
         stores.removeAll()
+        disabledStores.removeAll()
+        retiredChats.removeAll()
+        retiredOrder.removeAll()
         failedChats.removeAll()
         reports.removeAll()
         effects.values.withLock { $0.removeAll() }
@@ -216,7 +222,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         try await withCheckedThrowingContinuation { resume in
             enqueue { [weak self, weak store] in
                 guard let self else { resume.resume(throwing: PersonaCoreError.closed); return }
-                guard let store, let id = self.generation(for: store) else {
+                guard let store, let id = self.generation(for: store), self.chats[id] != nil else {
                     resume.resume(throwing: PersonaCoreError.invalidPatch)
                     return
                 }
@@ -241,7 +247,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             try flush(id, input: input)
             try compareQueued(id, input: input, shape: Self.shape(input.value))
         } catch PersonaCoreError.flushTimedOut {
-            // The serial queue retries a slow core once; this is not a continuity mismatch or a tombstone.
+            fail(id, rule: "core-timeout", shape: Self.shape(input.value))
         } catch {
             fail(id, rule: "core-input", shape: Self.shape(input.value))
         }
@@ -275,6 +281,12 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     var reportShapeCountForTests: Int {
         queue.sync { reports.count }
     }
+
+    var debugStateForTests: (generations: Int, stores: Int, disabled: Int, retired: Int, chats: Int) {
+        queue.sync { (generations.count, stores.count, disabledStores.count, retiredChats.count, chats.count) }
+    }
+
+    func waitForTests() { queue.sync {} }
 
     var coreClientForTests: PersonaCoreClient? {
         queue.sync { client }
@@ -365,6 +377,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         if let needed, !requests.contains(needed) {
             report(id, rule: "missing-request", shape: shape)
         }
+        if (kind == .latest || kind == .pushed), case .fill = input.gap, filling || requests.contains(.after) {
+            chats[id]?.filling = true
+        }
         if kind == .loadOlder, loadingOlder || requests.contains(.older) {
             chats[id]?.loadingOlder = true
         }
@@ -414,10 +429,17 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         // Closing an unknown chat is intentional: a partial start must not leave old Rust state behind.
         try? core().dispatch(.closeChat(chat: chatID(id)))
         Self.logger.debug("continuity shadow closed mismatches=\(self.mismatches, privacy: .public)")
+        for (pointer, weakStore) in stores where weakStore.store == nil {
+            stores.removeValue(forKey: pointer)
+            disabledStores.remove(pointer)
+        }
     }
 
     private func fail(_ id: UInt, rule: String, shape: String) {
         guard !failedChats.contains(id) else { return }
+        if let pointer = generations.first(where: { $0.value == id })?.key {
+            disabledStores.insert(pointer)
+        }
         failedChats.insert(id)
         if let store = storeForChat(id) {
             Task { @MainActor in store.setContinuityShadowEnabledForFixtureReplay(false) }
