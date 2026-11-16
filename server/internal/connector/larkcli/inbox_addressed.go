@@ -79,9 +79,14 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 			// A direct label belongs to this identity, not to unrelated descendants.
 			identityRole := role || cardRoleElement(v, requireRole)
 			if tag == "at" && (!requireRole || identityRole) || tag == "person" && identityRole {
-				for _, key := range []string{"user_id", "open_id", "id"} {
-					if v[key] == auth.OpenID {
-						return true
+				// Card user_id defaults to an open ID; generic element IDs are not user identities.
+				idType, hasIDType := v["id_type"]
+				userIDType, hasUserIDType := v["user_id_type"]
+				if (!hasIDType || idType == "open_id") && (!hasUserIDType || userIDType == "open_id") {
+					for _, key := range []string{"user_id", "open_id"} {
+						if id, ok := v[key].(string); ok && len(id) > 3 && strings.HasPrefix(id, "ou_") && id == auth.OpenID {
+							return true
+						}
 					}
 				}
 			}

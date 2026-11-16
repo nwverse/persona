@@ -77,9 +77,8 @@ func (c *Connector) ReplayMessages(ctx context.Context, chatID, start, end strin
 	}
 	messages := make([]adapter.Message, 0, len(found))
 	for _, message := range found {
-		if !isBoundAppMessage(message, auth.AppID) {
-			messages = append(messages, message)
-		}
+		// The exact selection is authorized recovery; only live polling filters our bot's messages.
+		messages = append(messages, message)
 	}
 	sort.SliceStable(messages, func(i, j int) bool { return messageLess(messages[i], messages[j]) })
 	things := []connector.InboxThing{}

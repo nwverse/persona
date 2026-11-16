@@ -164,3 +164,52 @@ func TestInboxReplayRejectsUnknownOrOutsideSourceTimestamp(t *testing.T) {
 		})
 	}
 }
+
+func TestInboxReplayKeepsEligibleBoundAppSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name, chatType, content, kind string
+		tier                          connector.Tier
+		mention, owner, assigned      bool
+	}{
+		{"addressed app message", "group", `"Please review"`, "mention", connector.TierAction, true, false, false},
+		{"app responsibility card", "group", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_user"}]}`, "mention", connector.TierAction, false, false, true},
+		{"direct app message", "p2p", `"Bot update"`, "bot", "", false, false, false},
+		{"unaddressed app group message", "group", `"Routine update"`, "", "", false, false, false},
+		{"owner identity with app metadata", "group", `"Please review"`, "bot_handoff", connector.TierFYI, true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selected := addressedMessage("om_example_selected", "cli_example", "Example Bot", tc.content, "", nil)
+			selected.ChatType, selected.CreateTime = tc.chatType, "2030-01-01T00:01:00Z"
+			selected.Sender.SenderType, selected.Sender.IDType, selected.Sender.AppID = "app", "app_id", "cli_example"
+			if tc.owner {
+				selected.Sender.ID, selected.Sender.Name = "ou_example_user", "Example User"
+			}
+			if tc.mention {
+				selected.Mentions = []adapter.Mention{{ID: "cli_example"}}
+			}
+			unselected := addressedMessage("om_example_context", "cli_example", "Example Bot", `"Context only"`, "",
+				[]adapter.Mention{{ID: "cli_example"}})
+			unselected.Sender.SenderType, unselected.Sender.IDType = "app", "app_id"
+			unselected.ChatType, unselected.CreateTime = tc.chatType, "2030-01-01T00:02:00Z"
+			c := addressedTestConnector(t, []adapter.Message{selected, unselected}, []adapter.Message{selected, unselected})
+			items, err := c.ReplayMessages(context.Background(), selected.ChatID, "2030-01-01T00:00:00Z",
+				"2030-01-01T00:05:00Z", []string{selected.MessageID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.kind == "" {
+				if len(items) != 0 {
+					t.Fatalf("unaddressed app activity entered: %+v", items)
+				}
+				return
+			}
+			if len(items) != 1 || items[0].Last != selected.MessageID || items[0].Kind != tc.kind ||
+				items[0].Tier != tc.tier || items[0].OwnerAssigned != tc.assigned || items[0].Done != "" {
+				t.Fatalf("selected identity or activity was lost: items=%+v", items)
+			}
+			if !strings.Contains(items[0].Context, "Context only") {
+				t.Fatalf("unselected history was not retained as context: %+v", items[0])
+			}
+		})
+	}
+}

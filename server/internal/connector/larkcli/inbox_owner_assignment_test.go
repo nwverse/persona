@@ -2,6 +2,7 @@ package larkcli
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
@@ -79,5 +80,67 @@ func TestCardPeerAssignmentAndOwnerMentionDoesNotGainMuteException(t *testing.T)
 				t.Fatalf("ordinary owner mention gained the responsibility mute exception: %+v", thing)
 			}
 		})
+	}
+}
+
+func TestCardStructuredOwnerIdentityRequiresOpenID(t *testing.T) {
+	for _, tag := range []string{"at", "person"} {
+		for _, tc := range []struct {
+			name, field, ownerID string
+			types                map[string]any
+			want                 bool
+		}{
+			{"explicit open ID", "open_id", "ou_example_owner", nil, true},
+			{"card user ID defaults to open ID", "user_id", "ou_example_owner", nil, true},
+			{"declared open ID", "user_id", "ou_example_owner", map[string]any{"user_id_type": "open_id"}, true},
+			{"declared ID type", "user_id", "ou_example_owner", map[string]any{"id_type": "open_id"}, true},
+			{"generic element ID", "id", "ou_example_owner", nil, false},
+			{"generic element ID with type", "id", "ou_example_owner", map[string]any{"id_type": "open_id"}, false},
+			{"employee ID in user field", "user_id", "example_employee", nil, false},
+			{"employee ID in open field", "open_id", "example_employee", nil, false},
+			{"union ID in user field", "user_id", "on_example_owner", nil, false},
+			{"empty open ID suffix", "user_id", "ou_", nil, false},
+			{"conflicting user ID type", "user_id", "ou_example_owner", map[string]any{"user_id_type": "user_id"}, false},
+			{"conflicting ID type", "user_id", "ou_example_owner", map[string]any{"id_type": "union_id"}, false},
+			{"contradictory open ID field", "open_id", "ou_example_owner", map[string]any{"user_id_type": "user_id"}, false},
+			{"malformed user ID type", "user_id", "ou_example_owner", map[string]any{"user_id_type": true}, false},
+			{"null ID type", "user_id", "ou_example_owner", map[string]any{"id_type": nil}, false},
+		} {
+			t.Run(tag+"/"+tc.name, func(t *testing.T) {
+				auth := adapter.AuthStatus{OpenID: tc.ownerID}
+				element := map[string]any{"tag": tag, tc.field: tc.ownerID}
+				for key, value := range tc.types {
+					element[key] = value
+				}
+				raw, err := json.Marshal(map[string]any{"elements": []any{
+					map[string]any{"tag": "plain_text", "text": "On-call:"}, element,
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				message := addressedMessage("om_example_card", "cli_example_monitor", "Example Monitor", string(raw), "", nil)
+				if got := cardAddressesOwner(message, auth); got != tc.want {
+					t.Errorf("addressed=%v want=%v", got, tc.want)
+				}
+				if got := cardAssignsOwner(message, auth); got != tc.want {
+					t.Errorf("assigned=%v want=%v", got, tc.want)
+				}
+				c := addressedTestConnector(t, []adapter.Message{message}, []adapter.Message{message})
+				groups := c.groupMessages([]adapter.Message{message}, auth, nil)
+				if !tc.want {
+					if len(groups) != 0 {
+						t.Fatalf("unverified identity granted Inbox admission: %+v", groups)
+					}
+					return
+				}
+				if len(groups) != 1 {
+					t.Fatalf("verified identity was not admitted: %+v", groups)
+				}
+				thing := c.thingForGroup(context.Background(), groups[0], auth)
+				if thing.Tier != "action" || !thing.OwnerAssigned {
+					t.Fatalf("verified assignment lost its routing or mute exception: %+v", thing)
+				}
+			})
+		}
 	}
 }
