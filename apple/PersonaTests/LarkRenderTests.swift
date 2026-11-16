@@ -9,6 +9,40 @@ struct LarkRenderTests {
         try JSON.decoder.decode([LarkPart].self, from: Data(json.utf8))
     }
 
+    /// A run compared without `Color` identity: `LarkColor.text` builds a fresh dynamic provider on every call, so two
+    /// equal-looking runs whose style carries a color never compare equal. The color's presence is compared instead.
+    private struct ComparableRun: Equatable {
+        var kind: String
+        var text: String
+        var bold = false
+        var italic = false
+        var underline = false
+        var dotted = false
+        var strike = false
+        var code = false
+        var hasColor = false
+        var hasBackground = false
+        var size: CGFloat?
+        var link: URL?
+    }
+
+    private func comparable(_ runs: [LarkInline]) -> [ComparableRun] {
+        runs.map { run in
+            switch run {
+            case .text(let text, let style):
+                ComparableRun(kind: "text", text: text, bold: style.bold, italic: style.italic, underline: style.underline,
+                              dotted: style.dotted, strike: style.strike, code: style.code, hasColor: style.color != nil,
+                              hasBackground: style.background != nil, size: style.size, link: style.link)
+            case .emoji(let key, let fallback):
+                ComparableRun(kind: "emoji", text: key + "/" + fallback)
+            case .symbol(let name, let color):
+                ComparableRun(kind: "symbol", text: name, hasColor: color != nil)
+            case .image(let url):
+                ComparableRun(kind: "image", text: url)
+            }
+        }
+    }
+
     @Test func decodesMessageWithPartsReplyAndReactions() throws {
         let json = """
         {"id":"m1","position":"9","sender_name":"A","is_mine":false,"type":"POST","text":"hi","recalled":false,"reply_count":0,
@@ -76,7 +110,7 @@ struct LarkRenderTests {
             .text("色", colored), .text("\n", base), .text("后", base),
         ]
         for _ in 0..<20 {
-            #expect(LarkFormat.cardMarkdown(input, style: base) == expected)
+            #expect(comparable(LarkFormat.cardMarkdown(input, style: base)) == comparable(expected))
         }
     }
 
@@ -104,10 +138,10 @@ struct LarkRenderTests {
         ]))
         var style = LarkRunStyle()
         style.italic = true
-        let expected = LarkFormat.cardMarkdown(text, style: style)
-        #expect(LarkCardRuns.runs(node, inMarkdown: true) == expected)
-        #expect(LarkCardRuns.runs(node, inMarkdown: true) == expected)
-        #expect(LarkCardRuns.runs(node, inMarkdown: false) == [.text(text, style)])
+        let expected = comparable(LarkFormat.cardMarkdown(text, style: style))
+        #expect(comparable(LarkCardRuns.runs(node, inMarkdown: true)) == expected)
+        #expect(comparable(LarkCardRuns.runs(node, inMarkdown: true)) == expected)
+        #expect(comparable(LarkCardRuns.runs(node, inMarkdown: false)) == comparable([.text(text, style)]))
     }
 
     @Test func lingoTermsUseUTF16Offsets() {
