@@ -90,7 +90,7 @@ const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository
 test('unrecognized receipt recovery stays journaled across detail reopen and storage restoration',async()=>{
  const {AssistantFeedModel}=await import('../entry/src/main/ets/models/AssistantFeed.ets');
  const {ResourceRow}=await import('../entry/src/main/ets/models/Wire.ets');
- for(const action of ['retry','continue'])for(const mismatch of ['missing','id','origin','manager']){
+ for(const action of ['retry','continue'])for(const mismatch of ['missing','id','origin','manager','manager-number','manager-null','manager-object','manager-omitted']){
   const owner='personal',hub='receipt-'+action+'-'+mismatch,conversation='main',todoId='task';
   const local=new MemoryStore();let repo=new HubRepository({managerId:owner,hubId:hub},local);
   const row=new ResourceRow(conversation,'Main','conversation');row.manager=owner;
@@ -99,13 +99,25 @@ test('unrecognized receipt recovery stays journaled across detail reopen and sto
   const card={id:'receipt',kind:'receipt',ref:todoId,conversation,manager:owner,body:{state:action==='retry'?'failed':'interrupted',resolution:'pending'}};
   let posts=0,feedReads=0,todoReads=0;
   globalThis.__personaRequest=async(path,method)=>{
-   if(method==='POST'){posts++;const updated={...task};if(mismatch==='missing')return '{}';updated[mismatch]='wrong';return JSON.stringify({todo:updated});}
+   if(method==='POST'){
+    posts++;const updated={...task};if(mismatch==='missing')return '{}';
+    if(mismatch==='manager-number')updated.manager=123;
+    else if(mismatch==='manager-null')updated.manager=null;
+    else if(mismatch==='manager-object')updated.manager={id:owner};
+    else if(mismatch==='manager-omitted')delete updated.manager;
+    else updated[mismatch]='wrong';
+    return JSON.stringify({todo:updated});
+   }
    if(path.includes('/feed')){feedReads++;return JSON.stringify({items:[card]});}
    if(path.startsWith('/api/v1/todos')){todoReads++;return JSON.stringify({todos:[task]});}
    return '{}';
   };
   const model={profile:{manager:owner},sessions:[lead],scope:()=>hub,connectionGeneration:()=>1,owns:(g,s)=>g===1&&s===hub,target:()=>conversation,repo:()=>repo,canApprove:()=>true,operationBlocked:path=>repo.mutations.blocked().some(r=>r.path===path),observeEvents:()=>()=>{}};
   const feed=new AssistantFeedModel();await feed.open(model,row);
+  if(mismatch==='manager-omitted'){
+   assert.equal(await feed.retryReceipt(card.id,todoId,action),true,'the server Todo acknowledgment may omit manager');
+   assert.equal(feed.error,'');assert.equal(posts,1);assert.deepEqual(repo.mutations.blocked(),[]);feed.close();continue;
+  }
   assert.equal(await feed.retryReceipt(card.id,todoId,action),false);assert.equal(feed.error,'result_unknown',action+'/'+mismatch);
   assert.equal(posts,1);assert.ok(feedReads>=3&&todoReads>=3,'both authoritative reads follow the uncertain POST');
   const record=repo.mutations.blocked()[0];assert.equal(record.state,'unknown');assert.equal(record.requiresReceipt,false);

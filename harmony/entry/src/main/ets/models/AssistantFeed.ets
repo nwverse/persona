@@ -943,7 +943,7 @@ export class AssistantFeedModel {
     const acknowledged = (response: Record<string, Object>): boolean => {
       const todo = Wire.object(response, 'todo');
       return Wire.text(todo, 'id') === todoId && Wire.text(todo, 'origin') === conversation &&
-        Wire.text(todo, 'manager', owner) === owner;
+        (!Wire.has(todo, 'manager') || typeof todo['manager'] === 'string' && todo['manager'] === owner);
     };
     try {
       if (!admit()) return false;
