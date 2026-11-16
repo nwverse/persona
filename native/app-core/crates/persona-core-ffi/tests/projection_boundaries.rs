@@ -1,4 +1,4 @@
-//! Replays the answer, stream-chunk, turn and task-index corpora through the exported C ABI, including ownership of
+//! Replays the answer, stream-chunk, turn, task-index and viewed-image corpora through the exported C ABI, including
 //! each returned buffer. The independently compiled C11 client (`tests/c_abi_smoke.c`) replays the same corpus from
 //! outside Rust; these tests pin the same contract for a Rust caller of the ABI, not for Swift or a device.
 
@@ -10,6 +10,7 @@ use std::slice;
 use persona_core::{
     PersonaCoreBytes, persona_core_bytes_free, persona_core_display_answer, persona_core_project_answer,
     persona_core_project_stream_chunks, persona_core_project_task_index, persona_core_project_turns,
+    persona_core_project_viewed_images,
 };
 use serde_json::Value;
 
