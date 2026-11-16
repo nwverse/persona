@@ -16,7 +16,7 @@ class StreamRepairBindingFixtureTest {
     private fun replay(text: String): JsonObject {
         val input = buildJsonObject { put("text", text) }.toString()
         val output = NativeBridge.projectStreamRepair(input)
-        assertTrue("JNI returned no fence-repair projection", output.isNotEmpty())
+        assertTrue("JNI returned no StreamRepair projection", output.isNotEmpty())
         return Json.parseToJsonElement(output) as JsonObject
     }
 
@@ -265,6 +265,7 @@ class StreamRepairBindingFixtureTest {
             "其中 ${'$'}a *b" to "其中 ${'$'}a *b", // unmatched formula holds its later markers
             "**后\n文 *斜" to "**后\n文 *斜*", // an opener on a previous line is not synthesized
             "<https://example.com/a\n*b" to "<https://example.com/a\n*b*", // autolink skipping cannot cross a newline
+            "见图 ![架构 *说明" to "见图 架构 *说明*", // scalar offsets stay intact when cutting a non-ASCII image
         )
         for ((input, repaired) in cases) {
             assertEquals("Apple inline boundary: ${input.replace("\n", "\\n")}", expected(repaired, "text"), replay(input))
@@ -276,6 +277,21 @@ class StreamRepairBindingFixtureTest {
             assertEquals("StreamRepair inline negative", wrong, actual)
         }
         println("JNI StreamRepair inline boundaries: ${cases.size} complete expectations plus wrong-object rejection")
+    }
+
+    @Test fun displayMathIsIsolatedButItsEndStateRemainsUnimplemented() {
+        // Scan keeps TeX out of inline repair. This bounded projection does not yet expose Apple's `.math` end.
+        for (input in listOf(
+            "${'$'}${'$'}\nx^2",
+            "${'$'}${'$'}\nx^2\n${'$'}${'$'}",
+            "${'$'}${'$'}\nx^2\n${'$'}${'$'}\n",
+            "\\[\nx",
+            "${'$'}${'$'}E=mc^2${'$'}${'$'}",
+            "质能 ${'$'}E=mc^2${'$'}",
+        )) {
+            assertEquals("display-math projection boundary: ${input.replace("\n", "\\n")}",
+                expected(input, "text"), replay(input))
+        }
     }
 
     @Test fun rejectsMalformedInputAndWrongExpectedObjects() {

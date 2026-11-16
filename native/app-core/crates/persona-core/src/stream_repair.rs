@@ -212,7 +212,7 @@ impl<'a> Scan<'a> {
                 if value == end {
                     math_end = None;
                     block_start = index + 1;
-                    closed_last = (index + 1 == lines.len()).then_some("math");
+                    closed_last = (index + 1 == lines.len()).then_some("math-isolated");
                 }
                 continue;
             }
@@ -488,7 +488,12 @@ fn project_end(text: &str) -> &'static str {
         return "code";
     }
     if let Some(closed) = scan.closed_last {
-        if scan.ends_with_newline { "text" } else { closed }
+        if scan.ends_with_newline || closed == "math-isolated" {
+            // A closed formula stays out of inline repair, but this bounded end projection does not implement `.math`.
+            "text"
+        } else {
+            closed
+        }
     } else if scan.table().is_some() {
         "table"
     } else {
