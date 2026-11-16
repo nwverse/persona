@@ -582,8 +582,8 @@ The schema is `schema/extension/models.schema.json`; the Go SDK has it as `ext.H
 - **No budget and no cap** (the user's decision): there is no daily limit and no fallback model. `usage` is what the call spent, every request of it together (`input_tokens`, `output_tokens`,
   `cache_read_input_tokens`, `cache_creation_input_tokens`, `requests`); the manager logs one line per call with the extension, `label`, model and usage. Keep it in the extension's own report if the user should see it.
 - **A held connection**: when the connection is out of quota or busy (docs/assistant/model-config.md "Upstream rate limits") nothing is sent and the answer is `model_paused` with `{reason, until}`; try again after `until`.
-- **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension: the user sets one up in Settings › Model configuration),
-  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection), `model_refused`, `timeout`, `invalid_output`.
+- **Errors**: `permission_denied` (`{scope: "models"}`), `invalid_params`, `assistant_offline`, `model_unavailable` (nothing callable for this extension, or the selected model is missing / unavailable to this key: the user repairs it in Settings › Model configuration),
+  `model_paused`, `model_failed` (the upstream failed: an error status, a dropped connection, or input over the model's context; the message distinguishes the cause), `model_refused`, `timeout`, `invalid_output`.
 - **A declined input**: when the model declines to answer (the Messages API's `stop_reason: "refusal"`, a Responses API refusal part, a Chat Completions refusal, or a response stopped by a `content_filter`)
   the answer is `model_refused` with `{stop_reason, usage}`; `usage` is what the declined call spent. Sending the same input again gets the same answer: split it into smaller pieces, drop
   a part or report which input was declined. Match the code, never the message, which is for people and may change. Hubs older than this code answer `model_failed`

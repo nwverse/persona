@@ -31,19 +31,20 @@ of the app on its main thread: 55–70 ms each with the `assistant` perf suite's
 app switching on a cue (`FrameProbe.switchPages`, `testTabSwitchAssistantAgentsByCue`) and the test only sleeping; keep
 the tapping test for the tap's own path.
 
-## A value that changes every scroll frame, read where a closure's content is built (#8781)
+## Scroll perf tests: which page did the test actually measure (#8824)
 
-The Agent chat's header folds with the finger: `chrome.collapse` changes on every frame of a drag. `ChromeHeader.body`
-read it and built `ChatRegion(content: full)`; a closure is never equal to the last one, so SwiftUI evaluated the whole
-open header (tabs, chips, glass) again on every frame, half of the long-history scroll test's hitches. Read such a value
-only in a small `ViewModifier` that moves or fades its `content`: the content is passed through, not rebuilt.
+`PerfAgentsTests/testAgentChatScrollLongHistory` opens its chat, after a fresh install, in one of two states: with the
+session list in, the real page of a working agent (title, tabs, status, live work line, Stop), or without it, a generic
+page ("对话", no tabs, nothing live). The first reads about 50 ms/s of hitches, the second about 25, whatever the build.
+Once loaded its chat fits on one screen: the swipes scroll nothing and the header never folds, so the number is what a
+working chat costs sitting still (a SwiftUI animation keeps the display link running), not a long scroll. A fix to the
+header fold (#8793) was merged on an A/B whose "after" runs all happened to open the generic page; it was reverted.
 
-Finding it: Time Profiler cannot name SwiftUI's work by view on a lazy list (about nine samples in ten had no app frame on
-the stack), and the SwiftUI instrument does not record on the simulator ("not supported on the Simulator"). What worked
-was a local diagnostic build with a switch per suspect part, measured with `scripts/app/perf-test.sh` and a fresh install
-before every run: the app's data container otherwise carried state from run to run, and the long-history test came out
-at either ~25 or ~50 ms/s by turns whatever was switched off. A build on the same Mac during a run moves the numbers more
-than most fixes; alternate before and after, and log the load average.
+Before trusting a before/after: take a screenshot during each run (`xcrun simctl io <udid> screenshot`) and check both
+builds measured the same page; sort runs by state before comparing. Also: Time Profiler leaves about nine samples in ten
+of a lazy list's scroll without an app frame, and the SwiftUI instrument does not record on the simulator; a local build
+with a switch per suspect part, measured alternately, attributes the cost instead. Builds or CI on the same Mac during a
+run move the numbers more than most fixes; log the load average with each run.
 
 ## A reversed range traps on the audio tap's thread (#7740)
 
