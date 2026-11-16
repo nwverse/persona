@@ -2429,7 +2429,7 @@ A machine's session list has hundreds of sessions at about 1 KB each, and a push
 
 #### Opt-in parameters (both session collections)
 
-Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `counts` opts into the bounded API. `pane_source`, `roots`, `parent_session_id`, `place`, `space`, `catalog`, `todo`, `waiting` and `exclude_pane_source` also opt in, but are supported only by the runtime collection (see below). Without them, legacy requests and response shapes remain unchanged: runtime `machine_id` filtering still returns the complete list; personal-agent `source`/`provider` filtering still returns the complete list; personal-agent `q` alone still searches messages and returns `items`.
+Any of `limit`, `cursor`, `since`, `summary`, `state`, `project`, `group`, or `counts` opts into the bounded API. `pane_source`, `roots`, `parent_session_id`, `place`, `space`, `catalog`, `todo`, `waiting` and `exclude_pane_source` also opt in, but are supported only by the runtime collection (see below). Without them the legacy request shape remains unchanged: runtime `machine_id` filtering still returns the complete list; personal-agent `source`/`provider` filtering still returns the complete list; personal-agent `q` alone still searches messages and returns `items`. The runtime collection's legacy answer now carries the same bounded rows a `summary` page does (cut text, task arrays only as counts): a whole fleet's list answer was hundreds of KB a pull while every hint reread it, and a row's whole chat detail stays in `GET /api/v1/sessions/{mid}/{sid}/info`.
 
 | Parameter | Contract |
 | --- | --- |
