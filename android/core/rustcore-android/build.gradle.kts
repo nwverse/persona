@@ -87,9 +87,6 @@ tasks.withType<BuildAndroidCore>().configureEach {
     inputs.property("cargoTargetDirectory", cargoTargetDirectory)
     val ndkRoot = "$resolvedSdk/ndk/$ndkVersion"
     val llvm = "$ndkRoot/toolchains/llvm/prebuilt/$ndkHostTag"
-    require(File(llvm).isDirectory) {
-        "NDK $ndkVersion prebuilt host tools are missing: $llvm"
-    }
     inputs.files(fileTree("$ndkRoot/sysroot") { include("**/*") })
         .withPropertyName("ndkSysroot").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.files(fileTree(llvm) {
