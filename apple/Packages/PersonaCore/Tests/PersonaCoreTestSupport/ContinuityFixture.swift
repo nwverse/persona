@@ -66,11 +66,37 @@ public enum ContinuityJSON: Equatable, Sendable {
             }
             return text
         }
+        // Validate every numeric node before Foundation can raise an Objective-C exception for non-finite data.
+        switch self {
+        case .number(let text):
+            guard ExactJSONNumbers.isValid(text) else {
+                throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
+            }
+        case .array(let values):
+            for value in values { try value.validateNumbers() }
+        case .object(let values):
+            for value in values.values { try value.validateNumbers() }
+        default: break
+        }
         // Foundation otherwise rejects fragments with an Objective-C exception rather than a Swift error. Only
         // display_answer's bare JSON string is a C input; other scalar values here are diagnostic renderings.
         let options: JSONSerialization.WritingOptions = [.fragmentsAllowed]
         let data = try JSONSerialization.data(withJSONObject: foundation, options: options)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private func validateNumbers() throws {
+        switch self {
+        case .number(let text):
+            guard ExactJSONNumbers.isValid(text) else {
+                throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
+            }
+        case .array(let values):
+            for value in values { try value.validateNumbers() }
+        case .object(let values):
+            for value in values.values { try value.validateNumbers() }
+        default: break
+        }
     }
 
     private var foundation: Any {

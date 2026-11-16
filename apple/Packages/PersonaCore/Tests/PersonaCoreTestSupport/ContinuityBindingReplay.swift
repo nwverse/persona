@@ -135,6 +135,8 @@ public struct ContinuityBindingReplay: Sendable {
         // OpenChat restores cached items, then a coverage gap starts a catch-up at the watermark. Those cached items
         // stay visible while the gap clears; no first-patch item is silently dropped.
         expected["covered"] = .number("0")
+        expected["item_ids"] = .array(initial["items"]?.array?.map { $0["id"] ?? .null } ?? [])
+        expected["actions"] = .array(requests)
         return .object(expected)
     }
 
