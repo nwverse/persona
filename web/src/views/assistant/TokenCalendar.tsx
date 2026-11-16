@@ -1,4 +1,4 @@
-// The token calendar on the assistant's new-chat page (#9506 on the iPhone, docs/web/web.md "Token calendar"): every
+// The token calendar on the assistant's new-chat page (#9549, the iPhone's #9506; docs/web/web.md): every
 // computer's tokens a day (lib/usage-history.ts), one square a day, a column a week, this week last, today outlined,
 // the theme color in four steps by rank. Its line says today's and the last 30 days' tokens; a clicked day (or the
 // arrow keys on the grid) shows that day's tokens and four kinds. Read when the page opens and when the tab comes back
