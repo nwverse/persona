@@ -81,4 +81,19 @@ internal object NativeBridge {
 
     /** Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed. */
     @JvmStatic external fun projectTurns(input: String): String
+
+    /** Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectStreamChunks(input: String): String
+
+    /** Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectAnswer(input: String): String
+
+    /** Formats a question option's display text and recommendation flag. Pure function, no runtime handle needed. */
+    @JvmStatic external fun displayAnswer(label: String): String
+
+    /** Projects background-task calls, descriptions and notice status sequences from JSON items. Pure function. */
+    @JvmStatic external fun projectTaskIndex(input: String): String
+
+    /** Projects the viewed-image strip for the tool call in a lines input. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectViewedImages(input: String): String
 }

@@ -1166,6 +1166,28 @@
       },
       "extractionState" : "manual"
     },
+    "%@ in total · up to 200 MB per file" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ in total · up to 200 MB per file"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合計 %1$@ · 1ファイルあたり最大200 MB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共 %1$@ · 每个文件最多 200 MB"
+          }
+        }
+      }
+    },
     "%@ Is Offline" : {
       "localizations" : {
         "en" : {
@@ -48268,6 +48290,28 @@
         }
       }
     },
+    "Couldn't read the commits" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the commits"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コミットを読み込めませんでした"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读不到提交"
+          }
+        }
+      }
+    },
     "Couldn't read the content: %@" : {
       "localizations" : {
         "en" : {
@@ -78586,6 +78630,28 @@
       },
       "extractionState" : "manual"
     },
+    "Large uploads can take a few minutes. Keep this open until it's sent." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Large uploads can take a few minutes. Keep this open until it's sent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "大きなファイルのアップロードには数分かかることがあります。送信が終わるまで閉じないでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件较大，上传可能要几分钟。发送完成前请不要关闭。"
+          }
+        }
+      }
+    },
     "LCU isn't installed on this Mac yet" : {
       "localizations" : {
         "en" : {
@@ -94433,6 +94499,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No commits yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No commits yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだコミットがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有提交"
+          }
+        }
+      }
     },
     "No longer on the computer" : {
       "localizations" : {
@@ -134721,29 +134809,6 @@
       },
       "extractionState" : "manual"
     },
-    "Send the queued messages now? [Queue Strip]" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Send the queued messages now?"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "送信待ちのメッセージを今すぐ送りますか？"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "现在就发送排队的消息？"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
     "Send this number to the bot in Lark" : {
       "localizations" : {
         "en" : {
@@ -148040,25 +148105,25 @@
         }
       }
     },
-    "Switches in %@ take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults." : {
+    "Switches in %@ take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switches in %@ take effect right away. For the rest, tap Save at the end of Extension configuration when you're done; the extension restarts after saving. Empty fields use the extension's defaults."
+            "value" : "Switches in %@ take effect right away. For the rest, tap Save when you're done; the extension restarts after saving. Empty fields use the extension's defaults."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 中的开关立即生效。其他字段编辑完成后，点击扩展配置末尾的「保存」。保存后扩展会重启，留空的字段使用默认值。"
+            "value" : "%@ 中的开关立即生效。其他字段编辑完成后点「保存」。保存后扩展会重启，留空的字段使用默认值。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ のスイッチはすぐに反映されます。その他の編集は、拡張機能の設定の末尾にある「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
+            "value" : "%@ のスイッチはすぐに反映されます。その他は編集後に「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
           }
         }
       }
@@ -161089,6 +161154,28 @@
         }
       }
     },
+    "This folder is no longer there" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This folder is no longer there"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このフォルダはもうありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个文件夹已经不在了"
+          }
+        }
+      }
+    },
     "This hub already has this address." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -166444,6 +166531,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This version of the app can't read this computer's answer. Update the app and try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This version of the app can't read this computer's answer. Update the app and try again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このバージョンのアプリではこのコンピュータの応答を読み取れません。アプリをアップデートしてもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个版本的 App 读不懂这台电脑的回答。更新 App 后再试。"
+          }
+        }
+      }
     },
     "This version of the app can't show this step. Update the app and tap Start Over to try again." : {
       "comment" : "A connector's sign-in sheet, at a step this version of the app can't draw (PersonaKit, #5758)",
@@ -182601,25 +182710,25 @@
         }
       }
     },
-    "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults." : {
+    "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "When you're done, tap Save at the end of Extension configuration; the extension restarts after saving. Empty fields use the extension's defaults."
+            "value" : "When you're done, tap Save; the extension restarts after saving. Empty fields use the extension's defaults."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "编辑完成后，点击扩展配置末尾的「保存」。保存后扩展会重启，留空的字段使用默认值。"
+            "value" : "编辑完成后点「保存」。保存后扩展会重启，留空的字段使用默认值。"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "編集後、拡張機能の設定の末尾にある「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
+            "value" : "編集後に「保存」を押してください。保存後に拡張機能が再起動します。空欄には既定値が使われます。"
           }
         }
       }

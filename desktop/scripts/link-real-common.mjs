@@ -58,9 +58,6 @@ export function sanitize(value, run, paths = []) {
   text = redactPathString(text, run, paths)
     .replace(/\b(?:PERSONA_|JARVIS_)?(?:TOKEN|PASSWORD|SECRET|CODE|FP)=\S+/g, match => `${match.slice(0, match.indexOf("=") + 1)}<redacted>`)
     .replace(/([?&](?:token|code|fp|password)=)[^\s&"']*/gi, "$1<redacted>")
-    .replace(/Bearer\s+[\x21-\x7e]+/g, "Bearer <redacted>")
-    .replace(/(?:persona|jarvis):\/\/(?:link|pair)\?[^\s"']*/gi, "<pairing-link>")
-    .replace(/([?&](?:token|code|fp|password)=)[^\s&"']*/gi, "$1<redacted>")
     .replace(/Bearer\s+[\x21-\x7e]+/g, "Bearer <redacted>");
   if (text.length > 128 * 1024) {
     const marker = "\n<evidence truncated after sanitization>";

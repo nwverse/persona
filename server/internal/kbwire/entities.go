@@ -183,4 +183,7 @@ type Entry struct {
 	Updated    time.Time `json:"updated"`
 	Extra      string    `json:"extra,omitempty"`  // projects: short / long · status; chats: dm / group…
 	Source     string    `json:"source,omitempty"` // chats: the source they came from (lark, mail, wechat, github…)
+	// RecordingKind is a recording's kind: meeting, note or day (#8731), so a list can mark notes and all-day
+	// recordings among meetings. Absent on other kinds, and from a hub before it.
+	RecordingKind string `json:"recording_kind,omitempty"`
 }

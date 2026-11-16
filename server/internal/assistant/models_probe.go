@@ -390,21 +390,30 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	}
 	said := gatewayMessage(raw)
 	var head string
-	switch res.StatusCode {
-	case http.StatusUnauthorized:
-		head = pt(l, "status_401")
-	case http.StatusForbidden:
-		head = pt(l, "status_403")
-	case http.StatusNotFound:
-		head = pt(l, "status_404")
-		code = "not_found"
-	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
-		head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
-		code = "wrong_protocol"
-	case http.StatusTooManyRequests:
-		head = pt(l, "status_429")
-	default:
-		head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+	if (res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusNotFound) &&
+		ai.FailureKindFor(res.StatusCode, raw) == ai.FailureModelUnavailable {
+		head = pt(l, "status_model_not_found")
+		code = "model_not_found"
+	} else {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			head = pt(l, "status_401")
+		case http.StatusForbidden:
+			head = pt(l, "status_403")
+		case http.StatusPaymentRequired:
+			head = pt(l, "status_402")
+			code = "quota_exhausted"
+		case http.StatusNotFound:
+			head = pt(l, "status_404")
+			code = "not_found"
+		case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+			head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
+			code = "wrong_protocol"
+		case http.StatusTooManyRequests:
+			head = pt(l, "status_429")
+		default:
+			head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+		}
 	}
 	if credentialRefused(res.StatusCode, raw, t.atAnthropic()) {
 		code = "auth"
@@ -417,8 +426,7 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 
 // atAnthropic: the target is Anthropic's own API (not a relay or another vendor).
 func (t probeTarget) atAnthropic() bool {
-	u, err := url.Parse(strings.TrimSpace(t.base))
-	return err == nil && strings.EqualFold(u.Hostname(), "api.anthropic.com")
+	return proto.AnthropicAPI(t.base)
 }
 
 // regionBlocked: a 403 body is Anthropic's region block, {"type":"error","error":{"type":"forbidden","message":
@@ -452,8 +460,9 @@ func regionOpenVendors(l i18n.Lang) string {
 	return strings.Join(names, pt(l, "list_sep"))
 }
 
-// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":"…"}, {"message"}), or
-// the start of the body.
+// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":{"error":{"message"}}},
+// {"error":{"error":"…"}}, {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most
+// error.error.
 func gatewayMessage(raw []byte) string {
 	var body struct {
 		Error   json.RawMessage `json:"error"`
@@ -461,12 +470,26 @@ func gatewayMessage(raw []byte) string {
 	}
 	if json.Unmarshal(raw, &body) == nil {
 		var e struct {
-			Message string `json:"message"`
+			Message string          `json:"message"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body.Error, &e) == nil {
+			var deeper struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(e.Error, &deeper) == nil && deeper.Message != "" {
+				return deeper.Message
+			}
+			var deeperText string
+			if json.Unmarshal(e.Error, &deeperText) == nil && deeperText != "" {
+				return deeperText
+			}
+			if e.Message != "" {
+				return e.Message
+			}
 		}
 		var s string
 		switch {
-		case json.Unmarshal(body.Error, &e) == nil && e.Message != "":
-			return e.Message
 		case json.Unmarshal(body.Error, &s) == nil && s != "":
 			return s
 		case body.Message != "":
@@ -503,6 +526,9 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
+	if t.api == "chat" && ai.OmitChatEffort(t.base, t.key, t.model, t.via, t.effort) {
+		t.effort = ""
+	}
 	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
 		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
 		out["code"] = "unsupported_effort"
@@ -512,6 +538,7 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 	auto := t.auth == probeAuthAuto
 	var res *http.Response
 	renamedTokens, droppedEffort := false, false
+	// A compatibility attempt changes the rejected request; X-Should-Retry: false only suppresses resending it unchanged.
 	for {
 		body, _ := json.Marshal(payload)
 		res, err = t.send(ctx, http.MethodPost, t.endpoint(path), body)
@@ -520,7 +547,15 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+		// Recognized machine codes win over compatibility wording and keep their original response for failure().
+		if ai.HasRecognizedErrorCode(raw) {
+			res.Body = io.NopCloser(bytes.NewReader(raw))
+			break
+		}
+		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
+		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
+		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+			ai.RememberChatEffortRejection(t.base, t.key, t.model, t.via, offValueRejected)
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
 			t.effort = "" // the answer did not verify the requested effort
@@ -685,6 +720,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		msg, code := t.failure(ctx, res, err)
 		if err == nil && res != nil && res.StatusCode == http.StatusNotFound {
 			msg = pt(i18n.From(ctx), "models_not_found")
+			code = "not_found" // a model-list endpoint is missing, not the model used by a connection test
 		}
 		out := fail(msg)
 		if code != "" {

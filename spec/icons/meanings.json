@@ -694,7 +694,7 @@
       "phosphor": "eye"
     },
     "voiceChannel": {
-      "sf": "waveform.and.mic",
+      "sf": "phone.fill",
       "phosphor": "waveform"
     },
     "voiceConnecting": {

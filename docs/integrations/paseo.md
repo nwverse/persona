@@ -189,7 +189,11 @@ and the engine's note under Settings › Machines asks to update it.
     longer has (a stale row) is refused (`workspace_missing`) and nothing starts; the session does not go to another workspace.
     New Agent itself (#7259; iOS, web and Android) lists the chosen computer's Paseo and Orca workspaces by project, main checkout, then
     worktrees, then folders, so one can be picked instead of typing or browsing a folder; the start sends its id as `workspace_id` with
-    `host` `paseo`. A computer whose Paseo engine is not enabled, or that is offline, lists none.
+    `host` `paseo`. A computer whose Paseo engine is not enabled, or that is offline, lists none. A Paseo workspace picked in a Git
+    repository still offers "In a new worktree" (#8856; iOS as New Worktree…, Android and web as the switch under it): Paseo is asked
+    where its worktree goes (`worktree/status` with `kind` `paseo`) and makes it (`worktree/add`, the same), and the start goes into the
+    workspace Paseo made for it (the `workspace_id` `worktree/add` answers), not the one picked. An Orca workspace's worktrees go through
+    Orca's own New Worktree.
   - **New worktree** (#6295; on the web, the ⋯ of a Paseo Git workspace in By repository and the Agents space menu): Paseo makes the worktree, as a
     workspace of its own (`workspace.create.request`), in its worktrees folder: `<worktrees root>/<project hash>/<name>`, the root being Paseo's
     `worktrees.root` setting or `<Paseo home>/worktrees`. The dialog shows that folder (beside a worktree Paseo already made of the repository, else
@@ -263,7 +267,7 @@ and the engine's note under Settings › Machines asks to update it.
 | Test a launcher (Settings › Models) | ✅ | One real prompt through the provider, with the provider's own login (`caps.check`): a probe agent in a background Paseo workspace for the node's empty check directory, in plan mode where the provider has it, without Persona's tools, never listed. Afterwards the probe is deleted, the workspace archived, and the project Paseo made for that directory removed (one Paseo already had stays) |
 | Models of a launcher | ✅ | Asked from Paseo when a picker opens (`list_provider_models`); refresh has Paseo look again first (`refresh_providers_snapshot`) |
 | Workspaces | ✅ | Paseo's checkouts, worktrees and folders are the computer's workspaces, Agents in them or not; New Agent starts in the one chosen ("Spaces and workspaces" above) |
-| New worktree | ✅ (web; iOS from New Agent's workspace) | Paseo makes it in its worktrees folder, as a workspace of its own (`workspace.create.request`), after node's git checks; a new Agent's own worktree too, removed through Paseo when the Agent is closed and you ask |
+| New worktree | ✅ (web; iOS, Android and web from New Agent's workspace) | Paseo makes it in its worktrees folder, as a workspace of its own (`workspace.create.request`), after node's git checks; a new Agent's own worktree too, removed through Paseo when the Agent is closed and you ask |
 | Rename workspaces and spaces, delete worktrees | ✅ (web) | A workspace's title and a project's name are set in Paseo; Delete worktree, only for one Paseo made, after a preview the user confirms and never while one of its Agents is at work, has Paseo archive it (folder removed, branch kept). Closing a workspace while keeping its folder stays in Paseo's App |
 | Branch to new chat (fork) | ✅ for Claude Code | The node copies the Agent's Claude transcript up to the reply chosen, under a new Claude session id named "分支 · <title>" (#6298). The branch is a session not running; its first message has Paseo take it over (`import_agent`, as in "Take over"), so it goes on in Paseo under that id while the original is untouched. It goes on with the original's provider: the node keeps the launcher with the branch and names it in the takeover (#8130), not whichever provider ran last, maybe another account's. Not while a turn is being written, and not for other providers (Paseo's own `agent.fork_context` only builds a text attachment of the history) |
 | Keystrokes, screen reading, live terminal, phone takeover | ❌ | Paseo has no terminal |
@@ -507,6 +511,15 @@ launcher ran on another account, and a provider added in Persona never applied i
     asked again after a dropped connection takes the Agent Paseo's directory has for the session by then (Paseo imports a session
     once, and refuses the next import of it). Should the bridge leave node meanwhile, the session is kept as not running, as Paseo's
     other Claude conversations are, not as starting. Before, a 25-second limit failed the takeover while Paseo went on, and the message was lost.
+
+- **Rich answers** (#8855): Paseo tells the agents it runs to draw tables, charts, stats, progress, checklists, steps
+  and choices as ```` ```paseo-ui ```` blocks of one JSON object. The hub writes each complete, readable block as a
+  ```` ```persona-view ```` of the same parts on its way out (`server/internal/hub/card_paseo_ui.go`, beside the ring
+  downgrade in `cardCompatItems`), so every app draws it in any chat with no release; the transcript keeps the block.
+  Past the apps' three cards a reply, or before one of the reply's own `persona-view` blocks, a block becomes its
+  plain-text fallback; an unreadable or unclosed one stays code, as Paseo shows it. Buttons are drawn as the choices to
+  reply with: card actions answer only in the assistant chat. While a reply streams, its block shows as code until the
+  finished item arrives.
 
 ## Out of scope and known limitations
 

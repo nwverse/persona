@@ -71,7 +71,8 @@ type Meeting struct {
 
 // MeetingRoom is a room meeting's room conversation.
 type MeetingRoom struct {
-	// Attendance is the role the room attends in: AttendanceListener, AttendanceParticipant, or "" (off).
+	// Attendance is the role the room attends in: AttendanceNotes, AttendanceListener, AttendanceParticipant, or ""
+	// (off).
 	Attendance string `json:"attendance,omitempty"`
 	State      string `json:"state"`
 	Problem    string `json:"problem,omitempty"`
@@ -173,8 +174,16 @@ func (m Meeting) Clone() Meeting {
 // RoomMeeting: an upload of r carried room once: its room conversation attends it, never another session.
 func (r Recording) RoomMeeting() bool { return r.Conv != nil && r.Conv.Room != nil }
 
-// Attending: r is attended now (its role is not off).
+// Attending: r is attended now (its role is not off): the phone sends its live sentences and a room meeting's room is
+// fed them, notes included.
 func (r Recording) Attending() bool { return r.AttendanceRole() != AttendanceOff }
+
+// Answering: Persona answers in r's meeting now (listener or participant): not while it is off, nor while its room only
+// takes notes (#8851), when …/ask answers not_attending.
+func (r Recording) Answering() bool {
+	role := r.AttendanceRole()
+	return role == AttendanceListener || role == AttendanceParticipant
+}
 
 // IsMeeting: r is a meeting as #2981 counts them: uploaded as one, or its minutes asked for.
 func (r Recording) IsMeeting() bool { return r.Kind == RecordingMeeting || r.MinutesAsked }
@@ -403,9 +412,9 @@ func (u *RecordingUpload) SetRoom(role string) { u.room = &roomUpload{Attendance
 // HasRoom: the upload carries room.
 func (u *RecordingUpload) HasRoom() bool { return u.room != nil }
 
-// roomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance): a value
-// that is not one of the three is off with AttendanceUnknownRole, a role on a recording that is not a meeting off with
-// AttendanceNotMeeting. The upload is cleaned (its Kind set).
+// roomRole is the role an upload's room asks for, normalized as #2981's attendance is (normalizeAttendance), with
+// notes besides (#8851): a value that is not one of the four is off with AttendanceUnknownRole, a role on a recording
+// that is not a meeting off with AttendanceNotMeeting. The upload is cleaned (its Kind set).
 func (u *RecordingUpload) roomRole() (role, problem string) {
 	role = strings.ToLower(strings.TrimSpace(u.room.Attendance))
 	switch {
@@ -413,7 +422,7 @@ func (u *RecordingUpload) roomRole() (role, problem string) {
 		return "", AttendanceUnknownRole
 	case role == "" || role == AttendanceOff:
 		return "", ""
-	case role != AttendanceListener && role != AttendanceParticipant:
+	case role != AttendanceNotes && role != AttendanceListener && role != AttendanceParticipant:
 		return "", AttendanceUnknownRole
 	case u.Kind != RecordingMeeting:
 		return "", AttendanceNotMeeting
