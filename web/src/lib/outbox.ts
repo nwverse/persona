@@ -38,6 +38,9 @@ export interface OutboxEntry {
   /** sent: the hub has it (or it started the conversation); the bubble waits for the transcript. */
   state: "sending" | "sent" | "failed";
   error?: string;
+  /** The code its failed send was refused with (dialog_open: a dialog had the terminal, #7343). Kept across a reload
+   *  (keepOutgoing); cleared once it is sent, retried or settled by a Check. */
+  code?: string;
   /** The computer's input box holds text (input_draft): what "Clear and send" clears, when it can. */
   clearable?: string;
   /** The hub keeps this id's definite answer, so an ordinary Retry is another operation. */
@@ -133,12 +136,36 @@ export function placeFailed(lines: ChatLine[], list: OutboxEntry[]): { before: M
   return { before, rest };
 }
 
+/** An uncertain send whose computer said where it is (a Claude session outside Persona's terminals, through its peer
+ *  inbox): its own words, not only "not sure it arrived", so the owner knows what to do (approve it on the computer). */
+const IN_DOUBT_REASONS: Record<string, string> = {
+  peer_held: "lib-outbox.held_on_computer", // a bypass permissions session holds it for approval at the computer
+  peer_unconfirmed: "lib-outbox.peer_unconfirmed", // handed over, not taken: held there, or dropped as a repeat
+};
+
+/** The code's own words for an uncertain send, when it has some. */
+function inDoubtReason(code: unknown): string | undefined {
+  const key = typeof code === "string" ? IN_DOUBT_REASONS[code] : undefined;
+  return key ? t(key) : undefined;
+}
+
 /** Why it didn't go, in words. */
 export function failureText(e: unknown): string {
   if (e instanceof ApiError && e.code === "input_draft") return t("lib-outbox.input_draft");
   if (e instanceof ApiError && e.code === "dialog_open") return t("lib-outbox.dialog_open");
-  if (e instanceof ApiError && e.body.delivered === "unknown") return t("lib-outbox.delivery_unknown");
+  if (e instanceof ApiError && e.body.delivered === "unknown") return inDoubtReason(e.code) ?? t("lib-outbox.delivery_unknown");
   return errorText(e);
+}
+
+/** What a kept entry's bubble says: an uncertain one in the page's current language from its code (one kept from
+ *  before a reload, or from a page that only had the generic words), else the words it failed with. */
+export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt">): string {
+  return (e.inDoubt ? inDoubtReason(e.code) : undefined) ?? e.error ?? "";
+}
+
+/** Held for approval on the computer (peer_held): not a failure, the owner's step there is what is left. */
+export function heldOnComputer(e: Pick<OutboxEntry, "code" | "inDoubt">): boolean {
+  return Boolean(e.inDoubt) && e.code === "peer_held";
 }
 
 // ── the store's side ────────────────────────────────────
@@ -187,13 +214,14 @@ export function settleOutbox(mid: string, sid: string, users: Seen[]) {
 }
 
 /** A failed entry's fields for the error its send ended with. */
-function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "clearable" | "newId" | "inDoubt"> {
+function failedWith(err: unknown): Pick<OutboxEntry, "state" | "error" | "code" | "clearable" | "newId" | "inDoubt"> {
   const inDoubt = err instanceof ApiError && err.body.delivered === "unknown";
   return {
     // the hub stopped waiting (delivered "unknown"): it may have gone in, and its copy in the transcript settles it (settle)
     inDoubt,
     state: "failed",
     error: failureText(err),
+    code: err instanceof ApiError ? err.code : undefined,
     clearable: err instanceof ApiError && err.code === "input_draft" && typeof err.body.clearable === "string" ? err.body.clearable : undefined,
     // A definite answer stays on this id, so its ordinary Retry is another operation. An uncertain send has no Retry:
     // Check queries the original operation instead (a network gap with no answer still retries with the same id).
@@ -232,14 +260,14 @@ export function inSendOrder<T>(key: string, post: () => Promise<T>): Promise<T> 
 
 const KEPT_PREFIX = "outbox-msg:";
 const keptKey = (key: string, id: string) => `${KEPT_PREFIX}${key}/${id}`;
-type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "state" | "wordsOnly" | "acceptedAt" | "clearable">>;
+type Outgoing = Pick<OutboxEntry, "id" | "text" | "images" | "at" | "launcher" | "model"> & Partial<Pick<OutboxEntry, "newId" | "inDoubt" | "error" | "code" | "state" | "wordsOnly" | "acceptedAt" | "clearable">>;
 
 /** Keeps one message's words until its transcript copy arrives (pictures are not kept: they would fill the
  *  storage). Storage can be full or refused; the message then lasts only as long as the page. */
 export function keepOutgoing(key: string, e: Outgoing) {
   if (!e.text.trim()) return;
   try {
-    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
+    storeValue(keptKey(key, e.id), JSON.stringify({ id: e.id, text: e.text, at: e.at, launcher: e.launcher, model: e.model, newId: e.newId, inDoubt: e.inDoubt, error: e.error, code: e.code, state: e.state, acceptedAt: e.acceptedAt, wordsOnly: e.wordsOnly, clearable: e.clearable, images: e.images.length }));
   } catch {
     // only this page's copy then
   }
@@ -252,12 +280,12 @@ export function acceptOutgoing(key: string, id: string, acceptedAt = Date.now())
   // too; the original component's setPending no longer reaches it. An already settled entry stays absent.
   const entries = list(key);
   if (entries.some((e) => e.id === id && e.state !== "sent")) {
-    setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
+    setOutbox(key, entries.map((e) => e.id === id ? { ...e, state: "sent", acceptedAt, error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined } : e));
   }
   try {
     const saved = storedValue(keptKey(key, id));
     if (saved === null) return;
-    storeValue(keptKey(key, id), JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, newId: undefined, inDoubt: undefined }));
+    storeValue(keptKey(key, id), JSON.stringify({ ...JSON.parse(saved), state: "sent", acceptedAt, error: undefined, code: undefined, newId: undefined, inDoubt: undefined }));
   } catch {
     // storage unavailable: keep only the current page's bubble
   }
@@ -311,7 +339,7 @@ export function restoreOutbox(mid: string, sid: string, inFlight: string[] = [])
     return true;
   });
   if (!back.length) return;
-  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
+  const entries = back.map(({ lostImages, ...k }): OutboxEntry => ({ ...k, images: [], state: k.state === "sent" ? "sent" : "failed", code: k.state === "sent" ? undefined : k.code, restored: true, error: k.state === "sent" ? undefined : lostImages ? t("lib-outbox.not_confirmed_images") : k.error ?? t("lib-outbox.not_confirmed") }));
   setOutbox(key, [...list(key), ...entries]);
 }
 
@@ -320,11 +348,33 @@ export function resetRestoredForTests() {
   restored.clear();
 }
 
+/** How the node says your own message went into a Claude outside Persona's terminals (session.send's answer). */
+export type DeliveryReply = { delivered_as?: string; relay_reason?: string };
+
+/**
+ * What to tell you when your own message to a Claude with Persona's plugin went through its message inbox instead of
+ * as your input (docs/integrations/claude-integration.md "Owner input through the Persona plugin"): the Agent may not
+ * take it as your approval. Nothing when it went in as your input, or when the session has no plugin (it always used
+ * the inbox there, and its row says so).
+ */
+export function relayNotice(reply?: DeliveryReply): string | undefined {
+  if (reply?.delivered_as !== "relayed") return undefined;
+  switch (reply.relay_reason) {
+    case "busy":
+      return t("lib-outbox.relayed_busy");
+    case "plugin_unavailable":
+    case "plugin_refused":
+    case "plugin_unconfirmed":
+      return t("lib-outbox.relayed_plugin");
+  }
+  return undefined;
+}
+
 async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: string, flight = beginMessageSend(mid, sid, e.id, e.text)): Promise<boolean> {
   const key = outboxKey(mid, sid);
   try {
     // stays sending through a gap (a hub restart); the client_msg_id is the op id
-    const r = await inSendOrder(key, () => apiOp<{ launcher_note?: string; waits_on_computer?: boolean } | undefined>(`${sessionPath(mid, sid)}/messages`, {
+    const r = await inSendOrder(key, () => apiOp<({ launcher_note?: string; waits_on_computer?: boolean } & DeliveryReply) | undefined>(`${sessionPath(mid, sid)}/messages`, {
       ...flight.request,
       method: "POST",
       opId: e.id,
@@ -332,10 +382,12 @@ async function deliver(mid: string, sid: string, e: OutboxEntry, clearDraft?: st
     }));
     if (!flight.current()) return true;
     flight.finish("delivered");
-    update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, clearable: undefined });
+    update(key, e.id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined });
     showLauncherNote(`${mid}/${sid}`, r?.launcher_note);
     // An outside-terminal Claude took it behind a question only the computer can answer (#5890).
     if (r?.waits_on_computer) toast(t("lib-outbox.waits_on_computer"), "info");
+    const relayed = relayNotice(r);
+    if (relayed) toast(relayed, "info");
     return true;
   } catch (err) {
     if (!flight.current()) return false;
@@ -401,19 +453,21 @@ function messageOperation(op: ClientOperation, mid: string, sid: string, id: str
 }
 
 /** The original HTTP reason on a definite receipt, without putting the operation's internals in the bubble. */
-function operationFailure(op: ClientOperation): string {
+function operationFailure(op: ClientOperation): Pick<OutboxEntry, "error" | "code"> {
   const saved = op.result;
   if (saved?.body && typeof saved.status === "number") {
     try {
       const bytes = Uint8Array.from(atob(saved.body), (c) => c.charCodeAt(0));
       const body = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const message = typeof body.error === "string" && body.error ? body.error : `HTTP ${saved.status}`;
-      return failureText(new ApiError(saved.status, message, body));
+      const err = new ApiError(saved.status, message, body);
+      // the receipt's code too: a dialog_open refusal found by a Check lights the terminal button as a live one does
+      return { error: failureText(err), code: err.code };
     } catch {
       // A receipt without readable original JSON still has its authoritative state below.
     }
   }
-  return t("lib-outbox.delivery_failed");
+  return { error: t("lib-outbox.delivery_failed"), code: undefined };
 }
 
 /** Read-only reconciliation of an uncertain send: query its original operation, then let the open transcript's ordinary
@@ -452,13 +506,13 @@ export function checkOutbox(mid: string, sid: string, id: string): Promise<Outbo
     if (op.state === "done") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { state: "sent", acceptedAt: Date.now(), error: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
+      update(key, id, { state: "sent", acceptedAt: Date.now(), error: undefined, code: undefined, clearable: undefined, newId: undefined, inDoubt: undefined });
       return "applied";
     }
     if (op.state === "failed") {
       reread();
       if (!current()) return "stale";
-      update(key, id, { inDoubt: false, newId: true, error: operationFailure(op) });
+      update(key, id, { inDoubt: false, newId: true, ...operationFailure(op) });
       return "not_applied";
     }
     reread(); // pending and unknown stay uncertain: never a new message id, never an ordinary Retry.
@@ -489,7 +543,7 @@ export function retryOutboxEntry(mid: string, sid: string, id: string, clearDraf
   if (e.inDoubt) return { id, sent: checkOutbox(mid, sid, id).then((result) => result === "applied") };
   // A gap the hub never answered is retried with the same id (the hub does it at most once). A definite answer stays
   // on the old receipt, so this ordinary Retry is a new operation.
-  const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, acceptedAt: undefined, at: Date.now() };
+  const next: OutboxEntry = { ...e, id: e.newId ? uuid() : e.id, newId: false, state: "sending", error: undefined, code: undefined, acceptedAt: undefined, at: Date.now() };
   const flight = beginMessageSend(mid, sid, next.id, next.text);
   noteWritten(next.id, next.at);
   write(key, list(key).map((x) => (x.id === id ? next : x)));

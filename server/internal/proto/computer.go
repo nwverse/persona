@@ -28,6 +28,9 @@ type Computer struct {
 	Displays []Display `json:"displays,omitempty"`
 	// NoAutoLock: "Don't auto-lock while the extension is on" is on for this Mac (the hub's, from the plugin's settings).
 	NoAutoLock bool `json:"no_auto_lock,omitempty"`
+	// ScreenX264: x264 is on for this Mac's live screen (the hub's, from the plugin's screen_x264; #8859): screen.dial
+	// asks for it, and the helper uses the user's ffmpeg on a direct LAN route. ScreenVideo.X264 says whether there is one.
+	ScreenX264 bool `json:"screen_x264,omitempty"`
 	// Backend is which driver this status is for: "cua" (Cua Driver) or "lcu" (amontlabs/lcu). Empty from a hub that
 	// only knows Cua Driver.
 	Backend string `json:"backend,omitempty"`
@@ -77,6 +80,10 @@ type ScreenVideo struct {
 	// signed in to the live screen without it), so Persona Screen is in System Settings' Screen & System Audio
 	// Recording list. While Permission is missing and Asked is false, macOS's alert is about to show on the Mac.
 	Asked bool `json:"asked,omitempty"`
+	// X264: the ffmpeg with libx264 the user installed on this Mac, as the node found and tested it ("ffmpeg 9.0.2"),
+	// so x264 can be turned on for this Mac (docs/extensions/computer-use.md "x264 on a direct LAN (#8859)").
+	// Absent: none found, or not tested yet.
+	X264 string `json:"x264,omitempty"`
 }
 
 // Browser is a Mac's ego lite, the agent browser the assistant may drive (the built-in plugin ego,
