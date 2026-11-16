@@ -400,9 +400,16 @@ func TestLiveJobPause(t *testing.T) {
 	m.until(extwire.TFReady)
 	m.audio(volctest.PCM(line(1, 1.0, 0.6)))
 	m.until(extwire.TFSentence)
-	time.Sleep(3 * liveQuietEnd)
-	if s := fv.Session(0); s == nil || !s.Last {
-		t.Fatal("the session was not finished at the pause")
+	// The quiet end comes liveQuietEnd after the last audio: the session's last packet, well within 10 of them.
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for deadline := time.Now().Add(10 * liveQuietEnd); ; <-tick.C {
+		if s := fv.Session(0); s != nil && s.Last {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the session was not finished at the pause")
+		}
 	}
 	m.audio(volctest.PCM(line(2, 1.0, 0.6)))
 	m.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
