@@ -256,18 +256,28 @@ binary; a missing helper or too-old Node fails the test rather than skipping it.
 replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
 The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
 from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
-`harmony/tests/core-host/projections.test.mjs` (#8937) replays the unchanged 15 answer + 8 display_answer,
-21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
+`harmony/tests/core-host/projections.test.mjs` (#8937) replays the current 15 answer + 9 display_answer,
+21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command; #9233 added
+the ninth recommendation. The answer comparison preserves the fixture's
 conditional next-page, picks and display fields. The receipt retains its description and started call with empty
 notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
 The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
 `coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
 label, while the other three take JSON documents.
+`harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
+all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
+turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
+same generated ArkTS codec and existing registry dispatch/flush/drain commands replay four operation cases at all 10
+checkpoints, with exact item IDs and 13 complete turn objects; an existing burst is also replayed through the
+standalone `replace` branch. Exact manifests, malformed/wrong-shaped inputs and deliberately wrong static and
+checkpoint expectations are checked. The helper supplies a fold range only after the real runtime requests it. No
+turn fixture, overlay or turn-grouping semantics changes.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
 mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
-a loaded NAPI module, NAPI argument conversion or callbacks, a HAP/HDC run or a physical device. The production
-HarmonyOS `coreProjectSort` consumer is a separate merged adapter (#9066), exercised on the host by
-`agent-sort-adapter.test.mjs`; the other projections have no production consumer.
+a loaded NAPI module, NAPI argument conversion or callbacks, a HAP/HDC run or a physical device. In particular,
+turn helper evidence does not replace #8808's real Linux NAPI addon loader. The production HarmonyOS `coreProjectSort`
+consumer is a separate merged adapter (#9066), exercised on the host by `agent-sort-adapter.test.mjs`; the other
+projections have no production consumer.
 
 ## Host-only boundary diagnostics
 

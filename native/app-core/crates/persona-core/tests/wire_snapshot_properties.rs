@@ -14,8 +14,7 @@
 //!   3. **`with_supervision` purity.** Promoting an item never mutates unrelated keys or string values,
 //!      including keys that *look like* `supervision_user` after an escape (e.g. `"a\"supervision_user"`).
 //!
-//! Tests that depend on a fix tracked in another issue carry an `#[ignore = "…"]` with that issue number, so
-//! they neither merge red nor silently regress once the fix lands.
+//! Both formerly ignored #9224 regression properties run here, so a future regression fails the suite.
 //!
 //! Bounded by construction: every generator below produces a fixed, small set of cases (no random iteration, no
 //! external fuzz service, no network). Total runtime is well under a second in both debug and release.
@@ -242,10 +241,8 @@ fn with_supervision_does_not_touch_unrelated_keys_or_values() {
     }
 }
 
-/// Escaped-prefix keys (`"a\"supervision_user"`) must never be the target of promotion. This is the #9224
-/// escaped-key regression; gated until that fix lands.
+/// Escaped-prefix keys (`"a\"supervision_user"`) must never be the target of promotion (#9224).
 #[test]
-#[ignore = "#9224: with_supervision patches escaped-prefix keys until the linear lexer lands"]
 fn with_supervision_does_not_patch_escaped_prefix_keys() {
     let json =
         r#"{"id":"a#0","seq":1,"kind":"text","role":"user","a\"supervision_user":false,"supervision_user":false}"#;
@@ -263,10 +260,8 @@ fn with_supervision_does_not_patch_escaped_prefix_keys() {
 // Error positions: fold errors are reported inside the whole item
 // ---------------------------------------------------------------------------
 
-/// The #9224 fold-position regression: a fold parse error used to be reported at a column inside the fold, not
-/// inside the original item. Gated until that fix lands.
+/// Fold parse errors are reported within the whole item, not at fold-relative positions (#9224).
 #[test]
-#[ignore = "#9224: fold parse errors are reported at fold-relative positions until the fix lands"]
 fn fold_errors_carry_whole_item_positions() {
     // A fold with a number that overflows a double. The error column must point past the `1e400` literal in the
     // original item, not at a column inside the re-parsed fold object.
