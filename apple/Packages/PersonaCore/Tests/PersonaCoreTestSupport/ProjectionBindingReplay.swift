@@ -32,9 +32,10 @@ public enum ProjectionBindingReplay {
                 let expected = try ProjectionFixture.require(item["expected"], "answer expected")
                 let actual = try answer(input, recommended: file == "recommended.json")
                 try ProjectionFixture.assertEqual(actual, expected, "answer/\(name)")
-                if file == "questions.json" {
+                if var wrong = actual.object, let allowed = wrong["allowed"]?.bool {
+                    wrong["allowed"] = .bool(!allowed)
                     try ProjectionFixture.assertWrongExpectationIsRejected(
-                        actual, wrong: .object(["allowed": .bool(false), "resolution": .null]), label: "answer/\(name)"
+                        actual, wrong: .object(wrong), label: "answer/\(name)"
                     )
                 }
                 counts[file, default: 0] += 1
