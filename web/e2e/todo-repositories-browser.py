@@ -280,10 +280,10 @@ def run(theme, width, suffix=""):
     # The server accepts a public HTTP alias and a mixed-case repository path; the editor now normalizes both.
     press("Add issue or PR")
     eventually("!!document.querySelector('[role=dialog] input[type=url]')")
-    type_url("http://github.com/Example/Web/issues/3216")
+    type_url("HTTPS://github.com/Example/Web/issues/3216")
     press("Add issue or PR")
     eventually("document.querySelector('[role=dialog]').innerText.includes('#3216')")
-    check(True, f"{where}: a public HTTP alias and mixed-case repository path are accepted")
+    check(True, f"{where}: an uppercase scheme, public alias and mixed-case repository path are accepted")
     shot(f"dialog-alias-{width}-{theme}{suffix}")
     js("window.repoFixture.failNextSave = {code: 'task_repositories_revision_conflict', error: 'changed'}; true")
     press("Save")

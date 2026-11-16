@@ -143,11 +143,34 @@ export function validRequestedRef(ref?: RequestedRef | null): boolean {
   return value.split("/").every((part) => part !== "" && !part.startsWith(".") && !part.endsWith(".lock"));
 }
 
-/** The whole creation/edit draft: unique repository ids, valid aliases (case-insensitive) and source refs, bounded links. */
-export function validRepositoryDraft(rows: TaskRepositoryInput[]): boolean {
+/** A normalized link identity inside its repository: public aliases/case and structured kind+number meet here. */
+export function repositoryLinkKey(identity: RepositoryIdentity, link: RepositoryLinkInput | TaskRepositoryLink): string | undefined {
+  const view = repositoryLinkView(identity, link);
+  return view ? `${identity.provider}|${identity.instance_url}|${identity.path}|${view.kind}|${view.number}` : undefined;
+}
+
+/** True when two links would normalize to the same repository, kind and number (the server's duplicate_link). */
+export function repositoryDuplicateLink(rows: TaskRepositoryInput[], identities?: ReadonlyMap<string, RepositoryIdentity>): boolean {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const identity = identities?.get(row.repo_id);
+    for (const link of row.links ?? []) {
+      const key = identity ? repositoryLinkKey(identity, link)
+        : "kind" in link ? `${row.repo_id}|${link.kind}|${link.number}` : undefined;
+      if (key && seen.has(key)) return true;
+      if (key) seen.add(key);
+    }
+  }
+  return false;
+}
+
+/** The whole creation/edit draft: unique ids/aliases, valid refs, bounded links and no normalized duplicate link. */
+export function validRepositoryDraft(rows: TaskRepositoryInput[], identities?: ReadonlyMap<string, RepositoryIdentity>): boolean {
   if (!Array.isArray(rows) || rows.length > 20) return false;
   const ids = new Set<string>();
   const aliases = new Set<string>();
+  const repositories = new Set<string>();
+  const links = new Set<string>();
   return rows.every((row) => {
     if (!row || typeof row.repo_id !== "string" || !row.repo_id || row.repo_id.length > 80 || ids.has(row.repo_id)) return false;
     ids.add(row.repo_id);
@@ -159,10 +182,27 @@ export function validRepositoryDraft(rows: TaskRepositoryInput[]): boolean {
       aliases.add(key);
     }
     if (!validRequestedRef(row.requested_ref)) return false;
-    const links = row.links ?? [];
-    if (!Array.isArray(links) || links.length > 50) return false;
-    return links.every((link) => link && (("url" in link && typeof link.url === "string" && !!link.url.trim() && link.url.trim().length <= 2048)
-      || (link.kind === "issue" || link.kind === "pull_request") && typeof link.number === "string" && /^[1-9][0-9]{0,19}$/.test(link.number)));
+    const identity = identities?.get(row.repo_id);
+    // An identity-aware draft must resolve every repository; a raw-shape-only draft cannot prove duplicates.
+    if (identities && !identity) return false;
+    if (identity) {
+      const key = `${identity.provider}|${identity.instance_url}|${identity.path}`;
+      if (repositories.has(key)) return false;
+      repositories.add(key);
+    }
+    const rowLinks = row.links ?? [];
+    if (!Array.isArray(rowLinks) || rowLinks.length > 50) return false;
+    return rowLinks.every((link) => {
+      if (!link || !(("url" in link && typeof link.url === "string" && !!link.url.trim() && link.url.trim().length <= 2048)
+        || (link.kind === "issue" || link.kind === "pull_request") && typeof link.number === "string" && /^[1-9][0-9]{0,19}$/.test(link.number))) return false;
+      const key = identity ? repositoryLinkKey(identity, link) : "kind" in link ? `${row.repo_id}|${link.kind}|${link.number}` : undefined;
+      if (identity && !key) return false;
+      if (key) {
+        if (links.has(key)) return false;
+        links.add(key);
+      }
+      return true;
+    });
   });
 }
 export function validRepositorySet(set: TaskRepositorySet, manager: string, todoId: string): boolean {
@@ -214,10 +254,10 @@ export function cleanRepositoryDraft(rows: TaskRepositoryInput[]): TaskRepositor
 }
 
 /** Explicit association creation stays outside the ordinary Todo client's startup path. */
-export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings): Promise<Todo> {
+export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings, identities: ReadonlyMap<string, RepositoryIdentity>): Promise<Todo> {
   const repositories = bindings ? cleanRepositoryDraft(bindings.repositories) : [];
   // The form checks this too; the submit guard keeps an invalid optional draft from ever becoming a POST.
-  if (!bindings || !revision(bindings.catalog_revision) || !validRepositoryDraft(repositories)) throw new Error("Invalid repository association draft");
+  if (!bindings || !revision(bindings.catalog_revision) || !validRepositoryDraft(repositories, identities)) throw new Error("Invalid repository association draft");
   const result = await api<{ todo: Todo }>("/todos", {
     ...repositoryRequestOptions(context), method: "POST",
     json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories } },

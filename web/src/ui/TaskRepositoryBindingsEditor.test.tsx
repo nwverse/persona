@@ -503,7 +503,7 @@ it("keeps an empty alias, default ref and a controlled creation draft without re
 
 it("creates the Todo and association draft in one request, preserving old defaults", async () => {
   const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
-  const pending = createTodoWithRepositories(context, " New work ", " Details ", undefined, { catalog_revision: 4, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ url: identity.canonical_url + "/pull/7" }, { url: identity.canonical_url + "/pull/8" }, { url: "" }] }] });
+  const pending = createTodoWithRepositories(context, " New work ", " Details ", undefined, { catalog_revision: 4, repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ url: identity.canonical_url + "/pull/7" }, { url: identity.canonical_url + "/pull/8" }, { url: "" }] }] }, new Map([["web", identity]]));
   expect(calls).toHaveLength(1);
   expect(calls[0].path).toBe("/todos");
   const body = JSON.parse(calls[0].init.body as string);

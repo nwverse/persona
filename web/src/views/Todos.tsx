@@ -1,5 +1,5 @@
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
-import { cleanRepositoryDraft, createTodoWithRepositories, validRepositoryDraft, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -2845,13 +2845,17 @@ function NewTodoDialog({
 }) {
   const repositoryContext = useRepositoryRequestContext(manager, owner);
   const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
+  const [repositoryCatalog, setRepositoryCatalog] = useState<RepositoryCatalog>();
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [dueDay, setDueDay] = useState("");
   const [dueTime, setDueTime] = useState("");
   const [allDay, setAllDay] = useState(true);
-  const bindingsValid = !repositoryBindings || validRepositoryDraft(cleanRepositoryDraft(repositoryBindings.repositories));
+  const repositoryIdentities = useMemo(() => new Map((repositoryCatalog?.repositories ?? []).map((entry) => [entry.id, entry] as const)), [repositoryCatalog]);
+  const cleanBindings = repositoryBindings ? cleanRepositoryDraft(repositoryBindings.repositories) : [];
+  const duplicateLinks = repositoryBindings ? repositoryDuplicateLink(cleanBindings, repositoryIdentities) : false;
+  const bindingsValid = !repositoryBindings || validRepositoryDraft(cleanBindings, repositoryIdentities);
 
   useEffect(() => {
     if (open) {
@@ -2881,7 +2885,7 @@ function NewTodoDialog({
     setBusy(true);
     try {
       const todo = repositoryBindings
-        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings)
+        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings, repositoryIdentities)
         : await createTodo(title, notes, due());
       if (!repositoryContext.isCurrent()) return;
       await refreshTodos();
@@ -2953,8 +2957,8 @@ function NewTodoDialog({
           />
         </div>
 
-        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
-        {!bindingsValid && <p role="alert" className="text-submeta text-red">{t("task-repositories.draft_invalid")}</p>}
+        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} onCatalog={setRepositoryCatalog} />
+        {!bindingsValid && <p role="alert" className="text-submeta text-red">{t(duplicateLinks ? "task-repositories.duplicate_link" : "task-repositories.draft_invalid")}</p>}
 
         <div className="mt-2 flex justify-end gap-2">
           <Button tone="secondary" disabled={busy} onClick={onClose}>

@@ -5,7 +5,7 @@ import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
 import {
   cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView, repositoryRequestContext,
-  saveTaskRepositories, validRepositoryAlias, validRepositoryDraft, validRequestedRef,
+  saveTaskRepositories, validRepositoryAlias, validRepositoryDraft, validRequestedRef, repositoryDuplicateLink,
   type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
   type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
 } from "../lib/task-repositories";
@@ -263,6 +263,12 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [unsupported, setUnsupported] = useState(false);
+  const identities = useMemo(() => {
+    const map = new Map<string, RepositoryIdentity>();
+    for (const entry of catalog?.repositories ?? []) map.set(entry.id, entry);
+    for (const row of saved?.repositories ?? []) map.set(row.repo_id, row.source_snapshot.identity);
+    return map;
+  }, [catalog, saved]);
   const lock = useRef(false);
   const loads = useRef(0);
   const editingNow = useRef(editing);
@@ -386,7 +392,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
   const save = async () => {
     if (lock.current || !saved || !catalog || !context.isCurrent()) return;
     const clean = cleanRepositoryDraft(draft);
-    if (!validRepositoryDraft(clean)) return;
+    if (!validRepositoryDraft(clean, identities)) return;
     lock.current = true;
     const busy = beginBusy();
     setError("");
@@ -399,7 +405,9 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     finally { lock.current = false; endBusy(busy); }
   };
   const repositories = saved?.repositories ?? [];
-  const dirty = !!saved && JSON.stringify(cleanRepositoryDraft(draft)) !== JSON.stringify(repositoryDraft(saved.repositories));
+  const cleanDraft = cleanRepositoryDraft(draft);
+  const duplicateLinks = repositoryDuplicateLink(cleanDraft, identities);
+  const dirty = !!saved && JSON.stringify(cleanDraft) !== JSON.stringify(repositoryDraft(saved.repositories));
   if (unsupported && !legacyPRs.length) return null;
   return <section className="mt-6" data-todo-repositories>
     <Group title={t("task-repositories.section")} right={!unsupported &&
@@ -434,11 +442,11 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
     <Dialog open={editing} onClose={() => { if (!busy) setEditing(false); }} title={t("task-repositories.manage")} width={480}
       footer={<>
         <Button disabled={busy} onClick={() => setEditing(false)}>{t("common.cancel")}</Button>
-        <Button tone="primary" busy={busy} disabled={!catalog || !dirty || !validRepositoryDraft(cleanRepositoryDraft(draft))} onClick={() => void save()}>{t("common.save")}</Button>
+        <Button tone="primary" busy={busy} disabled={!catalog || !dirty || !validRepositoryDraft(cleanDraft, identities)} onClick={() => void save()}>{t("common.save")}</Button>
       </>}>
       <p className="mb-4 text-submeta leading-relaxed text-ink-3">{t("task-repositories.hint")}</p>
       {catalog && <TaskRepositoryBindingsEditor catalog={catalog} value={draft} snapshots={saved?.repositories} pending={busy} onChange={setDraft} />}
-      {!validRepositoryDraft(cleanRepositoryDraft(draft)) && <p role="alert" className="mt-3 text-submeta text-red">{t("task-repositories.save_invalid")}</p>}
+      {!validRepositoryDraft(cleanDraft, identities) && <p role="alert" className="mt-3 text-submeta text-red">{t(duplicateLinks ? "task-repositories.duplicate_link" : "task-repositories.save_invalid")}</p>}
       {busy && !catalog && <Loading />}
       {error && <div className="mt-3 space-y-2">
         <p role="alert" className="text-submeta text-red">{error}</p>
@@ -449,8 +457,9 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
 }
 
 /** Creation remains one POST: the parent sends this optional controlled draft. */
-export function NewTodoRepositoryBindings({ context, value, onChange, pending }: {
+export function NewTodoRepositoryBindings({ context, value, onChange, pending, onCatalog }: {
   context: RepositoryRequestContext; value?: CreateRepositoryBindings; onChange: (value: CreateRepositoryBindings | undefined) => void; pending: boolean;
+  onCatalog?: (catalog: RepositoryCatalog) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [catalog, setCatalog] = useState<RepositoryCatalog>();
@@ -459,8 +468,10 @@ export function NewTodoRepositoryBindings({ context, value, onChange, pending }:
   const load = async () => {
     if (busy || !context.isCurrent()) return;
     setBusy(true); setError("");
-    try { const result = await loadRepositoryCatalog(context); if (context.isCurrent()) setCatalog(result); }
-    catch { if (context.isCurrent()) setError(t("task-repositories.failed")); }
+    try {
+      const result = await loadRepositoryCatalog(context);
+      if (context.isCurrent()) { setCatalog(result); onCatalog?.(result); }
+    } catch { if (context.isCurrent()) setError(t("task-repositories.failed")); }
     finally { if (context.isCurrent()) setBusy(false); }
   };
   const rows = value?.repositories ?? [];

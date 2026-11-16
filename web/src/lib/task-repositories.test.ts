@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
 import fixture from "../../../spec/fixtures/task-repositories/contract.json";
-import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDraft, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, repositoryRequestContext, validRepositoryAlias, validRepositoryDraft, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
+import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDraft, repositoryDuplicateLink, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, repositoryRequestContext, validRepositoryAlias, validRepositoryDraft, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
+import { credentialOwner } from "./api";
 
 it("shares alias, layout and typed-ref fixtures with the manager", () => {
   for (const alias of fixture.aliases.valid) expect(validRepositoryAlias(alias), alias).toBe(true);
@@ -40,6 +41,9 @@ it("reads a pasted issue or PR URL only when it belongs to the saved repository"
 it("accepts the public HTTP aliases and repository case the server accepts", () => {
   expect(repositoryLinkView(github, { url: "http://github.com/example/web/pull/7" })).toMatchObject({ kind: "pull_request", number: "7" });
   expect(repositoryLinkView(github, { url: "http://www.github.com/Example/Web/issues/12" })).toMatchObject({ kind: "issue", number: "12" });
+  expect(repositoryLinkView(github, { url: "HTTPS://github.com/example/web/pull/7" })).toMatchObject({ kind: "pull_request", number: "7" });
+  expect(repositoryLinkView(github, { url: "HtTp://github.com/Example/Web/issues/12" })).toMatchObject({ kind: "issue", number: "12" });
+  expect(repositoryLinkView(github, { url: "SSH://github.com/example/web.git" })).toBeNull();
   // Public instances share one HTTPS identity; a self-hosted instance keeps the scheme it was saved with.
   expect(repositoryLinkView(gitlab, { url: "http://gitlab.example.com/team/api/-/issues/9" })).toBeNull();
   const http = { ...gitlab, instance_url: "http://gitlab.example.com", canonical_url: "http://gitlab.example.com/team/api" };
@@ -122,11 +126,70 @@ it("refuses an invalid repository draft before any creation request", async () =
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   const context = repositoryRequestContext("assistant", "owner", () => true);
+  const identities = new Map([["web", github]]);
   await expect(createTodoWithRepositories(context, "Title", "", undefined, {
     catalog_revision: 1,
     repositories: [{ repo_id: "web", requested_ref: { kind: "branch", value: "" } }],
-  })).rejects.toThrow("Invalid repository association draft");
+  }, identities)).rejects.toThrow("Invalid repository association draft");
   expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
+
+it("rejects a duplicate link by normalized repository, kind and number without losing either title", async () => {
+  const identities = new Map([["web", github]]);
+  const links = [
+    { kind: "issue" as const, number: "7", title: "Structured title" },
+    { url: "http://github.com/Example/Web/issues/7", title: "Alias title" },
+  ];
+  expect(repositoryDuplicateLink([{ repo_id: "web", links }], identities)).toBe(true);
+  expect(validRepositoryDraft([{ repo_id: "web", links }], identities)).toBe(false);
+  // Validation is read-only: both entries and their metadata stay for the user to correct.
+  expect(links).toEqual([
+    { kind: "issue", number: "7", title: "Structured title" },
+    { url: "http://github.com/Example/Web/issues/7", title: "Alias title" },
+  ]);
+  // Same number with another kind or in another repository is legitimate.
+  expect(validRepositoryDraft([{ repo_id: "web", links: [
+    { kind: "issue", number: "7" }, { kind: "pull_request", number: "7" },
+  ] }], identities)).toBe(true);
+  expect(validRepositoryDraft([
+    { repo_id: "web", links: [{ kind: "issue", number: "7" }] },
+    { repo_id: "api", links: [{ kind: "issue", number: "7" }] },
+  ], new Map([["web", github], ["api", gitlab]]))).toBe(true);
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const context = repositoryRequestContext("assistant", "owner", () => true);
+  await expect(createTodoWithRepositories(context, "Title", "", undefined, {
+    catalog_revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links }],
+  }, identities)).rejects.toThrow("Invalid repository association draft");
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
+
+it("creates exactly once after a duplicate is corrected, keeping the chosen title", async () => {
+  const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ todo: { id: "t1", title: "Title" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  vi.stubGlobal("fetch", fetchMock);
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const identities = new Map([["web", github]]);
+  const duplicate = [
+    { kind: "issue" as const, number: "7", title: "Keep this title" },
+    { url: "http://github.com/Example/Web/issues/7", title: "Other title" },
+  ];
+  await expect(createTodoWithRepositories(context, "Title", "", undefined, {
+    catalog_revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: duplicate }],
+  }, identities)).rejects.toThrow("Invalid repository association draft");
+  expect(fetchMock).not.toHaveBeenCalled();
+  // The user removes the alias entry; the surviving structured link keeps its title and sends one atomic POST.
+  const pending = createTodoWithRepositories(context, "Title", "", undefined, {
+    catalog_revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: [duplicate[0]] }],
+  }, identities);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+  expect(body.repository_bindings.repositories[0].links).toEqual([{ kind: "issue", number: "7", title: "Keep this title" }]);
+  await expect(pending).resolves.toMatchObject({ id: "t1" });
   vi.unstubAllGlobals();
 });
 
