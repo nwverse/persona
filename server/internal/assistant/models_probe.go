@@ -390,21 +390,30 @@ func (t probeTarget) failure(ctx context.Context, res *http.Response, err error)
 	}
 	said := gatewayMessage(raw)
 	var head string
-	switch res.StatusCode {
-	case http.StatusUnauthorized:
-		head = pt(l, "status_401")
-	case http.StatusForbidden:
-		head = pt(l, "status_403")
-	case http.StatusNotFound:
-		head = pt(l, "status_404")
-		code = "not_found"
-	case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
-		head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
-		code = "wrong_protocol"
-	case http.StatusTooManyRequests:
-		head = pt(l, "status_429")
-	default:
-		head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+	if (res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusNotFound) &&
+		ai.FailureKindFor(res.StatusCode, raw) == ai.FailureModelUnavailable {
+		head = pt(l, "status_model_not_found")
+		code = "model_not_found"
+	} else {
+		switch res.StatusCode {
+		case http.StatusUnauthorized:
+			head = pt(l, "status_401")
+		case http.StatusForbidden:
+			head = pt(l, "status_403")
+		case http.StatusPaymentRequired:
+			head = pt(l, "status_402")
+			code = "quota_exhausted"
+		case http.StatusNotFound:
+			head = pt(l, "status_404")
+			code = "not_found"
+		case http.StatusMethodNotAllowed, http.StatusUnsupportedMediaType:
+			head = pt(l, "status_protocol", i18n.Args{"status": res.StatusCode})
+			code = "wrong_protocol"
+		case http.StatusTooManyRequests:
+			head = pt(l, "status_429")
+		default:
+			head = pt(l, "status_other", i18n.Args{"status": res.StatusCode})
+		}
 	}
 	if credentialRefused(res.StatusCode, raw, t.atAnthropic()) {
 		code = "auth"
@@ -452,8 +461,9 @@ func regionOpenVendors(l i18n.Lang) string {
 	return strings.Join(names, pt(l, "list_sep"))
 }
 
-// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":"…"}, {"message"}), or
-// the start of the body.
+// gatewayMessage is the error message in a gateway's answer ({"error":{"message"}}, {"error":{"error":{"message"}}},
+// {"error":{"error":"…"}}, {"error":"…"}, {"message"}), or the start of the body. Like the classifier, it reads at most
+// error.error.
 func gatewayMessage(raw []byte) string {
 	var body struct {
 		Error   json.RawMessage `json:"error"`
@@ -461,12 +471,26 @@ func gatewayMessage(raw []byte) string {
 	}
 	if json.Unmarshal(raw, &body) == nil {
 		var e struct {
-			Message string `json:"message"`
+			Message string          `json:"message"`
+			Error   json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(body.Error, &e) == nil {
+			var deeper struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(e.Error, &deeper) == nil && deeper.Message != "" {
+				return deeper.Message
+			}
+			var deeperText string
+			if json.Unmarshal(e.Error, &deeperText) == nil && deeperText != "" {
+				return deeperText
+			}
+			if e.Message != "" {
+				return e.Message
+			}
 		}
 		var s string
 		switch {
-		case json.Unmarshal(body.Error, &e) == nil && e.Message != "":
-			return e.Message
 		case json.Unmarshal(body.Error, &s) == nil && s != "":
 			return s
 		case body.Message != "":
@@ -520,14 +544,15 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
-		if readErr == nil && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+		noRetry := ai.NoRetry(res.Header)
+		if readErr == nil && !noRetry && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
 			t.effort = "" // the answer did not verify the requested effort
 			s.logf("assistant: chat connection test: gateway rejected reasoning_effort; retrying once without it")
 			continue
 		}
-		if readErr == nil && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
+		if readErr == nil && !noRetry && !renamedTokens && payload["max_tokens"] != nil && ai.ChatRequiresCompletionTokens(raw) {
 			renamedTokens = true
 			delete(payload, "max_tokens")
 			payload["max_completion_tokens"] = 256
@@ -685,6 +710,7 @@ func (s *Service) providerDiscover(ctx context.Context, in probeInput) map[strin
 		msg, code := t.failure(ctx, res, err)
 		if err == nil && res != nil && res.StatusCode == http.StatusNotFound {
 			msg = pt(i18n.From(ctx), "models_not_found")
+			code = "not_found" // a model-list endpoint is missing, not the model used by a connection test
 		}
 		out := fail(msg)
 		if code != "" {
