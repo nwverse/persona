@@ -38,6 +38,7 @@ struct ExtensionSurfaceView: View {
                         .font(ExtensionSurfaceTokens.label)
                         .lineLimit(1)
                         .minimumScaleFactor(ExtensionSurfaceTokens.circularLabelMinimumScale)
+                        .dynamicTypeSize(...ExtensionSurfaceTokens.circularLabelLargestTypeSize)
                 }
                 .gaugeStyle(.accessoryCircularCapacity)
                 .accessibilityLabel(Text(verbatim: progress.label))
