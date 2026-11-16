@@ -89,6 +89,12 @@
     <string name="assistant_phone_permissions_pending">Phone permissions pending</string>
     <string name="assistant_search_chats">Search chats</string>
     <string name="assistant_search_partial">Still going through older chats; some may not show yet.</string>
+    <!-- Full-window search on a regular window (#9171), as the open iPhone Duo -->
+    <plurals name="assistant_full_search_chats">
+        <item quantity="one">%1$d chat</item>
+        <item quantity="other">%1$d chats</item>
+    </plurals>
+    <string name="assistant_full_search_no_results">No results for “%1$s”</string>
     <string name="assistant_start_main">Start the main chat</string>
     <string name="assistant_main_chat">Main chat</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->

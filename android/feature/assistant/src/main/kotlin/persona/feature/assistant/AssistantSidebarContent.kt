@@ -45,6 +45,11 @@ fun AssistantSidebarContent(
     onOpenTodo: ((String) -> Unit)? = null,
     onOpenAgent: ((SessionKey) -> Unit)? = null,
     switcher: AssistantSwitcherSlot? = null,
+    /**
+     * A regular window (open foldable / tablet): Search opens over the whole window as the open iPhone Duo (#9171).
+     * Compact windows keep the drawer's inline search.
+     */
+    fullWindowSearch: Boolean = false,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
@@ -58,6 +63,7 @@ fun AssistantSidebarContent(
     val archivedWords = stringResource(R.string.assistant_archived)
     val words = conversationWords()
     var query by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf("") }
+    var fullSearchOpen by rememberSaveable(choice.hubId, choice.shown) { mutableStateOf(false) }
     var ended by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     var archived by remember(management) { mutableStateOf(emptySet<SessionKey>()) }
     // Rename… and Archived (N) (iOS `AssistantSidebar`): titles given here and the archived conversations.
@@ -147,8 +153,33 @@ fun AssistantSidebarContent(
                 onTodos = onTodos, todoCount = todoCount, showTodos = showTodos,
                 settingsCount = settingsCount, settingsDot = settingsDot, settingsBadge = settingsBadge,
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
-                found = foundChats, searchPartial = searchPartial)
+                found = foundChats, searchPartial = searchPartial,
+                fullWindowSearch = fullWindowSearch,
+                onFullSearch = {
+                    fullSearchOpen = FullSearchGate(fullSearchOpen).onSearch(fullWindowSearch).open
+                })
         }
+    }
+    if (fullSearchOpen) {
+        val roster = persona.core.designsystem.LocalManagerRoster.current
+        val assistantName = roster.assistantDisplayName(choice.shown, persona.core.designsystem.LocalPersonaName.current)
+        AssistantFullSearch(
+            chats = knownChats,
+            known = knownChats,
+            searchOn = searchOn,
+            management = management,
+            hubKey = "${choice.hubId.orEmpty()}|${choice.shown}",
+            words = words,
+            names = received.directionNames,
+            backgroundId = received.backgroundSupervisor,
+            mainName = assistantName,
+            mainKey = received.mainSession,
+            onOpen = { key ->
+                fullSearchOpen = FullSearchGate(true).afterPick().open
+                onOpen(key)
+            },
+            onDismiss = { fullSearchOpen = FullSearchGate(true).dismiss().open },
+        )
     }
     ConversationHistoryDialogs(history, received.conversations, operationScope, onOpen = onOpen,
         notice = { feedback?.notice(it, persona.core.designsystem.FeedbackStyle.Success) }, failure = ::failed)
