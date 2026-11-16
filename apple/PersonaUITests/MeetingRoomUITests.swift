@@ -53,8 +53,12 @@ final class MeetingRoomUITests: XCTestCase {
         try shot(app, "alone")
         invite.tap()
         XCTAssertTrue(persona.waitForExistence(timeout: 10), "Persona not back: \(app.debugDescription)")
-        XCTAssertTrue(waitFor(10) { app.descendants(matching: .any).matching(identifier: "meeting-thread-joined").count == 2 },
-                      "no joined row for the invite: \(app.debugDescription)")
+        // Joined again, after the left row (the header's joined row may be on the thread's earlier page by now).
+        let left = element(app, "meeting-thread-left")
+        XCTAssertTrue(waitFor(10) {
+            app.descendants(matching: .any).matching(identifier: "meeting-thread-joined").allElementsBoundByIndex
+                .contains { $0.frame.minY > left.frame.minY }
+        }, "no joined row for the invite: \(app.debugDescription)")
 
         // End asks first; a tap outside the question keeps the meeting going (the dialog shows no Cancel on iOS 26).
         let end = app.buttons["recording-stop"].firstMatch
