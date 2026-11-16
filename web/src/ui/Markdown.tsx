@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, lazy, memo, startTransition, Suspense, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { cloneElement, isValidElement, memo, startTransition, Suspense, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "./remark-gfm-parse";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
@@ -16,7 +16,7 @@ import { Icon } from "./icons";
 import { MermaidBlock } from "./Mermaid";
 import { ExternalImage } from "./ExternalImage";
 import { ReplyPicturesContext } from "./reply-pictures-context";
-import { useReplyImages } from "./reply-images-lazy";
+import { ReplyImagesRun, useReplyImages } from "./reply-images-lazy";
 import { AssistantCard, CARD_LANGUAGES } from "./AssistantCard";
 import { rehypePathLinks, textPaths, writtenText } from "./PathLinks";
 import { usePathLinks } from "../lib/path-presence";
@@ -368,14 +368,6 @@ function Link({ href, children, mid, cwd, line, title: hover }: { href?: string;
 // rehype-katex turns those into formulas before they get here.
 const hasClass = (cls: string | undefined, name: string) => (cls ?? "").split(/\s+/).includes(name);
 
-// A run of a reply's pictures (reply-images-lazy.ts lifts it out of its paragraph), drawn by its own chunk (#9475).
-const ReplyImages = lazy(() => import("./ReplyImages").then((m) => ({ default: m.ReplyImages })));
-const replyImagesComponent = (props: { node?: unknown }) => (
-  <Suspense fallback={null}>
-    <ReplyImages node={props.node as never} />
-  </Suspense>
-);
-
 export const markdownComponents: Components = {
   a: ({ href, children }) => <Link href={href}>{children}</Link>,
   // third-party images stay unloaded until tapped (#8162); the hub's own images render inline
@@ -413,8 +405,8 @@ export const markdownComponents: Components = {
     </td>
   ),
 };
-// react-markdown draws a custom element through its components too; Components' type lists HTML's only.
-(markdownComponents as Record<string, unknown>)["reply-images"] = replyImagesComponent;
+// A run of a reply's pictures (#9475), drawn by its own chunk; Components' type lists HTML's elements only.
+(markdownComponents as Record<string, unknown>)["reply-images"] = ({ node }: { node?: never }) => <Suspense fallback={null}><ReplyImagesRun node={node} /></Suspense>;
 
 // A table cell's words fit on one line in what a long cell keeps (7em less its padding, about 5.5em of text): the cell
 // doesn't wrap and needs no minimum width, so a column of numbers or names is as narrow as they are (audit item 77).
@@ -599,7 +591,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
   // The step that lifts block pictures into runs, once the text names a web picture (#9475).
-  const images = useReplyImages(useMemo(() => /!\[[^\]\n]*\]\(\s*<?https?:\/\//i.test(text), [text]));
+  const images = useReplyImages(useMemo(() => /!\[[^\]\n]*\]\(\s*<?https?:/i.test(text), [text]))?.rehypeReplyImages;
   const picturesContext = useMemo(() => ({ text, ask: Boolean(askImages) }), [text, askImages]);
   const rehypePlugins = useMemo<PluggableList>(
     () => [...(images ? [images] : []), ...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],

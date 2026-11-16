@@ -35,6 +35,8 @@ import { Icon } from "./icons";
 import { NARROW, useMedia } from "./media-query";
 import { ReplyPicturesContext } from "./reply-pictures-context";
 
+export { rehypeReplyImages } from "./reply-images-plugin";
+
 const RADIUS = 10; // the turn's viewed images' tiles (TurnImages.tsx)
 const tileClass = "group relative shrink-0 overflow-hidden bg-field shadow-hairline outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
