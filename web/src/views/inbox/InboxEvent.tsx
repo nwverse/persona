@@ -187,7 +187,8 @@ function AssistantBody({ text }: { text: string }) {
   return (
     <div className="flex flex-col items-start gap-1" data-event-text>
       <div ref={ref} {...fold} className={cx("w-full text-meta leading-relaxed text-ink", folded && BODY_FOLDED)} data-folded={folded || undefined}>
-        <Markdown text={text} small />
+        {/* a reply, read line by line as it was written, as the chat draws one */}
+        <Markdown text={text} small lineBreaks />
       </div>
       {long && (
         <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="rounded-[6px] px-1.5 py-0.5 text-label font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2">
