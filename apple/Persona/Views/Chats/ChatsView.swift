@@ -745,10 +745,15 @@ struct ChatsView: View {
 
     /// The Sidebar layout's root is something the Agents list opened (an Agent's chat, a space…), not the conversation
     /// or a place (#8359).
-    /// The Agents tab's root still belongs to the assistant in front: an Agent's chat on one of its computers.
+    /// The Agents tab's root may stay with the assistant in front: nothing picked, an Agent's chat on one of its computers,
+    /// or one not known yet (asked for at launch, before the session list is in): only a root known to be another
+    /// assistant's goes.
     private func rootIsCurrentAssistants(_ root: SidebarPageRoot) -> Bool {
-        guard let key = root.value?.base as? SessionKey, let session = model.session(key) else { return root.value == nil }
-        return model.scopedMachines(inFront: false).contains { $0.ref == session.machineRef }
+        guard let value = root.value else { return true }
+        guard let key = value.base as? SessionKey else { return false }
+        guard let session = model.session(key) else { return true }
+        let machines = model.scopedMachines(inFront: false)
+        return machines.isEmpty || machines.contains { $0.ref == session.machineRef }
     }
 
     private var agentsRootInFront: Bool {
