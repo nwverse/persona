@@ -26,6 +26,22 @@ import type { RewindRestore } from "../../lib/rewind";
 
 export { TurnUsage };
 
+/** The left edge of what shows `el`: the nearest box that clips it sideways (the chat's scroller), or the window's. */
+function shownLeft(el: HTMLElement): number {
+  for (let box = el.parentElement; box; box = box.parentElement) {
+    const style = getComputedStyle(box);
+    if (style.overflowX !== "visible" || /paint|strict|content/.test(style.contain)) return Math.max(0, box.getBoundingClientRect().left);
+  }
+  return 0;
+}
+
+/** Place the hover bar beside your bubble (0.375rem away) only when it still exists and fits inside the chat. */
+export function placeSideBar(row: HTMLElement, bar: HTMLElement, setBelow: (below: boolean) => void): void {
+  if (!row.isConnected || !bar.isConnected) return;
+  const gap = 0.375 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+  setBelow(!(row.getBoundingClientRect().left - gap - bar.offsetWidth >= shownLeft(row)));
+}
+
 /** "Start a new session" (cindy's words; "Start a new chat" in a Persona conversation, `chat`), on the reply bar and at the
  *  end of a reply's right-click menu, when the session can fork and the reply is a transcript line of its own
  *  (`<uuid>#<n>`; lines without a uuid are `line<seq>`, which the node cannot find). */

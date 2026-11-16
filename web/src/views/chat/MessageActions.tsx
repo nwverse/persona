@@ -40,21 +40,6 @@ const SelectMessageText = lazyDialog(() => replyBar().then((m) => m.SelectMessag
 const MessageMenu = lazyOverlay(() => replyBar().then((m) => m.MessageMenu));
 
 
-/** The left edge of what shows `el`: the nearest box that clips it sideways (the chat's scroller), or the window's. */
-function shownLeft(el: HTMLElement): number {
-  for (let box = el.parentElement; box; box = box.parentElement) {
-    const style = getComputedStyle(box);
-    if (style.overflowX !== "visible" || /paint|strict|content/.test(style.contain)) return Math.max(0, box.getBoundingClientRect().left);
-  }
-  return 0;
-}
-
-/** Whether the hover bar beside your bubble (`side`: to its left, 0.375rem away) fits inside what shows the chat. */
-export function sideBarFits(row: HTMLElement, bar: HTMLElement): boolean {
-  const gap = 0.375 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
-  return row.getBoundingClientRect().left - gap - bar.offsetWidth >= shownLeft(row);
-}
-
 /** The actions of one message; empty when there is nothing to act on. */
 export interface Action extends Pick<MenuItem, "hint" | "disabled" | "danger" | "confirm" | "inline" | "children"> {
   key: string;
@@ -169,8 +154,10 @@ export function MessageActions({
   const placeBar = (row: HTMLElement) => {
     const bar = barRef.current;
     if (!side || !bar) return;
-    const fits = sideBarFits(row, bar);
-    if (fits === below) setBelow(!fits);
+    // Below is safe while the intent-loaded placement code arrives; keep the same focused buttons.
+    setBelow(true);
+    void replyBar().then(({ placeSideBar }) => placeSideBar(row, bar, setBelow),
+      () => {}); // A failed chunk leaves the working controls below; the next intent can try again.
   };
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const opened = useRef(0);

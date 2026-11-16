@@ -11,7 +11,10 @@ const loading = vi.hoisted(() => {
 vi.mock("./ReplyBar", async (original) => {
   loading.started();
   await loading.ready;
-  return original<typeof import("./ReplyBar")>();
+  return {
+    ...await original<typeof import("./ReplyBar")>(),
+    placeSideBar: (_row: HTMLElement, _bar: HTMLElement, place: (below: boolean) => void) => place(false),
+  };
 });
 vi.mock("../../ui/atoms", async (original) => ({
   ...await original<typeof import("../../ui/atoms")>(),
@@ -58,12 +61,19 @@ it("loads message menus and text selection only on intent, preserving the messag
       </ChatActionsContext.Provider>,
     ));
     expect(loading.started).not.toHaveBeenCalled();
+    const copyMessage = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-messageactions.copy_message")}"]`)!;
+    await act(async () => { copyMessage.focus(); });
+    await vi.waitFor(() => expect(loading.started).toHaveBeenCalledTimes(1));
+    expect(host.querySelector("[data-side-bar]")?.getAttribute("data-side-bar")).toBe("below");
+    expect(document.activeElement).toBe(copyMessage);
     await open();
     await vi.waitFor(() => expect(loading.started).toHaveBeenCalledTimes(1));
     expect(host.querySelector("[data-original]")?.textContent).toBe(text);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     loading.release();
     await settle();
+    expect(host.querySelector("[data-side-bar]")?.getAttribute("data-side-bar")).toBe("beside");
+    expect(copyMessage.isConnected).toBe(true);
     await act(async () => item(t("chat-messageactions.fork")).click());
     expect(fork).toHaveBeenCalledExactlyOnceWith("u1#0");
     await open();
