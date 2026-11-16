@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The assistant's own Inbox source (#6430, docs/assistant/inbox.md "Assistant rows"): a row the assistant puts into the
@@ -25,12 +27,17 @@ import (
 // conversation's page as url), so an older app shows a normal row and opens the conversation. One conversation has
 // one row: a post within inboxPostWindow of the row's last one updates it (and opens it again when handled); a later
 // one starts a new row.
+//
+// A post's text is the assistant's Markdown (a briefing with headings and lists). The row keeps it as it was written in
+// body, which the detail draws (#9041); its summary, preview and chain message are the same words without the marks
+// on one line, so a list row or an app that does not know body never shows ** or - .
 const (
 	inboxPostSource = "assistant"
 	inboxPostKind   = "assistant_post"
 	inboxPostWindow = 30 * time.Minute
-	// A post's fields are cut like the Inbox's own: a title and a line for the list, a summary for the detail.
-	inboxPostTitleMax, inboxPostSummaryMax, inboxPostReasonMax = 80, 600, 120
+	// A post's fields are cut like the Inbox's own: a title and a line for the list, a summary for the detail. The body
+	// is the whole text of a long briefing, cut only past a few screens.
+	inboxPostTitleMax, inboxPostSummaryMax, inboxPostReasonMax, inboxPostBodyMax = 80, 600, 120, 6000
 )
 
 // A task's inbox setting: what of its runs goes into the Inbox.
@@ -155,7 +162,7 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 		return inboxPosted{}, err
 	}
 	title := clip(oneLine(strings.TrimSpace(a.Title)), inboxPostTitleMax)
-	summary := clip(oneLine(strings.TrimSpace(a.Summary)), inboxPostSummaryMax)
+	body, summary := inboxPostText(a.Summary)
 	tier := a.Tier
 	if tier == "" {
 		tier = TierFYI
@@ -169,8 +176,10 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 	thread := machine + "/" + session
 	sum := sha1.Sum([]byte(thread + "\n" + now.UTC().Format(time.RFC3339Nano)))
 	thing := connector.InboxThing{Thread: thread, Kind: inboxPostKind, Label: label, Title: title,
-		Preview: clip(summary, 120), Context: title + "\n" + summary, At: now, Last: hex.EncodeToString(sum[:8]), URL: link,
+		Preview: clip(summary, 120), Context: title + "\n" + body, At: now, Last: hex.EncodeToString(sum[:8]), URL: link,
 		Tier: connector.Tier(tier), Why: clip(oneLine(strings.TrimSpace(a.Reason)), inboxPostReasonMax)}
+	// The chain's received entry says the post in plain words, not the context's Markdown lines.
+	said := []InboxChainMessage{{Text: clip(summary, chainMessageText)}}
 
 	b := &s.inbox
 	b.mu.Lock()
@@ -190,16 +199,16 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 		prev := seenOf(it)
 		fillConnectorItem(it, thing)
 		it.DoneAt, it.DoneBy, it.Read = nil, "", false
-		b.noteReceived(it, prev, nil)
+		b.noteReceived(it, prev, said)
 	} else {
 		it = &InboxItem{ID: inboxPostSource + ":" + hex.EncodeToString(sum[:8]), Source: inboxPostSource, Account: inboxPostSource,
 			AccountName: label, StartedAt: now, Count: 1}
 		fillConnectorItem(it, thing)
-		b.noteReceived(it, inboxSeen{}, nil)
+		b.noteReceived(it, inboxSeen{}, said)
 		b.items[it.ID] = it
 		w = newWrite(it)
 	}
-	it.Summary, it.TriagedBy, it.Urgent = summary, "rules", false
+	it.Summary, it.Body, it.TriagedBy, it.Urgent = summary, body, "rules", false
 	b.noteTriaged(it)
 	b.applyPolicyTier(it) // the user's own rule for the source wins over what the post asked
 	b.settle(w)
@@ -210,8 +219,21 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 	return inboxPosted{id: it.ID, updated: updated}, nil
 }
 
+// inboxPostText is a post's text as the row keeps it: body, the Markdown as written (cut past inboxPostBodyMax), and
+// summary, its words without the marks on one line (cut to inboxPostSummaryMax). Text that is all marks keeps them.
+func inboxPostText(text string) (body, summary string) {
+	body = clip(strings.TrimSpace(text), inboxPostBodyMax)
+	summary = oneLine(textfmt.PlainMarkdown(body))
+	if summary == "" {
+		summary = oneLine(body)
+	}
+	return body, clip(summary, inboxPostSummaryMax)
+}
+
 // inboxPostEvery ends a run of a task set to "every": its conversation (machine, session) just finished a turn, and the
-// row says what the run answered. A run that failed or answered nothing puts nothing there (the failure is told as ever).
+// row says what the run answered: its whole last reply, read from the conversation, as written (the session list's
+// last_text is a line cut at 200 characters, kept only when the reply cannot be read). A run that failed or answered
+// nothing puts nothing there (the failure is told as ever).
 func (s *Service) inboxPostEvery(ctx context.Context, machine, session string) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
@@ -232,9 +254,13 @@ func (s *Service) inboxPostEvery(ctx context.Context, machine, session string) {
 	if !ok || sess.Status == proto.StatusWorking || strings.TrimSpace(sess.TurnError) != "" || strings.TrimSpace(sess.LastText) == "" {
 		return
 	}
+	text := sess.LastText
+	if _, answer := s.lastTurn(ctx, machine, session); answer != "" {
+		text = wire.AssistantCardText(answer) // a view block as the words it falls back to, as last_text has it
+	}
 	reason := i18n.T(s.inbox.userLang(), "assistant-inbox_post.every_reason")
 	if _, err := s.postToInbox(ctx, machine, session, inboxPostArgs{Title: task.labelIn(s.inbox.userLang()),
-		Summary: sess.LastText, Tier: TierFYI, Reason: reason}, time.Now()); err != nil {
+		Summary: text, Tier: TierFYI, Reason: reason}, time.Now()); err != nil {
 		s.logf("task %s: Inbox row: %v", task.ID, err)
 	}
 }

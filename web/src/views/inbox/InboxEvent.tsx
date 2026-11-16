@@ -2,12 +2,12 @@
 // manager's current state, or an older hub's handling / suggestion line) and the detail's body — ✦ summary, the suggestion card
 // with its buttons right under it, any recap, then the handling chain folded to its three newest entries, each entry going where its link says.
 // Drawn only for an item that carries this phase's fields (lib/inbox-events.ts `hasEvent`).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, isDone, itemKey, itemPath, itemRoute, markdownBody, markdownInSummary, reloadInbox, replaceItem, suggestionAct, useInbox, withoutMarks, type InboxItem } from "../../lib/inbox";
 import { docChangeLine } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
@@ -22,6 +22,7 @@ import { t } from "../../i18n";
 import { Button, cx, Shimmer, Spinner, Switch, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
+import { Markdown } from "../../ui/Markdown";
 import { StatusMark } from "../../ui/StatusMark";
 import { useFoldScroll } from "../chat/fold-scroll";
 import { useInboxView } from "../../lib/inbox-view-memory";
@@ -144,7 +145,7 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
         )}
         {(done || !item.suggestion) && (item.summary || item.recap) && (
           <section className="flex flex-col gap-2">
-            {item.summary && <EventSummary text={item.summary} />}
+            {item.summary && (markdownBody(item) ? <AssistantBody key={itemKey(item)} text={markdownBody(item)!} /> : <EventSummary text={item.summary} />)}
             {item.recap && (
               <div>
                 <p className="text-submeta font-medium text-ink-3">{t("inbox-inboxevent.recap")}</p>
@@ -161,6 +162,40 @@ export function EventBody({ item, onSource, embedded = false }: { item: InboxIte
   );
   // the line under it outside the fade, which would wash it out
   return embedded ? <div className="flex max-h-[40%] shrink-0 flex-col border-b border-line">{body}</div> : body;
+}
+
+/** Lines an assistant row's text shows folded: a briefing's conclusion and first section. */
+const BODY_LINES = 10;
+/** Folded: ten lines high, scrolling inside, its bottom fading while there is more (fold-scroll), as a long message in the chat. */
+const BODY_FOLDED = "max-h-[10lh] overflow-y-auto";
+
+/** The assistant's own row's text (#9041): the chat's Markdown, folded to BODY_LINES with Expand under it when it runs
+ *  longer, never cut with "…". */
+function AssistantBody({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(() => text.split("\n").length > BODY_LINES);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    // its whole height in lines (a fold's scrollHeight is all of it)
+    const line = parseFloat(getComputedStyle(el).lineHeight) || 22;
+    setLong(el.scrollHeight / line > BODY_LINES + 0.5);
+  }, [text, open]);
+  const folded = long && !open;
+  const fold = useFoldScroll(ref, folded, [text]);
+  return (
+    <div className="flex flex-col items-start gap-1" data-event-text>
+      <div ref={ref} {...fold} className={cx("w-full text-meta leading-relaxed text-ink", folded && BODY_FOLDED)} data-folded={folded || undefined}>
+        <Markdown text={text} small />
+      </div>
+      {long && (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="rounded-[6px] px-1.5 py-0.5 text-label font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2">
+          {open ? t("inbox-inboxevent.entry_collapse") : t("inbox-inboxevent.entry_expand")}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** The active state, its processing conversation, and a way to instruct an open item without a suggestion. */
@@ -581,7 +616,8 @@ function ChainRow({ item, e, tap, onTap, agentState }: { item: InboxItem; e: Cha
           {(e.messages ?? []).map((m, i) => (
             <p key={i} className="min-w-0">
               {m.sender && <span className="font-medium text-ink">{t("inbox-inboxevent.message_sender", { sender: m.sender })}</span>}
-              <span className="whitespace-pre-wrap">{m.text}</span>
+              {/* an older assistant row's message is its Markdown run into one line: said without the marks (#9041) */}
+              <span className="whitespace-pre-wrap">{markdownInSummary(item) ? withoutMarks(m.text) : m.text}</span>
               {m.at && <span className="ml-1.5 text-[11px] text-ink-3 tabular-nums">{chainTime(m.at)}</span>}
             </p>
           ))}

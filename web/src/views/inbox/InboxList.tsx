@@ -1,7 +1,7 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, lineSummary, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
 import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
@@ -725,7 +725,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className="min-w-0 flex-1">
               {it.summary ? (
                 <>
-                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5] break-words", done ? "text-ink-2" : "text-ink")}><Spark />{it.summary}</span>
+                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5] break-words", done ? "text-ink-2" : "text-ink")}><Spark />{lineSummary(it)}</span>
                   {!repeatsSummary(it) && <span className="mt-0.5 block truncate text-[11.5px] text-ink-2">{from}</span>}
                 </>
               ) : (

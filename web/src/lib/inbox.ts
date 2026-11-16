@@ -16,6 +16,7 @@ import type { AgentMutes } from "./agent-groups";
 import { agentName } from "./agent-kind";
 import { connectorOpenTitle } from "./connectors";
 import { contextBody } from "./context-body";
+import { plainMarkdown } from "./plain-markdown";
 import { conversationPage } from "./conversation-page";
 import type { Route } from "./router";
 import { isResumed } from "./reconnect";
@@ -101,6 +102,9 @@ export interface InboxItem {
   updated_at?: string;
   tier?: string;
   summary?: string;
+  /** An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it; `summary` and `preview`
+   *  are the same words without the marks. Older hubs leave it out. */
+  body?: string;
   reason?: string;
   read?: boolean;
   done_at?: string | null;
@@ -316,10 +320,35 @@ export function docTypeName(type?: string): string {
   }
 }
 
+/** A row from before the hub kept an assistant post's Markdown as `body` (#9041): its summary and preview hold that
+ *  Markdown run into one line. */
+export function markdownInSummary(it: InboxItem): boolean {
+  return it.source === "assistant" && !it.body;
+}
+
+/** What the detail draws as Markdown: an assistant row's `body`, or an older row's summary (`markdownInSummary`);
+ *  undefined for any other row, whose summary is the AI's line about it. */
+export function markdownBody(it: InboxItem): string | undefined {
+  if (it.source !== "assistant") return undefined;
+  return (it.body || it.summary || "").trim() || undefined;
+}
+
+/** Markdown run into one line, as words: its marks go (`plainMarkdown`), and so do the list markers the lost line
+ *  breaks left between words. Only for an older assistant row's text: a plain line's own dashes are not touched. */
+export function withoutMarks(text: string): string {
+  return plainMarkdown(text).split(/\s+/).filter((w) => w && w !== "-" && w !== "*" && w !== "+").join(" ");
+}
+
+/** The summary as a line or two of the list draws it: an older assistant row's without its marks. */
+export function lineSummary(it: InboxItem): string | undefined {
+  return markdownInSummary(it) && it.summary ? withoutMarks(it.summary) : it.summary;
+}
+
 /** Who wrote what: the row's line under the summary (or its second line before triage); `preview` is the hub's
  * translation of a foreign mail's when it is shown. */
 export function fromLine(it: InboxItem, preview?: string): string {
-  if (it.source === "assistant") return it.preview; // the assistant's own row: the tag already says who, so no "Assistant:" prefix
+  // the assistant's own row: the tag already says who, so no "Assistant:" prefix; an older one's without its marks
+  if (it.source === "assistant") return markdownInSummary(it) ? withoutMarks(it.preview) : it.preview;
   if (it.doc) return `${docTypeName(it.doc.type)} · ${it.preview}`; // the preview names who: "<name> mentioned you"
   if (it.moment) return t("lib-inbox.sender_line", { sender: it.sender ?? "", text: it.preview });
   if (it.connector) {
