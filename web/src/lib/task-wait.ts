@@ -6,7 +6,7 @@ export function waitSource(raw?: string): string | undefined {
   if (!raw) return undefined;
   try {
     const url = new URL(raw);
-    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || !url.hostname || url.pathname === "/") return undefined;
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.pathname === "/") return undefined;
     return url.href;
   } catch {
     return undefined;
@@ -15,7 +15,7 @@ export function waitSource(raw?: string): string | undefined {
 
 function past(raw: string | undefined, now: number): number | undefined {
   const ms = raw ? Date.parse(raw) : NaN;
-  return Number.isFinite(ms) && ms > 0 && ms <= now ? ms : undefined;
+  return ms > 0 && ms <= now ? ms : undefined;
 }
 
 export function sentWaitContact(evidence: ParkEvidence | undefined, now: number): ParkContact | undefined {
@@ -24,7 +24,7 @@ export function sentWaitContact(evidence: ParkEvidence | undefined, now: number)
     const object = waitSource(evidence.url);
     if (evidence.ready !== true || !object || !/(?:\/pull\/|\/-\/merge_requests\/)[1-9]\d*\/?$/.test(new URL(object).pathname)) return undefined;
   }
-  const c = evidence?.contact;
+  const c = evidence.contact;
   return c?.status === "sent" && c.channel?.trim() && c.sender?.trim() && c.request?.trim() &&
     waitSource(c.url) && past(c.sent_at, now) !== undefined ? c : undefined;
 }

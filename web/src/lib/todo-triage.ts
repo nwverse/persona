@@ -327,7 +327,8 @@ export function triageTodos(
 
   const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
   const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
-  const byWaitAge = (a: Todo, b: Todo) => placed.get(a.id)!.section === "parked" && placed.get(b.id)!.section === "parked" ? compareWaitAge(a, b, now) : 0;
+  // Callers compare sections first, so both tasks have the same section here.
+  const byWaitAge = (a: Todo, b: Todo) => placed.get(a.id)!.section === "parked" ? compareWaitAge(a, b, now) : 0;
   let open = 0;
   for (const td of list) {
     const tr = placed.get(td.id)!;
