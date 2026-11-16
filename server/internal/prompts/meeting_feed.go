@@ -7,7 +7,7 @@ package prompts
 type MeetingFeed struct {
 	Lang  string // the user's language: en, ja, else zh-Hans
 	Title string
-	Role  string // listener or participant
+	Role  string // notes, listener or participant
 	// From and To are the wall-clock times (HH:MM, the user's zone) of the first and the last line: From "" when the
 	// batch has no lines (only answers, or only the end), To "" when it is From.
 	From, To string
@@ -29,6 +29,11 @@ type MeetingFeed struct {
 	// (none yet when empty) and asks it to update them beside the topics, only when the batch changed what matters most.
 	Highlights      bool
 	HighlightsSoFar []MeetingHighlight
+	// Lean: a room started with lean batches (docs/assistant/meeting-minutes.md "Long meetings: lean batches and
+	// compaction (#8253)"), which has both tools and their rules in its CLAUDE.md: one short line asks it to update the
+	// topics and highlights as its rules say instead of restating them, and the lists so far are shown only with Lists
+	// (at the boundaries). Without Lean the text is as before it.
+	Lean, Lists bool
 }
 
 // MeetingHighlight is one of a meeting's highlights as its room set them: when it was made (in a batch the clock time

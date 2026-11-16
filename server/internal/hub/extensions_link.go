@@ -183,7 +183,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
+		featureSessionsSearch, featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
 	out = append(out, h.agentSessionArchiveFeatures()...)
 	out = append(out, h.agentAutonameFeatures()...)
 	out = append(out, h.sessionsSideFoldFeatures()...)
@@ -192,6 +192,7 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingPhotosFeatures()...)
 	out = append(out, h.meetingLiveViewFeatures()...)
 	out = append(out, h.meetingHighlightsFeatures()...)
+	out = append(out, h.meetingNotesFeatures()...)
 	out = append(out, h.meetingEchoFeatures()...)
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
@@ -204,7 +205,7 @@ func (h *Hub) features() []string {
 	for _, f := range h.extReport().Features {
 		switch f {
 		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
-			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
 			featureAssistantSearch, featureAssistantStartServiceTier, featureSessionsSideFold:
 			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, start speed and the side-session fold
 		}

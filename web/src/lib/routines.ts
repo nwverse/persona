@@ -45,6 +45,8 @@ export interface Task {
   title: string;
   prompt: string;
   repeat: Repeat;
+  fresh_each_run?: boolean;
+  state_note?: { text: string; revision: number; updated_at: string };
   /** once: when; interval: the next run. */
   at?: string;
   /** daily: "HH:MM" in the user's time zone. */
@@ -81,6 +83,35 @@ export interface Task {
   run_machine_id?: string;
   run_session_id?: string;
   run_launcher?: string;
+  /** Read-only (#8045): the kinds of task this task's own runs may start without the plan card, each a trust key
+   *  ("machine|folder|read" or "…|edit", as Settings › Assistant's remembered rules). Only the owner adds to it, by
+   *  ticking it on one of its runs' cards; the editor shows it and removes kinds (DELETE …/start-grant), never saves it. */
+  start_grant?: StartGrant | null;
+}
+
+export interface StartGrant {
+  kinds: string[];
+  granted_at?: string;
+}
+
+/** One kind of a start grant, as the editor names it: the computer, the folder (it covers the folders under it), and
+ *  whether the tasks only read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it
+ *  whole as the place, with no computer. */
+export interface GrantKind {
+  key: string;
+  machine: string;
+  folder: string;
+  readonly: boolean;
+}
+
+export function grantKinds(task: Pick<Task, "start_grant">): GrantKind[] {
+  return (task.start_grant?.kinds ?? []).filter((key) => typeof key === "string" && key).map((key) => {
+    const parts = key.split("|");
+    const mode = parts.length > 1 ? parts[parts.length - 1] : "";
+    const readonly = mode === "read";
+    if (parts.length === 3 && (mode === "read" || mode === "edit")) return { key, machine: parts[0], folder: parts[1], readonly };
+    return { key, machine: "", folder: mode === "read" || mode === "edit" ? parts.slice(0, -1).join("|") : key, readonly };
+  });
 }
 
 export interface Run {
@@ -328,7 +359,11 @@ export function sameTask(a: Task, b: Task): boolean {
   if ((a.permission_mode ?? "") !== (b.permission_mode ?? "")) return false;
   if ((a.push ?? "") !== (b.push ?? "")) return false;
   if ((a.inbox ?? "") !== (b.inbox ?? "")) return false;
-  if (a.repeat !== "once" && !sameInstant(a.until, b.until)) return false;
+  if (a.repeat !== "once" && (
+    !sameInstant(a.until, b.until) ||
+    Boolean(a.fresh_each_run) !== Boolean(b.fresh_each_run) ||
+    (a.state_note?.text ?? "") !== (b.state_note?.text ?? "")
+  )) return false;
   switch (a.repeat) {
     case "once":
       return parseTime(a.at)?.getTime() === parseTime(b.at)?.getTime();
@@ -359,7 +394,7 @@ function untilBody(d: Task, saved?: Task | null): string | null | undefined {
 
 /** The JSON for POST (no `saved`) or PUT. Models follow Models › Main chat; tasks only configure permissions.
  *  `push` goes only when changed from `saved`. `session_id` "" makes runs use the task's own conversation; `at` is left out when there is none (Go can't read "").
- *  `until` follows untilBody: omit to keep, null to clear. */
+ *  `until` follows untilBody: omit to keep, null to clear. Changed state text includes the revision the editor started with. */
 export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> {
   const body: Record<string, unknown> = {
     title: d.title.trim(),
@@ -381,6 +416,13 @@ export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> 
   // Only when changed: a hub keeps it when left out, and one that does not know it never gets it.
   if ((d.push ?? "") !== (saved?.push ?? "")) body.push = d.push ?? "";
   if ((d.inbox ?? "") !== (saved?.inbox ?? "")) body.inbox = d.inbox ?? "";
+  if (d.repeat !== "once") {
+    if (Boolean(d.fresh_each_run) !== Boolean(saved?.fresh_each_run)) body.fresh_each_run = Boolean(d.fresh_each_run);
+    if ((d.state_note?.text ?? "") !== (saved?.state_note?.text ?? "")) {
+      body.state_text = d.state_note?.text ?? "";
+      if (saved) body.state_revision = saved.state_note?.revision ?? 0;
+    }
+  }
   return body;
 }
 

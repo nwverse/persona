@@ -27,6 +27,10 @@ data class AgentListSettings(
     val hideBotmux: Boolean = false,
     /** sessions_hierarchy: even an orphan without rollup fields stays an ordinary, counted row. */
     val hierarchy: Boolean = false,
+    /** UI-only row-cap expansion, distinct from [expandedIdle] so Show All never unfolds idle agents. */
+    val expandedAll: Set<String> = emptySet(),
+    /** The caller's instant for `since:`; the list projection never reads a clock. */
+    val now: java.time.Instant = java.time.Instant.now(),
 )
 
 /**
@@ -194,8 +198,14 @@ fun buildAgentList(
     /** The hub's direction tree, which "By direction" ([AgentGrouping.Direction]) is built from; null: none to group by. */
     directions: DirectionTree? = null,
 ): AgentListResult {
-    val tree = codexTaskForest(foldRows(sessions, settings.hierarchy), runs = { settings.draws(it, pins) })
-    return buildFlatAgentList(tree.roots, machines, pins, mutes, tree.searchSettings(settings, pins, machines.associate { it.id to it.name }), todos, directions)
+    val listed = foldRows(sessions, settings.hierarchy)
+    val tree = codexTaskForest(listed, runs = { settings.draws(it, pins) })
+    val names = machines.associate { it.id to it.name }
+    // A side session is never a row (#7944): a search that finds one keeps its topmost parent's row instead.
+    val search = tree.searchSettings(settings, pins, names).let { s ->
+        sideSearchHits(sessions, listed, s, names).takeIf { it.isNotEmpty() }?.let { s.copy(queryAncestors = s.queryAncestors + it) } ?: s
+    }
+    return buildFlatAgentList(tree.roots, machines, pins, mutes, search, todos, directions)
         .let { it.copy(children = tree.children.plusChildren(it.children)) }
 }
 
@@ -217,7 +227,7 @@ fun buildFlatAgentList(
     directions: DirectionTree? = null,
 ): AgentListResult {
     val machineNames = machines.associate { it.id to it.name }
-    val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames) && !(settings.hideBotmux && it.session.isBotmux) }
+    val base = foldRows(sessions, settings.hierarchy).filter { settings.admits(it.session, pins, machineNames, settings.now) && !(settings.hideBotmux && it.session.isBotmux) }
     val counts = AgentQuickFilter.entries.filter { it != AgentQuickFilter.All }
         .associateWith { filter -> base.count { !it.isNestedSubtask && filter.matches(it) } }
     val filtered = base.filter { settings.quick.matches(it) || it.id in settings.kept }

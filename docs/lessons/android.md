@@ -1,5 +1,32 @@
 # Lessons: Android
 
+## Rust continuity frames are not input acknowledgements (#7448)
+
+A worker can emit a fetch before it publishes a patch. Use #7554's `Ack`/`acked` to distinguish an applied no-op from
+queued work, and read `ChatPatch.verified` rather than deriving coverage uncertainty in Kotlin. Submit each input and
+Ack adjacently; state wakes are chat-targeted and the Ack's ordered global wake closes that input's effect batch.
+Collect effects and drain the patch in the same driver critical section, or an Ack can overtake its effect handoff.
+
+Give every asynchronous older/fold input its own bounded completion slot, remove it on timeout/cancellation, and carry `fold_id`
+through range responses and failures. Never let a late effect use a newer call's slot. Compare a response's history
+generation against submitted inputs under the same input mutex, not against the still-old displayed frame. Start
+fold cleanup protection before any suspension after reserving its ID, and bind initialization waiters to the driver
+scope so closing before the first frame cancels them. A queued async fill belongs
+to its applied callback chain. Before successful response queueing, its request owner must release the gate on failure
+or cancellation, including cancellation after HTTP returns. Queue acknowledgement is neither successful content nor
+completion of a later reconciliation: preserve errors across ordinary Acks and give each reconciliation a receipt.
+A content Ack can also be older than a transport failure: record the error's input boundary and clear it only for a
+later successful content input. Check whether a fill response settled before scanning coverage on an Ack-only frame.
+Bound overtaken-After follow-ups by progress and a request budget. Keep synchronous repository methods separate:
+retain their original state-lock sections, requests mutex, return values and error publication. Do not send Kotlin
+through asynchronous receipt timeouts, operation slots or history generations. Finish older's gate and clear its
+loading flag in the same state-lock section; a failed read receipt restores the snapshot it took under that lock.
+Fold expansion returns the downloaded items, not a filter of the current reducer, since a push can remove its fold.
+Keep synchronous coverage checks at their original repository call sites, using one captured adapter state.
+The adapter must not repeat those scans or scan history for controls and intermediate range pages.
+Rejected effects have no owner; record and broadcast diagnostics without cancelling another chat. Immediate test-only flush/drain schedulers do not prove
+these races: use real JNI with independently controlled worker completion, frames and transport.
+
 ## Verify intermittent test failures with the whole module
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
@@ -9,9 +36,20 @@ An intermittent test is not verified by repeatedly running only its own class. I
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
 and the read-only `selectedTexts` / `getSelectableTexts()` are all a select-in-place needs. Nothing starts from the word under a
 point (`select` takes a range of the container's text, and the Markdown renderer exposes no text layouts to find an offset by), so
-Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, so wait
-until `getSelectableTexts()` lists them (a frame or two) before `selectAll()`; a message with no words never lists any, and must not be
-left selecting.
+Select takes the whole message and a long press on a word picks that word. The words register as the container is laid out, and a
+later change of those words releases a selection that was already made (`updateTextLayout` calls `notifySelectableChange`, and
+`onSelectableChangeCallback` calls `onRelease`), including after composition has seen the selection. A position change does not
+(`notifyPositionChange`). Wait until `getSelectableTexts()` lists the same non-blank words for a couple of frames before `selectAll()`. A list that
+changes after that take is not done: wait for it to hold again and take the whole of it, even when the earlier selection was
+not released (a blank or partial first node does not count as the message). Keep doing that until the frame bound. A finger
+on the message is the user (a tap, a long press) and is not taken back. The toolbar's Copy is the user as well:
+Foundation 1.12.1 `SelectionManager.toolbarCopy` is `copy()` then `onRelease()`, and the touch-mode context-menu Copy
+does the same (`copy` then `onRelease` when `isInTouchMode`, which starts true). An empty selection whose words did not
+change is that release. Do not `selectAll` again, or the settle frames never see an empty selection and the message stays
+selecting (#8728). When the bound runs out with nothing really selected,
+end the selection. Stopping at the first stable reading leaves a later change: the message stays selecting, and Copy does
+nothing (#8728). A message with
+no words never lists any, and must not be left selecting.
 
 - A `SelectionContainer` inside another takes its text out of the outer one: a code block that opens its own was missing from a
   select-all. A block joins by checking `LocalSelectionAbove` (`SelectableOnItsOwn`); buttons, title bars and cards are wrapped in
@@ -120,6 +158,17 @@ A decorative mark inside a clickable row may be merged into that row's semantics
 unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
 can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
 bounded real-page fixture and test state transitions on the same row instead of hiding the failure with more heap.
+
+## A chat's loading means the hub has not answered, not that the cache was read (#8321)
+
+`HubChatRepository.publish` set `loading = false` on every publish, and the first publish is the disk cache's. An uncached chat
+was therefore an empty one ("No messages yet") for as long as its first page took, and a page refused until a watch loads it
+(Paseo's `not_loaded`) showed the error instead of the skeleton. Loading is a fact about the hub: nothing shown and no answer for
+the chat yet (a page, items, the hub's error). Keep it on the entry and derive the snapshot's `loading` from it in `publish`,
+since every metadata event publishes again. The same goes for an error that must outlive those publishes: `state.update` errors
+(the existing `ChatSyncFailed`) are gone at the next session-list event, so a wait's own failure goes in `eventError`, which
+only items clear. In tests, let the repository's collectors settle before opening the chat: a list publish that lands after
+the open's first read hides what that read published.
 
 ## Snapshot subscriptions are not page visibility
 
@@ -338,6 +387,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
 - `./gradlew --stop` stops all daemons of that Gradle version on the machine. Shared lanes (worktrees) therefore stop other people's builds too. To stop only yours, use Ctrl-C or kill your own command.
 
 ## Testing
+
+- A complete Robolectric run can still have no heap headroom (#8339): 205 chat classes finished with 498 MiB live after a full GC on the 512 MiB default, followed by repeated full GCs. Near-end shallow histograms were led by Robolectric resource/theme tables (265.7 MiB) and Compose objects (82.0 MiB); they do not establish GC roots or native bitmap ownership. Measure the whole task with GC logs and a live class histogram before changing test lifetimes or choosing `maxHeapSize`; one class cannot expose growth across the shared test process.
 
 - A shot diff against `main` needs the images' own noise first (2026-11-12, #4339). `android_shots_diff.py` on one run of `main` and one of a branch with no relevant change calls hundreds of the ~1,700 images different: live clocks ("21:30"), a shimmer, the dither of dark Brief and Board, text heights that jump by 4 px between two runs of the same code. Run each side at least twice (`clean…UnitTest` and `--no-build-cache`, or Gradle replays the results without redrawing a picture), take the pixels that differ between two runs of one side as that image's noise, and count only the differences outside it, with a pixel of margin; what is left is what the change drew, and it is looked at by eye. Shots drawn by tests whose class name does not end in `ShotsTest` need a `--tests` pattern of their own.
 
@@ -704,7 +755,28 @@ Two failures that only show at `compileDebugUnitTestKotlin` / first composition,
 
 Running `./gradlew` Robolectric/JVM tests on a container without Android Studio needs explicit setup:
 - Toolchain is JDK 21 (AGP pins `gradle-daemon-jvm.properties toolchainVersion=21`); a machine whose default `java` is 8 fails sdkmanager with `UnsupportedClassVersionError`. Point `JAVA_HOME` at a 21 JDK.
-- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`), and write `sdk.dir` to `android/local.properties`.
+- Install the SDK via `cmdline-tools`; the platform package carries a minor suffix (`platforms;android-37.0`, not `android-37`). In the Android project, create the untracked `local.properties` file with `sdk.dir` pointing to the installed SDK.
 - On an IPv6-only NAT64 network curl works but the JVM throws "Network is unreachable" (it defaults to an IPv4 socket): set `_JAVA_OPTIONS=-Djava.net.preferIPv6Addresses=true` for both sdkmanager and Gradle dependency downloads.
 - In a small memory cgroup the default `-Xmx4g` daemon is OOM-killed. Constrain it: `GRADLE_OPTS="-Xmx1600m -Dorg.gradle.workers.max=1 -Dkotlin.compiler.execution.strategy=in-process"`, `--no-daemon`, and an **Groovy-syntax** init script setting every `Test` task `maxHeapSize`/`maxParallelForks = 1`. A Kotlin-syntax init (`Test::class.java`) fails with "No such property: java" — and the failure is easy to misread as a pass, so always confirm `BUILD SUCCESSFUL` and the test-results XML, never just the shell's exit code.
 - Pure-Kotlin modules (`core:domain`, `core:contracts`) expose the JVM `test` task; Android library modules expose `testDebugUnitTest`.
+
+## Under imePadding, a size read in composition recomposes on every keyboard frame (#8334)
+
+With edge-to-edge and `adjustResize` the IME inset changes on every frame of the keyboard's slide, so everything under an
+`imePadding()` is measured smaller each frame. That is cheap as layout and expensive as composition: Compose 1.12's
+`BoxWithConstraints` subcomposes its content again whenever its constraints change, so a page body inside one ran in full
+per frame, and reading `WindowInsets.ime` (or `safeDrawing`, which includes it) in composition does the same to its scope.
+Keep sizes under the keyboard out of composition: `onSizeChanged` into a state read inside `derivedStateOf`, a layout
+modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up". `ChatImeRecompositionTest` dispatches the
+inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
+the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
+`JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## Shadow comparisons require equivalent contracts (#7448)
+
+A shared field name does not imply shared semantics: Kotlin continuity's per-input `verified` can be true for restored
+cache while Rust's `ChatPatch.verified` stays false until a fresh baseline. Compare common state and request fields;
+cover intentionally different verification semantics with explicit real-JNI tests rather than rebuilding the Rust
+state machine locally. Rejection is driver-level and uncorrelated: signal it without payloads, preserve it across
+multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
+may stop on that signal without affecting Kotlin or another chat's work.

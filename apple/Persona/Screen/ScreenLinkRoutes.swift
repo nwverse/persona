@@ -28,9 +28,10 @@ enum ScreenRoutes {
     /// Whether this phone asks the hub for a screen session: offered, and the Settings switch on (it is by default).
     nonisolated static var enabled: Bool { offered && ScreenRoutePrefs.automatic }
 
-    /// The video over UDP on direct routes (#7873) stays off in release builds until the check on real devices; a
-    /// DEBUG build launched with -showScreenUDP has it. It needs direct routes on: the same Settings switch covers it.
-    nonisolated static let udpReleaseEnabled = false
+    /// The video over UDP on direct routes (#7873), never on cellular: on in release builds since the live check against
+    /// a real Mac. False turns it off again; a DEBUG build launched with -showScreenUDP has it either way. It needs
+    /// direct routes on: the same Settings switch covers it.
+    nonisolated static let udpReleaseEnabled = true
 
     nonisolated static var udpEnabled: Bool {
         #if DEBUG
@@ -55,6 +56,8 @@ enum ScreenRoutes {
     /// And of the UDP flow carrying the video, about once a second (#7873): the mobile data budget leaves room for its
     /// parity and resends.
     @MainActor static var flows: [String: @MainActor (ScreenUDPStatus?) -> Void] = [:]
+    /// The UDP flow carrying each live screen's video, as last reported, by pair (the DEBUG command channel reads it).
+    @MainActor static var latestFlow: [String: ScreenUDPStatus] = [:]
     /// Each live screen's routes as last measured and the one in use, by pair (the DEBUG command channel reads them).
     @MainActor static var latest: [String: (routes: [String: LinkStats], current: String, change: PathChange?)] = [:]
 
@@ -70,6 +73,7 @@ enum ScreenRoutes {
             listeners[pair] = nil
             meters[pair] = nil
             flows[pair] = nil
+            latestFlow[pair] = nil
             latest[pair] = nil
             ScreenLinkRegistry.shared.remove(pair)
         }
@@ -98,7 +102,13 @@ nonisolated final class ScreenLinkRelaySocket: ScreenLinkSocket, @unchecked Send
 /// A screen stream as the RFB client and the video stream read it.
 nonisolated final class ScreenLinkRFBTransport: RFBTransport, @unchecked Sendable {
     let stream: ScreenLinkByteStream
-    init(_ stream: ScreenLinkByteStream) { self.stream = stream }
+    /// The hub's relay the stream opened on, for a refusal's status (#8320).
+    private let relay: RFBWebSocket?
+    init(_ stream: ScreenLinkByteStream, relay: RFBWebSocket? = nil) {
+        self.stream = stream
+        self.relay = relay
+    }
+    var refusedStatus: Int? { relay?.refusedStatus }
     func send(_ bytes: [UInt8]) async throws { try await stream.send(Data(bytes)) }
     func receive() async throws -> [UInt8] { [UInt8](try await stream.receive()) }
     func close() { stream.close() }
@@ -361,7 +371,10 @@ actor ScreenLinkProber {
                 openFlow(route, port: port)
             case let .flow(status):
                 let pair = pair
-                await MainActor.run { ScreenRoutes.flows[pair]?(status) }
+                await MainActor.run {
+                    ScreenRoutes.flows[pair]?(status)
+                    ScreenRoutes.latestFlow[pair] = status
+                }
             case let .reopen(video):
                 let group = group, machine = machine, pair = pair
                 if let relay = await MainActor.run(body: { ScreenRoutes.reopenRelay(group: group, machine: machine, pair: pair, video: video) }) {

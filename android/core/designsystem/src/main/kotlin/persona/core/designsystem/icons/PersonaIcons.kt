@@ -304,6 +304,8 @@ object PersonaIcons {
     val settings: PhIcon get() = PhIcons.Gear
     /** SF Symbol `square.and.arrow.up`. */
     val share: PhIcon get() = PhIcons.ShareNetwork
+    /** SF Symbol `rectangle.portrait.on.rectangle.portrait`. */
+    val sideSessions: PhIcon get() = PhIcons.Stack
     /** SF Symbol `sidebar.left`. */
     val sidebar: PhIcon get() = PhIcons.SidebarSimple
     /** SF Symbol `puzzlepiece.extension`. */
@@ -350,8 +352,8 @@ object PersonaIcons {
     val video: PhIcon get() = PhIcons.VideoCamera
     /** SF Symbol `eye`. */
     val view: PhIcon get() = PhIcons.Eye
-    /** SF Symbol `waveform.and.mic`. */
-    val voiceChannel: PhIcon get() = PhIcons.Waveform
+    /** SF Symbol `phone.fill`. */
+    val voiceChannel: PhIcon get() = PhIcons.Phone
     /** SF Symbol `antenna.radiowaves.left.and.right`. */
     val voiceConnecting: PhIcon get() = PhIcons.Broadcast
     /** SF Symbol `phone.down.fill`. */

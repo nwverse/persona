@@ -160,6 +160,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	over, refused, parks := false, false, 0
 	var waiting *OwnerWait // accepted while the work stopped on the owner's decision: refused, nothing written (#1277)
 	judgedDone := false    // it was waiting for review: the judge had found it done
+	var criteriaErr error
 	var v Supervision
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
@@ -167,6 +168,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				w := *v.Waits
 				waiting = &w
 				return false
+			}
+			if verdict == reviewAccepted && a.Outcome != outcomeCannot {
+				if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
+					return false
+				}
 			}
 			judgedDone = v.State == reviewPending
 			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderRef(v.Supervisor) {
@@ -224,6 +230,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if err != nil {
 		return "", err
 	}
+	if criteriaErr != nil {
+		return "", criteriaErr
+	}
 	if refused {
 		return "", reworkOverError(t.ID)
 	}
@@ -247,6 +256,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b.init()
 	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned, sigOverdue, sigRecheck, sigUndecidable, sigOwnerCannot, sigParkedDue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
+	}
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		// Closed: a decision that ended a parking has nothing left to move. A review that leaves the task open, parking
+		// it again included, does not say its supervisor heard of the decision: that waits for its message (decidedPark).
+		delete(b.pending, t.ID+"|"+sigParkDecided)
 	}
 	b.mu.Unlock()
 	// How it ended against what was asked (task_brief_result.go): each criterion of the brief, as scope changes left them.
@@ -303,6 +317,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 					s.taskClosedReport(t, reason) // the bot's task report says it is closed, as for the judge's (reports.go)
 				}
 			}
+		}
+		if verdict == reviewAccepted {
+			s.sendsAccepted(ctx, t.ID, time.Now()) // what was sent its agent before is answered: closed already, too (#7539)
 		}
 		if verdict == reviewCancelled {
 			s.stopTaskAgents(ctx, t) // its cards stop asking the user (supervise_leader.go)

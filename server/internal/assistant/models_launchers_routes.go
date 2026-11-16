@@ -306,7 +306,11 @@ func (s *Service) launcherRoutes() {
 				result := proto.LauncherCheck{Agent: "api", Model: config.Model, Answer: textfmt.Clip(textfmt.OneLine(answer), 200), OK: err == nil,
 					Millis: int(time.Since(started).Milliseconds())}
 				if err != nil {
-					result.Error = textfmt.Clip(textfmt.OneLine(err.Error()), 400)
+					message := err.Error()
+					if explanation := directCallFailureExplanation(s.requestCtxLang(ctx), err); explanation != "" {
+						message = explanation + ": " + message
+					}
+					result.Error = textfmt.Clip(textfmt.OneLine(message), 400)
 				}
 				apierr.WriteJSON(w, map[string]any{"check": result})
 				return
@@ -325,7 +329,11 @@ func (s *Service) launcherRoutes() {
 			return
 		}
 		var res proto.LauncherCheck
-		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": r.PathValue("name")}, &res); err != nil {
+		params := map[string]any{"name": r.PathValue("name")}
+		if r.URL.Query().Get("purpose") == "assistant" {
+			params["purpose"] = "assistant"
+		}
+		if err := s.call(ctx, machine, assistantwire.DeviceLaunchersCheck, params, &res); err != nil {
 			apierr.Call(w, err)
 			return
 		}
@@ -454,11 +462,19 @@ func (s *Service) machineLauncherRoutes() {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		mid := r.PathValue("mid")
-		if _, ok := s.device(ctx, mid); !ok {
+		d, ok := s.device(ctx, mid)
+		if !ok {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
-		list, err := s.pickerLaunchers(ctx, mid)
+		// New Agent lists what a start in its host can run (?host=, else the computer's default): where that is an
+		// engine that runs only its own launchers (Paseo), its providers alone (#8140). The main chat's menu lists the
+		// computer's own launchers: the assistant runs them on its command line, whatever the engine.
+		host := ""
+		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
+			host = agentStartHost(d, r.URL.Query().Get("host"))
+		}
+		list, err := s.pickerLaunchersOn(ctx, mid, host)
 		var unavailable []unavailableLauncher
 		if err == nil && r.URL.Query().Get("purpose") == "assistant" { // the main chat's menu, and the scheduled tasks' that follow it
 			all := list
@@ -475,8 +491,9 @@ func (s *Service) machineLauncherRoutes() {
 		def := s.pickerDefault(ctx, r)
 		keep, _ := def["provider"].(string)
 		shown := s.withHealth(ctx, mid, list, keep)
-		// A Persona-managed provider shows its display name over its ID (launcher_auto_name); tiers and default still
-		// name the ID, which clients look up here.
+		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the
+		// name the runtime gives it (Paseo's label, the node's display_name, #8261); tiers and default still name the
+		// ID, which clients look up here.
 		stored := s.storedLaunchers(ctx)
 		for i, l := range shown {
 			j := slices.IndexFunc(stored, func(m storedLauncher) bool { return m.Name == l.Name })
@@ -496,11 +513,15 @@ func (s *Service) machineLauncherRoutes() {
 			if p, tiers := s.pickerTiers(ctx, mid, usable); len(tiers) > 0 {
 				out["tiers"], out["tiers_profile"] = tiers, map[string]string{"id": p.ID, "name": p.Name}
 			}
+			// and the providers left out here for their own-service rule, with why (#8109), as the main chat's has them
+			if skipped := s.ownServiceSkipped(ctx, mid, list, s.requestLang(r)); len(skipped) > 0 {
+				out["unavailable"] = skipped
+			}
 		}
 		apierr.WriteJSON(w, out)
 	})
 	s.handle("GET /api/v1/machines/{mid}/launchers/{name}/models", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 70*time.Second)
+		ctx, cancel := context.WithTimeout(withLauncherPurpose(r.Context(), r.URL.Query().Get("purpose")), 70*time.Second)
 		defer cancel()
 		mid := r.PathValue("mid")
 		if _, ok := s.device(ctx, mid); !ok {

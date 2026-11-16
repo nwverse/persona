@@ -29,9 +29,10 @@ func (s Session) IsSubtask() bool {
 }
 
 // SessionHierarchy is a Session's place among the sessions that started one another (docs/protocol/protocol.md
-// "Session hierarchy"), when it began, and its completed task ownership. Each member is a key of the row itself on
-// the wire. A Session holds it by pointer (Session.Hierarchy, nil when every member is empty): these sparse fields
-// inline would take every row past its size class (TestSessionFitsItsSizeClass).
+// "Session hierarchy"), when it began, its completed task ownership, and rare lifecycle metadata. Each member is
+// a top-level wire key. A Session holds it by pointer (Session.Hierarchy, nil when every member is empty): these
+// sparse fields inline would take every row past its size class (TestSessionFitsItsSizeClass). The Deleted flag
+// describes no ancestry; it shares this storage to preserve the allocation budget for ordinary session rows.
 type SessionHierarchy struct {
 	// CompletedTodo is display-only task ownership. Keep this sparse reference out of every Session's hot row.
 	CompletedTodo *TodoRef `json:"completed_todo,omitempty"`
@@ -71,6 +72,13 @@ type SessionHierarchy struct {
 	// A session may be named more than once (switched back to and away again), each time for another stretch. Set by
 	// the node.
 	EngineHistory []EngineLeg `json:"engine_history,omitempty"`
+	// Aliases are the other session ids its machine knows this row's conversation by, none of which it lists beside it
+	// (one conversation, one row): the Claude session holding the conversation of a runtime's session listed under an
+	// id of its own, and the sessions that one was forked from, newest first (docs/integrations/paseo.md "Session
+	// IDs", #8131). The manager shows no archive record under one of them: the conversation was listed under it once,
+	// and its archived row repeated the row listed now. Set by the node.
+	Aliases []string `json:"aliases,omitempty"`
+	Deleted bool     `json:"deleted,omitempty"` // Permanent manager tombstone; use Session.IsDeleted/SetDeleted.
 }
 
 // EngineLeg is one earlier stretch of a conversation (SessionHierarchy.EngineHistory): the session that ran it, its
@@ -116,7 +124,7 @@ type SessionChildren struct {
 func (h *SessionHierarchy) empty() bool {
 	return h.ParentAgentID == "" && h.StartedAt.IsZero() && h.AskingParentSessionID == "" && h.FoldedUnder == "" && h.FoldedAs == "" &&
 		h.FoldedSide == "" &&
-		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil
+		h.Children == nil && len(h.EngineHistory) == 0 && h.CompletedTodo == nil && len(h.Aliases) == 0 && !h.Deleted
 }
 
 // CompletedTodo is the last completed association for navigation, never active work.
@@ -148,6 +156,7 @@ func (s *Session) hierarchy() SessionHierarchy {
 		h.Children = &c
 	}
 	h.EngineHistory = slices.Clone(h.EngineHistory)
+	h.Aliases = slices.Clone(h.Aliases)
 	return h
 }
 
@@ -158,6 +167,20 @@ func (s *Session) setHierarchy(h SessionHierarchy) {
 		return
 	}
 	s.Hierarchy = &h
+}
+
+// IsDeleted reports the permanent manager tombstone. Ordinary rows allocate no lifecycle metadata.
+func (s *Session) IsDeleted() bool { return s.Hierarchy != nil && s.Hierarchy.Deleted }
+
+// SetDeleted uses copy-on-write, like the other rare fields: copies of a
+// Session share Hierarchy, so changing one must never change another.
+func (s *Session) SetDeleted(deleted bool) {
+	if s.IsDeleted() == deleted {
+		return
+	}
+	h := s.hierarchy()
+	h.Deleted = deleted
+	s.setHierarchy(h)
 }
 
 // ParentAgentID is the session this one is drawn under while staying its own (SessionHierarchy.ParentAgentID); "" when
@@ -245,6 +268,26 @@ func (s *Session) SetEngineHistory(legs []EngineLeg) {
 	}
 	h := s.hierarchy()
 	h.EngineHistory = slices.Clone(legs)
+	s.setHierarchy(h)
+}
+
+// Aliases are the other session ids the row's conversation is known by on its machine (SessionHierarchy.Aliases);
+// nil when none. Shared with the row's other copies: not to be changed.
+func (s *Session) Aliases() []string {
+	if s.Hierarchy == nil {
+		return nil
+	}
+	return s.Hierarchy.Aliases
+}
+
+// SetAliases sets the other ids the row's conversation is known by (nil: none), with no new hierarchy when it already
+// has them.
+func (s *Session) SetAliases(ids []string) {
+	if slices.Equal(s.Aliases(), ids) {
+		return
+	}
+	h := s.hierarchy()
+	h.Aliases = slices.Clone(ids)
 	s.setHierarchy(h)
 }
 

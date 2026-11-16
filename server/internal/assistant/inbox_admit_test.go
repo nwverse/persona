@@ -324,9 +324,66 @@ func TestInboxTriageIsBusyWhileTheModelIs(t *testing.T) {
 	}
 }
 
-// An item with a fallback tier comes in with it when the model fails ("By rule") and that version is final: the model
-// coming back does not sort it again. Meanwhile one without a fallback waits.
-func TestInboxFallbackIsFinal(t *testing.T) {
+// brokenExchange is a transport whose every request panics in the caller's goroutine.
+type brokenExchange struct{}
+
+func (brokenExchange) RoundTrip(*http.Request) (*http.Response, error) { panic("the exchange broke") }
+
+// A panic that unwinds through another use of the triage model's connection does not strand the Inbox (#6698). The
+// knowledge base loop recovers from a panic in one of its steps and carries on, so the process lives; the request
+// the panic unwound through stayed counted as out, and when it was the one finding out whether a pause was over
+// nobody found out after it. Every round then held its items as "the model is at its concurrency limit" with
+// nothing sent to an upstream that was fine, until the manager restarted.
+func TestInboxTriageRecoversAfterAPanicOnItsConnection(t *testing.T) {
+	ai.SetBusyPauseForTest(t, 50*time.Millisecond)
+	window, timeout := admitWindow, admitTimeout
+	admitWindow, admitTimeout = 5*time.Second, 150*time.Millisecond
+	t.Cleanup(func() { admitWindow, admitTimeout = window, timeout })
+	model, client := newTriageModel(t, "busy", `{"tier":"fyi","summary":"示例","reason":"示例"}`)
+	things := sevenThings()
+	h, _ := admitHub(t, client, &inboxConnector{things: things})
+
+	collectAndAdmit(h)
+	if _, status := inboxTriageOf(t, h); status.State != triagePaused || status.Waiting != len(things) {
+		t.Fatalf("while the upstream answers 503: triage %+v", status)
+	}
+
+	// The pause is over and the upstream is fine again. Another use of the connection finds out first, and a panic
+	// unwinds through its request; its caller recovers.
+	pauseOver(t, client)
+	model.mode.Store("ok")
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the other request did not panic")
+			}
+		}()
+		var out struct{ Tier string }
+		_ = ai.NewWith(client.Config(), brokenExchange{}).JSON(context.Background(), "知识库", "示例", &out)
+	}()
+
+	before := len(model.asked())
+	collectAndAdmit(h)
+	in := 0
+	for _, th := range things {
+		if it := itemOf(h, "example", th.Thread); it != nil && it.Tier == TierFYI {
+			in++
+		}
+	}
+	_, status := inboxTriageOf(t, h)
+	if in != len(things) || status.State != "ok" || status.Waiting != 0 {
+		t.Fatalf("the round after the panic: %d of %d in, %d asked about, triage %+v, held %+v",
+			in, len(things), len(model.asked())-before, status, ai.Held(client.Config()))
+	}
+	if p := ai.Held(client.Config()); p != nil {
+		t.Fatalf("still held: %+v", p)
+	}
+}
+
+// An item with a fallback tier comes in with it when the model fails ("By rule"), marked to be asked again (RuleOf,
+// TriagedAt left behind): once the model is back, the next pass sorts it by the model (#8298). Meanwhile one without
+// a fallback waits.
+func TestInboxFallbackIsRetried(t *testing.T) {
 	model, client := newTriageModel(t, "fail", `{"tier":"noise","summary":"示例","reason":"示例"}`)
 	now := time.Now().Add(-time.Minute)
 	lark := &extensionLark{things: []connector.InboxThing{{Thread: "chat:10", Kind: KindDM, Title: "Alice", Preview: "在吗", Context: "Alice：在吗",
@@ -338,7 +395,7 @@ func TestInboxFallbackIsFinal(t *testing.T) {
 
 	collectAndAdmit(h)
 	dm := h.inbox.items["lark:10:5"]
-	if dm == nil || dm.Tier != TierAction || dm.Reason != "按规则" || dm.TriagedAt != dm.Last || !st.saved(dm.ID) {
+	if dm == nil || dm.Tier != TierAction || dm.Reason != "按规则" || dm.TriagedAt == dm.Last || dm.RuleOf != dm.Last || !st.saved(dm.ID) {
 		t.Fatalf("the DM with a fallback: %+v", dm)
 	}
 	if itemOf(h, "example", th.Thread) != nil {
@@ -348,17 +405,26 @@ func TestInboxFallbackIsFinal(t *testing.T) {
 		t.Fatalf("triage %+v", status)
 	}
 
+	// The model is back: the waiting item's answer says so, and the pass after it asks about the DM again.
 	model.mode.Store("ok")
 	before := len(model.asked())
 	collectAndAdmit(h)
-	h.inbox.triaging.Lock() // the pass for items in the list runs in the background: wait for it
-	h.inbox.triaging.Unlock()
+	waitTriage(h)
 	calls := model.asked()[before:]
 	if len(calls) != 1 || !strings.Contains(calls[0].User, "PR 上的评论") {
-		t.Fatalf("triage calls after the model is back: %+v", calls)
+		t.Fatalf("triage calls in the round the model is back: %+v", calls)
 	}
-	if dm.Tier != TierAction || dm.Reason != "按规则" || dm.Summary != "" {
-		t.Fatalf("the DM was sorted again: %+v", dm)
+	collectAndAdmit(h)
+	waitTriage(h)
+	calls = model.asked()[before+1:]
+	if len(calls) != 1 || !strings.Contains(calls[0].User, "在吗") {
+		t.Fatalf("triage calls in the round after: %+v", calls)
+	}
+	h.inbox.mu.Lock()
+	tier, reason, summary, triaged, ruleOf := dm.Tier, dm.Reason, dm.Summary, dm.TriagedAt == dm.Last, dm.RuleOf
+	h.inbox.mu.Unlock()
+	if tier != TierNoise || reason != "示例" || summary != "示例" || !triaged || ruleOf != "" {
+		t.Fatalf("the DM after the model is back: tier %q reason %q summary %q triaged %v rule_of %q", tier, reason, summary, triaged, ruleOf)
 	}
 	if it := itemOf(h, "example", th.Thread); it == nil || it.Tier != TierNoise {
 		t.Fatalf("the waiting item: %+v", it)
@@ -452,8 +518,8 @@ func TestInboxAdmitWindow(t *testing.T) {
 }
 
 // The hub's own sources (here a connector no plugin provides) go as they always did: a new item is listed at once,
-// untriaged, and the triage pass afterwards gives one without a rule tier its fallback, "Noise", when the model fails;
-// nothing is held back.
+// untriaged, and the triage pass afterwards gives one without a rule tier its fallback, "Noise", when the model fails,
+// to be asked again later (RuleOf); nothing is held back.
 func TestInboxBuiltinSourcesAsBefore(t *testing.T) {
 	model, client := newTriageModel(t, "fail", `{"tier":"action","summary":"示例","reason":"示例"}`)
 	th := genericThing("example-org/example-repo#7", "a", "示例：一条评论")
@@ -468,10 +534,10 @@ func TestInboxBuiltinSourcesAsBefore(t *testing.T) {
 	h.inbox.triaging.Lock() // the triage pass runs in the background: wait for it
 	h.inbox.triaging.Unlock()
 	h.inbox.mu.Lock()
-	tier, reason, triaged := it.Tier, it.Reason, it.TriagedAt == it.Last
+	tier, reason, ruled := it.Tier, it.Reason, it.TriagedAt != it.Last && it.RuleOf == it.Last
 	h.inbox.mu.Unlock()
-	if tier != TierNoise || reason != "按规则" || !triaged || len(model.asked()) != 1 {
-		t.Fatalf("after the pass: tier %q reason %q triaged %v, %d call(s)", tier, reason, triaged, len(model.asked()))
+	if tier != TierNoise || reason != "按规则" || !ruled || len(model.asked()) != 1 {
+		t.Fatalf("after the pass: tier %q reason %q ruled %v, %d call(s)", tier, reason, ruled, len(model.asked()))
 	}
 	if _, status := inboxTriageOf(t, h); status.State != "ok" || status.Waiting != 0 {
 		t.Fatalf("triage %+v", status)

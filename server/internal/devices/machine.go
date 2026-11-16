@@ -104,10 +104,12 @@ type Machine struct {
 	sessionsListed  bool                     // the current connection has really supplied a snapshot, successful empty ones included
 	sessionsReady   chan struct{}            // closed once the current connection's first sessions.list has been handled
 	lists           proto.SessionListDecoder // decodes the node's lists, only the sessions whose bytes changed (onEvent)
-	sessionRevision uint64                   // local ordering of session snapshots, independent of node transcript revisions
-	watched         map[string]bool          // sessions the hub watches (session.watch): watched again on a new connection
-	followed        map[string]bool          // sessions the manager itself follows (Follow: a channel's turn): watched as well
-	lastSeq         map[string]int           // session id -> highest item seq seen
+	sessionRevision uint64                   // advanced by sessions.changed, independent of node transcript revisions
+	// sessionsEventMu serializes sessions.list response and sessions.changed cache application and forwarding.
+	sessionsEventMu sync.Mutex
+	watched         map[string]bool // sessions the hub watches (session.watch): watched again on a new connection
+	followed        map[string]bool // sessions the manager itself follows (Follow: a channel's turn): watched as well
+	lastSeq         map[string]int  // session id -> highest item seq seen
 	// unsettled: sessions whose last Follow the node did not take (the next Follow asks it again; a new connection
 	// settles them).
 	unsettled map[string]bool
@@ -495,7 +497,7 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 	}, nil
 }
 
-func (m *Machine) callOnce(ctx context.Context, method string, params any, out any) error {
+func (m *Machine) callOnce(ctx context.Context, method string, params any, out any, snapshot *sessionSnapshot) error {
 	m.mu.Lock()
 	p := m.peer
 	info := m.info
@@ -554,6 +556,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.StartGoal) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Goal string `json:"goal"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if strings.TrimSpace(fields.Goal) != "" { // its own code: the caller starts again without the goal
+			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
+		}
+	}
 	if !nodeHas(info, nodeproto.AssistantConfigDir) && (method == "assistant.send" || method == "assistant.warm" || method == "session.send") {
 		raw, _ := json.Marshal(params)
 		var fields struct {
@@ -562,6 +574,16 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		_ = json.Unmarshal(raw, &fields)
 		if fields.ConfigDir != "" {
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_assistant_config_dir")}
+		}
+	}
+	if !nodeHas(info, nodeproto.AssistantSupervisionInstructions) && (method == "assistant.send" || method == "assistant.warm" || method == "session.send") {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Instructions string `json:"supervision_instructions"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if fields.Instructions != "" {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_node_outdated")}
 		}
 	}
 	if method == "assistant.send" && !nodeHas(info, nodeproto.AssistantServiceTier) {
@@ -604,7 +626,7 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
@@ -619,6 +641,11 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	}
 	if method == "node.configure" {
 		params = m.withClaudeDirs(ctx, params)
+	}
+	if snapshot != nil {
+		m.mu.Lock()
+		snapshot.peer, snapshot.revision = p, m.sessionRevision
+		m.mu.Unlock()
 	}
 	return p.Call(ctx, method, params, out)
 }
@@ -722,6 +749,13 @@ func (m *Machine) sessionList() []proto.Session {
 	return slices.Clone(m.sessions)
 }
 
+// appendSessions appends the machine's sessions to dst (Devices.AppendSessions).
+func (m *Machine) appendSessions(dst []proto.Session) []proto.Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append(dst, m.sessions...)
+}
+
 // sessionsWhere copies out the sessions keep accepts (Devices.SessionsWhere).
 func (m *Machine) sessionsWhere(keep func(*proto.Session) bool) []proto.Session {
 	m.mu.Lock()
@@ -770,6 +804,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	m.noteClosed(event, params)
 	switch event {
 	case "sessions.changed":
+		m.sessionsEventMu.Lock()
+		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below
 		if list, ok := m.decodeSessions(params); ok {
 			m.setSessions(list)
 		}

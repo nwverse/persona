@@ -261,21 +261,26 @@ class WatcherTests(unittest.TestCase):
 
     def test_test_only_web_change_runs_changed_tests_not_full_lanes(self):
         names = "web/src/views/chat/ContextGroup.test.tsx\n"
-        with patch.object(pr_watch_verify, "checked", return_value=names):
-            commands = pr_watch_verify.persona_checks(".", pr(title="test(web): refine a test"), 1, {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_file = root / names.strip()
+            test_file.parent.mkdir(parents=True)
+            test_file.write_text("import { test } from 'vitest'\n")
+            with patch.object(pr_watch_verify, "checked", return_value=names):
+                commands = pr_watch_verify.persona_checks(str(root), pr(title="test(web): refine a test"), 1, {})
+            with patch.object(pr_watch_verify, "run_check", return_value={"name": "test", "ok": True}) as check, \
+                    patch.object(pr_watch_verify, "checked", return_value=names):
+                pr_watch_verify.verify("example/one", pr(), str(root), {"profile": "persona"})
         self.assertEqual(commands[2], ("Changed web tests", ["node", "./node_modules/vitest/vitest.mjs", "run",
                                                              "src/views/chat/ContextGroup.test.tsx"], "web"))
         guard = next(command[1] for command in commands if command[0] == "Changed test-file baseline guards")
-        self.assertEqual(guard[guard.index("--worktree") + 1], ".")
+        self.assertEqual(guard[guard.index("--worktree") + 1], str(root))
         self.assertFalse(any(command[0] in {"CI web", "CI scripts"} for command in commands))
         self.assertTrue(any(command[0] == "Web typecheck" for command in commands))
         self.assertTrue(any(command[0] == "Privacy and documentation guards" for command in commands))
-        with patch.object(pr_watch_verify, "run_check", return_value={"name": "test", "ok": True}) as check, \
-                patch.object(pr_watch_verify, "checked", return_value=names):
-            pr_watch_verify.verify("example/one", pr(), ".", {"profile": "persona"})
-        self.assertEqual(check.call_args_list[0].kwargs["cwd"], "web")
-        self.assertEqual(check.call_args_list[2].kwargs["cwd"], "web")
         self.assertTrue(any(command[0] == "Web extension mirror cleanup tests" for command in commands))
+        self.assertEqual(check.call_args_list[0].kwargs["cwd"], str(root / "web"))
+        self.assertEqual(check.call_args_list[2].kwargs["cwd"], str(root / "web"))
 
     def test_production_apple_fix_does_not_use_test_only_fast_path(self):
         self.assertIsNone(pr_watch_verify.scoped_test_checks(".", SHA_BASE, SHA_A,
@@ -306,8 +311,21 @@ class WatcherTests(unittest.TestCase):
 
     def test_changed_go_and_python_tests_use_focused_commands(self):
         names = ["server/internal/agents/cache_test.go", "scripts/operations/test_pr_watch.py"]
-        with patch.object(pr_watch_verify, "checked", return_value="\n".join(names) + "\n"):
-            commands = pr_watch_verify.persona_checks(".", pr(title="test: refine relevant tests"), 1, {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in names:
+                test_file = root / name
+                test_file.parent.mkdir(parents=True, exist_ok=True)
+                test_file.write_text("import unittest\n" if name.endswith(".py") else "package agents\n")
+            calls = []
+            def check(name, argv, root, timeout, environ=None, cwd=None):
+                calls.append(cwd)
+                return {"name": name, "command": argv, "ok": True, "summary": "", "stdout": "", "stderr": ""}
+            with patch.object(pr_watch_verify, "checked", return_value="\n".join(names) + "\n"):
+                commands = pr_watch_verify.persona_checks(str(root), pr(title="test: refine relevant tests"), 1, {})
+            with patch.object(pr_watch_verify, "run_check", side_effect=check), \
+                    patch.object(pr_watch_verify, "checked", return_value="\n".join(names) + "\n"):
+                pr_watch_verify.verify("example/one", pr(), str(root), {"profile": "persona"})
         self.assertEqual(commands[0][0], "Changed Go tests")
         self.assertEqual(commands[0][1][:2], ["python3", "-I"])
         self.assertTrue(commands[0][1][2].endswith("pr_watch_go_tests.py"))
@@ -319,14 +337,7 @@ class WatcherTests(unittest.TestCase):
         self.assertIn(("Changed Python tests", ["python3", "-I", "-B", "-m", "unittest", "test_pr_watch.py"],
                        "scripts/operations"), commands)
         self.assertFalse(any(command[0].startswith("CI ") for command in commands))
-        calls = []
-        def check(name, argv, root, timeout, environ=None, cwd=None):
-            calls.append(cwd)
-            return {"name": name, "command": argv, "ok": True, "summary": "", "stdout": "", "stderr": ""}
-        with patch.object(pr_watch_verify, "run_check", side_effect=check), \
-                patch.object(pr_watch_verify, "checked", return_value="\n".join(names) + "\n"):
-            pr_watch_verify.verify("example/one", pr(), ".", {"profile": "persona"})
-        self.assertEqual(calls, [None, None, None, "scripts/operations", None, None])
+        self.assertEqual(calls, [None, None, None, str(root / "scripts/operations"), None, None])
 
     def test_changed_sleep_guard_requires_lowering_the_baseline(self):
         import pr_watch_test_guards
@@ -360,7 +371,8 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("-timeout=10m", command)
         self.assertEqual(command[-1], "./internal/agents")
         cleanup.assert_called_once()
-        self.assertEqual(cleanup.call_args.args[0][:3], ["docker", "rm", "-f"])
+        container = calls[0][0][calls[0][0].index("--name") + 1]
+        self.assertEqual(cleanup.call_args.args[0], ["docker", "rm", "-fv", container])
 
         calls.clear()
         with tempfile.TemporaryDirectory() as directory, \
@@ -375,6 +387,28 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(len(runs), 2)
         self.assertEqual([run[-1] for run in runs], ["./internal/node", "./internal/node"])
         self.assertTrue(all("-timeout=10m" in run for run in runs))
+
+    def test_go_test_runner_removes_postgres_volume_on_failure(self):
+        import pr_watch_go_tests
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at):
+                calls = []
+                def fake_checked(argv, **kwargs):
+                    calls.append(argv)
+                    if len(calls) == fail_at:
+                        raise pr_watch_go_tests.WatchError("fixture failure")
+                    return ""
+                with tempfile.TemporaryDirectory() as directory, \
+                        patch.object(pr_watch_go_tests, "checked", side_effect=fake_checked), \
+                        patch.object(pr_watch_go_tests.subprocess, "run") as cleanup:
+                    package = Path(directory) / "server/internal/agents"
+                    package.mkdir(parents=True)
+                    (package / "cache_test.go").write_text("package agents\n")
+                    with self.assertRaisesRegex(pr_watch_go_tests.WatchError, "fixture failure"):
+                        pr_watch_go_tests.main(["--worktree", directory, "./internal/agents"])
+                container = calls[0][calls[0].index("--name") + 1]
+                cleanup.assert_called_once()
+                self.assertEqual(cleanup.call_args.args[0], ["docker", "rm", "-fv", container])
 
     def test_argument_driven_python_verification_keeps_full_scripts_lane(self):
         names = "scripts/test/test_rolling_compatibility.py\n"
@@ -635,6 +669,14 @@ class WatcherTests(unittest.TestCase):
         base_output = "--- FAIL: TestBase\nAssertionError: base defect"
         self.assertNotEqual(pr_watch_repair.failure_test_ids(pr_output), pr_watch_repair.failure_test_ids(base_output))
 
+    def test_gh_json_passes_a_continuation_payload_to_stdin(self):
+        payload = '{"title":"fix: continuation","head":"owner:branch"}'
+        with patch.object(pr_watch_common, "checked", return_value='{"number":9}') as checked:
+            result = pr_watch_common.gh_json(["api", "repos/example/one/pulls", "--input", "-"], input_text=payload)
+        self.assertEqual(result, {"number": 9})
+        self.assertEqual(checked.call_args.kwargs["input_text"], payload)
+        self.assertEqual(checked.call_args.args[0], ["gh", "api", "repos/example/one/pulls", "--input", "-"])
+
     def test_continuation_pr_links_original_issue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -643,6 +685,8 @@ class WatcherTests(unittest.TestCase):
                     if "FETCH_HEAD" in argv:
                         return SHA_BASE + "\n"
                     return SHA_B + "\n"
+                if argv[:2] == ["git", "cat-file"]:
+                    return "".join(line.strip() + " commit\n" for line in kwargs["input_text"].splitlines())
                 return ""
             with patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: pr(head=SHA_B if number == 9 else SHA_A)), \
                     patch.object(pr_watch_repair, "verify", return_value=[]), \
@@ -743,10 +787,46 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", env)
         self.assertNotIn("PR_WATCH_WEBHOOK_SECRET", env)
         self.assertIn("ANTHROPIC_API_KEY", env)
-        argv = pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
+        with patch.object(pr_watch_repair.shutil, "which", return_value="/usr/bin/bwrap"):  # a machine without bwrap too
+            argv = pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
         home = argv[argv.index("HOME") + 1]
         self.assertNotEqual(Path(home), self.root)
         self.assertFalse(Path(home).is_relative_to(self.root))
+        self.assertLess(argv.index("--chdir"), argv.index("--bind"))
+        self.assertIn("--proc", argv)
+        self.assertIn("--dev-bind", argv)
+        self.assertNotIn(["--dev-bind", "/dev", "/dev"], [argv[i:i + 3] for i in range(len(argv) - 2)])
+        self.assertNotIn("/sys", argv)
+
+    def test_failed_base_merge_aborts_the_owned_conflicted_index(self):
+        with tempfile.TemporaryDirectory(prefix="pr-watch-conflict-abort-") as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            (root / "file.txt").write_text("base\n")
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+            subprocess.run(["git", "checkout", "-qb", "pr"], cwd=root, check=True)
+            (root / "file.txt").write_text("pr\n")
+            subprocess.run(["git", "commit", "-qam", "pr"], cwd=root, check=True)
+            head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            subprocess.run(["git", "checkout", "-q", "main"], cwd=root, check=True)
+            (root / "file.txt").write_text("main\n")
+            subprocess.run(["git", "commit", "-qam", "main"], cwd=root, check=True)
+            base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            subprocess.run(["git", "checkout", "-q", "pr"], cwd=root, check=True)
+            current = pr(head=head, baseRefOid=base)
+            with patch.object(pr_watch_repair, "fetch_current_main", return_value=base):
+                with self.assertRaises(pr_watch_common.WatchError):
+                    pr_watch_repair.merge_base_in_isolation(current, root, base)
+            self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(), head)
+            self.assertEqual(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True), "")
+
+    def test_repair_worker_refuses_without_bwrap(self):
+        with patch.object(pr_watch_repair.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "bwrap"):
+                pr_watch_repair.repair_worker_argv(["claude", "--version"], self.root)
 
     def test_dry_run_repair_failure_never_comments(self):
         self.watcher.dry_run = True
@@ -852,6 +932,69 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "enqueue") as enqueue:
             self.watcher.discover()
         enqueue.assert_called_once()
+
+    def test_conflict_repair_consumes_one_round_and_verifies_before_push(self):
+        calls = []
+        def update(repo, current, worktree, base, reviewer, before_conflict):
+            self.assertEqual(reviewer, self.config["reviewer"])
+            before_conflict()
+            return SHA_B
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", side_effect=update), \
+                patch.object(pr_watch_repair, "merged_main", return_value=SHA_BASE), \
+                patch.object(pr_watch, "verify", side_effect=lambda *args, **kwargs: calls.append("verify") or []), \
+                patch.object(pr_watch, "checked", side_effect=lambda *args, **kwargs: calls.append("privacy") or ""), \
+                patch.object(pr_watch_repair, "push_updated_head", side_effect=lambda *args: calls.append("push")), \
+                patch.object(self.watcher, "merge") as merge:
+            self.watcher.process("example/one", 7)
+        self.assertEqual(calls, ["verify", "privacy", "push"])
+        merge.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 1)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
+
+    def test_failed_conflict_attempt_still_consumes_its_round(self):
+        def update(repo, current, worktree, base, reviewer, before_conflict):
+            before_conflict()
+            raise pr_watch_common.WatchError("worker could not resolve the conflict")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", side_effect=update), \
+                patch.object(self.watcher, "merge") as merge:
+            self.watcher.process("example/one", 7)
+        merge.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 1)
+
+    def test_clean_merge_does_not_consume_a_conflict_round(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", return_value=False) as update, \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        update.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7).get("repair_rounds", 0), 0)
+
+    def test_conflict_resolution_requires_a_successful_privacy_scan_before_commit(self):
+        calls = []
+        def checked(argv, **kwargs):
+            calls.append(argv)
+            if argv[:2] == ["git", "rev-parse"]:
+                if argv[2] == "MERGE_HEAD":
+                    return SHA_BASE + "\n"
+                if argv[2] == "HEAD":
+                    return SHA_A + "\n"
+                return SHA_B + "\n"
+            if argv[:3] == ["git", "diff", "--name-only"] and "--diff-filter=U" in argv:
+                return "conflicted.txt\0" if len([x for x in calls if x[:2] == ["git", "write-tree"]]) == 0 else ""
+            return ""
+        with patch.object(pr_watch_repair, "repair_repository_copy", return_value=nullcontext(self.root)), \
+                patch.object(pr_watch_repair, "run", return_value=subprocess.CompletedProcess([], 1, "", "conflict")), \
+                patch.object(pr_watch_repair, "repair_worker_argv", return_value=["worker"]), \
+                patch.object(pr_watch_repair, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch_repair, "index_entries", return_value=[]), \
+                patch.object(pr_watch_repair, "copy_conflict_resolution"), \
+                patch.object(pr_watch_repair, "checked", side_effect=checked):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_repair.repair_merge_conflict("example/one", pr(), self.root, SHA_BASE, {})
+        self.assertFalse(any("commit" in argv for argv in calls if argv and argv[0] == "git"))
 
     def test_failure_summary_retains_actual_errors(self):
         result = subprocess.CompletedProcess([], 1, "PASS earlier lane\n" + "\n".join("ordinary" for _ in range(200)) +
@@ -984,6 +1127,37 @@ class WatcherTests(unittest.TestCase):
                 self.assertEqual(self.watcher.queue_priority("example/one", 8, SHA_B), 1)
                 self.watcher.state.data["prs"]["example/one#8"].update(
                     {"retry_after": 0, "outcome": "failed", "blocking": False})
+
+    def test_portable_two_repository_example_has_no_private_configuration(self):
+        path = HERE / "pr-watch.persona.example.json"
+        config = pr_watch.load_config(path)
+        self.assertEqual(config["workers"], 10)
+        self.assertEqual(config["reviewer"]["timeout_seconds"], 2700)
+        self.assertEqual([item["name"] for item in config["repositories"]],
+                         ["nwverse/persona", "nwverse/persona-extensions"])
+        self.assertEqual([item["verify"]["profile"] for item in config["repositories"]],
+                         ["persona", "extensions"])
+        self.assertTrue(all(item["merge"] is False for item in config["repositories"]))
+        text = path.read_text()
+        self.assertNotIn("/home/", text)
+        self.assertNotIn("/data00/", text)
+        self.assertNotIn("token", text.lower())
+        service = (HERE / "persona-pr-watch.example.service").read_text()
+        self.assertIn("EnvironmentFile=-%h/.config/persona/pr-watch.env", service)
+        self.assertNotIn("Environment=ANTHROPIC", service)
+        self.assertNotIn("/home/", service)
+
+    def test_ten_workers_start_and_stop_cleanly(self):
+        self.config["workers"] = 10
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        watcher.start_workers()
+        self.addCleanup(watcher.stopping.set)
+        self.assertEqual(len(watcher.workers), 10)
+        for _ in watcher.workers:
+            watcher.tasks.put((2, -1, ("", 0)))
+        for worker in watcher.workers:
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
 
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"
