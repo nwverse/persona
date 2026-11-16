@@ -465,6 +465,11 @@ Phase 3 lands in several PRs.
     description is retained. Offset timestamps are normalized to whole-second UTC. Malformed input and a wrong expected
     object are rejected. This is not rendered `ChatLine`, complete TaskIndex consumer state, UI badges, actual
     background execution or timing evidence.
+  - `persona_core::viewed_images` covers the tool-call viewed-image leaf (#8860). Real Kotlin/JNI compares the
+    complete post-overlay `vi-2#0` line for `tool_images_belong_to_call`, including `d:` identity from the original
+    image payload and its owning image turn, plus duplicate/running/error/Read-extension and wrong-expected negatives.
+    The owner comes from the existing turn projection and tool-step id, not from confusing `tool_use_id` with the use
+    item id. This is not full `ChatLine`, folded-image, UI loading, actual tool execution or performance evidence.
   - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
     boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
