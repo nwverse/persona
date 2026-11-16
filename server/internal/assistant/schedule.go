@@ -107,6 +107,10 @@ type Task struct {
 	// Space is the space of the conversation that set it up ("health", docs/assistant/health.md): a run that starts a conversation
 	// starts it there. "" is the assistant's own.
 	Space string `json:"space,omitempty"`
+	// StartGrant: the owner let this schedule's own rounds start some kinds of task without the plan card (#8045,
+	// schedule_grant.go). The hub's: only the owner's Start on the card of one of its rounds adds to it; no app body and
+	// no tool sets or widens it, and a change of the prompt or of where it runs drops it.
+	StartGrant *StartGrant `json:"start_grant,omitempty"`
 	// CreatedBy is "assistant" for tasks Persona set up from a conversation.
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
@@ -288,6 +292,8 @@ type schedule struct {
 	// news again; a skip that finds the conversation no longer waiting, a run going in, or the task deleted clears it.
 	// In memory only: a hub restart pushes a wait once more.
 	waitTold map[string]string
+	// rounds: by machine NUL conversation, the rounds the hub is sending there (schedule_grant.go noteRound); in memory only.
+	rounds map[string][]schedRound
 	// limitWait: tests' wait before retrying a run a usage limit stopped (nil: until the reset, limitRetryWait).
 	limitWait func(reset, now time.Time) time.Duration
 }
@@ -468,6 +474,7 @@ func (s *Service) saveLocked(sc *schedule, tasks []Task) error {
 	if tasks == nil {
 		tasks = []Task{} // null would read as "never moved over"
 	}
+	dropStaleGrants(tasks) // a prompt or target changed since the owner's grant: it no longer applies (schedule_grant.go)
 	if st := s.store(); st != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1756,7 +1763,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params, s.lang(ctx))
 			if err == nil {
-				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
+				s.noteRound(m.ID, t.SessionID, t.ID, time.Now()) // before it is sent: its turn may plan at once (schedule_grant.go)
+				if err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil); err != nil {
+					s.endRound(m.ID, t.SessionID, t.ID)
+				}
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
@@ -1799,7 +1809,10 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
 			err := s.applyModel(ctx, "task."+t.ID, params)
 			if err == nil {
-				err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params)
+				s.noteRound(m.ID, t.RunSessionID, t.ID, time.Now())
+				if err = s.resumeOwn(ctx, m.ID, t.RunSessionID, params); err != nil {
+					s.endRound(m.ID, t.RunSessionID, t.ID)
+				}
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.RunMachineID, t.RunSessionID
@@ -1820,6 +1833,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		return proto.Session{}, err
 	}
 	run.MachineID, run.SessionID = sess.MachineID, sess.SessionID
+	s.noteRound(sess.MachineID, sess.SessionID, t.ID, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher)
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
@@ -1983,6 +1997,7 @@ func (s *Service) startScheduledRun(run ScheduleRun, t Task, m *Device) {
 	}
 	run.ID = s.recordRun(run)
 	if m == nil || run.ID == "" {
+		s.endRound(run.MachineID, run.SessionID, t.ID) // no watcher to see its turn end: its plans ask
 		// There's no watcher to confirm success. Discard the draft so the next run reads only the last saved note.
 		s.takeTaskStateDraft(t.stateRunKey)
 		return
@@ -1995,6 +2010,8 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	ctx, cancel := context.WithTimeout(context.Background(), runWatchTimeout)
 	defer cancel()
 	ended, ran := s.waitTurnEnd(ctx, m.ID, run.SessionID)
+	// Its turn ended (or is no longer followed): a later turn there is not its round, and a retry below notes its own.
+	s.endRound(m.ID, run.SessionID, t.ID)
 	if !ended {
 		return
 	}

@@ -84,6 +84,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs = "", "", "", nil
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
+		// The hub's too: the scheduled round this plan comes from is the hub's to tell (scheduledRoundOf, #8045).
+		t.Schedule, t.ScheduleTitle = "", ""
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
 		// real health detour and its first-detour guard keeps the true original machine (#2271).
 		t.Reroute = nil
@@ -203,6 +205,23 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
 		return "", err
 	}
+	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
+	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in the health
+	// space, whose plans always wait for Start.
+	var round string
+	var roundItems []proto.Item
+	if scope == nil && !s.inHealth(ctx, sessionID) {
+		round, roundItems = s.scheduledRoundOf(ctx, machine, sessionID)
+		if round != "" {
+			title := ""
+			if st, ok := s.scheduledTask(ctx, round); ok {
+				title = st.labelIn(s.lang(ctx))
+			}
+			for i := range a.Tasks {
+				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle = round, title
+			}
+		}
+	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen, CreatedAt: now, UpdatedAt: now}
@@ -238,7 +257,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString(dups)
 		return b.String(), nil
 	}
-	if health || !s.planStartsAtOnce(ctx, p.Tasks) {
+	var granted func() func(PlanTask) bool
+	if round != "" {
+		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, machine, sessionID, round, roundItems) }
+	}
+	if health || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSuggestion(ctx, p, s.lang(ctx))})
 		// A card below the answer is easy to miss: push it as well.
 		titles := make([]string, 0, len(p.Tasks))
@@ -272,7 +295,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, or a kind the user trusts):\n", len(started.Tasks))
+	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (read-only, asked for by the user, a kind the user trusts, or one "+
+		"the user lets this scheduled task start):\n", len(started.Tasks))
 	for _, t := range started.Tasks {
 		if t.Error != "" {
 			fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
