@@ -330,9 +330,10 @@ import UserNotifications
     /// asks "End the Meeting?" once it shows.
     static func openRecordings(askingEnd: String? = nil) {
         // A sheet swiped away on the page already in front comes back (`recordingLiveSheet`). The End asks only for the
-        // recording running now: an older activity's tap never asks later, on another page.
-        let running = RecordingCapture.shared.recordingID?.uuidString.lowercased()
-        RecordingLivePresenter.shared.open(askingEnd: askingEnd == running ? askingEnd : nil)
+        // recording running now: an older activity's tap never asks later, on another page. The capture is read only for
+        // an End: made on first use, it recovers what an earlier run left open, and every other open stays as it was.
+        let asking = askingEnd.flatMap { id in RecordingCapture.shared.recordingID?.uuidString.lowercased() == id ? id : nil }
+        RecordingLivePresenter.shared.open(askingEnd: asking)
         showRecordings()
     }
 
