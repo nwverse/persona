@@ -184,11 +184,20 @@ func (p *phoneScreens) restoreLeftovers(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	if err := run(ctx, helper); err != nil {
+	err := run(ctx, helper)
+	_, left := os.Stat(file())
+	switch {
+	case left != nil && err != nil:
+		// `open -W` can't wait on a helper that has already finished (its records were for windows that are gone): the
+		// records are gone, so it did its work. Not a failure.
+		p.logf("phone screen: put back what a session left (nothing to wait for)")
+	case err != nil:
 		p.logf("phone screen: putting back what a session left: %v", err)
-		return
+	case left == nil:
+		p.logf("phone screen: some of what a session left is kept for later (an app that didn't answer)")
+	default:
+		p.logf("phone screen: put back what a session left")
 	}
-	p.logf("phone screen: put back what a session left")
 }
 
 // errPhoneHelper is a helper that stopped answering or answered nonsense: the session is over.

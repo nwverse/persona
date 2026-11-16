@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -322,5 +325,34 @@ func TestPhoneScreenLeftoversArePutBack(t *testing.T) {
 	w2.node.phones.restoreLeftovers(ctx)
 	if n := w2.restores.Load(); n != 0 {
 		t.Fatalf("ran without the permission (%d)", n)
+	}
+}
+
+// `open -W` fails when the helper finished before it could wait (#9500's follow-up): with the records gone that is a
+// done restore, never logged as a failure; with records still there the failure is logged.
+func TestPhoneScreenRestoreLogsNoFalseFailure(t *testing.T) {
+	ctx := context.Background()
+	w := newPhoneWorld(t, "post_event: granted\nphone_screen: 1 granted\n")
+	var mu sync.Mutex
+	var lines []string
+	w.node.phones.logf = func(f string, a ...any) { mu.Lock(); lines = append(lines, fmt.Sprintf(f, a...)); mu.Unlock() }
+	w.node.phones.restoreRun = func(context.Context, string) error {
+		_ = os.Remove(w.records) // the helper put everything back and exited before open could wait
+		return errors.New("open: exit status 1: Unable to block on application")
+	}
+	if err := os.WriteFile(w.records, []byte(`{"records":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.node.phones.restoreLeftovers(ctx)
+	w.node.phones.restoreRun = func(context.Context, string) error { return errors.New("open: no such app") }
+	if err := os.WriteFile(w.records, []byte(`{"records":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w.node.phones.restoreLeftovers(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) != 2 || strings.Contains(lines[0], "Unable") || !strings.Contains(lines[0], "put back") ||
+		!strings.Contains(lines[1], "no such app") {
+		t.Fatalf("logged %q", lines)
 	}
 }
