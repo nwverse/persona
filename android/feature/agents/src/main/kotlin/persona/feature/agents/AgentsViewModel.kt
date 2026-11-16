@@ -15,6 +15,15 @@ import java.time.Instant
 import java.util.UUID
 
 private data class GroupListCounts(val filter: SessionListFilter, val revision: String, val counts: SessionListCounts)
+
+/** iOS `AppModel.heldInList`: latch only on entering an Unread chat, then release when the visible chat changes or closes. */
+internal fun heldInListKey(rows: List<AgentSession>, visible: String?, previous: String?): String? = when {
+    previous != null && previous == visible -> previous
+    previous != null -> null
+    rows.any { it.id == visible && it.state == AgentState.Unread } -> visible
+    else -> null
+}
+
 private data class ListInputs(val settings: AgentListSettings, val group: GroupFilter?, val assistant: persona.core.contracts.api.CurrentAssistant?, val visible: SessionKey?)
 
 /** What the hub's paged search matches: the search's words, not its conditions ([AgentQuery]), which it does not read. */
@@ -133,7 +142,7 @@ internal class AgentsViewModel(
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.
     @Volatile private var previous: AgentListResult? = null
-    /** Set only while that Agent chat remains visible and its row was Unread there; shadow input only. */
+    /** Set only while that Agent chat remains visible and its row was Unread there (iOS AppModel.heldInList). */
     private var heldInList: String? = null
     // Only touched while building [page]: one build at a time, so it needs no more.
     private var previousContext: List<Any?>? = null
@@ -239,11 +248,7 @@ internal class AgentsViewModel(
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
             grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
         val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy")) }
-        val heldSession = visible?.path?.takeIf { key ->
-            if (heldInList != key) heldInList = null
-            if (heldInList == null && rows.any { it.id == key && it.state == AgentState.Unread }) heldInList = key
-            heldInList != null
-        }
+        val heldSession = heldInListKey(rows, visible?.path, heldInList).also { heldInList = it }
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)

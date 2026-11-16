@@ -14,8 +14,8 @@ const documents = readdirSync(fixtureDir).filter((f) => f.endsWith('.json')).sor
   file, ...JSON.parse(readFileSync(new URL(file, fixtureDir), 'utf8')),
 }));
 const cases = documents.filter((doc) => doc.operation === 'agents_list').flatMap((doc) => doc.cases);
-assert.equal(cases.length, 30, 'the exact checked-in projection corpus');
-assert.equal(new Set(cases.map((c) => c.name)).size, 30, 'unique case names');
+assert.equal(cases.length, 33, 'the exact checked-in projection corpus');
+assert.equal(new Set(cases.map((c) => c.name)).size, 33, 'unique case names');
 const prefs = {pinsSpaces: [], pinsSessions: [], mutesSpaces: [], mutesSessions: [], mutesAllowed: []};
 
 function nativeInput(c) {
@@ -39,7 +39,7 @@ function nativeInput(c) {
 }
 
 // Complete structural projection through the actual production snapshot function, never a second native implementation.
-test('all 30 fixtures reach both native ArkTS and the real core; differences are reported, not hidden', async () => {
+test('all 33 fixtures reach both native ArkTS and the real core; differences are reported, not hidden', async () => {
   const host = new HostCore(helperPath);
   try {
     const results = [];
@@ -70,7 +70,7 @@ test('all 30 fixtures reach both native ArkTS and the real core; differences are
     const matched = results.filter((r) => r.matched).length;
     const rules = [...new Set(results.flatMap((r) => r.rules))].sort();
     console.log(`  production ArkTS/core projection: ${matched}/${results.length} equal; ${results.length - matched} recorded by #8966; rules=${rules.join(',')}`);
-    assert.equal(results.length, 30);
+    assert.equal(results.length, 33);
     assert.ok(matched < results.length, 'the parity oracle must not silently erase the known native/iOS mismatch (#8966)');
     assert.deepEqual(rules, ['counts', 'group-order', 'unread-shown']);
     assert.equal(matched, 1, 'current host baseline; #8966 must update this expectation as parity improves');
