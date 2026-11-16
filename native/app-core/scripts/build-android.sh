@@ -4,9 +4,11 @@
 set -euo pipefail
 
 WORKSPACE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+CARGO_OUTPUT=${CARGO_TARGET_DIR:-$WORKSPACE/target}
 OUTPUT=${1:-"$WORKSPACE/build/android"}
 SYMBOLS=${2:-"$WORKSPACE/build/android-symbols"}
 REPORTS=${3:-"$WORKSPACE/build/android-reports"}
+CARGO_FEATURES=${PERSONA_ANDROID_CARGO_FEATURES:-}
 [[ $OUTPUT != "$SYMBOLS" && $OUTPUT != "$REPORTS" && $SYMBOLS != "$REPORTS" ]] || {
   printf 'Android core build: FAILED (jni, symbols and reports need distinct output roots)\n' >&2; exit 2;
 }
@@ -73,8 +75,8 @@ for pair in 'arm64-v8a:aarch64-linux-android' 'x86_64:x86_64-linux-android'; do
   abi=${pair%%:*}
   target=${pair#*:}
   printf 'Android core build: building %s (%s)\n' "$abi" "$target"
-  (cd "$WORKSPACE" && cargo +1.98.0 build --locked --release --target "$target" -p persona-core-ffi)
-  raw=$WORKSPACE/target/$target/release/libpersona_core.so
+  (cd "$WORKSPACE" && cargo +1.98.0 build --locked --release --target "$target" -p persona-core-ffi ${CARGO_FEATURES:+--features "$CARGO_FEATURES"})
+  raw=$CARGO_OUTPUT/$target/release/libpersona_core.so
   destination=$OUTPUT/$abi
   mkdir -p "$destination" "$SYMBOLS/$abi" "$REPORTS"
   cp "$raw" "$SYMBOLS/$abi/libpersona_core.so"

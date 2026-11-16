@@ -1153,12 +1153,28 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   sendNow.current = onSend;
   const send = useCallback((out: Outgoing) => sendNow.current(out), []);
   // The assistant's tasks (docs/assistant/unified-entry.md): the conversation's feed, and the main one's "Today" card.
-  const feed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
+  const taskFeed = useFeed((s) => (assistant ? (s.feeds[sid] ?? NO_FEED) : NO_FEED));
   useEffect(() => {
     if (!assistant) return;
     void loadFeed(sid);
     if (sid === mainConversation) void loadToday(sid);
   }, [assistant, sid, mainConversation]);
+  // Its urgent calls (docs/assistant/urgent-call.md), each a row at its time among the feed: read by a module of their own.
+  const [calls, setCalls] = useState<FeedItem[]>(NO_FEED);
+  useEffect(() => {
+    if (!assistant) return;
+    let stop: (() => void) | undefined;
+    let gone = false;
+    void import("../assistant/urgent-calls").then((m) => {
+      if (!gone) stop = m.watchCalls(sid, setCalls);
+    });
+    return () => {
+      gone = true;
+      stop?.();
+      setCalls(NO_FEED);
+    };
+  }, [assistant, sid]);
+  const feed = useMemo(() => (calls.length ? [...taskFeed, ...calls].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)) : taskFeed), [taskFeed, calls]);
   // The "Today" card's actions say something to Persona here.
   useEffect(() => {
     if (!assistant) return;

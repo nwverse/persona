@@ -8,8 +8,8 @@ One Rust library under the iOS, Android and HarmonyOS clients' native UIs. Desig
 | Crate | What it is |
 | --- | --- |
 | `persona-core` | Pure logic: no IO, no clock, no FFI, no `unsafe`. Today it holds `continuity` (a chat's items, how far they are complete, and what to fetch), ported from the rules every client implements (`spec/fixtures/continuity`). `transport` decodes the hub's continuity payloads from raw bytes into `continuity`'s inputs (see "Transport decoding" below). |
-| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` only queues an action's bytes. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
-| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. |
+| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` is lock-free on the caller: it pushes an encoded action onto the worker's channel, with the pending count and stop flag in atomics. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
+| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. The JNI dispatch moves the action bytes into the worker's channel without a second copy. |
 | `persona-core-ohos` | HarmonyOS's single NAPI library. Its default host build tests the close-safe runtime registry and all shared fixtures; the `ohos` feature adds ohos-rs's NAPI entry points and thread-safe callbacks, supplied by the device runtime. |
 | `persona-core-typegen` | Generates the clients' bincode codecs for the `wire` types: Kotlin to android/core/rustcore, Swift to apple/Packages/PersonaCore and ArkTS to harmony/entry/src/main/ets/core/rustcore. All are committed and checked for drift. |
 
@@ -70,9 +70,10 @@ The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JN
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
 fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
 visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
-The fence-only StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
-stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation, partial markers
-and malformed/wrong-expected controls. Tables, inline markup, math and `plainOpenFence` are not implemented.
+The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
+partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
+`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
@@ -136,6 +137,32 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## Android Agents-list adapter and sort shadow (#8954)
+
+`:feature:agents` supplies its existing scoped list projection to `AgentListAdapter`. Kotlin remains authoritative; the
+default factory and the entire Release source set return only `KotlinAgentListAdapter`, with no observer or shadow class.
+The optional DEBUG observer uses `projectSort` on its own FIFO worker after the Kotlin result has returned. Enable it in
+JVM tests with `-Ppersona.sort=shadow`, or launch `DebugEntryActivity` with `--es debug.sortShadow on`, then force-stop
+and relaunch (`off` disables it). Reports use the `PersonaCoreShadow` tag and hold only `agents-list-sort`, a rule code
+and counts/flags/enum values: never titles, paths, queries, identifiers or exception messages.
+
+The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
+use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
+headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
+identity and includes the core's `held` field from the shell's visible Agent chat when the row remains Unread. The
+production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
+instant makes `since:` searches deterministic. The 30 checked-in `agents_list` fixtures pass through both production
+Kotlin and the real host JNI projection; additional real-JNI cases found #9027 (multi-hub pin identity in the core)
+and #9033 (Android does not yet implement iOS's `heldInList`). Those differences are recorded, not hidden or changed
+to match Rust.
+
+Release has no sort-shadow implementation and its native library does not export `Java_..._projectSort`. The app still
+packages the other core entry points for the existing packaging work: this is a strict boundary for this shadow, not a
+claim that the whole native library is absent. `buildAndroidReleaseCore` builds its own Cargo target and checks both
+ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally prove that no shadow class is on the
+classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
+production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
+not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
 ## HarmonyOS Agents-list adapter (#8957)
 
 `AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
@@ -156,7 +183,6 @@ both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `co
 membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
-
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
@@ -275,9 +301,12 @@ Neither replay executed Swift, iOS, a simulator, a production adapter or a physi
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 
-- **Keys only other events use.** iOS's `Envelope` is one struct for every event type, so iOS also drops an `items`
-  frame when such a key (`rows`, `features`, `fleet`, …) has the wrong type. The core checks the keys an `items`
-  frame carries and ignores the rest, so it does not follow every unrelated addition to the Swift struct.
+- **Shared scalar / raw-JSON Envelope keys are checked before routing (#8995).** iOS decodes its shared `Envelope`
+  before choosing an event. `decode_frame` now rejects a wrong-typed known scalar, list shape or raw `JSONValue`
+  number even when another event owns the key (`rows`, `features`, `state`, `backlog`, `args`, …). An unknown event
+  type remains `Frame::Other`; it is not treated as a continuity event. The #8955 source-derived fixture replays this
+  production gate, and the real host Kotlin/JNI, ArkTS and independently compiled C ABI paths check the same rules.
+  The production Item JSON and exact `bad_item` locations are unchanged; `dispatch` still only queues bytes.
 - **Nested structs the core does not read.** iOS refuses a payload when an item's `image`, `task`, `compact`,
   `injected` or `model_refusal`, or a fold's `images` or `tasks`, fails to decode. The core accepts it.
 - **Number spellings the hub never writes.** The core takes integer literals only and refuses `8.0` or `8e0`, which

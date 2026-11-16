@@ -310,6 +310,7 @@ func New(o Options) *Service {
 	s.skillRoutes()
 	s.workoutRoutes()
 	s.scheduleRoutes()
+	s.scheduleGrantRoutes()
 	s.placeRoutes()
 	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
 	s.repositoryRoutes()
@@ -596,6 +597,8 @@ type startParams struct {
 	Origin         string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
 	OriginRef      string               `json:"origin_ref,omitempty"`
 	Source         *proto.MessageSource `json:"source,omitempty"`
+	// NewSessionID starts the conversation under this id (a Claude Code one; another agent picks its own).
+	NewSessionID string `json:"new_session_id,omitempty"`
 }
 
 // kbReady: there is a knowledge base (kb.go; on, opened or about to).
