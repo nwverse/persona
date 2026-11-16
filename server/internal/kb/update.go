@@ -242,7 +242,7 @@ func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	}
 	d.Meta = raw
 	if kind == KindRecording {
-		d.Meta = metaWithMeeting(raw, meeting)
+		d.Meta = metaWithNameSource(metaWithMeeting(raw, meeting))
 	}
 	if kind == KindProject {
 		d.Log = e.Store.Log(id, 30)

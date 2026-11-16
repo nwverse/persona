@@ -77,6 +77,10 @@ func TestTranslateKeepsNonClaudeScreeningModel(t *testing.T) {
 
 func TestTranslatePatchDoesNotChangeOtherCategories(t *testing.T) {
 	s, _, _ := modelService(t)
+	title := purposeOf(t, s, purposeMeetingTitle)
+	if title.Parent != "kb" || title.CategoryID != "kb" {
+		t.Fatalf("meeting titles no longer follow information processing: %+v", title)
+	}
 	translationProvider(t, s, "translation", "translation-default", "")
 	for id, binding := range map[string]ModelBinding{
 		"assistant":    {Provider: "launcher.main", Model: "main-model"},
@@ -95,9 +99,10 @@ func TestTranslatePatchDoesNotChangeOtherCategories(t *testing.T) {
 		t.Fatalf("translation binding = %+v, %v", got, err)
 	}
 	for id, want := range map[string]ModelBinding{
-		"assistant":    {Provider: "launcher.main", Model: "main-model"},
-		"kb":           {Provider: "legacy.kb", Model: "knowledge-model"},
-		"inbox.triage": {Provider: "legacy.triage", Model: "screening-model"},
+		"assistant":         {Provider: "launcher.main", Model: "main-model"},
+		"kb":                {Provider: "legacy.kb", Model: "knowledge-model"},
+		"inbox.triage":      {Provider: "legacy.triage", Model: "screening-model"},
+		purposeMeetingTitle: {Provider: "legacy.kb", Model: "knowledge-model"},
 	} {
 		got, err := s.resolveModel(context.Background(), id)
 		if err != nil || got.Provider != want.Provider || got.Model != want.Model {

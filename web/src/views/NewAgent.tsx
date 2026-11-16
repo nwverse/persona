@@ -240,20 +240,24 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setWtError("");
     return retirePreparation;
   }, [open, preset, mid, cwd, workspace, manager, credential, targetOnline]);
+  // a Paseo workspace picked from the list (#8856) can still start in a new worktree of its repository, which Paseo
+  // makes as a workspace of its own; an Orca one makes its worktrees through Orca's own New Worktree
+  const paseoPicked = workspacePicked && workspace?.host === "paseo";
   const [repo, setRepo] = useState<WorktreeStatus | null>(null);
   useEffect(() => {
     setRepo(null);
     const dir = cwd.trim();
-    if (!open || !mid || !dir || workspace) return;
+    if (!open || !mid || !dir || (workspace && !paseoPicked)) return;
     const c = new AbortController();
     // the engine it opens in says where its worktree goes (Paseo makes its own)
-    const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal, host || undefined).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
+    const kind = paseoPicked ? "paseo" : host || undefined;
+    const timer = setTimeout(() => void worktreeStatus(mid, dir, c.signal, kind).then((st) => { if (!c.signal.aborted) setRepo(st); }), 400);
     return () => {
       clearTimeout(timer);
       c.abort();
     };
-  }, [open, mid, cwd, workspace, manager, credential, host]);
-  const worktreeOffered = !workspace && Boolean(repo?.path);
+  }, [open, mid, cwd, workspace, paseoPicked, manager, credential, host]);
+  const worktreeOffered = (!workspace || paseoPicked) && Boolean(repo?.path);
   // Back to a folder: typed, browsed or a recent one, on the computer's default engine.
   const clearWorkspace = () => {
     retirePreparation();
@@ -592,7 +596,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const setup = { machine: mid, cwd: dir, launcher, model: picks.model ?? "", agent_type: agent, mode: claude ? permissionMode : "", effort: claude ? (picks.effort ?? "") : "" };
     // only an explicit "on" is sent: off is what a new Claude is anyway
     const ultra = ultracodeShown && !ultracodeBlocked && ultracode ? true : undefined;
-    const launch = (dir: string) => {
+    const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
@@ -600,7 +604,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       const inline = !workspace && !desktopStart && launchersOf === mid && agent === "traex"
         ? inlineTextStart(launchers.find((l) => l.name === listLauncher), opensIn ?? hostDefault, snapshot.text, snapshot.attachments.length)
         : undefined;
-      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId: workspace?.workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent,
+      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, launcher, ...picks, permissionMode: permissionMode || undefined, host: opensIn, ultracode: ultra, text: snapshot.text, attachments: sent,
         ...(codex ? { agentType: "codex", inlinePrompt: true } : inline) });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
@@ -611,13 +615,14 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setForwards([]);
       dismiss();
     };
-    // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts
-    if (!workspace && inWorktree && worktreeOffered && !desktopScratch) {
+    // in a worktree of its own (#6115): made first, by the engine it opens in; a failure says why here, and nothing starts.
+    // From a picked Paseo workspace (#8856) the start goes into the workspace Paseo made for the worktree, not the one picked.
+    if ((!workspace || paseoPicked) && inWorktree && worktreeOffered && !desktopScratch) {
       setWtBusy(true);
       setWtError("");
       void addAgentWorktree(mid, cwd.trim(), agentNameHint(prompt, cwd), wtBranch, { signal: controller.signal, token, tokenOwner: owner }, opensIn)
         .then(
-          (wt) => launch(wt.path),
+          (wt) => launch(wt.path, paseoPicked ? wt.workspace_id || undefined : undefined),
           (e) => {
             if (!current()) return;
             submitted.current = false;
@@ -631,7 +636,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
         });
       return;
     }
-    launch(workspace ? workspace.cwd : dir);
+    launch(workspace ? workspace.cwd : dir, workspace?.workspaceId);
   };
 
   if (none)
