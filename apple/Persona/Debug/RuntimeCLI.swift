@@ -26,6 +26,16 @@ enum RuntimeCLI {
         .merging(imageViewerCommands) { core, _ in core }
         .merging(agentsPagingCommands) { core, _ in core }
         .merging(screenRoutesTable) { core, _ in core }
+        .merging(recordingTable) { core, _ in core }
+
+    /// The recording being made (#9417), on the phone only.
+    private static var recordingTable: [String: Command] {
+        #if os(iOS)
+        recordingCommands
+        #else
+        [:]
+        #endif
+    }
 
     /// The live screen's routes (#6398), on the phone only.
     private static var screenRoutesTable: [String: Command] {

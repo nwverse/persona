@@ -84,7 +84,7 @@ final class MeetingReplayUITests: XCTestCase {
         let open = app.buttons["recording-wrapup-open"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 5), app.debugDescription)
         open.tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "写好发布说明")).firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["新版录音入口已合进主干，开始录音只要一步"].firstMatch.waitForExistence(timeout: 10),
                       "the tape's minutes aren't shown: \(app.debugDescription)")
         try shot(app, "minutes")
         XCTAssertNil(try upload(hub, replayed), "the replayed meeting went to the hub")
@@ -105,6 +105,11 @@ final class MeetingReplayUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 15), app.debugDescription)
         let row = element(app, "meeting-transcription-line")
         XCTAssertTrue(waitFor(20) { row.exists && row.label.contains("云端") }, "the start isn't on the hub: \(row.label)")
+        // Persona answering on screen, as the lane's sample meetings run.
+        let invite = app.buttons["meeting-invite-persona"].firstMatch
+        XCTAssertTrue(invite.waitForExistence(timeout: 5), app.debugDescription)
+        invite.tap()
+        XCTAssertTrue(element(app, "meeting-persona-invited").waitForExistence(timeout: 5), app.debugDescription)
         start.tap()
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting room:\n\(app.debugDescription)")
         // Nothing asked for the microphone: the file stands in for it.

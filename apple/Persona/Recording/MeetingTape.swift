@@ -175,12 +175,16 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
 /// Writes the tape of a meeting recorded from an audio file (`-openMeetingAudio`): from the moment it records, every
 /// change of what the meeting room is shown (`MeetingTranscription`'s caption, lines and problem, `MeetingConversation`'s
 /// room, topics and highlights), stamped with when it came; at Stop the length and the phone's own lines; then, read from
-/// the hub every 15 seconds for up to 20 minutes, the minutes. It follows the stores (Observation), so nothing in the
-/// meeting's own code knows of it. Written to `MeetingTape.folder` a second after each change and at once at the end.
+/// the hub every 15 seconds for up to 20 minutes, the minutes. A tape that ended without its minutes (the app quit before
+/// the hub wrote them) goes on waiting for them at the next launch of such a run. It follows the stores (Observation), so
+/// nothing in the meeting's own code knows of it. Written to `MeetingTape.folder` a second after each change and at once
+/// at the end.
 @MainActor final class MeetingTapeRecorder {
     static let shared = MeetingTapeRecorder()
 
-    private var tape: MeetingTape?
+    /// Every tape this run writes, by recording: the one being recorded and those waiting for their minutes.
+    private var tapes: [UUID: MeetingTape] = [:]
+    /// The recording being taped now.
     private var id: UUID?
     private var began = Date()
     private var stopped = false
@@ -188,10 +192,12 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
     private var writeDue: Task<Void, Never>?
     private let log = Logger(subsystem: "persona", category: "recording")
 
-    /// At launch: follows the recordings of a run with `-openMeetingAudio`; nothing otherwise.
+    /// At launch: follows the recordings of a run with `-openMeetingAudio`, and waits on for the minutes of tapes from
+    /// earlier runs; nothing otherwise.
     static func startIfAsked() {
         guard UserDefaults.standard.string(forKey: RecordingFileInput.key) != nil else { return }
         shared.follow()
+        Task { await shared.resumeWaiting() }
     }
 
     private func follow() {
@@ -199,7 +205,7 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
             Task { @MainActor in MeetingTapeRecorder.shared.follow() }
         }
         // The recording's clock is read outside the tracking: it moves ten times a second.
-        guard !changes.isEmpty, var tape else { return }
+        guard !changes.isEmpty, let id, var tape = tapes[id] else { return }
         let t = Date().timeIntervalSince(began)
         let at = stopped ? tape.duration : RecordingCapture.shared.elapsed
         for change in changes {
@@ -208,7 +214,7 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
             event.at = at
             tape.events.append(event)
         }
-        self.tape = tape
+        tapes[id] = tape
         scheduleWrite()
     }
 
@@ -255,21 +261,20 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
         id = entry.id
         began = entry.createdAt
         let attendance = entry.attendance
-        tape = MeetingTape(title: entry.displayTitle, startedAt: entry.createdAt,
-                           audio: UserDefaults.standard.string(forKey: RecordingFileInput.key).map { ($0 as NSString).lastPathComponent },
-                           locale: entry.locale, transcription: attendance?.transcription?.rawValue,
-                           service: MeetingTranscription.shared.service, role: attendance?.role.rawValue)
+        tapes[entry.id] = MeetingTape(title: entry.displayTitle, startedAt: entry.createdAt,
+                                      audio: UserDefaults.standard.string(forKey: RecordingFileInput.key).map { ($0 as NSString).lastPathComponent },
+                                      locale: entry.locale, transcription: attendance?.transcription?.rawValue,
+                                      service: MeetingTranscription.shared.service, role: attendance?.role.rawValue)
         log.notice("tape: recording meeting \(entry.id.uuidString, privacy: .public)")
     }
 
     /// Stop: the length, the phone's own lines and the title now; then the minutes.
     private func stop(_ id: UUID) {
         stopped = true
-        guard var tape else { return }
+        guard var tape = tapes[id] else { return }
         tape.endedAfter = Date().timeIntervalSince(began)
-        let entry = RecordingLibrary.shared.entry(id)
-        tape.duration = entry?.duration ?? RecordingCapture.shared.elapsed
-        self.tape = tape
+        tape.duration = RecordingLibrary.shared.entry(id)?.duration ?? RecordingCapture.shared.elapsed
+        tapes[id] = tape
         Task { @MainActor in
             // The last segment's lines are saved a moment after Stop.
             try? await Task.sleep(for: .seconds(5))
@@ -279,32 +284,54 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
     }
 
     private func finish(_ id: UUID) {
-        guard var tape, let entry = RecordingLibrary.shared.entry(id) else { return }
+        guard var tape = tapes[id], let entry = RecordingLibrary.shared.entry(id) else { return }
         tape.finalTitle = entry.displayTitle
         let lines = entry.sentences
         tape.phoneLines = lines.isEmpty ? nil : lines
-        self.tape = tape
-        write()
+        tapes[id] = tape
+        write(id)
+    }
+
+    /// The tapes of earlier runs that ended without their minutes: read from the hub as at Stop.
+    private func resumeWaiting() async {
+        let folder = MeetingTape.folder
+        let pending = await Task.detached(priority: .utility) { () -> [(UUID, MeetingTape)] in
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            return files.compactMap { url in
+                guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                      let tape = try? MeetingTape.decode(Data(contentsOf: url)),
+                      tape.endedAfter != nil, tape.minutes == nil, tape.minutesState != "failed" else { return nil }
+                return (id, tape)
+            }
+        }.value
+        for (id, tape) in pending where tapes[id] == nil {
+            tapes[id] = tape
+            log.notice("tape: waiting on for the minutes of \(id.uuidString, privacy: .public)")
+            Task { @MainActor in await self.readMinutes(id) }
+        }
     }
 
     private func readMinutes(_ id: UUID) async {
         let deadline = Date().addingTimeInterval(20 * 60)
         while Date() < deadline {
             try? await Task.sleep(for: .seconds(15))
-            guard let api = AppModel.shared.api, let answer = try? await RecordingMinutesModel.fetch(id, api), var tape else { continue }
-            if let entry = RecordingLibrary.shared.entry(id) { tape.finalTitle = entry.displayTitle }
+            guard let api = AppModel.shared.api, let answer = try? await RecordingMinutesModel.fetch(id, api), var tape = tapes[id] else { continue }
+            if let entry = RecordingLibrary.shared.entry(id) {
+                tape.finalTitle = entry.displayTitle
+                if tape.phoneLines == nil, !entry.sentences.isEmpty { tape.phoneLines = entry.sentences }
+            }
             tape.minutesState = answer.detail.meta?.state
             if let name = answer.detail.meta?.name, !name.isEmpty { tape.finalTitle = name }
             if let minutes = answer.detail.minutes, tape.minutesState == "ready" || !minutes.isEmpty {
                 tape.minutes = minutes
-                tape.minutesAfter = Date().timeIntervalSince(began)
-                self.tape = tape
-                write()
+                tape.minutesAfter = Date().timeIntervalSince(tape.startedAt)
+                tapes[id] = tape
+                write(id)
                 log.notice("tape: the minutes came")
                 return
             }
-            self.tape = tape
-            write()
+            tapes[id] = tape
+            write(id)
             if tape.minutesState == "failed" { return }
         }
         log.notice("tape: no minutes within 20 minutes")
@@ -315,12 +342,12 @@ nonisolated struct MeetingTape: Codable, Equatable, Sendable {
         writeDue = Task { @MainActor in
             try? await Task.sleep(for: .seconds(1))
             self.writeDue = nil
-            self.write()
+            if let id = self.id { self.write(id) }
         }
     }
 
-    private func write() {
-        guard let tape, let id, let data = try? tape.encoded() else { return }
+    private func write(_ id: UUID) {
+        guard let tape = tapes[id], let data = try? tape.encoded() else { return }
         let url = MeetingTape.folder.appending(path: "\(id.uuidString).json")
         Task.detached(priority: .utility) {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
