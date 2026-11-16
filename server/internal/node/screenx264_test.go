@@ -55,7 +55,7 @@ func TestFFmpegListAndVersion(t *testing.T) {
 	for out, want := range map[string]string{
 		"ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers\nbuilt with …": "ffmpeg 9.0.2",
 		"ffmpeg version n8.1.3-12-gabc Copyright":                                          "ffmpeg n8.1.3-12-gabc",
-		"something else":                                                                    "ffmpeg",
+		"something else": "ffmpeg",
 	} {
 		if got := ffmpegVersion(out); got != want {
 			t.Errorf("ffmpegVersion(%q) = %q, want %q", out, got, want)
