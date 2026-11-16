@@ -82,6 +82,7 @@ export struct AgentListPage {
   @Local look: DeviceLook = deviceLook;
   @Local groupBindings: BoundAgentGroup[] = [];
   @Local mixedMachines: boolean = false;
+  @Local filterWidth: number = 0;
   private rowBindingOwner: Object | undefined;
   private rowBindingScope: string = '';
   private groupBindingSequence: number = 0;
@@ -457,29 +458,47 @@ export struct AgentListPage {
     Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.filter).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('agent_filter_button'))
       .onClick(() => this.filterSheetOpen = true).id('agents.filter')
   }
+  private quickFilterUsesSelect(): boolean {
+    if (this.environment.fontScale >= 1.5 || this.filterWidth <= 0) return true;
+    const context = this.getUIContext();
+    let labelWidth = 0;
+    QUICK_LABELS.forEach((key: string) => {
+      labelWidth = Math.max(labelWidth, context.px2vp(context.getMeasureUtils().measureText({
+        textContent: tr(key), fontSize: String(Tokens.meta) + 'fp', fontWeight: FontWeight.Medium
+      })));
+    });
+    const slotWidth = Math.max(Tokens.touch, labelWidth + Tokens.inset * 2);
+    return this.filterWidth - Tokens.page * 2 - Tokens.fine * 2 < slotWidth * QUICK_FILTERS.length;
+  }
+
   @Builder filters() {
     if (!this.rail) Column({ space: Tokens.gap }) {
       if (this.environment.fontScale >= 1.5) {
         this.searchControl()
         this.filterControl()
-        Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') },
-          { value: tr('agent_group_background') }])
-          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).font({ size: Tokens.body })
-          .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
       } else {
         Row({ space: Tokens.gap }) {
           Row() { this.searchControl() }.layoutWeight(1)
           this.filterControl()
         }.width('100%')
+      }
+      if (this.quickFilterUsesSelect()) {
+        Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') },
+          { value: tr('agent_group_background') }])
+          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%')
+          .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
+      } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([
           { text: tr('all') }, { text: tr('needs_you') }, { text: tr('working') }, { text: tr('unread') }, { text: tr('agent_group_background') }
         ]), selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index]),
           itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
           itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
           itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta),
-          itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
+          itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), itemPadding: { start: LengthMetrics.vp(Tokens.inset), end: LengthMetrics.vp(Tokens.inset) },
+          buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
       }
     }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap }).width('100%')
+      .onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.filterWidth = width; })
   }
 
   @Builder renameForm() {

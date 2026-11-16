@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { stripTypeScriptTypes } from 'node:module';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
@@ -36,4 +37,19 @@ const decision=fs.readFileSync(w+'/components/InteractionDecisionForm.ets','utf8
 for(const kind of ['permission','plan'])for(const selected of ['approve','deny',''])assert.equal(method(decision,'submitIconKey').call({request:{kind},selected}),selected||'confirm');
 assert.equal(method(decision,'submitIconKey').call({request:{kind:'screen'},selected:'deny'}),'confirm');
 
+});
+
+
+test('Agent quick filters retain full names using native Select when the measured pane is too narrow',()=>{
+ const src=fs.readFileSync(w+'/components/AgentListPage.ets','utf8');
+ const start=src.indexOf('  private quickFilterUsesSelect()'),end=src.indexOf('  @Builder filters()',start);assert(start>=0&&end>start);
+ let labelPixels=210;
+ const Filters=vm.runInNewContext(stripTypeScriptTypes('class Filters {'+src.slice(start,end)+'}; Filters'),{
+  Tokens:{meta:14,touch:48,inset:12,page:16,fine:4},QUICK_LABELS:['all','needs_you','working','unread','agent_group_background'],QUICK_FILTERS:['all','needsYou','working','unread','backgroundWaiting'],FontWeight:{Medium:'medium'},tr:key=>key
+ });
+ const view=new Filters();view.environment={fontScale:1};view.getUIContext=()=>({px2vp:p=>p/3,getMeasureUtils:()=>({measureText:()=>labelPixels})});
+ for(const width of [0,280,320,420]){view.filterWidth=width;assert.equal(view.quickFilterUsesSelect(),true,String(width));}
+ view.filterWidth=713;assert.equal(view.quickFilterUsesSelect(),false);
+ labelPixels=420;assert.equal(view.quickFilterUsesSelect(),true,'long localized label');
+ labelPixels=210;view.environment.fontScale=1.5;assert.equal(view.quickFilterUsesSelect(),true,'enlarged system text');
 });

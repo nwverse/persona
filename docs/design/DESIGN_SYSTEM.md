@@ -1961,6 +1961,8 @@ existing Avatar and Accent fields. Agent grouping (Status, Machine or Project) i
 view-scoped workspace preference, not a device appearance field. Preference restoration finishes before selection
 is enabled, failed writes keep the last confirmed value, and changing one option does not reset the others.
 
+The Agent quick filter uses the existing native Select when the actual pane cannot fit all five full localized segment labels. Native text measurement and the explicit segment padding determine fit; a font scale of 1.5× or above also uses Select. Search and filter keep their compact row at ordinary text sizes. This content-filter fallback is independent of the two-icon Persona/Agents peer control.
+
 Native `WithTheme` supplies light and dark system tokens; an own-message subtree supplies readable bubble tokens.
 Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
 captions. Package images remain bounded, decoded natively and installed atomically. Native system materials belong
@@ -2941,3 +2943,4 @@ agent may have added a link. Manager/Todo/credential changes retire old results.
 New copy ships in English, Simplified Chinese and Japanese. Evidence:
 `web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
 `web/e2e/todo-repositories-browser.py`.
+
