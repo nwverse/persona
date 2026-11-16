@@ -33,8 +33,8 @@ function identity(evidence: ParkEvidence | undefined, waitingOn?: string, reason
   // A reminder's receipt URL and recorder can change without starting a different external wait.
   const source = waitSource(evidence?.url);
   const object = evidence?.kind === "merge_review" ? source?.split(/[?#]/)[0].replace(/\/$/, "") : source;
-  return evidence ? JSON.stringify([evidence.kind, evidence.target?.trim(), evidence.kind === "person_reply" ? evidence.contact?.channel : object]) :
-    JSON.stringify(["legacy", waitingOn, reason]);
+  return JSON.stringify(evidence ? [evidence.kind, evidence.target?.trim(), evidence.kind === "person_reply" ? evidence.contact?.channel : object] :
+    ["legacy", waitingOn, reason]);
 }
 
 /** Earliest known start of this uninterrupted wait, not the task's update or a PR poll. */
@@ -68,4 +68,3 @@ export function waitStart(todo: Todo, now: number): { at?: number; request: bool
 export function compareWaitAge(a: Todo, b: Todo, now: number): number {
   return (waitStart(a, now).at ?? Infinity) - (waitStart(b, now).at ?? Infinity) || a.id.localeCompare(b.id);
 }
-
