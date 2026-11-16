@@ -666,12 +666,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				code, msg = cmp.Or(nestedCode, code), cmp.Or(nestedMsg, msg)
 			}
 			if _, responseCode, responseMsg, ok := errorOf(ev.Response.Error); ok { // response.error is most specific
-				if responseCode != "" {
-					code = responseCode
-				}
-				if responseMsg != "" {
-					msg = responseMsg
-				}
+				code, msg = cmp.Or(responseCode, code), cmp.Or(responseMsg, msg)
 			}
 			return code, msg
 		}

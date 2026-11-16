@@ -423,11 +423,11 @@ func newHTTPError(resp *http.Response, raw []byte) *httpError {
 	after, validAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
 		retryAfter: after, retryAfterGiven: validAfter, code: code, message: message, errorType: errorType,
-		envelope: envelope, noRetry: NoRetry(resp.Header)}
+		envelope: envelope, noRetry: noRetryHeader(resp.Header)}
 }
 
-// NoRetry reports whether the gateway explicitly forbids retrying this response.
-func NoRetry(header http.Header) bool {
+// noRetryHeader reports whether the gateway explicitly forbids retrying this response.
+func noRetryHeader(header http.Header) bool {
 	return strings.EqualFold(strings.TrimSpace(header.Get("X-Should-Retry")), "false")
 }
 
@@ -642,12 +642,9 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 	case h.status == http.StatusPaymentRequired:
 		reason = ReasonQuota
 	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven && h.retryAfter > 0:
-		// Only a valid positive 429 cooldown is a quota reset instead of an ordinary busy answer.
+		// Only a valid positive 429 cooldown is a quota reset instead of an ordinary busy answer. Other no-retry
+		// statuses retain their raw behavior; busy statuses without one still use the gate.
 		reason = ReasonQuota
-	case h.noRetry && h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
-		// No-retry suppresses same-request transience, but 429/503/529 still need the busy gate without a positive
-		// 429 cooldown. Other statuses retain their raw no-retry behavior.
-		return "", 0, ""
 	case h.status != http.StatusTooManyRequests && h.status != http.StatusServiceUnavailable && h.status != 529:
 		return "", 0, ""
 	case coded:

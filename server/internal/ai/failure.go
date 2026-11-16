@@ -119,6 +119,9 @@ type errorEnvelope struct {
 
 // decodeErrorString reads one envelope field without letting a malformed sibling discard the rest of the envelope.
 func decodeErrorString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
 	var value string
 	if json.Unmarshal(raw, &value) != nil {
 		return ""
@@ -129,6 +132,9 @@ func decodeErrorString(raw json.RawMessage) string {
 // decodeErrorCode accepts both the string and numeric error codes used by compatible gateways. json.Number avoids a
 // float conversion, so an integer code keeps its exact decimal representation.
 func decodeErrorCode(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
 	var code string
 	if json.Unmarshal(raw, &code) == nil {
 		return strings.TrimSpace(code)
