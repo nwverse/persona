@@ -214,13 +214,22 @@ type SnapshotTask struct {
 	// Reported: what its agent last reported to the supervisor (report_to_supervisor), nil when it has not.
 	Reported *SnapshotReport
 	// Plan: its agent's own task list, nil when it keeps none or Reported is newer (a report says more).
-	Plan *SnapshotAgentPlan
+	Plan  *SnapshotAgentPlan
+	Owner SnapshotOwner
+}
+
+// SnapshotOwner is whose a task in the snapshot is, never rendered: the conversation that handed it out (its todo's
+// origin, "" for the user's own to-do) and the one that supervises it, so a conversation other than the main one gets
+// only its own tasks (assistant/context.go scopeSnapshot).
+type SnapshotOwner struct {
+	Origin, Supervisor string
 }
 
 // SnapshotOpenTodo is the compact index of one open todo. Full task details are
 // limited separately so every open todo remains discoverable in the context.
 type SnapshotOpenTodo struct {
 	ID, Title, Link string
+	Owner           SnapshotOwner
 }
 
 // SnapshotReport is a supervised task's agent's latest report: its kind (progress, question, blocked, done), the step
@@ -306,6 +315,11 @@ type Snapshot struct {
 	// Approvals: open tasks whose finished work waits for the user's nod to go live (merge, deploy, turn on, send),
 	// oldest first: told to the user as one list to approve at once (docs/assistant/todos.md "Delivery").
 	Approvals []SnapshotApproval
+	// Scoped: the snapshot of a conversation other than the main one and its stand-ins: Tasks, Unaccepted and Approvals
+	// hold only the tasks it handed out or supervises, and OpenTodos only its open ones Tasks does not show; other
+	// conversations' tasks and the user's own to-dos are left to todo_list (OpenTodosTotal still counts every open
+	// to-do; assistant/context.go scopeSnapshot).
+	Scoped bool
 	// Omit: the sections left out to keep the block within its budget (assistant/context.go fitSnapshot).
 	Omit SnapshotOmit
 }
@@ -324,6 +338,7 @@ func SnapshotCut() string { return render("assistant/snapshot_cut", nil) }
 // SnapshotApproval is a task held short of live until the user approves: what it is, how far it got, where it is held.
 type SnapshotApproval struct {
 	ID, Title, Stage, Gate, Link string
+	Owner                        SnapshotOwner
 }
 
 // SnapshotAccept is a deployed task waiting for the user to check it, or a conclusion waiting for the user: its verdict
@@ -331,6 +346,7 @@ type SnapshotApproval struct {
 type SnapshotAccept struct {
 	Title, Verdict, Changed, Link string
 	Since                         time.Time // in the user's zone
+	Owner                         SnapshotOwner
 }
 
 func (s Snapshot) Up() []SnapshotMachine   { return s.machines(true) }
@@ -426,6 +442,7 @@ type TaskRun struct {
 	InboxWorthy, InboxEvery bool
 	// Facts: the run's facts Persona worked out (RenderBriefFacts), above the task's prompt; "" for a task without them.
 	Facts string
+	State string // formatted scheduled-task state and update instructions
 }
 
 func RenderTaskRun(t TaskRun) string { return render("assistant/task_run", t) }
@@ -868,6 +885,12 @@ func RenderTaskDoneWhen(criteria []string) string {
 	return render("assistant/task_done_when", struct{ Criteria []string }{criteria})
 }
 
+// RenderTaskGoal is a task's done_when as one checkable condition, for a Claude Code /goal typed before the task's
+// first message (docs/integrations/agent-goal.md "A goal set at the start"): one line, trimmed.
+func RenderTaskGoal(criteria []string) string {
+	return strings.TrimSpace(render("assistant/task_goal", struct{ Criteria []string }{criteria}))
+}
+
 // Relay is a message one assistant conversation sends another (conversation_send / conversation_new): what was
 // written, behind a note saying where it comes from and how many hops it is from the user's own message.
 type Relay struct {
@@ -891,6 +914,9 @@ type CodexMemory struct {
 }
 
 func RenderCodexMemory(m CodexMemory) string { return render("assistant/codex_memory", m) }
+
+// RenderMemoryDream asks the background pass to consolidate durable preferences.
+func RenderMemoryDream() string { return render("assistant/memory_dream", nil) }
 
 // RuntimeInstructions is what the assistant on an agent runtime (DSH…) gets with a new conversation's first message
 // (assistant/runtime_instructions): the shared memory, and the skills' gated commands it runs as tools.

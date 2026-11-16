@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -539,11 +540,19 @@ func (s *Service) newTodoAs(ctx context.Context, id, title, notes, origin, planI
 }
 
 // insertTodo stores todo row, puts it in memory and tells the apps.
-func (s *Service) insertTodo(ctx context.Context, row db.TodoRow) (Todo, error) {
+func (s *Service) insertTodo(ctx context.Context, row db.TodoRow, bindings ...*repository.CreateBindings) (Todo, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, err
 	}
-	if st := s.todoDB(); st != nil {
+	if len(bindings) > 0 && bindings[0] != nil {
+		st, ok := s.store().(todoRepositoryStore)
+		if !ok {
+			return Todo{}, repository.Problem("store_unavailable")
+		}
+		if err := st.CreateTodoWithRepositories(ctx, row, *bindings[0]); err != nil {
+			return Todo{}, err
+		}
+	} else if st := s.todoDB(); st != nil {
 		if err := st.CreateTodo(ctx, row); err != nil {
 			return Todo{}, err
 		}
@@ -784,12 +793,7 @@ func (s *Service) closedTaskOf(ctx context.Context, mid, sid string) (Todo, bool
 	}
 	var found *Todo
 	for _, t := range s.todos.todos {
-		if t.Origin == "" || t.DoneAt == nil || t.StartError != "" || t.DoneBy != db.DoneByAuto && t.DoneBy != db.DoneByReview ||
-			found != nil && !t.DoneAt.After(*found.DoneAt) {
-			continue
-		}
-		// Older cancellations used done_by=review; the ledger preserves their verdict.
-		if t.Supervision.state(*t) == reviewCancelled {
+		if !hubClosedTask(t) || found != nil && !t.DoneAt.After(*found.DoneAt) {
 			continue
 		}
 		for _, a := range t.Agents {
@@ -805,11 +809,20 @@ func (s *Service) closedTaskOf(ctx context.Context, mid, sid string) (Todo, bool
 	return copyTodoLocked(found), true
 }
 
+// hubClosedTask: t is a task the hub closed, judged done or accepted by a review, and not cancelled: more work for it
+// may open it again (closedTaskOf, routeToTaskAs). Older cancellations used done_by=review; the ledger keeps their
+// verdict. Cancelled tasks and ones the user closed stay theirs to reopen.
+func hubClosedTask(t *Todo) bool {
+	return t.Origin != "" && t.DoneAt != nil && t.StartError == "" && (t.DoneBy == db.DoneByAuto || t.DoneBy == db.DoneByReview) &&
+		t.Supervision.state(*t) != reviewCancelled
+}
+
 // ---- HTTP ----
 
 var errTodosUnavailable = errors.New("todos service unavailable")
 
 func (s *Service) todoRoutes() {
+	s.todoRepositoryRoutes()
 	s.taskReviewDismissalRoutes()
 	s.todoDecisionRoutes()
 	s.todoThreadRoutes()
@@ -864,10 +877,11 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var in struct {
-			Title   string  `json:"title"`
-			Notes   string  `json:"notes"`
-			Project *string `json:"project"`
-			Kind    string  `json:"kind"`
+			Title              string          `json:"title"`
+			Notes              string          `json:"notes"`
+			Project            *string         `json:"project"`
+			Kind               string          `json:"kind"`
+			RepositoryBindings json.RawMessage `json:"repository_bindings"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -893,11 +907,20 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		bindings, err := parseCreateBindings(in.RepositoryBindings)
+		if err != nil {
+			taskRepositoriesError(w, err)
+			return
+		}
 		var resTodo Todo
 		if kind == db.KindConcern {
-			resTodo, err = s.createConcern(r.Context(), title, strings.TrimSpace(in.Notes), plan)
+			resTodo, err = s.createConcern(r.Context(), title, strings.TrimSpace(in.Notes), plan, bindings)
 		} else {
-			resTodo, err = s.createPlainTodo(r.Context(), title, in.Notes, plan)
+			resTodo, err = s.createPlainTodo(r.Context(), title, in.Notes, plan, bindings)
+		}
+		if bindings != nil && err != nil {
+			taskRepositoriesError(w, err)
+			return
 		}
 		if errors.Is(err, errConcernNoStore) {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
