@@ -125,8 +125,7 @@ struct ExtensionColumnsLayout: Layout {
         var start = 0
         while start < subviews.count {
             let end = min(start + n, subviews.count)
-            // Up to a whole point: a card offered a fraction less than it measured would scale its titles down
-            // (a row's title may shrink to fit, `minimumScaleFactor`).
+            // In whole points (docs/apple/performance.md P7).
             let height = (subviews[start..<end].map { $0.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0)
                 .rounded(.up)
             lines.append((start..<end, height))
@@ -281,7 +280,10 @@ struct ExtensionSectionItems: View {
                     case .rows(let entries):
                         ExtensionColumnsLayout(most: columns, minimum: ExtensionColumns.minimum(typeSize)) {
                             ForEach(entries) { entry in
+                                // Its own height, at the top of the line (`ExtensionSectionCard`: an exact height
+                                // would scale a row's title down).
                                 ExtensionItemRow(item: entry.component, model: model, link: $link)
+                                    .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
@@ -380,6 +382,9 @@ struct ExtensionSectionCard: View {
                 Text(f).font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }
+        // Its content at its own height, the card as tall as the line: offered the line's exact height, a stack hands
+        // its rows equal shares and a row's title (`minimumScaleFactor`) scales down to fit one.
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .card()
         .accessibilityElement(children: .contain)

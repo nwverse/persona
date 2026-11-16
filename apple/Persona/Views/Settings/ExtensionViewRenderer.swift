@@ -47,6 +47,7 @@ struct ExtensionViewRenderer: View {
                             ExtensionColumnsLayout(most: g.columns, minimum: ExtensionColumns.minimum(typeSize)) {
                                 ForEach(items) { item in
                                     ExtensionItemRow(item: item.component, model: model, link: $link)
+                                        .fixedSize(horizontal: false, vertical: true)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
