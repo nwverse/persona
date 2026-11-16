@@ -549,9 +549,11 @@ struct ChatsView: View {
                     return
                 }
                 let previousPath = path
+                let previousRoot = unified?.root
                 stackStill.whenStill {
-                    // A newer targeted open wins, even if the stable-stack opener already consumed it.
-                    guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
+                    // A newer targeted open wins, even if the stable-stack opener already consumed it (with roots, an
+                    // Agent picked meanwhile changes the root, not the path).
+                    guard !leaving, model.agentsNavigationRevision == request, path == previousPath, unified?.root == previousRoot,
                           model.openChat == nil, model.openPersonalAgent == nil else { return }
                     spaceAt = [:]
                     if rootsMode, let unified { unified.forget(path: $path) } else if !path.isEmpty { path = NavigationPath() }
@@ -612,9 +614,12 @@ struct ChatsView: View {
             // computer) is the assistant before's.
             .onChange(of: model.assistantSwitches) {
                 if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
-                // The Agents tab's root was the assistant before's too (the other pages forget theirs in `AssistantView`).
-                if rootsMode, unified?.part == .agents, let unified { unified.forget(path: $path) }
-                else if !path.isEmpty { path = NavigationPath() }
+                // The Agents tab's root was the assistant before's too (the other pages forget theirs in `AssistantView`),
+                // unless it is one of this assistant's: a chat asked for at launch is opened before the demo or the paired
+                // assistant is set, and the first switch took it away again.
+                if rootsMode, unified?.part == .agents, let unified {
+                    if !rootIsCurrentAssistants(unified.root) { unified.forget(path: $path) }
+                } else if !path.isEmpty { path = NavigationPath() }
             }
     }
 
@@ -740,6 +745,12 @@ struct ChatsView: View {
 
     /// The Sidebar layout's root is something the Agents list opened (an Agent's chat, a space…), not the conversation
     /// or a place (#8359).
+    /// The Agents tab's root still belongs to the assistant in front: an Agent's chat on one of its computers.
+    private func rootIsCurrentAssistants(_ root: SidebarPageRoot) -> Bool {
+        guard let key = root.value?.base as? SessionKey, let session = model.session(key) else { return root.value == nil }
+        return model.scopedMachines(inFront: false).contains { $0.ref == session.machineRef }
+    }
+
     private var agentsRootInFront: Bool {
         guard rootsMode, let root = unified?.root else { return false }
         return root.value != nil && root.place == nil
