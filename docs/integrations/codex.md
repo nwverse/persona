@@ -118,6 +118,10 @@ Since 2026-11-04 (#1709), Codex sessions controlled by the phone through app-ser
 (`source_kind: codex_app_server`), and herdr panes already joined to the shared daemon ("Sessions on the daemon" above, "Connection: app-server").
 Messages to them already use `turn/start` / `turn/steer`; thinking effort is the thread's own setting, requiring no terminal typing (`node/codex_effort.go`).
 
+Assistant conversations on a custom Codex launcher also accept Codex's native levels, including `minimal` and `ultra`.
+Both the first-message selection and a configured effort are checked against the agent that the launcher actually runs,
+not its command name; Claude launchers still reject Codex-only levels (`node/assistant_codex_alias_effort_test.go`).
+
 - **Unchanged**: permission mode still cannot be changed on the phone (Codex approval policy and sandbox remain determined by launch arguments and `config.toml`; requests with permission mode return
   "Only Codex thinking effort can be changed on the phone; change permission mode on the computer"). Terminal-only panes (terminal route), sub-Agents
   and the internal Codex fork cannot even change thinking effort, with existing prompts unchanged. Codex desktop App chats change it through the App (#5575, "Sessions in the Codex desktop App" below). Starting Codex from the phone still omits thinking effort (see "Starting from the phone").

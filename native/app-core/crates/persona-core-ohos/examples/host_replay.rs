@@ -3,8 +3,9 @@
 //! `core_config`, `core_create`, `core_dispatch`, `core_flush`, `core_drain` and `core_close` do, with a `Host` that
 //! records every callback. `harmony/tests/core-host/replay.test.mjs` and `transport.test.mjs` are its clients. The
 //! transport command also decodes raw payloads directly with `persona_core::transport`. The state command projects
-//! existing session/hub fixtures through `persona_core::state`. Neither loads the NAPI library or proves the NAPI glue
-//! itself (argument conversion, thread-safe functions), which only a device build links.
+//! existing session/hub fixtures through `persona_core::state`. The projection command covers answer/display,
+//! stream chunks, task indexes and turns. None loads the NAPI library or proves the NAPI glue itself (argument conversion,
+//! thread-safe functions), which only a device build links.
 //!
 //! # Framing
 //!
@@ -27,6 +28,7 @@
 //! | 9 | transport | payload kind `u8`, UTF-8 JSON body | decoded result as UTF-8 JSON, including an `error` object on refusal |
 //! | 10 | sort | UTF-8 JSON `sort::Input` | the `sort::Projection` as UTF-8 JSON |
 //! | 11 | state | UTF-8 JSON `{kind, input}` | the state fixture's expected-shaped JSON |
+//! | 12 | projection | UTF-8 JSON `{kind, input}` | the projection's complete result JSON |
 //!
 //! Wire types for `reencode`: 1 `Action`, 2 `ChatEvent`, 3 `ChatPatch`, 4 `ChatSnapshot`, 5 `Config`, 6 `Effect`,
 //! 7 `ListOp`, 8 `Request`, 9 `WireBatch`, 10 `Payload`. It uses the decoder the worker uses for actions, which
@@ -98,6 +100,7 @@ const SAMPLES: u8 = 8;
 const TRANSPORT: u8 = 9;
 const SORT: u8 = 10;
 const STATE: u8 = 11;
+const PROJECTION: u8 = 12;
 
 const OK: u8 = 1;
 const ERROR: u8 = 2;
@@ -404,6 +407,47 @@ fn state_json(bytes: &[u8]) -> Result<String, String> {
             serde_json::to_string(&serde_json::json!({"state": state.as_str()})).map_err(|e| e.to_string())
         }
         _ => Err("state: unknown projection kind".into()),
+    }
+}
+
+/// A pure JSON projection, mirroring the NAPI export's input and result contract. `display_answer` is the exception:
+/// its NAPI export takes a bare label, so this host envelope carries that label as its string input.
+fn projection_json(bytes: &[u8]) -> Result<String, String> {
+    let input: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| "projection: input is not valid JSON".to_owned())?;
+    let object = input.as_object().ok_or("projection: input is not an object")?;
+    if object.len() != 2 || !object.contains_key("kind") || !object.contains_key("input") {
+        return Err("projection: expected exactly kind and input".into());
+    }
+    let kind = object["kind"].as_str().ok_or("projection: kind is not a string")?;
+    let input = &object["input"];
+    match kind {
+        "answer" => {
+            let input: persona_core::answer::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("answer: input does not decode: {error}"))?;
+            let transition = persona_core::answer::project(&input).ok_or("answer: operation has no transition")?;
+            serde_json::to_string(&transition).map_err(|e| e.to_string())
+        }
+        "display_answer" => {
+            let label = input.as_str().ok_or("display_answer: label is not a string")?;
+            serde_json::to_string(&persona_core::answer::display(label)).map_err(|e| e.to_string())
+        }
+        "stream_chunks" => {
+            let input: persona_core::stream_chunks::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("stream_chunks: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::stream_chunks::split(&input)).map_err(|e| e.to_string())
+        }
+        "task_index" => {
+            let input: persona_core::task_index::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("task_index: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::task_index::project(&input)).map_err(|e| e.to_string())
+        }
+        "turns" => {
+            let input: persona_core::turns::Input = serde_json::from_value(input.clone())
+                .map_err(|error| format!("turns: input does not decode: {error}"))?;
+            serde_json::to_string(&persona_core::turns::project(&input)).map_err(|e| e.to_string())
+        }
+        _ => Err("projection: unknown projection kind".into()),
     }
 }
 
@@ -777,6 +821,11 @@ fn run(input: &mut impl Read, output: &mut impl Write) -> Result<(), String> {
             STATE => {
                 let result = catch_unwind(AssertUnwindSafe(|| state_json(fields("state").rest())))
                     .unwrap_or_else(|_| Err("state: projection panicked".to_owned()));
+                write_result(output, result.map(String::into_bytes))?;
+            }
+            PROJECTION => {
+                let result = catch_unwind(AssertUnwindSafe(|| projection_json(fields("projection").rest())))
+                    .unwrap_or_else(|_| Err("projection: projection panicked".to_owned()));
                 write_result(output, result.map(String::into_bytes))?;
             }
             other => return Err(format!("unknown command {other}")),

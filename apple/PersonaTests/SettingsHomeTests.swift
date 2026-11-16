@@ -28,14 +28,14 @@ struct SettingsHomeTests {
         let model = try model()
         var content = SettingsAssistantHeading.content(for: model)
         #expect(content.manager?.id == "assistant")
-        #expect(content.title == "助手 的设置")
+        #expect(content.title == "助手的设置")
         #expect(content.showsSwitch)
         #expect(content.footnote == "只显示「助手」自己的内容。要改别的助手，先切换过去。")
 
         model.selectAssistantManager("work")
         content = SettingsAssistantHeading.content(for: model)
         #expect(content.manager?.id == "work")
-        #expect(content.title == "工作 的设置")
+        #expect(content.title == "工作的设置")
         #expect(content.showsSwitch)
         #expect(content.footnote == "只显示「工作」自己的内容。要改别的助手，先切换过去。")
     }
@@ -43,7 +43,7 @@ struct SettingsHomeTests {
     @Test func singleAssistantSettingsStillOfferTheSwitcher() throws {
         let content = SettingsAssistantHeading.content(for: try model(roster: Self.one))
         #expect(content.manager?.id == "assistant")
-        #expect(content.title == "助手 的设置")
+        #expect(content.title == "助手的设置")
         #expect(content.showsSwitch)
         #expect(content.footnote == "只显示「助手」自己的内容。要改别的助手，先切换过去。")
     }

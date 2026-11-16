@@ -3,6 +3,7 @@ package subscriptions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -63,25 +64,27 @@ func TestARowWithReplyToCanBeRepliedToThroughItsConnector(t *testing.T) {
 	if len(rows) != 1 || !rows[0].CanReply || rows[0].ReplyTo != "Comment on example-org/example-repo#12 (anyone who can see the repo)" || rows[0].Last != "c2" {
 		t.Fatalf("rows: %+v", rows)
 	}
-	in, thread, ok := e.svc.ReplyTarget(e.ctx, sub.ID, rows[0].Thread, rows[0].Last)
-	if !ok || thread != "example-org/example-repo#12" {
-		t.Fatalf("target: %v %q", ok, thread)
+	in, thread, err := e.svc.ReplyTarget(e.ctx, sub.ID, rows[0].Thread, rows[0].Last)
+	if err != nil || thread != "example-org/example-repo#12" {
+		t.Fatalf("target: %v %q", err, thread)
 	}
 	if err := in.Reply(e.ctx, connector.InboxReply{Thread: thread, Last: rows[0].Last, Text: "Thanks"}); err != nil || len(rc.replies) != 1 {
 		t.Fatalf("reply: %v %+v", err, rc.replies)
 	}
+	// A row with no item to answer, or whose item is gone, cannot be answered (#9194): refused as such a row.
 	for _, last := range []string{"", "gone", "h:abc"} {
-		if _, _, ok := e.svc.ReplyTarget(e.ctx, sub.ID, "", last); ok {
-			t.Errorf("a target for %q", last)
+		if _, _, err := e.svc.ReplyTarget(e.ctx, sub.ID, "", last); !errors.Is(err, connector.ErrCannotReply) {
+			t.Errorf("for %q: %v, want a row that cannot be answered", last, err)
 		}
 	}
-	if _, _, ok := e.svc.ReplyTarget(e.ctx, "sub_gone", "", "c2"); ok {
-		t.Error("a target of a subscription that is gone")
+	// A subscription that is gone is a source that is not here, whatever the row.
+	if _, _, err := e.svc.ReplyTarget(e.ctx, "sub_gone", "", "c2"); err == nil || errors.Is(err, connector.ErrCannotReply) {
+		t.Errorf("a target of a subscription that is gone: %v", err)
 	}
 	// The connector can't be called now: a reply is not routed; the row stops offering one once a run found it so.
 	e.conns.infos["example"].Status = connector.StateNotSignedIn
-	if _, _, ok := e.svc.ReplyTarget(e.ctx, sub.ID, "", "c2"); ok {
-		t.Error("routed a reply while the connector can't be called")
+	if _, _, err := e.svc.ReplyTarget(e.ctx, sub.ID, "", "c2"); err == nil || errors.Is(err, connector.ErrCannotReply) {
+		t.Errorf("routed a reply while the connector can't be called, or blamed the row: %v", err)
 	}
 	cur, _ := e.store.GetSubscription(e.ctx, sub.ID)
 	cut := *cur

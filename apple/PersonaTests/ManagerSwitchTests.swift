@@ -347,6 +347,30 @@ struct ManagerSwitchTests {
         #expect(model.assistantPicks.isEmpty, "it doesn't come back with the manager")
     }
 
+    /// The built-in assistant picked, then kept out of the switcher (`hidden`, #9055): the page goes back to the default,
+    /// as for one no longer installed, and it can't be picked again while it is hidden.
+    @Test func aHiddenAssistantTakesThePageBackToTheDefault() async throws {
+        let saved = UserDefaults.standard.object(forKey: "assistant.current")
+        defer { UserDefaults.standard.set(saved, forKey: "assistant.current") }
+        let hub = FakeHub()
+        let model = try model(hub, roster: try Self.roster(#"""
+        {"default":"m-1","managers":[{"id":"assistant","name":"助手","online":true,"builtin":true},
+          {"id":"m-1","name":"工作","online":true,"default":true}]}
+        """#))
+        model.selectAssistantManager("assistant")
+        #expect(model.assistantManagerID == "assistant" && model.currentAssistant?.id == "assistant")
+        hub.on("GET", "/api/v1/managers", json: #"""
+        {"default":"m-1","managers":[{"id":"assistant","name":"助手","online":true,"builtin":true,"hide":true,"hidden":true},
+          {"id":"m-1","name":"工作","online":true,"default":true}]}
+        """#)
+        await model.refreshManagerRoster("")
+        #expect(model.assistantManagerID == nil && model.currentAssistant?.id == "m-1" && model.api?.shownManager == nil)
+        #expect(model.assistantPicks.isEmpty, "it doesn't come back when it is shown again")
+        #expect(model.managerRoster?.isMulti == true, "still counted: the pages still scope by assistant")
+        model.selectAssistantManager("assistant")
+        #expect(model.assistantManagerID == nil, "not picked while hidden")
+    }
+
     @Test func theListsAreTheShownManagers() throws {
         let roster = try Self.roster()
         let sessions = [try session("a1", manager: "assistant"), try session("w1", manager: "m-1"), try session("n1", manager: nil),

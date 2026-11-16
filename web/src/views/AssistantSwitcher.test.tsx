@@ -154,6 +154,28 @@ describe("the sidebar's assistant switcher", () => {
     expect(rows().map((r) => r.textContent).filter((x) => x === "新建助手" || x === "管理助手…")).toEqual(["新建助手", "管理助手…"]);
   });
 
+  it("leaves out the built-in assistant while it is hidden, still counting it, and goes back to the default from it (#9055)", async () => {
+    const hidden: ManagerList = {
+      default: "m-1",
+      managers: ROSTER.managers.map((m) =>
+        m.id === "assistant" ? { ...m, default: false, hide: true, hidden: true } : m.id === "m-1" ? { ...m, default: true } : m,
+      ),
+    };
+    act(() => chooseManager("assistant")); // picked before it was hidden
+    hub.roster = hidden;
+    act(() => setRoster(hidden));
+    expect(shownManager()).toBe("m-1");
+    await render();
+    await open();
+    const radios = [...document.body.querySelectorAll<HTMLElement>("[role=menuitemradio]")];
+    expect(radios).toHaveLength(2);
+    expect(radios.some((r) => r.textContent?.includes("助手"))).toBe(false);
+    expect(radios[1].textContent).toContain("家里");
+    // the hidden one still runs: the Default tag still goes by every installed assistant
+    expect(radios[0].textContent).toContain("工作默认");
+    expect(radios[0].getAttribute("aria-checked")).toBe("true");
+  });
+
   it("switches the whole app to the one picked, and leaves another assistant's page for its own", async () => {
     await render({ name: "session", mid: "mac", sid: "s9" });
     await open();

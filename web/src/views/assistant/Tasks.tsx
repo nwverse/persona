@@ -72,7 +72,7 @@ import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
+import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -273,10 +273,20 @@ export function rememberScope(tasks: PlanTask[], machines: Machine[]): string {
   return places.length ? t("assistant-tasks.plan_remember", { places: formatList(places) }) : "";
 }
 
+/** The scheduled task whose own run planned this (#8045), named for the card's "Let … start these by itself"; null for
+ *  every other plan, which the card draws as before. */
+export function planSchedule(plan: TaskPlan): { id: string; name: string } | null {
+  const task = plan.tasks.find((task) => task.schedule);
+  if (!task?.schedule) return null;
+  return { id: task.schedule, name: task.schedule_title?.trim() || t("assistant-tasks.plan_schedule_unnamed") };
+}
+
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
   const machines = useStore((s) => s.machines);
   const [remember, setRemember] = useState(false);
+  const [scheduleGrant, setScheduleGrant] = useState(false);
+  const grantId = useId();
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
   const [workspaceChoice, setWorkspaceChoice] = useState<Record<number, TaskWorkspace>>({});
@@ -302,6 +312,9 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
   const scope = rememberScope(editedPlan.tasks, machines);
+  // offered where "Start these directly" is: a plan of only read-only tasks starts without asking anyway
+  const schedule = scope ? planSchedule(plan) : null;
+  const grant = Boolean(schedule) && scheduleGrant;
   const startEdits = () => {
     const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
     const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
@@ -325,10 +338,15 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
         {scope}
       </label>}
+      {schedule && <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-0.5">
+        <input id={grantId} type="checkbox" checked={scheduleGrant} onChange={(e) => setScheduleGrant(e.target.checked)} aria-describedby={`${grantId}-note`} className="accent-[var(--accent)]" />
+        <label htmlFor={grantId} className="cursor-pointer text-label text-ink-2">{t("assistant-tasks.plan_schedule_grant", { name: schedule.name })}</label>
+        <p id={`${grantId}-note`} className="col-start-2 text-label text-ink-3">{t("assistant-tasks.plan_schedule_grant_note")}</p>
+      </div>}
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps
           its buttons at the tray's bottom edge; a card that fits looks as it did (the padding it takes it gives back) */}
       <div data-plan-actions className="sticky bottom-0 z-[1] -mx-4 -mt-2 -mb-4 flex gap-2 rounded-b-card bg-surface px-4 pt-2 pb-4">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits()))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits(), grant))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -345,7 +363,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           onClose={() => setEditing(false)}
           onStart={(edits) => {
             setEditing(false);
-            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow)));
+            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow), grant));
           }}
         />
       </Suspense>}
@@ -465,6 +483,9 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       return item.ref && !isLater ? <MessageCard item={item} /> : null;
     case "inbox_suggestion":
       return item.ref ? <Suspense fallback={null}><LazyHandoffCard item={item} /></Suspense> : null;
+    case "urgent_call":
+      // an urgent call (docs/assistant/urgent-call.md): its row, loaded with the first one
+      return <Suspense fallback={null}><LazyUrgentCallLine item={item} /></Suspense>;
     case "notice": {
       // a line the hub wrote (#4305): small and centered, as the chat's own notices
       const text = feedNotice(item);
@@ -648,6 +669,7 @@ function useSayToPersona(conversation: string) {
 const LazyMessageDraft = lazy(() => import("./MessageDraft"));
 // a hand-off conversation's write-back (#5932): loaded with the first such card
 const LazyHandoffCard = lazy(() => import("./HandoffCard").then((m) => ({ default: m.HandoffCard })));
+const LazyUrgentCallLine = lazy(() => import("./UrgentCallLine").then((m) => ({ default: m.UrgentCallLine })));
 export const draftTasks = { useTodo, useTaskNow, progressOf, TaskMark, openTask };
 
 function MessageCard({ item }: { item: FeedItem }) {
@@ -681,9 +703,7 @@ export const TaskQuestions = memo(function TaskQuestions({ conversation }: { con
   if (!first && !answered.length) return null;
   return (
     <div className="flex flex-col gap-1">
-      {answered.map((a) => (
-        <AnsweredCard key={a.ix.id} card={a} />
-      ))}
+      {answered.length > 0 && <AnsweredSummary answered={answered} />}
       {first && (
         <>
           <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">

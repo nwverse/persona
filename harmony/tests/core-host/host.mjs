@@ -32,7 +32,7 @@ export const wire = await import(wireUrl.href);
 
 // The helper's frames: a u32 little-endian length, a tag byte, then the fields.
 const MAX_FRAME = 16 * 1024 * 1024;
-export const Command = {config: 1, create: 2, dispatch: 3, flush: 4, drain: 5, close: 6, reencode: 7, samples: 8, transport: 9, sort: 10, state: 11};
+export const Command = {config: 1, create: 2, dispatch: 3, flush: 4, drain: 5, close: 6, reencode: 7, samples: 8, transport: 9, sort: 10, state: 11, projection: 12};
 export const Record = {ok: 1, error: 2, changed: 3, effect: 4, sample: 5, end: 6};
 export const PayloadKind = {latest: 1, newer: 2, reloaded: 3, older: 4, range: 5, frame: 6};
 const WireType = {Action: 1, ChatEvent: 2, ChatPatch: 3, ChatSnapshot: 4, Config: 5, Effect: 6, ListOp: 7, Request: 8, WireBatch: 9, Payload: 10};
@@ -278,6 +278,13 @@ export class HostCore {
     const value = await this.#call(Command.state, Buffer.from(body, 'utf8'));
     return JSON.parse(Buffer.from(value).toString('utf8'));
   }
+  async projectionJSON(body) {
+    const value = await this.#call(Command.projection, Buffer.from(body, 'utf8'));
+    return JSON.parse(Buffer.from(value).toString('utf8'));
+  }
+  async projection(kind, input) {
+    return this.projectionJSON(JSON.stringify({kind, input}));
+  }
 
   #flag(value) {
     assert.ok(value.length === 1 && value[0] <= 1, 'a flag is one byte, 0 or 1');
@@ -327,7 +334,8 @@ export function requestObject(request) {
     case 'subscribe': return request.since_seq === null ? {kind: request.kind, fold_work: request.fold_work}
       : {kind: request.kind, fold_work: request.fold_work, since_seq: request.since_seq};
     case 'fetch_older': return {kind: request.kind, before_seq: request.before_seq, fold_work: request.fold_work};
-    case 'fetch_range': return {kind: request.kind, from_seq: request.from_seq, through_seq: request.through_seq};
+    case 'fetch_range': return {kind: request.kind, from_seq: request.from_seq, through_seq: request.through_seq,
+      ...(request.fold_id === null ? {} : {fold_id: request.fold_id})};
     default: throw new Error('unknown request: ' + request.kind);
   }
 }

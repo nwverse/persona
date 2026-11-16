@@ -380,6 +380,9 @@
     <string name="settings_subscriptions_counts_on">%1$d 个开着</string>
     <string name="settings_subscriptions_counts_failing">%1$d 个开着 · %2$d 个出错</string>
     <string name="settings_subscriptions_counts_none">可以订阅</string>
+    <string name="settings_ext_notification_expired">通知已过期，请在扩展页重试。</string>
+    <string name="settings_ext_notification_wrong_scope">找不到原 hub 或助手，请重新连接后在扩展页重试。</string>
+    <string name="settings_ext_notification_unlock">请先解锁手机，再执行这条通知的操作。</string>
     <plurals name="settings_ext_node_running">
         <item quantity="other">在 %1$d 台机器上运行</item>
     </plurals>
