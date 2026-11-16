@@ -356,9 +356,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
 // Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
 // en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
-// Agent-only task-row status and separate to-do chips (#6492), measured against main 0b860744f4 in the same environment:
-// en 478,697 -> 479,111 B, ja 481,833 -> 482,257 B, zh-Hans 479,530 -> 479,940 B. The budget adds only ja's measured
-// 424 B feature delta, preserving main's existing 269 B of room rather than adding any new room.
+// Agent-only task-row status and separate to-do chips (#6492), measured against main 3324a7323c in the same environment:
+// en 478,843 -> 479,284 B, ja 481,979 -> 482,430 B, zh-Hans 479,676 -> 480,113 B. The budget adds 424 B of ja's measured
+// 451 B feature delta, using 27 B of main's 123 B of room and keeping 96 B rather than adding any new room.
 // #9283: an extension's sidebar entries and an open page's header drawn from the last places list at first paint
 // (lib/extension-slots.ts keeps it under lib/feed-cache.ts's hub and sign-in scope; it is read at startup, so it is
 // first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
