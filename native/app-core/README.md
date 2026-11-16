@@ -36,7 +36,7 @@ emulator results never fill the physical-device column.
 | `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30; state/recents not implemented | Sort smoke only; state/recents not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents not implemented | Sort is compiled for OHOS but its actual NAPI invocation is not measured; state/recents have no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table and final-marker source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, and 14 final-marker expectations | Split 21; repair not implemented | Split 21 on macOS; repair not implemented | Split 21; repair not implemented | Split NAPI unexecuted; repair NAPI not implemented | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker and inline source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
@@ -47,9 +47,11 @@ cannot rerun them. Those reports used later Xcode versions, so Xcode 26.0 remain
 generated Swift type, a compiled OHOS feature or a host fake is not itself a replay result.
 
 The StreamRepair boundary is deliberately narrower than full Markdown repair: fence recognition/repair, the bounded
-table scanner and final unfinished block-marker hold-back have cargo and real host-JNI evidence. Inline markup, math,
-`plainOpenFence`, rendering, timing/coalescing and production adapters remain out of scope; no C, SwiftPM, ArkTS-host
-or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is closed. It does not close
+table scanner, final unfinished block-marker hold-back and scalar inline repair have cargo and real host-JNI evidence.
+Their C ABI and ArkTS-host replays (#9241) cover the named fence/table/marker inputs, including inherited inline
+expectations. The `.math` end state, `plainOpenFence`, rendering, timing/coalescing and production adapters remain out
+of scope; no SwiftPM or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is
+closed. It does not close
 the separate Android performance follow-up: #9048's lock-free dispatch and owned-JNI-byte hand-off have overlapping
 host A/B distributions, and the original emulator / device go/no-go evidence remains unresolved as recorded in the plan.
 
@@ -83,7 +85,10 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
 `persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
-`{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
+`{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 22 fence + 19 marker/boundary + 39
+table/boundary complete `{repaired, end}` objects stated independently from the Apple tests/source and existing JNI
+replay,
+`persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
 `persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
 `persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
@@ -106,15 +111,21 @@ corpus plus overlay, and separately replays the existing replacement through the
 runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
-fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
-visual gaps, rendering, timing/coalescing, production adapters or physical-device performance. Later C ABI, SwiftPM
-and ArkTS host replays cover `stream_chunks` but not StreamRepair, whose C/NAPI/Swift boundaries remain unimplemented.
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift, visual gaps, rendering,
+timing/coalescing, production adapters or physical-device performance. The fence/table/marker StreamRepair slices have
+separate real host-JNI coverage; this PR adds their C ABI and ArkTS host replays. Only their SwiftPM projection remains
+unimplemented; the generated NAPI export is committed but no NAPI library has been loaded or executed.
 The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
 stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
 partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
 `markersOnly` cases/controls plus digit boundaries. Table repair (#9164) replays all 22 repair and 15 table/text end
 assertions from Apple's table-related tests, including half-written rows, early delimiter rows, list indentation and
-lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
+lazy-line exclusion. Inline repair (#9286) replays all 51 explicit Apple inline-related assertions and 13 separate
+source-derived boundary controls. Its scalar scanner follows emphasis/strikethrough flanking, code spans,
+links/images, escapes, bare/autolinks and inline-formula skipping. All 342 Unicode-scalar prefixes of Apple's mixed
+reply are replayed through real stream-chunks JNI into stream-repair JNI, preserving each completed-line prefix and
+leaving the finished reply unchanged. Display math is recognized to keep inline repair
+out of it. The `.math` end state and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. #9233 adds a ninth recommendation for newline / NBSP / TAB
@@ -227,6 +238,34 @@ workspace tests also exercise frozen-reading identity, explicit folds, filters a
 portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
+## Android answer adapter and shadow (#9143)
+
+`AnswerBuilder.build/display` keeps its existing signatures and delegates to a Kotlin-default `AnswerAdapter`, so every
+existing Agent request and chat panel keeps the same returned Kotlin objects. The separate hub-provided task
+recommendation text (`TodoAsk.recommend`) is not part of this question-option projection. Release compiles only the
+Kotlin path; `RustCoreAnswer`, the observer and its preferences have no Release source-set or JNI entry.
+
+The DEBUG launcher accepts `--es debug.answerShadow on` (then force-stop and relaunch; use `off` to disable it for the
+next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar and is
+also a dependency of the standard root `test`. Kotlin returns before the observer's own bounded FIFO worker converts
+the question-only operation, loads the native library or calls JNI. At most 32 comparisons wait in that queue, repeated
+labels are compared once per adapter after a successful comparison, and a full queue drops only new diagnostic work.
+The DEBUG answer JNI itself uses a bounded Rust channel (one executing job plus at most one waiting job), with a
+one-second result wait on the client's background worker. The main thread never calls it; a native thread that itself
+hangs cannot be forcibly cancelled, but it cannot make the queue unbounded.
+Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
+unsupported, not as parity. Exact answer/display comparisons stay in that worker, including picks and custom-answer
+state for all three supported operations; a report contains only domain, rule and counts/flags/operation enums, never a
+label, question, answer, identifier or exception message. Every 10 completed comparisons logs only
+`answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+
+The replay compares all 15 `questions.json` and 9 `recommended.json` complete expected objects through both the
+current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
+as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
+evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
+both packaged ABIs. The U+200B display boundary was independently fixed by #9189 and is included in the ninth case;
+the retained `other` draft distinction found by the stricter multi-step shadow is #9238 and is not normalized here.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
@@ -263,9 +302,13 @@ from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong
 the ninth recommendation. The answer comparison preserves the fixture's
 conditional next-page, picks and display fields. The receipt retains its description and started call with empty
 notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
+`harmony/tests/core-host/stream-repair.test.mjs` (#9241) replays the same 80 complete `{repaired, end}` objects
+through the `stream_repair` host projection command, including the digit, leading-blank-line and delimiter boundaries.
+Both surfaces reject malformed inputs and deliberately wrong `end`, wrong `repaired` and extra-field expectations.
 The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAnswer`, `coreDisplayAnswer`,
-`coreProjectStreamChunks`, `coreProjectTaskIndex` and `coreProjectTurns`; their generated declarations are checked
-for drift. `coreDisplayAnswer` takes a bare option label, while the other five take JSON documents.
+`coreProjectStreamChunks`, `coreProjectStreamRepair` (#9241), `coreProjectTaskIndex` and `coreProjectTurns`; their
+generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option label, while the other six take
+JSON documents.
 `harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
 all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
 turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
