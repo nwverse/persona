@@ -496,9 +496,10 @@ struct TodoDetailView: View {
     private func bottomBar(_ todo: TodoItem) -> some View {
         // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
         // they were cut to "Hand to A…" from xxLarge.
-        // The app's regular buttons, as tall as the sidebar's New Chat, and on a wide page (an iPad) no wider than a
-        // readable page, centered, as the Inbox's hand-off bar: at the large control size across the whole page they
-        // were taller and far wider than any other button and hid more of the notes (#8958).
+        // The regular control size with a 30 pt label: 44 pt buttons, a whole tap target and about the sidebar's New
+        // Chat (46). On a wide page (an iPad) the row is no wider than a readable page, centered, as the Inbox's
+        // hand-off bar. At the large size across the whole page they were 61 pt tall and on an iPad 380 pt wide each,
+        // and hid more of the notes (#8958).
         StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
             bottomButtons(todo)
         }
@@ -509,6 +510,8 @@ struct TodoDetailView: View {
         .background(Theme.pageBackground)
     }
 
+    /// Each label is measured at its full size (`minimumScale: 1`): at the regular size the row's 0.8 allowance kept
+    /// "Hand to Agent" beside Done at xxxLarge, cut to "Hand to Age…" instead of shrunk (#8958).
     @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
         // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
         if !todo.isDone {
@@ -518,10 +521,10 @@ struct TodoDetailView: View {
                 HStack(spacing: Theme.Space.xs) {
                     ThemedIcon(Theme.Icon.handToAI)
                     // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
-                    Text("Hand to Agent [To-do Page Button]").buttonLabelLine()
+                    Text("Hand to Agent [To-do Page Button]").buttonLabelLine(minimumScale: 1)
                 }
                 .font(Theme.Font.bodyStrong)
-                .scaledFrame(maxWidth: .infinity)
+                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
             }
             .themedButton(prominent: true)
             .accessibilityIdentifier("todo.handToAgent")
@@ -532,10 +535,10 @@ struct TodoDetailView: View {
         } label: {
             HStack(spacing: Theme.Space.xs) {
                 ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
-                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine()
+                Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine(minimumScale: 1)
             }
             .font(Theme.Font.bodyStrong)
-            .scaledFrame(maxWidth: .infinity)
+            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
         }
         .themedButton(prominent: false)
         .accessibilityIdentifier("todo.toggleDone")

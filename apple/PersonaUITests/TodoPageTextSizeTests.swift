@@ -31,7 +31,7 @@ final class TodoPageTextSizeTests: XCTestCase {
     }
 
     /// The bottom bar in the page's three states (#8958): with an Agent at work and a stage, with nothing yet, and done
-    /// (Reopen alone). Its buttons are as tall as the app's other buttons (not the large control size), and on a wide
+    /// (Reopen alone). Its buttons are as tall as the app's other buttons (44 pt, not the large control size), and on a wide
     /// page (an iPad) the row is no wider than `Theme.Size.readable`, centered. `bar-<state>.png` in PERSONA_SHOTS;
     /// PERSONA_LANDSCAPE=1 turns the device first; PERSONA_BEFORE shoots and checks nothing.
     @MainActor func testBottomBarInEachState() throws {
@@ -50,7 +50,7 @@ final class TodoPageTextSizeTests: XCTestCase {
             guard env["PERSONA_BEFORE"] == nil else { continue }
             let buttons = [done] + (state == "done" ? [] : [app.buttons["todo.handToAgent"].firstMatch])
             for b in buttons {
-                XCTAssertLessThanOrEqual(b.frame.height, 50, "\(state): \(b.identifier) no taller than the app's buttons \(b.frame)")
+                XCTAssertEqual(b.frame.height, 44, accuracy: 3, "\(state): \(b.identifier) 44 pt tall \(b.frame)")
             }
             let row = buttons.map(\.frame).reduce(buttons[0].frame) { $0.union($1) }
             XCTAssertLessThanOrEqual(row.width, 561, "\(state): the row is no wider than a readable page \(row)")
@@ -84,13 +84,16 @@ final class TodoPageTextSizeTests: XCTestCase {
 
     @MainActor private func launch(_ hub: String, _ language: String, _ size: String, _ extra: [String]) {
         app?.terminate()
-        XCUIDevice.shared.appearance = ProcessInfo.processInfo.environment["PERSONA_APPEARANCE"] == "dark" ? .dark : .light
+        let dark = ProcessInfo.processInfo.environment["PERSONA_APPEARANCE"] == "dark"
+        XCUIDevice.shared.appearance = dark ? .dark : .light
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let (languages, locale) = Self.languages[language]!
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
                                "-AppleLanguages", languages, "-AppleLocale", locale,
-                               "-UIPreferredContentSizeCategoryName", Self.sizes[size]!] + extra
+                               "-UIPreferredContentSizeCategoryName", Self.sizes[size]!,
+                               // The app's own appearance setting wins over the device's: name the one asked for.
+                               "-ui.scheme", dark ? "dark" : "light"] + extra
         app.launchPinned()
         dismissSystemAlerts()
     }
