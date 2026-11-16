@@ -89,9 +89,12 @@ pub struct Session {
 impl Session {
     /// A hub-local `machine/session`, or iOS's `group|machine/session`. An unqualified id belongs only to its own hub.
     pub fn matches_preference(&self, id: &str) -> bool {
-        let group = self.app_hub_group.as_deref().unwrap_or("");
         if let Some((owner, rest)) = id.split_once('|') {
-            return owner == group && rest == format!("{}/{}", self.machine_id, self.session_id);
+            let qualified = self.manager.as_deref().map_or_else(
+                || self.app_hub_group.clone().unwrap_or_default(),
+                |manager| manager.to_owned(),
+            );
+            return owner == qualified && rest == format!("{}/{}", self.machine_id, self.session_id);
         }
         id == format!("{}/{}", self.machine_id, self.session_id)
     }

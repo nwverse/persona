@@ -210,7 +210,7 @@ test('iOS state, machine and space groupings share core visibility and release r
   workspace.setGroupingMode('state');
   assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['s1', 's2', 's3']);
   workspace.setReadingDetail(true);
-  client.sessions = [first];
+  client.sessions = [first, second, third];
   workspace.update(client, true);
   assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['s1', 's2', 's3']);
   client.sessions = [first, second, third, agent('s4')];
@@ -228,6 +228,7 @@ test('external session selection updates and clears the left row selection', asy
   const first = agent('s1'), second = agent('s2');
   const { workspace, client } = await opened({ sessions: [first, second] });
   client.selected = agent('s2');
+  workspace.toggleFold('state/idle');
   workspace.update(client);
   assert.equal(workspace.isSelected(second), true);
   client.selected = ResourceRow.from({ id: 'conversation-1', manager: 'work' }, 'conversation');
@@ -374,6 +375,93 @@ test('per-Hub pins and allowed exceptions cannot affect another Hub with the sam
   assert.equal(w.groups.find((group) => group.id === 'pinned').rows.some((row) => row.group === 'hub-b'), false);
 });
 
+test('same-Hub manager preferences and held state remain isolated', async () => {
+  const a = clientFixture(), b = clientFixture();
+  a.client.profile.id = 'hub'; a.client.profile.manager = 'alpha'; a.state.manager = 'alpha';
+  b.client.profile.id = 'hub'; b.client.profile.manager = 'beta'; b.state.manager = 'beta'; b.state.scope = 'hub:beta';
+  a.state.prefs.pins.sessions = ['m1/shared']; b.state.prefs.pins.sessions = [];
+  a.state.prefs.mutes.allowed = ['m1/shared']; b.state.prefs.mutes.spaces = ['m1/project'];
+  a.client.machines[0].manager = 'alpha'; b.client.machines[0].manager = 'beta';
+  const first = agent('shared', {manager: 'alpha', state: 'idle', space_name: 'project'});
+  const second = agent('shared', {manager: 'beta', state: 'idle', space_name: 'project'});
+  first.group = 'hub'; second.group = 'hub';
+  a.client.directoryReady = true; a.client.directorySessions = [first, second];
+  a.client.directoryOwners = () => [a.client, b.client]; a.client.directoryOwnerFor = (row) => row.manager === 'beta' ? b.client : a.client;
+  const w = new AgentWorkspace(); await w.open(a.client);
+  assert.equal(w.groups.find((group) => group.id === 'pinned').rows[0].manager, 'alpha');
+  assert.equal(w.groups.find((group) => group.id === 'pinned').rows.length, 1);
+  w.selectRow(first);
+  assert.equal(w.isPinned(first), true); assert.equal(w.isPinned(second), false);
+  assert.equal(w.isMuted(second), true); assert.equal(w.isMuted(first), false);
+});
+
+test('legacy empty manager machine filters keep the Hub group', async () => {
+  const {workspace, client} = await opened();
+  client.profile.id = 'hub';
+  client.sessions[0].group = 'hub';
+  await workspace.setMachineFilter(JSON.stringify(['hub', '', 'm1']));
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['s1']);
+});
+
+test('time-bounded searches use caller time and group titles remain visible', async () => {
+  const {workspace} = await opened({sessions: [agent('s1', {updated_at: new Date().toISOString()})]});
+  workspace.setSearch('since:24h');
+  assert.equal(workspace.visibleRows().length, 1);
+  workspace.setGroupingMode('machine');
+  assert.equal(workspace.groups[0].machineName, 'Computer m1');
+  workspace.setGroupingMode('space');
+  assert.equal(workspace.groups[0].machineName, 'repo');
+});
+
+test('native failure retains the same displayed rows and action authority', async () => {
+  const {workspace, client} = await opened();
+  const original = client.sessions[0], ticket = workspace.actionTicket(original);
+  workspace.adapter = {project() {throw new Error('native unavailable');}};
+  client.sessions = [agent('s1', {title: 'Replacement target'})];
+  workspace.update(client);
+  assert.equal(workspace.visibleRows()[0], original);
+  assert.equal(ticket(), true);
+  assert.equal(workspace.error, 'failed');
+});
+
+test('frozen reading drops deleted and offline rows without admitting new members', async () => {
+  const first = agent('keep'), second = agent('offline');
+  const {workspace, client} = await opened({sessions: [first, second]});
+  workspace.setReadingDetail(true);
+  client.sessions = [agent('keep', {state: 'idle'}), agent('new-member')];
+  workspace.update(client, true);
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['keep']);
+  client.sessions = [agent('keep', {state: 'offline'}), agent('new-member')];
+  workspace.update(client, true);
+  assert.deepEqual(workspace.visibleRows(), []);
+});
+
+test('forgetting a Hub refolds frozen groups without resurrecting rows', async () => {
+  const a = clientFixture(), b = clientFixture();
+  a.client.profile.id = 'hub-a'; b.client.profile.id = 'hub-b'; b.state.scope = 'hub-b:work';
+  const first = agent('first'), second = agent('second');
+  first.group = 'hub-a'; second.group = 'hub-b';
+  a.client.directoryReady = true; a.client.directorySessions = [first, second];
+  a.client.directoryOwners = () => [a.client, b.client]; a.client.directoryOwnerFor = (row) => row.group === 'hub-b' ? b.client : a.client;
+  const w = new AgentWorkspace(); await w.open(a.client, true);
+  w.toggleFold('state/working');
+  w.toggleFold('state/working');
+  w.forgetHub('hub-b');
+  assert.deepEqual(w.visibleRows().map((row) => row.group), ['hub-a']);
+  w.toggleFold('state/working');
+  assert.ok(w.visibleRows().every((row) => row.group !== 'hub-b'));
+});
+
+test('archived sessions get a registry entry for machine grouping', async () => {
+  const a = clientFixture({history: [agent('archived', {archived: true, state: 'working', machine_id: 'retired'})]});
+  a.client.features = ['agent_session_archives'];
+  const w = new AgentWorkspace(); await w.open(a.client);
+  await w.setHistory(true);
+  w.setGroupingMode('machine');
+  assert.ok(w.groups.some((group) => group.id.includes('retired')));
+  assert.equal(w.groups[0].machineName, 'retired');
+});
+
 test('group fold and quick filter controls are native buttons with touch bounds', () => {
   const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
   assert.match(source, /Button\(tr\(binding\.value\.folded \? 'agent_expand' : 'agent_collapse'\)\)/);
@@ -400,7 +488,7 @@ test('a mutation journal admission is revoked when its captured Hub goes away',a
  assert.equal(await w.rename(f.client.sessions[0],'changed',''),false);assert.equal(dispatched,0);
 });
 
-test('a background directory load cannot bypass established reading membership',async()=>{const first=agent('frozen-a'),second=agent('frozen-b'),{workspace,client}=await opened({sessions:[first,second]});workspace.setReadingDetail(true);client.directoryReady=true;client.directoryLoading=true;client.directorySessions=[agent('new-member'),agent('frozen-a',{state:'idle'})];workspace.update(client,true);assert.deepEqual(workspace.visibleRows().map(row=>row.id),['frozen-a','frozen-b']);assert.equal(workspace.visibleRows()[0].state,'idle');});
+test('a background directory load cannot bypass established reading membership',async()=>{const first=agent('frozen-a'),second=agent('frozen-b'),{workspace,client}=await opened({sessions:[first,second]});workspace.setReadingDetail(true);client.directoryReady=true;client.directoryLoading=true;workspace.toggleFold('state/idle');client.directorySessions=[agent('new-member'),agent('frozen-a',{state:'idle'}),second];workspace.update(client,true);assert.deepEqual(workspace.visibleRows().map(row=>row.id),['frozen-a','frozen-b']);assert.equal(workspace.visibleRows()[0].state,'idle');});
 test('forgetting a foreign Hub removes frozen rows, history, selection and action authority',async()=>{const a=clientFixture(),b=clientFixture();a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';const first=agent('same'),second=agent('same');first.group='hub-a';second.group='hub-b';a.client.directoryReady=true;a.client.directorySessions=[first,second];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client,true);w.selectExternal(second);w.historyRows=[second];const ticket=w.actionTicket(second);assert.equal(ticket(),true);w.forgetHub('hub-b');assert.deepEqual(w.visibleRows().map(row=>row.group),['hub-a']);assert.equal(w.selectedKey,'');assert.equal(w.historyRows.length,0);assert.equal(ticket(),false);});
 test('an archive-only foreign owner is included and its open confirmation cannot survive reconnect',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('archived',{archived:true,state:'offline'})]});a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';b.client.features=['agent_session_archives'];b.client.sessions=[];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client);assert.equal(w.historySupported(),true);await w.setHistory(true);assert.ok(b.state.calls.some(call=>call.path.startsWith('/api/v1/sessions/archived')));assert.equal(w.visibleRows().length,0,'the archived offline Agent is not live membership');await w.setHistory(false);const row=a.client.sessions[0],ticket=w.actionTicket(row);assert.equal(ticket(),true);a.state.generation++;assert.equal(ticket(),false);});
 

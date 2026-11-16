@@ -25,6 +25,9 @@ pub struct Input {
     /// replaces both for its group, so a pin on one hub cannot pin the same machine/session on another.
     #[serde(default)]
     pub hub_preferences: Option<StdHashMap<String, HubPreferences>>,
+    /// Manager-scoped preferences, applied only to the matching group + manager. Hub preferences remain the fallback.
+    #[serde(default)]
+    pub manager_preferences: Option<StdHashMap<String, HubPreferences>>,
     pub settings: Settings,
 }
 
@@ -78,22 +81,39 @@ pub struct HubPreferences {
 }
 
 impl Input {
-    fn preferences(&self, group: &str) -> (&Pins, &Mutes) {
-        self.hub_preferences
-            .as_ref()
-            .and_then(|preferences| preferences.get(group))
-            .map_or((&self.pins, &self.mutes), |preferences| {
-                (&preferences.pins, &preferences.mutes)
+    fn preferences(&self, group: &str, manager: Option<&str>) -> (&Pins, &Mutes) {
+        manager
+            .filter(|manager| !manager.is_empty())
+            .and_then(|manager| {
+                let key = format!("{group}|{manager}");
+                self.manager_preferences.as_ref()?.get(&key)
             })
+            .map_or_else(
+                || {
+                    self.hub_preferences
+                        .as_ref()
+                        .and_then(|preferences| preferences.get(group))
+                        .map_or((&self.pins, &self.mutes), |preferences| {
+                            (&preferences.pins, &preferences.mutes)
+                        })
+                },
+                |preferences| (&preferences.pins, &preferences.mutes),
+            )
     }
 
     fn pinned(&self, session: &Session) -> bool {
-        let (pins, _) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        let (pins, _) = self.preferences(
+            session.app_hub_group.as_deref().unwrap_or(""),
+            session.manager.as_deref(),
+        );
         pins.sessions.iter().any(|pin| session.matches_preference(pin))
     }
 
     fn muted(&self, session: &Session) -> bool {
-        let (_, mutes) = self.preferences(session.app_hub_group.as_deref().unwrap_or(""));
+        let (_, mutes) = self.preferences(
+            session.app_hub_group.as_deref().unwrap_or(""),
+            session.manager.as_deref(),
+        );
         if mutes.sessions.iter().any(|id| session.matches_preference(id)) {
             return true;
         }
@@ -109,12 +129,12 @@ impl Input {
     }
 
     fn pinned_space(&self, space: &Space<'_>) -> bool {
-        let (pins, _) = self.preferences(&space.group);
+        let (pins, _) = self.preferences(&space.group, space.manager.as_deref());
         pins.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
     }
 
     fn muted_space(&self, space: &Space<'_>) -> bool {
-        let (_, mutes) = self.preferences(&space.group);
+        let (_, mutes) = self.preferences(&space.group, space.manager.as_deref());
         mutes.spaces.contains(&format!("{}/{}", space.machine_id, space.name))
     }
 }
@@ -240,6 +260,7 @@ struct Row {
     /// `group|machine_id` for a non-default hub group, as iOS's `MachineRef.path`.
     machine_path: String,
     group: String,
+    manager: Option<String>,
     state: AgentState,
     sort_date: Option<i128>,
     is_waiting: bool,
@@ -274,19 +295,29 @@ impl Row {
         } else {
             format!("{group}|")
         };
-        let held = input.settings.held.as_deref() == Some(short_id.as_str());
+        let row_id = if session.manager.as_deref().is_some_and(|manager| !manager.is_empty()) {
+            format!("{}|{}", machine_path, session.session_id)
+        } else {
+            format!("{prefix}{short_id}")
+        };
+        let held = input
+            .settings
+            .held
+            .as_deref()
+            .is_some_and(|held| held == short_id || held == row_id);
         let sort_date = if state == AgentState::Working {
             session.state_since.as_deref().or(session.updated_at.as_deref())
         } else {
             session.updated_at.as_deref()
         };
         Self {
-            id: format!("{prefix}{short_id}"),
+            id: row_id,
             short_id,
             machine_id: session.machine_id.clone(),
             session_id: session.session_id.clone(),
             machine_path,
             group: group.to_owned(),
+            manager: session.manager.clone(),
             state,
             sort_date: sort_date.and_then(utc_timestamp),
             is_waiting: state.is_quiet() && session.is_waiting(),
@@ -415,7 +446,19 @@ impl Query {
             &session.machine_id,
         );
         if !input.settings.machine_filter.is_empty() && machine_path != input.settings.machine_filter {
-            return false;
+            let legacy = session
+                .app_hub_group
+                .as_deref()
+                .map_or(session.machine_id.clone(), |group| {
+                    if group.is_empty() {
+                        session.machine_id.clone()
+                    } else {
+                        format!("{group}|{}", session.machine_id)
+                    }
+                });
+            if legacy != input.settings.machine_filter {
+                return false;
+            }
         }
         let machine_path = machine_path.to_lowercase();
         if !self
@@ -661,7 +704,7 @@ fn ordered_with<'a>(rows: impl IntoIterator<Item = &'a Row>, by_rank: bool, olde
 fn pinned_sessions<'a>(rows: &[&'a Row], input: &Input) -> Vec<&'a Row> {
     let mut pinned: Vec<&Row> = rows.iter().copied().filter(|row| row.pinned).collect();
     pinned.sort_by_key(|row| {
-        let (pins, _) = input.preferences(&row.group);
+        let (pins, _) = input.preferences(&row.group, row.manager.as_deref());
         pins.sessions
             .iter()
             .position(|id| *id == row.short_id || *id == row.id)
@@ -790,6 +833,7 @@ struct Space<'a> {
     id: String,
     machine_id: String,
     group: String,
+    manager: Option<String>,
     name: String,
     members: Vec<&'a Row>,
     priority: u8,
@@ -809,6 +853,7 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
                 id: format!("{}/{}", machine_path, row.space_id),
                 machine_id: row.machine_id.clone(),
                 group: row.group.clone(),
+                manager: row.manager.clone(),
                 name: row.space_name.clone(),
                 members: Vec::new(),
                 priority: u8::MAX,

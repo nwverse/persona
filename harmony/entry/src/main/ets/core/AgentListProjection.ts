@@ -49,5 +49,7 @@ export interface CoreSortInput {
   settings: Record<string, Object>;
   /** Per-Hub preferences from #9027; the legacy maps belong to the default Hub. */
   hub_preferences?: Record<string, Object>;
+  /** Manager-qualified preferences override the Hub default only for that manager. */
+  manager_preferences?: Record<string, Object>;
 }
 export type CoreProjectSort = (input: string) => string;

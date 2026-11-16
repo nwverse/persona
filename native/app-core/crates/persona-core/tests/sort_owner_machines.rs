@@ -26,17 +26,25 @@ fn managers_on_one_hub_machine_keep_independent_groups_and_filters() {
     let groups = projection.groups;
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0].id, "machine/hub|alpha|shared");
-    assert_eq!(groups[0].rows, ["hub|shared/first"]);
+    assert_eq!(groups[0].rows, ["hub|alpha|shared|first"]);
     assert_eq!(groups[1].id, "machine/hub|beta|shared");
-    assert_eq!(groups[1].rows, ["hub|shared/second"]);
+    assert_eq!(groups[1].rows, ["hub|beta|shared|second"]);
 
     for (manager, session) in [("alpha", "first"), ("beta", "second")] {
         let filtered = persona_core::sort::project(
             &serde_json::from_value(input("machine", &format!("hub|{manager}|shared"))).expect("filter"),
         );
         assert_eq!(filtered.groups.len(), 1);
-        assert_eq!(filtered.groups[0].rows, [format!("hub|shared/{session}")]);
+        assert_eq!(filtered.groups[0].rows, [format!("hub|{manager}|shared|{session}")]);
     }
+
+    let legacy =
+        persona_core::sort::project(&serde_json::from_value(input("machine", "hub|shared")).expect("legacy filter"));
+    assert_eq!(
+        legacy.groups.len(),
+        2,
+        "legacy group|machine includes both manager owners"
+    );
 }
 
 #[test]
@@ -50,4 +58,39 @@ fn owner_qualified_space_group_keeps_legacy_preference_machine_key() {
     assert_eq!(projection.groups.len(), 2);
     assert_eq!(projection.groups[0].id, "hub|alpha|shared/-");
     assert_eq!(projection.groups[1].id, "hub|beta|shared/-");
+}
+
+#[test]
+fn manager_preferences_and_held_are_owner_qualified() {
+    let mut value = input("state", "");
+    value["sessions"][0]["state"] = json!("idle");
+    value["sessions"][1]["state"] = json!("idle");
+    value["manager_preferences"] = json!({
+        "hub|alpha": {
+            "pins": {"spaces": [], "sessions": ["shared/first"]},
+            "mutes": {"spaces": [], "sessions": [], "allowed": []}
+        },
+        "hub|beta": {
+            "pins": {"spaces": [], "sessions": []},
+            "mutes": {"spaces": ["shared/project"], "sessions": [], "allowed": ["shared/second"]}
+        }
+    });
+    value["hub_preferences"] = json!({
+        "hub": {
+            "pins": {"spaces": [], "sessions": ["shared/second"]},
+            "mutes": {"spaces": [], "sessions": [], "allowed": []}
+        }
+    });
+    value["settings"]["held"] = json!("hub|alpha|shared|first");
+    value["settings"]["folded"] = json!(["!state/idle"]);
+    value["settings"]
+        .as_object_mut()
+        .expect("settings")
+        .remove("expanded_idle");
+    let projection = persona_core::sort::project(&serde_json::from_value(value).expect("manager preferences"));
+    assert_eq!(projection.groups[0].id, "pinned");
+    assert_eq!(projection.groups[0].rows, ["hub|alpha|shared|first"]);
+    assert!(!projection.groups[0].rows.contains(&"hub|beta|shared|second".to_owned()));
+    assert_eq!(projection.groups[1].rows, ["hub|beta|shared|second"]);
+    assert!(!projection.groups[1].rows.contains(&"hub|alpha|shared|first".to_owned()));
 }

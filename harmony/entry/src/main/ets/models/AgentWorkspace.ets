@@ -41,6 +41,7 @@ export class AgentWorkspaceGroup {
   stateCounts: Record<string, Object> = {};
   spoken: string = '';
   totalRowCount: number = 0;
+  memberIds: string[] = [];
   rows: ResourceRow[] = [];
 
   constructor(id: string, machineId: string, machineName: string, repositoryPath: string, repositoryName: string,
@@ -58,6 +59,9 @@ function rowKey(row: ResourceRow): string { return JSON.stringify(row.group ? [r
 function rowSpaceKey(row: ResourceRow): string {
   const name = Wire.text(row.data(), 'space_name');
   return name ? rowMachine(row) + '/' + name : '';
+}
+function coreRowId(row: ResourceRow): string {
+  return (row.group ? row.group + '|' : '') + (row.manager ? row.manager + '|' : '') + rowMachine(row) + '|' + rowSession(row);
 }
 function cloneRow(row: ResourceRow): ResourceRow {
   const copy = new ResourceRow(row.id, row.title, row.kind);
@@ -111,6 +115,7 @@ export class AgentWorkspace {
   private actionEpoch: number = 0;
   revokeRowActions(): void { this.actionEpoch++; this.busy = false; }
   private sourceRows: ResourceRow[] = [];
+  private latestSourceRows: ResourceRow[] = [];
   private externalSelection: ResourceRow | undefined;
   private historyRows: ResourceRow[] = [];
   private historyLoaded: boolean = false;
@@ -125,7 +130,6 @@ export class AgentWorkspace {
   private folded: string[] = [];
   private expandedIdle: string[] = [];
   private expandedQuiet: string[] = [];
-  private currentNow: string = '';
   private heldSession: string = '';
   historySupported(): boolean { return !!this.client?.directoryOwners().some((owner: ClientModel) => owner.features.includes('agent_session_archives')); }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
@@ -163,7 +167,7 @@ export class AgentWorkspace {
     this.client = client; this.scope = client.scope(); this.owner = client.profile.manager;
     this.viewScope = JSON.stringify([this.scope, this.owner]);
     this.openingView = true; this.loading = true; this.busy = false; this.error = '';
-    this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
+    this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
     this.quickFilter = 'all'; this.groupingMode = 'state'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
     this.readingDetail = false; this.freezeSuppressed = false;
     this.preferences.clear(); this.pinsSpaces = []; this.pinsSessions = []; this.mutesSpaces = []; this.mutesSessions = []; this.mutesAllowed = [];
@@ -179,14 +183,14 @@ export class AgentWorkspace {
       this.selectedKey = Wire.text(saved, 'selected');
       this.folded = Wire.strings(saved, 'folded'); this.expandedIdle = Wire.strings(saved, 'expanded_idle');
       this.expandedQuiet = Wire.strings(saved, 'expanded_quiet');
-      this.sourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
+      this.latestSourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
       this.syncSelected(client);
       this.rebuild();
       this.setReadingDetail(readingDetail);
       if (client.connected) {
         await client.refreshDirectory();
         if (!this.loadCurrent(client, revision)) return;
-        this.sourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client); this.rebuild();
+        this.latestSourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client); this.rebuild();
         await this.refreshDirectoryPreferences(client, revision);
         if (!this.loadCurrent(client, revision)) return;
         if (this.history) await this.loadHistory(client, revision);
@@ -199,7 +203,7 @@ export class AgentWorkspace {
   }
 
   hide(): void {
-    this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false;
+    this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
     this.persistTimer = -1;
@@ -212,11 +216,11 @@ export class AgentWorkspace {
       return;
     }
     if (this.history && client.connected && !this.historySupported()) {
-      this.history = false; this.sourceRows = this.rowsForClient(client); this.saveViewLater();
+      this.history = false; this.latestSourceRows = this.rowsForClient(client); this.saveViewLater();
     }
     this.syncSelected(client);
     this.setReadingDetail(readingDetail);
-    this.sourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
+    this.latestSourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
     this.rebuild();
   }
 
@@ -229,7 +233,7 @@ export class AgentWorkspace {
     try {
       await client.refreshDirectory();
       if (!this.ownerActive(snapshot)) return;
-      this.sourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client); this.rebuild();
+      this.latestSourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client); this.rebuild();
       await this.refreshDirectoryPreferences(client, this.revision);
       if (this.history) await this.loadHistory(client, this.revision);
     } catch (failure) { if (this.ownerActive(snapshot)) this.fail(failure as Error); }
@@ -238,10 +242,13 @@ export class AgentWorkspace {
   setReadingDetail(value: boolean): void {
     if (value === this.readingDetail) return;
     if (value) {
+      if (this.readingDetail) return;
       this.heldSession = ''; this.rebuild();
       this.readingDetail = true;
       this.freezeSuppressed = false;
-      this.frozenGroups = this.sourceReady() ? this.copyGroups(this.groups) : undefined;
+      if (this.sourceReady() || this.groups.length > 0) {
+        this.frozenGroups = this.copyGroups(this.groups);
+      }
     } else {
       this.readingDetail = false;
       this.heldSession = '';
@@ -302,7 +309,7 @@ export class AgentWorkspace {
     this.historyRequest++; this.loading = false;
     this.history = value;
     this.error = '';
-    this.sourceRows = value ? [] : this.rowsForClient(this.client);
+    this.latestSourceRows = value ? [] : this.rowsForClient(this.client);
     this.rebuild(); this.saveViewLater();
     if (value && this.client) await this.loadHistory(this.client, this.revision, true);
     else this.refreezeAfterFilter();
@@ -312,7 +319,7 @@ export class AgentWorkspace {
   forgetHub(group: string): void {
     this.historyRequest++; this.loading = false;
     const keep = (row: ResourceRow): boolean => row.group !== group;
-    this.sourceRows = this.sourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
+    this.latestSourceRows = this.sourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
     if (this.externalSelection?.group === group) { this.externalSelection = undefined; this.selectedKey = ''; }
     if (this.frozenGroups) this.frozenGroups = this.frozenGroups.map((source: AgentWorkspaceGroup) => { const copy = this.copyGroup(source); copy.rows = copy.rows.filter(keep); return copy; }).filter((source: AgentWorkspaceGroup) => source.rows.length > 0);
     this.preferences.clear(); this.rebuild();
@@ -323,7 +330,8 @@ export class AgentWorkspace {
     if (row.kind !== 'session' || !this.groups.some((group: AgentWorkspaceGroup) =>
       group.rows.some((item: ResourceRow) => rowKey(item) === rowKey(row)))) return;
     this.externalSelection = row; this.selectedKey = rowKey(row);
-    this.heldSession = row.state === 'unread' ? rowMachine(row) + '/' + rowSession(row) : '';
+    this.heldSession = row.state === 'unread' ? (row.group ? row.group + '|' : '') + (row.manager ? row.manager + '|' : '') +
+      rowMachine(row) + '|' + rowSession(row) : '';
     this.saveViewLater();
   }
 
@@ -599,7 +607,7 @@ export class AgentWorkspace {
       if (rowKey(item) !== key) return item;
       const next = cloneRow(item), data = next.data(); data['state'] = state; next.raw = JSON.stringify(data); next.state = state; return next;
     });
-    this.sourceRows = patch(this.sourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
+    this.latestSourceRows = patch(this.sourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
   }
 
   private async loadHistory(client: ClientModel, revision: number, refreezeAfterLoad: boolean = false): Promise<void> {
@@ -631,7 +639,7 @@ export class AgentWorkspace {
       }
       if (!this.loadCurrent(client, revision) || request !== this.historyRequest || machine !== this.machineFilter) return;
       if ((refreezeAfterLoad || !this.historyLoaded) && this.readingDetail) { this.freezeSuppressed = false; this.frozenGroups = undefined; }
-      this.historyRows = rows; this.historyLoaded = true; this.sourceRows = rows.slice(); this.rebuild();
+      this.historyRows = rows; this.historyLoaded = true; this.latestSourceRows = rows.slice(); this.rebuild();
     } finally { if (this.loadCurrent(client, revision) && request === this.historyRequest) { this.loading = false; if (refreezeAfterLoad && this.freezeSuppressed) this.refreezeAfterFilter(); } }
   }
 
@@ -658,36 +666,41 @@ export class AgentWorkspace {
 
   private refreezeAfterFilter(): void {
     if (!this.readingDetail) return;
-    this.freezeSuppressed = false; this.frozenGroups = this.sourceReady() ? this.copyGroups(this.groups) : undefined;
+    this.freezeSuppressed = false;
+    if (this.sourceReady()) this.frozenGroups = this.copyGroups(this.groups);
   }
 
   private rebuild(): void {
-    if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
-      const latest = new Map<string, ResourceRow>();
-      this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
-      this.groups = this.frozenGroups.map((group: AgentWorkspaceGroup) => {
-        const copy = this.copyGroup(group);
-        copy.rows = group.rows.map((row: ResourceRow) => latest.get(rowKey(row)) || row);
-        if (group.id === 'state/idle') copy.folded = !this.folded.includes('!state/idle');
-        return copy;
-      });
-      this.frozenGroups = this.copyGroups(this.groups);
-      return;
-    }
     let groups;
     try {
       groups = this.adapter.project(this.makeListInput()).groups;
     } catch (_) {
-      // Keep the last usable projection; an unavailable native core is not an empty successful result.
+      // Preserve both rows and action authority from the same successful snapshot.
       this.error = 'failed';
       return;
     }
+    this.sourceRows = this.latestSourceRows;
+    if (this.client) this.syncSelected(this.client);
     const byId = new Map<string, ResourceRow>();
-    this.sourceRows.forEach((row) => byId.set((row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row), row));
+    this.sourceRows.forEach((row) => byId.set(coreRowId(row), row));
+    if (this.readingDetail && !this.freezeSuppressed && !this.frozenGroups && this.groups.length > 0) {
+      this.frozenGroups = this.copyGroups(this.groups);
+    }
+    if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
+      this.groups = this.frozenGroups.map((group) => {
+        const copy = this.copyGroup(group);
+        const projected = groups.find((entry) => entry.id === group.id);
+        if (projected) copy.folded = projected.folded;
+        copy.rows = group.memberIds.map((id) => byId.get(id)).filter((row): row is ResourceRow => !!row && row.state !== 'offline');
+        return copy;
+      }).filter((group) => group.rows.length > 0 || group.totalRowCount > 0);
+      this.frozenGroups = this.copyGroups(this.groups);
+      return;
+    }
     this.groups = groups.map((group) => {
-      const native = new AgentWorkspaceGroup(group.id, group.machineId, group.machineName, '', '', '', '', '');
-      native.folded = group.folded; native.parent = group.parent || ''; native.stateCounts = group.state_counts || {};
-      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
+      const native = new AgentWorkspaceGroup(group.id, '', group.title, '', '', '', '', '');
+      native.folded = group.folded; native.parent = group.parent || ''; native.stateCounts = group.state_counts || {};      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
+      native.memberIds = group.rows.slice();
       native.showMachine = group.id.startsWith('machine/');
       native.rows = group.visible_rows.map((id) => byId.get(id)).filter((row): row is ResourceRow => !!row);
       return native;
@@ -696,7 +709,7 @@ export class AgentWorkspace {
   }
 
   private makeListInput(): AgentListInput {
-    const rows = this.sourceRows.map((row: ResourceRow): AgentListRow => {
+    const rows = this.latestSourceRows.map((row: ResourceRow): AgentListRow => {
       const raw = row.data();
       raw['machine_id'] = rowMachine(row); raw['session_id'] = rowSession(row); raw['title'] = row.title;
       raw['cwd'] = row.path; raw['state'] = row.state; raw['manager'] = row.manager; raw['app_hub_group'] = row.group;
@@ -704,12 +717,21 @@ export class AgentWorkspace {
     });
     return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
-      kept: this.frozenGroups?.flatMap((group) => group.rows.map((row: ResourceRow) =>
-        (row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row))) || [],
-      machines: this.client?.directoryOwners().flatMap((owner: ClientModel) => owner.machines.map((row: ResourceRow) =>
-        ({id: row.id, name: row.title, group: owner.profile.id, manager: row.manager || owner.profile.manager}))) || [],
+      kept: this.frozenGroups?.flatMap((group) => group.memberIds) || [],
+      machines: this.client?.directoryOwners().flatMap((owner: ClientModel) => {
+        const current = owner.machines.map((row: ResourceRow) =>
+          ({id: row.id, name: row.title, group: owner.profile.id, manager: row.manager || owner.profile.manager}));
+        this.historyRows.filter((session) => (session.group || owner.profile.id) === owner.profile.id && session.manager === owner.profile.manager)
+          .forEach((session) => {
+            if (!current.some((machine) => machine['id'] === rowMachine(session))) {
+              current.push({id: rowMachine(session), name: this.ownerFor(session)?.machineName(rowMachine(session)) || rowMachine(session),
+                group: owner.profile.id, manager: session.manager});
+            }
+          });
+        return current;
+      }) || [],
       coreSettings: {sort: 'state', folded: this.folded, expanded_idle: this.expandedIdle, expanded_quiet: this.expandedQuiet,
-        compact: false, now: this.currentNow, held: this.heldSession},
+        compact: false, now: new Date().toISOString(), held: this.heldSession},
       preferencesFor: (row: AgentListRow) => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow) => this.machineIdentity(row.source as ResourceRow),
       machineName: (row: AgentListRow) => {
@@ -724,7 +746,7 @@ export class AgentWorkspace {
       group.worktreePath, group.worktreeName, group.branch, group.rows.slice());
     copy.showMachine = group.showMachine; copy.showRepository = group.showRepository; copy.showWorktree = group.showWorktree;
     copy.folded = group.folded; copy.parent = group.parent; copy.stateCounts = group.stateCounts;
-    copy.spoken = group.spoken; copy.totalRowCount = group.totalRowCount; return copy;
+    copy.spoken = group.spoken; copy.totalRowCount = group.totalRowCount; copy.memberIds = group.memberIds.slice(); return copy;
   }
 
   private copyGroups(groups: AgentWorkspaceGroup[]): AgentWorkspaceGroup[] { return groups.map((group: AgentWorkspaceGroup) => this.copyGroup(group)); }
