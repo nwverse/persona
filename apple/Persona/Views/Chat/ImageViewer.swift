@@ -381,7 +381,7 @@ struct ImageViewer: View {
             return
         }
         do {
-            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (BackgroundCallbackTests).
+            // `@Sendable`: Photos runs the block on its own queue, where main-actor code is a crash (test_apple_background_callbacks.py).
             try await PHPhotoLibrary.shared().performChanges { @Sendable in PHAssetChangeRequest.creationRequestForAsset(from: img) }
             Haptics.success()
             AppModel.shared.toast = Toast(String(localized: "Saved to Photos"), style: .success)
