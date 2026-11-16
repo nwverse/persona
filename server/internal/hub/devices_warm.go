@@ -64,10 +64,8 @@ func (h *Hub) saveDevicesWarm(ctx context.Context) {
 				saved.EngineHosts[m.cfg.ID] = *m.engineHosts
 			}
 			if shown {
-				w := devicesWarmMachine{Info: m.info, Sessions: slices.Clone(m.sessions), ArchivedBy: m.archivedBy}
-				for _, s := range m.archived {
-					w.Archived = append(w.Archived, s)
-				}
+				w := devicesWarmMachine{Info: m.info, Sessions: slices.Clone(m.sessions), Archived: slices.Clone(m.archived),
+					ArchivedBy: m.archivedBy}
 				if !m.online {
 					w.Until = m.warmUntil
 				}

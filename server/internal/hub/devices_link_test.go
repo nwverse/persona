@@ -190,7 +190,9 @@ func TestTheHubShowsTheHandOverUntilTheManagerReports(t *testing.T) {
 	next.store = st
 	next.cfg.Machines = h.cfg.Machines
 	next.startDevices(context.Background())
-	if s := next.machineByID("box").snapshot(); !s.Online || s.Hostname != "box" || len(next.machineByID("box").sessionList()) != 1 {
+	// One row in its list; sessionList, the manager's whole list, has the archived row too.
+	if s := next.machineByID("box").snapshot(); !s.Online || s.Hostname != "box" || len(next.machineByID("box").keptSessions()) != 1 ||
+		len(next.machineByID("box").sessionList()) != 2 {
 		t.Fatalf("the next hub process: %+v", s)
 	}
 	if s, ok := next.machineByID("box").session("old-archived"); !ok || !s.Archived {
@@ -202,7 +204,7 @@ func TestTheHubShowsTheHandOverUntilTheManagerReports(t *testing.T) {
 	third.store = st
 	third.cfg.Machines = h.cfg.Machines
 	third.startDevices(context.Background())
-	if s := third.machineByID("box").snapshot(); !s.Online || len(third.machineByID("box").sessionList()) != 1 {
+	if s := third.machineByID("box").snapshot(); !s.Online || len(third.machineByID("box").keptSessions()) != 1 {
 		t.Fatalf("a second quick restart: %+v", s)
 	}
 	if _, ok := third.machineByID("box").session("old-archived"); !ok {

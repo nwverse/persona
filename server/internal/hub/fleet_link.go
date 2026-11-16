@@ -298,7 +298,8 @@ func sameJSON(a, b any) bool {
 	return string(x) == string(y)
 }
 
-// decorated is a machine's sessions as the apps get them: the manager's last list.
+// decorated is a machine's sessions as the manager listed them, stamped: its last list, with the archived rows it
+// told apart (Machine.sessionList). The apps get it through Hub.shown, which leaves those out.
 func (h *Hub) decorated(m *Machine) []proto.Session {
 	list := m.sessionList()
 	h.stampSessions(m, list)

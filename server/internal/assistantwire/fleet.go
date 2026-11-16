@@ -17,7 +17,7 @@ const (
 	// EventFleetArchived is a machine's archived rows (FleetArchived), to a hub whose hello says Hello.ArchivedApart:
 	// the rows of the machine's list that are archived (proto.Session.Archived, not the assistant's), which the apps
 	// never see. EventFleetSessions then leaves them out. Told when they change, and once per machine after each
-	// handshake; the hub keeps them only for lookups by session (#6836).
+	// handshake; the hub reads them wherever it read the manager's list, except what the apps get (#6836).
 	EventFleetArchived = "fleet.archived"
 	// EventFleetInteraction is a pending interaction that is new or shown again (FleetInteraction).
 	EventFleetInteraction = "fleet.interaction"

@@ -292,19 +292,23 @@ func (h *Hub) updateBusy() []busyItem {
 		m.mu.Lock()
 		resident := m.info.NodeUpdate // advertised only by a resident supervisor
 		m.mu.Unlock()
-		list := m.keptSessions() // only read, and no copy of it: the manager stamp is not read here
-		for i := range list {
-			s := &list[i]
-			// Terminal-host sessions outlive the node transport. Unknown hosts and
-			// direct assistant processes still wait: an ephemeral SSH node may own them.
-			if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
-				(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
-				continue
-			}
-			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
-			// update back for as long as it runs, and the restart does not stop it.
-			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
+		// Only read, and no copies of them: the manager stamp is not read here. The archived rows told apart
+		// (Machine.archived) as well, as when they were in the list.
+		list, archived := m.keptWhole()
+		for _, rows := range [2][]proto.Session{list, archived} {
+			for i := range rows {
+				s := &rows[i]
+				// Terminal-host sessions outlive the node transport. Unknown hosts and
+				// direct assistant processes still wait: an ephemeral SSH node may own them.
+				if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
+					(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
+					continue
+				}
+				// On a turn, not working on in the background (#2228): a server an agent left running would hold the
+				// update back for as long as it runs, and the restart does not stop it.
+				if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
+					out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
+				}
 			}
 		}
 	}
