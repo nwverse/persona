@@ -885,6 +885,12 @@ type SuperviseAsk struct {
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
 
+type DraftPR struct {
+	Language, URL, Head string
+}
+
+func RenderDraftPR(p DraftPR) string { return render("assistant/draft_pr", p) }
+
 // SuperviseReviewed is the independent review of a task waiting for review: State clean (nothing blocking), blocking
 // (blocking findings left once the rework rounds ran out) or failed (Error says why), its counts and report.
 type SuperviseReviewed struct {
