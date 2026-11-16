@@ -217,6 +217,8 @@ External sends keep the account, recipient and content in their native confirmat
 
 Inbox item writes share synchronous admission across replies, attachments, handoff and Process/Reopen. Preparation before account lookup or journal admission is known unsent; the repository's final admission callback rechecks the captured owner immediately before transport. A disconnect makes known-unsent work retryable and dispatched work uncertain. Attachment reply targets are frozen before asynchronous lookup. Pending/unknown receipts, malformed attachment acknowledgements and replies naming another item retain no-resend protection; reply identity is validated before the journal records success. Confirmed success does not become a retryable failure when later local cleanup fails. Reply capability controls visibility separately from submission occupancy, so the draft and its status remain readable.
 
+Shared native Select controls retain a 48vp minimum target and leave their height to ArkUI content sizing; a fixed 48vp height would clip 3.2× text. See the [native Select sizing rules](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-basic-components-select).
+
 The Agent quick filter uses the existing native Select when the actual pane cannot fit all five full localized segment labels. Native text measurement and the explicit segment padding determine fit; a font scale of 1.5× or above also uses Select. Search and filter keep their compact row at ordinary text sizes. This content-filter fallback is independent of the two-icon Persona/Agents peer control.
 
 ## Native data updates

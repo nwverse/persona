@@ -46,7 +46,7 @@ export class ButtonStyles {
 /** Native Select remains the picker; compact text treatment avoids another filled action slab. */
 class PersonaSelectModifier implements AttributeModifier<SelectAttribute> {
   applyNormalAttribute(select: SelectAttribute): void {
-    select.controlSize(ControlSize.SMALL).height(Tokens.touch).constraintSize({ minHeight: Tokens.touch }).font({ size: Tokens.body, weight: FontWeight.Normal })
+    select.controlSize(ControlSize.SMALL).constraintSize({ minHeight: Tokens.touch }).font({ size: Tokens.body, weight: FontWeight.Normal })
       .fontColor(Colors.secondary).backgroundColor(Color.Transparent);
   }
 }

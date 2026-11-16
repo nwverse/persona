@@ -387,7 +387,7 @@ export struct AgentListPage {
       Row({ space: Tokens.page }) {
         Text(tr('agent_filter_machine')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
         Select(this.machineSelectOptions()).selected(this.machineIndex()).value(this.machineLabel())
-          .attributeModifier(SelectStyles.inline).constraintSize({ maxWidth: '68%' })
+          .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
           .onSelect((index: number) => this.selectMachine(index)).id('agents.machine_filter')
       }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
       Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
@@ -404,7 +404,7 @@ export struct AgentListPage {
         Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
         Select(GROUPINGS.map((key) => ({ value: tr(GROUP_LABELS[key]) } as SelectOption)))
           .selected(this.groupingIndex()).value(tr(GROUP_LABELS[GROUPINGS[this.groupingIndex()]]))
-          .attributeModifier(SelectStyles.inline).constraintSize({ maxWidth: '68%' })
+          .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
           .onSelect((index: number) => this.selectGrouping(index)).id('agents.grouping')
       }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
     }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.page + this.filterInset }).width('100%')

@@ -51,7 +51,7 @@ export struct DeviceLookPicker {
           Text(tr('device_look_accent_heading')).fontSize(Tokens.body).flexShrink(0).constraintSize({ maxWidth: '100%' })
           Select(this.accentChoices()).attributeModifier(SelectStyles.inline).selected(this.accentIndex()).value(this.accentLabel(this.model.accentId)).enabled(this.active && this.model.ready)
             .onSelect((index: number) => { const id = this.model.accentOptions()[index]; if (this.active && id) this.onAccentSelected(id); })
-            .constraintSize({ maxWidth: '100%' }).id('device-look-accent')
+            .constraintSize({ minHeight: Tokens.touch, maxWidth: '100%' }).id('device-look-accent')
         }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
       }
       if (this.model.busy || !this.model.ready) ListItem() { LoadingProgress().width(Tokens.touch).height(Tokens.touch) }
