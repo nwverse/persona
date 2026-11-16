@@ -12922,6 +12922,69 @@ if MOCK_INBOX_SHOWCASE:
         SESSIONS.append(_session)
 
 
+# MOCK_INBOX_MANY=<n> (n per section) or action:30,working:6,fyi:40,noise:20,done:25: many more made-up items per section,
+# for the section bar (#9053), long-list screenshots and perf runs. Every item carries `status` (so In progress shows),
+# sources rotate over Lark, the mail account and GitHub (three source groups), and update times spread over 40 days (every
+# time group); done items fall in the list's last 3 days. Added after MOCK_INBOX_EVENTS / MOCK_INBOX_SHOWCASE, so it
+# combines with either.
+def _many_counts(spec):
+    keys = ("action", "working", "fyi", "noise", "done")
+    if not spec: return {}
+    if spec.isdigit(): return {k: int(spec) for k in keys}
+    out = {}
+    for part in spec.split(","):
+        k, _, v = part.partition(":")
+        if k.strip() in keys and v.strip().isdigit(): out[k.strip()] = int(v)
+    return out
+
+
+_MANY_TOPICS = [  # i18n-ignore: made-up mock content in the mock's language
+    ("周会时间调整", "问周三的周会能不能改到下午"),
+    ("合同条款确认", "对方法务改了付款条款，等你确认第 4 条和第 7 条能不能接受，周五前要回复"),
+    ("报销单待审批", "上个月的差旅报销等你审批"),
+    ("新版设计稿", "设计组放了新版首页设计稿，想在评审前听听你的意见，重点是导航和空状态"),
+    ("服务器告警", "示例服务的磁盘用量超过 85%"),
+    ("客户回访", "示例客户想约下周回访，问你哪天方便"),
+    ("发布计划", "下个版本的发布计划更新了，候选包推迟一天"),
+    ("数据看板更新", "周报数据看板刷新了，转化率比上周低 2%，附了原因分析的链接"),
+]
+
+
+def _many_item(section, i, n):
+    title, summary = _MANY_TOPICS[i % len(_MANY_TOPICS)]
+    if section == "done":
+        at = ago(minutes=5 + (i * (3 * 24 * 60 - 120)) // max(n, 1))
+    else:
+        at = ago(days=(i * 41) // max(n, 1), minutes=7 * (i % 9))
+    k = i % 3
+    base = {"id": "many:%s:%d" % (section, i), "count": 1 + i % 4, "started_at": at, "updated_at": at,
+            "title": "%s %d" % (title, i + 1), "summary": summary, "preview": summary, "read": i % 3 == 0}
+    if k == 0:
+        base.update(source="lark", kind="group" if i % 2 else "dm", account="lark", account_name="飞书", sender="示例同事 %d" % (i % 7 + 1),
+                    lark={"feed_id": "many-%s-%d" % (section, i), "is_group": bool(i % 2), "start_position": "1"})
+    elif k == 1:
+        base.update(source="mail", kind="mail", account="acc1", account_name="个人邮箱", sender="示例联系人 %d" % (i % 5 + 1),
+                    mail={"account_id": "acc1", "mailbox": "INBOX", "uids": [20000 + 1000 * len(section) + i],
+                          "from": {"name": "示例联系人 %d" % (i % 5 + 1), "email": "contact%d@example.com" % (i % 5 + 1)}})
+    else:
+        base.update(source="github", kind="review_requested", account="github", account_name="GitHub", sender="example-bot",
+                    connector={"thread": "example-org/example-repo#%d" % (100 + i), "label": "GitHub",
+                               "url": "https://github.com/example-org/example-repo/pull/%d" % (100 + i)})
+    if section == "done":
+        base.update(tier="fyi" if i % 2 else "action", done_at=at, done_by="user", read=True)
+    elif section == "working":
+        base.update(tier="action", status="working", reason="AI 正在处理",
+                    handling={"owner": "manager", "state": ("looking", "agent", "waiting")[i % 3], "since": at})
+    else:
+        base.update(tier=section, status=section, reason={"action": "等你回复", "fyi": "知会你", "noise": "自动通知"}[section])
+    return base
+
+
+MOCK_INBOX_MANY = _many_counts(os.environ.get("MOCK_INBOX_MANY", "").strip())
+for _section, _n in MOCK_INBOX_MANY.items():
+    INBOX.extend(_many_item(_section, _i, _n) for _i in range(_n))
+
+
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
 # docs/assistant/inbox.md "Item actions"): the item carries the hand-off and the conversation's reply suggestion, and the
 # main conversation's feed has the write-back card (kind inbox_suggestion), so the chat draws the card and "Wrap up".
@@ -28850,6 +28913,7 @@ MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a 
 MOCK_HELP.append("MOCK_REWIND=1|safeguards|codex|agy  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
+MOCK_HELP.append("MOCK_INBOX_MANY=<n>|action:30,working:6,fyi:40,noise:20,done:25  Inbox: n made-up items per section (or per section:count), with status so In progress shows, over Lark, mail and GitHub and 40 days of updates; done ones in the last 3 days. For the section bar (#9053) and long-list runs")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
