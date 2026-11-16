@@ -98,9 +98,9 @@ class AgentFilterCapsuleTest {
     @Test fun noEnglishLabelIsShortened() = assertEveryLabelWhole(english)
     @Test fun noSimplifiedChineseLabelIsShortened() = assertEveryLabelWhole(chinese)
     @Test fun noJapaneseLabelIsShortened() = assertEveryLabelWhole(japanese)
-    @Test fun noLabelIsShortenedAtTheLargestTextSize() {
-        assertEveryLabelWhole(english, fontScale = 2f)
-    }
+    @Test fun noEnglishLabelIsShortenedAtTheLargestTextSize() = assertEveryLabelWhole(english, fontScale = 2f)
+    @Test fun noSimplifiedChineseLabelIsShortenedAtTheLargestTextSize() = assertEveryLabelWhole(chinese, fontScale = 2f)
+    @Test fun noJapaneseLabelIsShortenedAtTheLargestTextSize() = assertEveryLabelWhole(japanese, fontScale = 2f)
     @Test fun noLabelIsShortenedOnTheOtherStyles() {
         show(chinese, style = AppStyle.Brief)
         scrollTo(chinese.lastIndex)

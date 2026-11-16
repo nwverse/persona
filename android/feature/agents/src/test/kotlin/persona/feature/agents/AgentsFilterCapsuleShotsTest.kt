@@ -50,7 +50,8 @@ class FilterCapsuleWords(
 /**
  * The Agents page's filter capsule (#9121, #7034): the production Agents page, not an HTML reconstruction; synthetic data
  * only. Every one of the seven filters has an agent, so the strip is as long as it gets. Each scene draws the strip at rest,
- * scrolled to its end and after a middle filter was chosen, in one style and appearance at one text size. The same file
+ * scrolled to its end, with Unread chosen and with the longest label chosen, in one style and appearance at one text size,
+ * and then the grouping menu; a "few" scene draws a page of two states, whose three filters fit the strip. The same file
  * ran against `main` to draw the screenshots the change is compared with, so it uses only the page's own test tags.
  * PNGs go to `build/filter-capsule-shots/` (the module's build directory; `-Dpersona.shots=<dir>` does not reach the test JVM).
  */
