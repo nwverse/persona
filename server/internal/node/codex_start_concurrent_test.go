@@ -157,6 +157,9 @@ func TestCodexSamePromptStartsClaimDistinctThreads(t *testing.T) {
 
 	firstID := "aaaaaaaa-0000-4000-8000-000000000001"
 	writeThread(t, n.home, firstID, cwd, prompt)
+	rolloutCaches.Lock()
+	cacheFor(n.codexHome()).at = time.Time{} // as for the second: the cache would hide it for up to its 5 s, the wait's whole bound
+	rolloutCaches.Unlock()
 	var first string
 	select {
 	case first = <-ids:

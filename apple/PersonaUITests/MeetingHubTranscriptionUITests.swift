@@ -268,8 +268,9 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         try shot(app, "detail")
     }
 
-    /// A hub-mode meeting started with the highlights too (#3862 phase 2b, `-showMeetingSample room-hub-highlights`): the
-    /// Highlights card holds no line and there is no Live box, so the hub's lines are on the Full Transcript page; an
+    /// A hub-mode meeting started with the highlights too (#3862 phase 2b, `-showMeetingSample room-hub-highlights`): on
+    /// the meeting room's Highlights page (#8731; the Live page has the newest lines) the card holds no line and the hub's
+    /// lines are on the Full Transcript page; an
     /// upstream problem puts the fallback notice under the card's title, and the transcript shows the phone's own lines
     /// under it.
     @MainActor func testWithTheHighlightsTheHubsLinesAreOneTapAway() throws {
@@ -279,9 +280,11 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-openChatsFresh", "YES",
                                "-showMeetingSample", "room-hub-highlights"]
         app.launchPinned()
+        let highlightsTab = app.buttons["meeting-room-tab-highlights"].firstMatch
+        XCTAssertTrue(highlightsTab.waitForExistence(timeout: 20), "no Highlights page:\n\(app.debugDescription)")
+        highlightsTab.tap()
         let card = element(app, "meeting-highlights")
         XCTAssertTrue(card.waitForExistence(timeout: 20), "no Highlights card:\n\(app.debugDescription)")
-        XCTAssertFalse(element(app, "meeting-live").exists, "a Live box beside the Highlights card")
         let transcript = card.descendants(matching: .any).matching(identifier: "meeting-transcript").firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 5), "no Full Transcript on the card:\n\(app.debugDescription)")
 
@@ -326,7 +329,7 @@ final class MeetingHubTranscriptionUITests: XCTestCase {
 
     /// Stop asks first: its confirmation's Stop Recording.
     @MainActor private func confirmStop(_ app: XCUIApplication) {
-        let named = app.buttons["停止录音"].firstMatch
+        let named = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         if named.waitForExistence(timeout: 5) { named.tap(); return }
         let dialog = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app.alerts.firstMatch
         XCTAssertTrue(dialog.exists, "Stop didn't ask first:\n\(app.debugDescription)")

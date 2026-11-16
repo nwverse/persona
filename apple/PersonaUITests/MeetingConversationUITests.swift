@@ -372,7 +372,7 @@ final class MeetingConversationUITests: XCTestCase {
     /// Stop asks first. Its destructive button has no identifier of its own (the live bar's dialog, 「停止录音」 in
     /// zh-Hans, as MeetingRecordingUITests confirms it); else the dialog's first button.
     @MainActor private func confirmStop(_ app: XCUIApplication) {
-        let named = app.buttons["停止录音"].firstMatch
+        let named = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         if named.waitForExistence(timeout: 5) { named.tap(); return }
         let dialog = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app.alerts.firstMatch
         XCTAssertTrue(dialog.exists, "Stop didn't ask first:\n\(app.debugDescription)")

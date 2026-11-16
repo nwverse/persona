@@ -15873,6 +15873,28 @@
         }
       }
     },
+    "Answers Out Loud" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answers out loud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声で回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出声回答"
+          }
+        }
+      }
+    },
     "API Key" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -26315,24 +26337,24 @@
         }
       }
     },
-    "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs." : {
+    "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs."
+            "value" : "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあり、上部で切り替えます。iPad では Persona と Agents のタブです。"
+            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあります。iPhone では上部、iPhone Duo では右下で切り替え、iPad では Persona と Agents のタブです。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "助手和 Agents 各占一页，在顶部切换。iPad 上是 Persona 和 Agents 两个标签。"
+            "value" : "助手和 Agents 各占一页。iPhone 上在顶部切换，iPhone Duo 上在右下角切换，iPad 上是 Persona 和 Agents 两个标签。"
           }
         }
       },
@@ -62385,6 +62407,50 @@
         }
       }
     },
+    "End [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束"
+          }
+        }
+      }
+    },
+    "End and Write the Minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End and Write the Minutes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了して議事録を作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束并生成纪要"
+          }
+        }
+      }
+    },
     "End Conversation" : {
       "localizations" : {
         "en" : {
@@ -62430,6 +62496,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "End the Meeting?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the Meeting?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議を終了しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束会议？"
+          }
+        }
+      }
     },
     "End-of-Day Review" : {
       "localizations" : {
@@ -71427,6 +71515,28 @@
         }
       }
     },
+    "Highlights [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlights"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        }
+      }
+    },
     "HTML Card" : {
       "shouldTranslate" : false,
       "localizations" : {
@@ -78515,6 +78625,28 @@
         }
       }
     },
+    "Invite [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "招待"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邀请"
+          }
+        }
+      }
+    },
     "Invite Persona" : {
       "localizations" : {
         "en" : {
@@ -78555,6 +78687,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开会时自动邀请 Persona"
+          }
+        }
+      }
+    },
+    "Invite Persona to ask, or use Just Me." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite Persona to ask, or use Just Me."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先邀请 Persona 再提问，或者用“仅自己”。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問するには Persona を招待するか、「自分だけ」を使ってください。"
           }
         }
       }
@@ -80611,6 +80766,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Keep Going [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Going"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "続ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续开会"
+          }
+        }
+      }
     },
     "Keep Recalled Messages" : {
       "localizations" : {
@@ -85325,6 +85502,28 @@
         }
       }
     },
+    "Live [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时"
+          }
+        }
+      }
+    },
     "Live Activities" : {
       "localizations" : {
         "en" : {
@@ -87444,6 +87643,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "低打扰模式"
+          }
+        }
+      }
+    },
+    "Map [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Map"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导图"
           }
         }
       }
@@ -108843,6 +109064,28 @@
         }
       }
     },
+    "On Now [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "On Now [Upcoming Meeting]" : {
       "localizations" : {
         "en" : {
@@ -109618,29 +109861,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iPhone 上的 Persona 配对好之后，点下面从 iPhone 同步。"
-          }
-        }
-      },
-      "extractionState" : "manual"
-    },
-    "Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password)." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password)."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アシスタントの manager.json に google.client_id を追加してハブを再起動すると、ここに「Googleでサインイン」が表示されます（初回のみの設定）。それまではアプリパスワードで追加できます。Google アカウントで 2 段階認証プロセスを有効にし、Google アカウント › セキュリティ › アプリパスワードで 16 文字のパスワードを作成してここに入力してください（Google のログインパスワードではありません）。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在助手的 manager.json 里写上 google.client_id 并重启 hub 后，这里会出现「使用 Google 账号登录」（一次性配置）。在那之前可以用应用专用密码添加：Google 账号先开两步验证，再到 Google 账号 › 安全性 › 应用专用密码 生成一个 16 位密码填在这里（不是 Google 登录密码）。"
           }
         }
       },
@@ -115148,6 +115368,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Photo [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        }
+      }
     },
     "PR to Merge" : {
       "extractionState" : "manual",
@@ -124685,6 +124927,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Remove [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出"
+          }
+        }
+      }
     },
     "RTF document" : {
       "localizations" : {
@@ -135885,6 +136149,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SOCKS5 代理"
+          }
+        }
+      }
+    },
+    "Speaker [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speaker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スピーカー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "喇叭"
           }
         }
       }
@@ -158382,6 +158668,28 @@
         }
       }
     },
+    "The map grows as the meeting moves through its topics." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The map grows as the meeting moves through its topics."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議が議題を進むにつれて、ここにマップができていきます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议进入各个议题后，导图会在这里长出来。"
+          }
+        }
+      }
+    },
     "The Meta glasses are not ready yet" : {
       "localizations" : {
         "en" : {
@@ -159247,7 +159555,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音频保存在这台设备上，文字会进入知识库。结束后的录音无法继续。"
+            "value" : "音频保存在这台设备上，文字会进入知识库。结束后不能再接着录。"
           }
         }
       }
@@ -178099,29 +178407,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Turn Persona on in the menu to ask, or use Just Me." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn Persona on in the menu to ask, or use Just Me."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在菜单里打开 Persona 再提问，或者用“仅自己”。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "質問するにはメニューで Persona をオンにするか、「自分だけ」を使ってください。"
-          }
-        }
-      }
     },
     "Turn it on and tap Restart" : {
       "localizations" : {
@@ -203035,6 +203320,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "「%@」"
+          }
+        }
+      }
+    },
+    "The password is an app password, not your Google password: turn on 2-Step Verification for the Google account, then open App passwords, create one and paste the 16-character password above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The password is an app password, not your Google password: turn on 2-Step Verification for the Google account, then open App passwords, create one and paste the 16-character password above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードには Google アカウントのパスワードではなくアプリ パスワードを入力します。Google アカウントで 2 段階認証を有効にし、「アプリ パスワード」ページで作成した 16 文字のパスワードを上に貼り付けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码要填应用专用密码，不是 Google 账号密码：先给 Google 账号开启两步验证，再打开「应用专用密码」页面生成一个，把 16 位密码粘贴到上面。"
+          }
+        }
+      }
+    },
+    "The password is an app-specific password, not your Apple Account password: sign in to your Apple Account, open Sign-In and Security › App-Specific Passwords, create one and paste it above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The password is an app-specific password, not your Apple Account password: sign in to your Apple Account, open Sign-In and Security › App-Specific Passwords, create one and paste it above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "パスワードには Apple アカウントのパスワードではなく App 用パスワードを入力します。Apple アカウントにサインインし、サインインとセキュリティ › App 用パスワード で作成したものを上に貼り付けてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码要填 App 专用密码，不是 Apple 账户密码：登录 Apple 账户，打开 登录与安全 › App 专用密码，生成一个并粘贴到上面。"
+          }
+        }
+      }
+    },
+    "Open Google App passwords" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Google App passwords"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google のアプリ パスワードを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Google 应用专用密码页面"
+          }
+        }
+      }
+    },
+    "Open Apple Account" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Apple Account"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple アカウントを開く"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Apple 账户"
           }
         }
       }
