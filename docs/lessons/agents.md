@@ -1087,6 +1087,14 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
 
+## Completed Codex history is not the current turn's state (#8946)
+
+The session list promoted a pane to working from its shared app-server, then demoted it to done because a materialized
+paginated transcript ended on an older completed turn. Check the unambiguous live owner's cached active or waiting state
+before applying stale-rollout correction, including when no current turn ID was observed. Test the published session row
+with old completed history, a late join, a start notification and completion; testing only the intermediate status misses
+the overwrite. Keep the terminal-only stale-turn fallback, and do not add RPC or transcript reads to the live guard.
+
 ## Herdr workspace directories come from panes (#4761)
 
 herdr's `workspace.list` does not report a workspace cwd, even though panes do (#4761). Resolve cwd-only worktree requests from each session's `pane.list` and optional worktree metadata, with canonical deepest-prefix matching. Only associate a pane-derived directory when the workspace's panes agree: herdr creates from the workspace source, so a matching later pane must not select another repository (#5524). A linked-worktree workspace holds only its checkout, not its main repository: herdr refuses it as a worktree source. A workspace that contains the path can still belong to an ancestor repository. Use it for native creation only when its matched directory is inside the requested Git root; otherwise use Git. Use foreground directories only when the workspace has no stable pane directory. Test with workspace records that omit cwd and a matching second pane from another repository. A repository with no matching terminal workspace can still use Git worktree creation and open a plain workspace: checkout isolation remains, but terminal parent grouping is unavailable.
