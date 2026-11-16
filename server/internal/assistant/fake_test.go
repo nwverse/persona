@@ -65,16 +65,17 @@ type fakeHub struct {
 	voice         []assistantwire.VoicePlugin
 	modelExts     []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage    []string
-	ownModels     bool                       // the test sets hello.Models itself: no fake model
-	devices       []Device                   // devices.list answers these when set (else one per machine with sessions)
-	devicesFull   bool                       // devices.list says its list is complete (a machine not in it was removed)
-	devicesOther  []string                   // devices.list's ids kept out of it (pending, leaving, absorbed)
-	sessions      map[string][]proto.Session // by machine: the machines there are
-	sessionsFail  map[string]int             // by machine: sessions.list fails offline this many more times (then recovers)
-	itemsFail     int                        // session.items fails this many more times (then recovers)
-	items         []proto.Item               // session.items answers this
-	pageTurns     bool                       // and only the last n turns of it to "turns": n, as the node does (else all of it)
-	itemsPage     int                        // > 0: session.items with after_seq pages them by seq, this many a page
+	ownModels     bool                         // the test sets hello.Models itself: no fake model
+	devices       []Device                     // devices.list answers these when set (else one per machine with sessions)
+	devicesFull   bool                         // devices.list says its list is complete (a machine not in it was removed)
+	devicesOther  []string                     // devices.list's ids kept out of it (pending, leaving, absorbed)
+	sessions      map[string][]proto.Session   // by machine: the machines there are
+	sessionsFail  map[string]int               // by machine: sessions.list fails offline this many more times (then recovers)
+	itemsFail     int                          // session.items fails this many more times (then recovers)
+	items         []proto.Item                 // session.items answers this
+	page          func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
+	pageTurns     bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
+	itemsPage     int                          // > 0: session.items with after_seq pages them by seq, this many a page
 	calls         []DeviceCall
 	known         map[string]bool  // conversations the nodes have
 	made          int              // conversations started, for the next id
@@ -389,6 +390,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		items := f.items
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
+		}
+		if f.page != nil { // a real transcript pages (transcriptChat)
+			n, _ := a["turns"].(float64)
+			items = f.page(max(int(n), 1))
+			if limit, _ := a["limit"].(float64); limit > 0 && len(items) > int(limit) {
+				items = items[len(items)-int(limit):]
+			}
 		}
 		return json.Marshal(map[string]any{"items": items})
 	case DeviceSessionRename:
@@ -1395,16 +1403,27 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 }
 
 // lastTurns is the last n turns of items, as the node pages a transcript (transcript.File.PageTurns): a turn opens
-// with a prompt.
+// with a prompt the node counts (nodePagePrompt), so the page also holds the turns before it that opened with an
+// injected prompt (a scheduled run's, a wake, a supervision prompt). Counting those as turns made the page of a reused
+// scheduled chat hold only the current run, which is how #8874 got past the tests.
 func lastTurns(items []proto.Item, n int) []proto.Item {
 	start := len(items)
 	for seen := 0; start > 0 && seen < n; {
 		start--
-		if it := items[start]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued {
+		if nodePagePrompt(items[start]) {
 			seen++
 		}
 	}
 	return items[start:]
+}
+
+// nodePagePrompt is transcript.pagePrompt (not exported): a user question, not a turn Persona woke. TestLastTurnsPagesLikeTheNode
+// holds the two together on a real transcript.
+func nodePagePrompt(it proto.Item) bool {
+	if it.Role != "user" || it.Kind != proto.KindText || it.Queued || it.Wake || it.Injected != nil {
+		return false
+	}
+	return it.ClientMsgID != "" || it.From != "" || prompts.ParseInjected(it.Text) == nil
 }
 
 // fakeAnswer is how the fake model gives one answer: after delay (a caller that gives up first gets none), stopping for

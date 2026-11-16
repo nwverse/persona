@@ -374,7 +374,7 @@ describe("收件箱事件：详情", () => {
     act(() => root.render(<EventBody item={failed} onSource={() => {}} />));
     await press("再试一次");
     await flush();
-    expect(calls.list.some((c) => c.path === "/inbox?sources=all")).toBe(true);
+    expect(calls.list.some((c) => c.path.startsWith("/inbox?sources=all"))).toBe(true); // the list again, a delta when it can
     expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["建议已更新", "info"]);
   });
   it("修改: edits the text and confirms it, or 说一句话 goes back as an instruction", async () => {
