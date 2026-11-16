@@ -103,6 +103,21 @@ schedule cache writes.
 or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
 releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
 
+Enable the debug-only shadow with `-PpersonaContinuity=shadow` in JVM tests, or launch `DebugEntryActivity` with
+`--es debug.continuity shadow`, then force-stop and relaunch the app (use `kotlin` to turn it off). Kotlin remains
+authoritative: the shadow serially replays every input on its own background queue, waiting only for its own core,
+created after the first frame. It compares item ids/order, items, covered, history, hasMore, loadedOnce and requests.
+Kotlin's per-step gap/verified and Rust's persistent verification authority are not equivalent fields: cache restores
+and live pushes intentionally differ, covered by a separate real-JNI contract test rather than a second state machine.
+Rust-only acknowledgements and concurrent-fold capability do not change the Kotlin result returned to the repository.
+`PersonaCoreShadow` reports contain only domain, rule and input kind with counts/flags; never items, identifiers, text,
+history or sequence values. Driver-level rejection has its own `rust-rejected` rule, including rejection followed by
+an exception, and never logs the rejection reason through the shadow. Native failure disables only that chat's shadow.
+Neither accept nor close waits for Rust; close preserves queued inputs. After every 10 completed input comparisons,
+and after draining on close, each shadow logs only `compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+`compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
+Release source sets contain neither the shadow nor its preferences.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
