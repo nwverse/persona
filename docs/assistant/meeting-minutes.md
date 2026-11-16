@@ -781,7 +781,7 @@ A meeting Persona is not in still gets its live view. Since #8731 a meeting star
   - `POST …/ask` answers `409 not_attending`, as for `off`. An ask accepted before the switch still gets its answer.
   - The phone runs no meeting call and no Talk.
 - **Inviting and removing.** Inviting Persona switches the same room to `listener` or `participant`; removing it switches the room back to `notes`. The room is never replaced.
-- **Default.** `meeting_attendance_default` keeps its three values. When it is `off` and the hub lists `meeting_notes`, the phone starts a meeting in `notes`.
+- **Default.** `meeting_attendance_default` keeps its three values. When it is `off` and the hub lists `meeting_notes`, the phone starts a meeting in `notes`. The iPhone (#8731) shows it as one switch, Invite Persona Automatically (on: `listener`), and its quick start invites Persona per meeting ([recording.md](../apple/recording.md) "Persona in meetings").
 - **Older managers.** An older manager after a rollback reads `notes` as an unknown role, so the meeting is stored `off`: no live view, and minutes as usual. A hub-mode timeline that names `notes` is ignored whole there, like any malformed timeline.
 
 #### The room conversation
