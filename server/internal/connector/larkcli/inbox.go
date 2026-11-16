@@ -762,7 +762,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Title:    title,
 		Sender:   latest.Sender.Name,
 		Preview:  firstLine(text),
-		Context:  contextText(contextMessages),
+		Context:  contextText(contextMessages, me),
 		At:       messageTime(latest),
 		Last:     latest.MessageID,
 		ReplyTo:  replyTo(lang, name, group.threadID != ""),
@@ -992,12 +992,30 @@ func messageKey(message adapter.Message) string {
 var atAll = lazyre.New(`(?:^|\s)@_all(?:\s|$)|<at\s+user_id="all"`)
 
 func messageMentions(message adapter.Message, me string) bool {
+	return mentionsOwner(message, me) || mentionsAll(message)
+}
+
+// mentionsOwner: the message @'s the owner, by the mention's id only: another person can have the owner's display name.
+func mentionsOwner(message adapter.Message, me string) bool {
+	if me == "" {
+		return false
+	}
+	for _, mention := range message.Mentions {
+		if mention.ID == me {
+			return true
+		}
+	}
+	return false
+}
+
+// mentionsAll: the message @'s everyone.
+func mentionsAll(message adapter.Message) bool {
 	if atAll.MatchString(rawText(message.Content)) {
 		return true
 	}
 	for _, mention := range message.Mentions {
 		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
-		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
+		if id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
 			return true
 		}
 	}
@@ -1128,7 +1146,16 @@ func rawText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n")
 }
 
-func contextText(messages []adapter.Message) string {
+// The marks after a sender that say whom a message @'s, as the tier criteria read them (prompts/inbox/tiers.md): there a
+// Lark group message without them did not @ the owner.
+const (
+	markOwner = "（@了我）"  // i18n-ignore: the tier criteria's mark, read by the model
+	markAll   = "（@所有人）" // i18n-ignore: the tier criteria's mark, read by the model
+)
+
+// contextText is the conversation as the models read it, a line a message: "<sender><marks>: <text>", the marks from
+// the message's structured mentions (both when it @'s the owner and everyone). me is the owner's id.
+func contextText(messages []adapter.Message, me string) string {
 	var b strings.Builder
 	for _, message := range messages {
 		text := strings.TrimSpace(messageText(message))
@@ -1138,12 +1165,19 @@ func contextText(messages []adapter.Message) string {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
+		start := b.Len()
 		name := message.Sender.Name
 		if name == "" {
 			name = message.Sender.ID
 		}
-		if name != "" {
-			b.WriteString(name)
+		b.WriteString(name)
+		if mentionsOwner(message, me) {
+			b.WriteString(markOwner)
+		}
+		if mentionsAll(message) {
+			b.WriteString(markAll)
+		}
+		if b.Len() > start {
 			b.WriteString(": ")
 		}
 		b.WriteString(text)

@@ -11,7 +11,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Real Kotlin/JNI replay for fence and final-marker StreamRepair, with independently stated Apple expectations. */
+/** Real Kotlin/JNI replay for fence, table and final-marker StreamRepair, with independently stated Apple expectations. */
 class StreamRepairBindingFixtureTest {
     private fun replay(text: String): JsonObject {
         val input = buildJsonObject { put("text", text) }.toString()
@@ -102,6 +102,91 @@ class StreamRepairBindingFixtureTest {
         assertEquals("a non-ASCII digit is real text", "１２", replay("１２").getValue("repaired").jsonPrimitive.content)
         println("JNI StreamRepair markersOnly replay: ${cases.size} repaired expectations plus boundaries")
     }
+    @Test fun preservesAppleWhitespaceAndMarkerPrefixBoundaries() {
+        // Scan.string(0..<lastLine.lowerBound) retains the newline after an initial blank line.
+        assertEquals("leading blank line before a marker", "\n", replay("\n-").getValue("repaired").jsonPrimitive.content)
+        assertEquals("leading blank line before a heading marker", "\n", replay("\n##").getValue("repaired").jsonPrimitive.content)
+        // Foundation .whitespaces includes Zs/tab and five ASCII newlines, not NEL or Unicode line/paragraph separators.
+        val input = "| a |\n| -\r |\n| x"
+        assertEquals("CR inside a delimiter is not a table", expected(input, "text"), replay(input))
+        val verticalTab = "| a |\n| -\u000b |\n| x"
+        assertEquals("vertical tab inside a delimiter is not a table", expected(verticalTab, "text"), replay(verticalTab))
+        assertEquals("tab inside a delimiter is trimmed",
+            "| a |\n| -\t |\n| x\n",
+            replay("| a |\n| -\t |\n| x\n").getValue("repaired").jsonPrimitive.content)
+        val nonBreakingSpace = "| a |\n| - |\n| x"
+        assertEquals("non-breaking space is a Foundation whitespace",
+            "| a |\n| - |\n| x\n",
+            replay(nonBreakingSpace + "\n").getValue("repaired").jsonPrimitive.content)
+        val nextLine = "| a |\n| -\u0085 |\n| x"
+        assertEquals("NEL is not a Foundation whitespace", expected(nextLine, "text"), replay(nextLine))
+        val lineSeparator = "| a |\n| -  |\n| x"
+        assertEquals("Unicode line separator is not a Foundation whitespace", expected(lineSeparator, "text"), replay(lineSeparator))
+    }
+
+    @Test fun tableRepairAndEndMatchEveryAppleTableAssertion() {
+        // Exact repair assertions from holdsATablesHalfWrittenLastRowBack, givesATableHeaderItsDelimiterRowEarly,
+        // findsATableRightUnderAParagraphLine, keepsATableInTheListItemItIsIn and findsNoTableInALazyLine.
+        val head = "| 文件 | 改动 |\n| --- | --- |\n| a.swift | 刷新 |\n"
+        val repairCases = listOf(
+            head + "| b.swi" to head,
+            head + "| b.swift | 超时 |\n" to head + "| b.swift | 超时 |\n",
+            "| 文件 | 改" to "| 文件 | 改",
+            "Use a | b\n| not a table" to "Use a | b\n| not a table",
+            "| 文件 | 改动 |\n" to "| 文件 | 改动 |\n| --- | --- |",
+            "| a | b |\n| --" to "| a | b |\n| --- | --- |",
+            "| a | b |\n|" to "| a | b |\n| --- | --- |",
+            "## 结果\n| a | b | c |\n" to "## 结果\n| a | b | c |\n| --- | --- | --- |",
+            "| a | b |\n| :-- | --: |" to "| a | b |\n| :-- | --: |",
+            "| 不是表格\n" to "| 不是表格\n",
+            "| x |\n| a | b |\n" to "| x |\n| a | b |\n",
+            "**结果：**\n| a | b |\n" to "**结果：**\n| a | b |\n| --- | --- |",
+            "**结果：**\n| a | b |\n| --" to "**结果：**\n| a | b |\n| --- | --- |",
+            "**结果：**\n| a | b |\n| --- | --- |\n| 1" to "**结果：**\n| a | b |\n| --- | --- |\n",
+            "- 项\n\n  | a | b |\n" to "- 项\n\n  | a | b |\n  | --- | --- |",
+            "1. 项\n   | a | b |\n   | -" to "1. 项\n   | a | b |\n   | --- | --- |",
+            "- 项\n  | a | b |\n  | --- | --- |\n  | 1" to "- 项\n  | a | b |\n  | --- | --- |\n",
+            "- 项\n\n  | a | b |\n  | --- | --- |\n  " to "- 项\n\n  | a | b |\n  | --- | --- |\n",
+            "- 项\n| a | b |\n" to "- 项\n| a | b |\n",
+            "- a\n  - b\n  | x |\n" to "- a\n  - b\n  | x |\n",
+            "> 引用\n| a | b |\n" to "> 引用\n| a | b |\n",
+            "- 项\n| a | b |\n| --- | --- |\n| 1" to "- 项\n| a | b |\n| --- | --- |\n| 1",
+        )
+        for ((input, expectedRepair) in repairCases) {
+            assertEquals("Apple table repair: ${input.replace("\n", "\\n")}", expectedRepair,
+                replay(input).getValue("repaired").jsonPrimitive.content)
+        }
+        // Exact end assertions in the same five Apple table tests plus the table cases in tellsWhereTheTextEnds.
+        val endCases = listOf(
+            "**结果：**\n| a | b |\n| --- | --- |\n| 1" to "table",
+            "**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n" to "table",
+            "| a | b |\n| --- | --- |\nfoo" to "table",
+            "| a | b |\n| --- | --- |\n- 项" to "text",
+            "- 项\n  | a | b |\n  | --- | --- |\n  | 1" to "table",
+            "- 项\n\n  | a | b |\n  | --- | --- |\n  " to "table",
+            "- 项\n\n  | a | b |\n" to "table",
+            "- 项\n\n  | a | b |\n  " to "table",
+            "- 项\n| a | b |\n| --- | --- |\n| 1" to "text",
+            "| a | b |\n| --- | --- |\n| 1" to "table",
+            "| a | b |\n| --- | --- |\n| 1 | 2 |\n" to "table",
+            "| a | b |\n" to "table",
+            "| a | b |\n| -" to "table",
+            "| a | b" to "text",
+            "| a | b |\n| --- | --- |\n\n后文" to "text",
+        )
+        for ((input, expectedEnd) in endCases) {
+            assertEquals("Apple table end: ${input.replace("\n", "\\n")}", expectedEnd,
+                replay(input).getValue("end").jsonPrimitive.content)
+        }
+        val actual = replay("| a | b |\n| -")
+        val wrong = expected("| a | b |\n| --- | --- |", "text")
+        assertNotEquals("wrong complete table expectation must differ", wrong, actual)
+        assertThrows("wrong complete table expectation is rejected", AssertionError::class.java) {
+            assertEquals("StreamRepair table negative", wrong, actual)
+        }
+        println("JNI StreamRepair table replay: ${repairCases.size} repaired + ${endCases.size} end expectations")
+    }
+
     @Test fun rejectsMalformedInputAndWrongExpectedObjects() {
         assertEquals("", NativeBridge.projectStreamRepair("{\"invalid\":true}"))
         assertEquals("", NativeBridge.projectStreamRepair("not JSON"))
