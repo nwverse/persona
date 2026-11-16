@@ -326,6 +326,8 @@ todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/{id}/decisions
 todos.read           GET /api/v1/todos/{id}/repositories
 -                    GET /api/v1/usage
+-                    GET /api/v1/usage/days
+-                    GET /api/v1/usage/hours
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
 agents.read          GET /api/v1/workspace-board/activity

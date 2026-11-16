@@ -15,8 +15,10 @@ import java.time.Instant
 import java.util.UUID
 
 private data class GroupListCounts(val filter: SessionListFilter, val revision: String, val counts: SessionListCounts)
+private data class HeldInputs(val settings: AgentListSettings, val group: GroupFilter?, val assistant: persona.core.contracts.api.CurrentAssistant?,
+                              val visible: SessionKey?, val held: SessionKey?)
 private data class ListInputs(val settings: AgentListSettings, val group: GroupFilter?, val assistant: persona.core.contracts.api.CurrentAssistant?,
-                              val visible: SessionKey?, val workspaces: List<AgentWorkspace>)
+                              val visible: SessionKey?, val held: SessionKey?, val workspaces: List<AgentWorkspace>)
 
 /** What the hub's paged search matches: the search's words, not its conditions ([AgentQuery]), which it does not read. */
 internal fun hubQuery(query: String): String = AgentQuery.parse(query).text.take(256)
@@ -78,8 +80,10 @@ internal class AgentsViewModel(
     listContext: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
     archiveService: AgentArchives? = null,
     private val listAdapter: persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create(),
-    private val visibleChat: kotlinx.coroutines.flow.StateFlow<SessionKey?> = kotlinx.coroutines.flow.MutableStateFlow(null),
     /** The shell's visible Agent chat, null while the list itself is on screen. */
+    private val visibleChat: kotlinx.coroutines.flow.StateFlow<SessionKey?> = kotlinx.coroutines.flow.MutableStateFlow(null),
+    /** Captured by the shell on chat entry, before any read receipt can turn that Unread row idle. */
+    private val heldChat: kotlinx.coroutines.flow.StateFlow<SessionKey?> = visibleChat,
 ) : ViewModel() {
     val archives = archiveService?.let { api -> AgentArchivesState(api, viewModelScope) { key, archived ->
         if (archived) bindings?.onSessionClosed?.invoke(key)
@@ -149,8 +153,6 @@ internal class AgentsViewModel(
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.
     @Volatile private var previous: AgentListResult? = null
-    /** Set only while that Agent chat remains visible and its row was Unread there; shadow input only. */
-    private var heldInList: String? = null
     // Only touched while building [page]: one build at a time, so it needs no more.
     private var previousContext: List<Any?>? = null
     private val _delivery = MutableStateFlow<Map<String, RequestDelivery>>(emptyMap())
@@ -242,8 +244,9 @@ internal class AgentsViewModel(
         bindings?.assistant?.assistant?.map { it.directionTree }?.distinctUntilChanged() ?: flowOf(null)
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        combine(settings, groupFilter, assistant, visibleChat, workspaceCatalog.rows, ::ListInputs),
-        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant, visible, workspaces), (ops, todosAndTree, todosSupported) ->
+        combine(settings, groupFilter, assistant, visibleChat, heldChat) { settings, group, assistant, visible, held -> HeldInputs(settings, group, assistant, visible, held) }
+            .combine(workspaceCatalog.rows) { inputs, workspaces -> ListInputs(inputs.settings, inputs.group, inputs.assistant, inputs.visible, inputs.held, workspaces) },
+        combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant, visible, held, workspaces), (ops, todosAndTree, todosSupported) ->
         val (todos, directions) = todosAndTree
         val now = Instant.now()
         // The current assistant's (the hub's lists are every manager's, each row with its own).
@@ -255,11 +258,8 @@ internal class AgentsViewModel(
         val prefs = localPrefs.copy(pins = ops.pins?.domain() ?: localPrefs.pins, mutes = ops.mutes?.domain() ?: localPrefs.mutes,
             grouping = resolvedGrouping(localPrefs.grouping, todosSupported))
         val rows = sessions.map { it.listSession(prefs).copy(hierarchyKnown = repository.supportsFeature(it.machineId, "sessions_hierarchy")) }
-        val heldSession = visible?.path?.takeIf { key ->
-            if (heldInList != key) heldInList = null
-            if (heldInList == null && rows.any { it.id == key && it.state == AgentState.Unread }) heldInList = key
-            heldInList != null
-        }
+        // The shell records this before its read receipt, so a conflated Idle snapshot cannot erase an Unread entry.
+        val heldSession = held?.takeIf { it == visible }?.path
         // A partial machine snapshot must not hide sessions in machine grouping.
         val knownMachines = machines + sessions.map { it.machineId }.distinct().filter { id -> machines.none { it.id == id } }
             .map { Machine(it) } // named by the list as not updated yet (AgentsScreen.kt)
@@ -290,7 +290,8 @@ internal class AgentsViewModel(
             // Loaded as of the hub status this page was built from: [page] joins the latest status to a page that may be
             // one throttled build behind, and a page built before the load must not say the list is in.
             loaded = pagination.loaded).let { state ->
-            val spaces = agentSpaces(rows)
+            // Computer projects use the same held marker as the main projection; ordinary space members stay as before.
+            val spaces = agentSpaces(rows.map { it.copy(heldInList = it.id == heldSession) })
             state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces), directionsAvailable = directions != null)
         }
     // The app (listContext set) builds only from the latest inputs and redraws at most every PAGE_MILLIS: with an

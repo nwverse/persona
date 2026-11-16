@@ -139,3 +139,71 @@ func TestPutUsagesOneTransaction(t *testing.T) {
 		t.Fatalf("rows = %v, want %v", rows, want)
 	}
 }
+
+// Past a week the ten-minute rows roll up into one row an hour; the calendar sums every machine's rows (or each
+// machine's) into spans of time, each row in the span its start is in.
+func TestUsageHistory(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now().Truncate(time.Hour)
+	b := func(at time.Time, model string, out int64) proto.UsageBucket {
+		return proto.UsageBucket{Minute: at.Unix(), Model: model, Launcher: "claude", Input: 1, CacheRead: 10, Output: out, Requests: 1}
+	}
+	old := now.Add(-8 * 24 * time.Hour)
+	if err := d.PutUsage(ctx, "m1", []proto.UsageBucket{b(old.Add(5*time.Minute), "opus", 1), b(old.Add(25*time.Minute), "opus", 2),
+		b(old.Add(65*time.Minute), "opus", 4), b(now.Add(-time.Hour), "opus", 8)}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PutUsage(ctx, "m2", []proto.UsageBucket{b(old.Add(30*time.Minute), "gpt", 16)}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsage(ctx, now.Add(-27*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RollupUsageHours(ctx, now.Add(-7*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var steps map[int]int
+	if err := func() error {
+		steps = map[int]int{}
+		rows, err := d.pool.Query(ctx, `SELECT step, count(*) FROM machine_usage GROUP BY step`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var step, n int
+			if err := rows.Scan(&step, &n); err != nil {
+				return err
+			}
+			steps[step] = n
+		}
+		return rows.Err()
+	}(); err != nil {
+		t.Fatal(err)
+	}
+	// m1's first hour is one row, its second another, m2's hour one; the hour-old minute stays a minute.
+	if want := map[int]int{UsageMinuteStep: 1, UsageHourStep: 3}; !maps.Equal(steps, want) {
+		t.Fatalf("rows by step = %v, want %v", steps, want)
+	}
+
+	// Two spans: the old hour and its next, then up to now and a minute; every machine summed, then each apart.
+	bounds := []time.Time{old, old.Add(time.Hour), old.Add(2 * time.Hour), now.Add(time.Minute)}
+	spans, err := d.UsageSpans(ctx, bounds, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 3 || spans[0].Span != 0 || spans[0].Output != 19 || spans[0].Requests != 3 || spans[0].CacheRead != 30 ||
+		spans[1].Span != 1 || spans[1].Output != 4 || spans[2].Span != 2 || spans[2].Output != 8 || spans[0].Machine != "" {
+		t.Fatalf("spans = %+v", spans)
+	}
+	spans, err = d.UsageSpans(ctx, bounds[:2], true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 2 || spans[0].Machine != "m1" || spans[0].Output != 3 || spans[1].Machine != "m2" || spans[1].Output != 16 {
+		t.Fatalf("by machine = %+v", spans)
+	}
+	if spans, err := d.UsageSpans(ctx, bounds[:1], false); err != nil || spans != nil {
+		t.Fatalf("one bound = %+v, %v", spans, err)
+	}
+}
