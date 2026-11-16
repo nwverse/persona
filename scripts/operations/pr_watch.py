@@ -62,8 +62,11 @@ def load_config(path):
             raise WatchError("verify config must be an object")
         if item.get("merge", False) is not True and item.get("merge", False) is not False:
             raise WatchError("merge must be a boolean")
+        if item.get("close_stale", True) is not True and item.get("close_stale", True) is not False:
+            raise WatchError("close_stale must be a boolean")
         repos.append({"name": repo, "checkout": str(Path(root).expanduser()), "base": base,
                       "verify": item["verify"], "merge": item.get("merge", False),
+                      "close_stale": item.get("close_stale", True),
                       "privacy": item.get("privacy"), "notify_command": item.get("notify_command")})
     reviewer = raw.get("reviewer", {})
     if not isinstance(reviewer, dict):
@@ -742,6 +745,66 @@ class Watcher:
             raise WatchError("PR has an outstanding changes request")
         return True
 
+    def stale_progress_at(self, repo, number, pr, old):
+        """Use actual GitHub activity, never repeated polling or retry state."""
+        comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
+                            "--paginate", "--jq", ".[] | {createdAt: .created_at}"], timeout=90)
+        reviews = gh_json(["api", "repos/%s/pulls/%s/reviews" % (repo, number),
+                           "--paginate", "--jq", ".[] | {createdAt: .submitted_at}"], timeout=90)
+        commits = gh_json(["api", "repos/%s/pulls/%s/commits" % (repo, number),
+                           "--paginate", "--jq", ".[] | {committedDate: .commit.committer.date}"], timeout=90)
+        progress = pr_watch_common.progress_timestamp(pr, comments, reviews, commits)
+        return progress
+
+    def mark_and_close_stale(self, config, pr, old):
+        """Explain and mark before closing; neither action counts as new progress."""
+        repo, number = config["name"], pr["number"]
+        if (not config.get("close_stale", True) or self.dry_run
+                or old.get("outcome") == "continuation" or pr["isDraft"]):
+            return False
+        last_progress = self.stale_progress_at(repo, number, pr, old)
+        elapsed = time.time() - last_progress
+        if elapsed <= pr_watch_common.STALE_SECONDS:
+            return False
+        age = int(elapsed // 86400)
+        reason = ("This PR has had no substantive progress for more than seven days (%d days since the last "
+                  "new commit, review, comment, newly published failure, or automatic repair). It is marked `stale` "
+                  "and closed without merging. Reopen it when work resumes; the exact head was not merged." % age)
+        result = run(["gh", "pr", "edit", str(number), "--repo", repo, "--add-label", pr_watch_common.STALE_LABEL],
+                     timeout=90)
+        if result.returncode:
+            # GitHub has no built-in `stale` label in every repository. A
+            # missing label is a failed marker, not permission to close silently.
+            raise WatchError("could not mark the long-inactive PR: " + bounded(result.stderr, 1000))
+        self.state.put(repo, number, pr["headRefOid"], last_progress_at=last_progress,
+                       stale_marked_at=int(time.time()))
+        self.comment(repo, number, reason)
+        latest = pr_snapshot(repo, number)
+        if latest["state"] != "OPEN" or latest["isDraft"]:
+            return False
+        progress = self.stale_progress_at(repo, number, pr, old)
+        # The notice and label just added by this watcher are not new work.
+        # A new contributor comment, review or commit during publication wins.
+        if progress > last_progress + 1:
+            self.state.put(repo, number, pr["headRefOid"], outcome="stale_close_pending",
+                           last_progress_at=last_progress, stale_activity_at=progress,
+                           failure="New substantive activity arrived while the stale notice was published; the PR stays open.")
+            return False
+        result = run(["gh", "pr", "close", str(number), "--repo", repo,
+                      "--comment", "Closing after the stale notice above: no substantive progress for more than seven days."],
+                     timeout=90)
+        if result.returncode:
+            raise WatchError("could not close the long-inactive PR after its notice: " + bounded(result.stderr, 1000))
+        closed = pr_snapshot(repo, number)
+        if closed["state"] != "CLOSED":
+            raise WatchError("stale-PR close did not reach CLOSED; no stale terminal state was saved")
+        self.state.put(repo, number, pr["headRefOid"], outcome="stale_closed",
+                       last_progress_at=last_progress, stale_closed_at=int(time.time()),
+                       failure=None)
+        self.log("%s#%s closed after %d days without substantive progress" % (repo, number, age))
+        self.notify(config, number, pr["headRefOid"], "stale_closed")
+        return True
+
     def process(self, repo, number):
         config = self.repositories[repo]
         key = (repo, number)
@@ -755,6 +818,17 @@ class Watcher:
             return
         head = pr["headRefOid"]
         old = self.state.get(repo, number)
+        try:
+            if self.mark_and_close_stale(config, pr, old):
+                return
+        except WatchError as error:
+            # Marking, commenting and closing are independent GitHub writes.
+            # A partial notice never proves that the PR was actually closed.
+            self.state.put(repo, number, head, outcome="stale_close_pending",
+                           failure=str(error), stale_close_attempts=int(old.get("stale_close_attempts", 0)) + 1)
+            self.log("%s#%s stale-PR cleanup failed; no merge was attempted: %s" % (
+                repo, number, bounded(error, 500)))
+            return
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old

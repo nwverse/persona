@@ -5,6 +5,7 @@
       "checkout": "/path/to/trusted-persona-checkout",
       "base": "main",
       "merge": false,
+      "close_stale": false,
       "verify": {
         "profile": "persona",
         "timeout_seconds": 7200
@@ -15,6 +16,7 @@
       "checkout": "/path/to/trusted-persona-extensions-checkout",
       "base": "main",
       "merge": false,
+      "close_stale": false,
       "verify": {
         "profile": "extensions",
         "timeout_seconds": 7200

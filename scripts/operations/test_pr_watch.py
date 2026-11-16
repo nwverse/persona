@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import importlib.util
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -30,10 +31,12 @@ SHA_A, SHA_B, SHA_BASE = "a" * 40, "b" * 40, "c" * 40
 
 
 def pr(head=SHA_A, **overrides):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = {"number": 7, "title": "fix: an example", "body": "Summary.\n\nFixes #6",
               "state": "OPEN", "isDraft": False, "headRefOid": head, "headRefName": "fix/example",
               "baseRefName": "main", "baseRefOid": SHA_BASE, "isCrossRepository": False,
-              "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewDecision": "", "url": "https://example.com/pr/7"}
+              "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "reviewDecision": "", "url": "https://example.com/pr/7",
+              "createdAt": now, "updatedAt": now}
     result.update(overrides)
     return result
 
@@ -65,6 +68,101 @@ class WatcherTests(unittest.TestCase):
         self.github = patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", ""))
         self.github = self.github.start()
         self.addCleanup(self.github.stop)
+        # These unit tests do not perform real GitHub calls. Keep the three
+        # read-only activity APIs empty unless a stale-specific test supplies
+        # its own observations; the production parser still fails on bad data.
+        self.activity = patch.object(self.watcher, "stale_progress_at", side_effect=lambda repo, number, snapshot, old: pr_watch_common.progress_timestamp(snapshot, [], [], []))
+        self.activity.start()
+        self.addCleanup(self.activity.stop)
+
+    def test_stale_pr_is_marked_explained_then_closed_without_merging(self):
+        self.watcher.config["repositories"][0]["close_stale"] = True
+        self.watcher.repositories["example/one"]["close_stale"] = True
+        calls = []
+        def github(argv, **kwargs):
+            calls.append(argv)
+            if argv[1:3] == ["pr", "edit"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[1:3] == ["pr", "close"]:
+                self.github_pr["state"] = "CLOSED"
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            self.fail("unexpected GitHub mutation: %r" % argv)
+        self.github_pr = pr()
+        self.github_pr["createdAt"] = "2026-11-01T00:00:00Z"
+        old = int(time.mktime(time.strptime("2026-11-01T00:00:00Z", "%Y-%m-%dT%H:%M:%SZ")))
+        with patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(self.github_pr)), \
+                patch.object(pr_watch.time, "time", return_value=old + 8 * 86400), \
+                patch.object(self.watcher, "stale_progress_at", return_value=float(old)), \
+                patch.object(pr_watch, "run", side_effect=github), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(self.watcher, "merge") as merge:
+            self.watcher.process("example/one", 7)
+        self.assertEqual(self.github_pr["state"], "CLOSED")
+        self.assertEqual([call[1:3] for call in calls], [["pr", "edit"], ["pr", "close"]])
+        self.assertIn("more than seven days", self.comments[0])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+        review.assert_not_called()
+        merge.assert_not_called()
+
+    def test_recent_pr_activity_prevents_stale_close(self):
+        self.github_pr = pr()
+        with patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(self.github_pr)), \
+                patch.object(pr_watch.time, "time", return_value=time.mktime(time.strptime("2026-11-15T00:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False) as merge, \
+                patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
+            self.watcher.process("example/one", 7)
+        self.assertFalse(any("seven days" in body for body in self.comments))
+        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+        merge.assert_called_once()
+
+    def test_failed_stale_comment_never_closes(self):
+        old = time.time() - 8 * 86400
+        with patch.object(self.watcher, "stale_progress_at", return_value=old), \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute, \
+                patch.object(self.watcher, "comment", side_effect=pr_watch_common.WatchError("offline")), \
+                patch.object(pr_watch, "pr_snapshot") as snapshot:
+            with self.assertRaises(pr_watch_common.WatchError):
+                self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {})
+        self.assertEqual(execute.call_count, 1)
+        snapshot.assert_not_called()
+
+    def test_new_activity_after_stale_notice_keeps_pr_open(self):
+        old = time.time() - 8 * 86400
+        with patch.object(self.watcher, "stale_progress_at", side_effect=[old, old + 30]), \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute, \
+                patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "comment"):
+            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {}))
+        self.assertEqual(execute.call_count, 1)
+        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+
+    def test_stale_progress_uses_substantive_activity_and_rejects_bad_timestamps(self):
+        snapshot = pr(createdAt="2026-11-13T00:00:00Z", updatedAt="2026-11-13T00:00:00Z")
+        activity = pr_watch_common.progress_timestamp(snapshot,
+            [{"createdAt": "2026-11-14T00:00:00Z"}], [],
+            [{"committedDate": "2026-11-15T00:00:00Z"}])
+        self.assertGreater(activity, pr_watch_common.github_time(snapshot["createdAt"]))
+        for bad in (None, "2026-11-15", "2026-11-15T00:00:00+08:00"):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.github_time(bad)
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_common.progress_timestamp(snapshot, None, [], [])
+
+    def test_stale_close_honors_dry_run_review_only_and_continuations(self):
+        old = time.time() - 8 * 86400
+        with patch.object(self.watcher, "stale_progress_at", return_value=old) as activity, \
+                patch.object(pr_watch, "run") as execute:
+            self.watcher.dry_run = True
+            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {}))
+            self.watcher.dry_run = False
+            config = dict(self.watcher.config["repositories"][0], close_stale=False)
+            self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
+            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(), {"outcome": "continuation"}))
+            self.assertFalse(self.watcher.mark_and_close_stale(self.watcher.config["repositories"][0], pr(isDraft=True), {}))
+        activity.assert_not_called()
+        execute.assert_not_called()
 
     def test_clean_head_runs_both_gates_then_merges(self):
         calls = []
@@ -800,6 +898,7 @@ class WatcherTests(unittest.TestCase):
         self.watcher.worktree = lambda *args: self.root / "checkout"
         self.watcher.remove_worktree = lambda *args: None
         self.watcher.comment = lambda repo, number, body: self.comments.append(body)
+        self.watcher.stale_progress_at = lambda repo, number, snapshot, old: pr_watch_common.progress_timestamp(snapshot, [], [], [])
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=findings), \

@@ -18,6 +18,12 @@ Every new, open, non-draft PR head goes through independent gates:
 
 New commits invalidate all previous results. Duplicate comments are suppressed by head and finding fingerprint. Merge failures use bounded exponential backoff; an unchanged conflict may use a bounded repair round instead of waiting forever for a new head. A contributor branch is only changed by the explicit maintainer-authorized repair flow: a normal main-merge or repair commit, never a force-push. A fork is never written; a continuation PR is used instead. Other people's review threads are never resolved automatically.
 
+## Closing PRs after a week without progress
+
+A non-draft PR with no substantive progress for **more than seven days** is marked `stale`, told in English that it is being closed for long inactivity, and then closed without merging. New commits, reviews, contributor comments, publication of a newly found failure, or an automatic repair publication reset the interval. Polling, retrying an already recorded failure, and writing local retry counters do not. A fork PR with a published continuation is left to that continuation instead of being closed. The `close_stale` repository switch is an explicit local opt-in; dry runs and review-only examples do not close PRs.
+
+The watcher reads the PR's actual comments, reviews and commits before deciding. It adds the label first, saves that the marker was published, posts the explanation, then rereads activity before closing so newly arriving work wins. The watcher's own stale notice is not new work and cannot prevent a later retry. Failure to mark, comment or close leaves the PR open and records the failure; it never counts as a merge or a successful close. A closed PR is only reopened by a person resuming work, and any reopened or changed head goes through fresh semantic review and verification. This is distinct from the 24-hour issue-claim expiry in `docs/operations/collaboration.md`; that rule governs ownership, not PR closure.
+
 The default is **review-only**: no configured repositories, and `"merge": false` for every added repository. Enabling merge is a separate local maintainer decision. `scripts/hooks/merge-pr.sh` and the generic `pr_watch_merge.py` hold the same shared-Git-directory lock, so manual and automated merges cannot race. The wrapper retains the machine-private scan of the exact changed range and squash message. Do not apply one checkout's private-word configuration to another repository.
 
 ## Configure
@@ -32,6 +38,7 @@ Each repository entry has:
 | `checkout` | Trusted local checkout used only for refs and temporary worktrees; its working tree is not edited |
 | `base` | Base branch to watch, normally `main` |
 | `merge` | Opt-in live squash merging; `false` means review and verification only |
+| `close_stale` | Opt-in stale-PR closure; `false` keeps a repository out of this cleanup. The live maintainer configuration enables it separately |
 | `verify.profile` | `persona`, `extensions`, or an explicit `commands` array |
 | `verify.timeout_seconds` | Bound for each command, 60–21600 seconds |
 | `privacy` | Optional public-content scanner for a generic repository, not a path to another checkout's private configuration |

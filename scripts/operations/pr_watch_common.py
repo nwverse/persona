@@ -9,14 +9,40 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 PR_FIELDS = (
     "number,title,body,state,isDraft,headRefOid,headRefName,baseRefName,"
-    "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url"
+    "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
+    "createdAt,updatedAt"
 ).replace("baseRefOid,", "")
+STALE_LABEL = "stale"
+STALE_SECONDS = 7 * 86400
+
+
+def github_time(value):
+    """Parse only GitHub's explicit UTC timestamps; missing dates fail closed."""
+    if not isinstance(value, str):
+        raise WatchError("GitHub timestamp is missing")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError as error:
+        raise WatchError("GitHub timestamp is not explicit UTC") from error
+
+
+def progress_timestamp(snapshot, comments, reviews, commits):
+    """Actual PR activity, not a poll or a retry counter, resets stale cleanup."""
+    latest = github_time(snapshot.get("createdAt"))
+    if not isinstance(comments, list) or not isinstance(reviews, list) or not isinstance(commits, list):
+        raise WatchError("stale-PR activity must contain comments, reviews and commits")
+    for item, field in [(item, "createdAt") for item in comments + reviews] + [(item, "committedDate") for item in commits]:
+        if not isinstance(item, dict):
+            raise WatchError("stale-PR activity contains an invalid record")
+        latest = max(latest, github_time(item.get(field)))
+    return latest
 
 
 class WatchError(Exception):
@@ -188,9 +214,11 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
             raise WatchError("PR snapshot has no valid %s" % field)
         if field == "baseRefOid" and data[field] == "0" * 40:
             raise WatchError("PR snapshot has no repository base commit")
-    for field in ("title", "body", "state", "headRefName", "baseRefName", "url", "mergeable"):
+    for field in ("title", "body", "state", "headRefName", "baseRefName", "url", "mergeable", "createdAt", "updatedAt"):
         if not isinstance(data.get(field), str):
             raise WatchError("PR snapshot has no valid %s" % field)
+    github_time(data["createdAt"])
+    github_time(data["updatedAt"])
     if not isinstance(data.get("isDraft"), bool) or not isinstance(data.get("isCrossRepository"), bool):
         raise WatchError("PR snapshot has invalid flags")
     return data

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[2]
 WATCH = ROOT / "scripts" / "operations" / "pr_watch.py"
@@ -21,8 +22,14 @@ out = ""
 code = 0
 if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
-    entry["review"] = json.loads(entry["input"]) if entry["input"] else None
-if args[:1] == ["api"] and args[1].endswith("/reviews"):
+    entry["review"] = json.loads(entry["input"]) if entry["input"] and "/pulls/" in args[1] else None
+if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
+    print("[]")
+    entry["returncode"] = 0
+    with open(log_path, "a") as log:
+        log.write(json.dumps(entry) + "\n")
+    sys.exit(0)
+if args[:1] == ["api"] and len(args) > 1 and args[1].endswith("/reviews"):
     payload = entry["review"]
     code = 422 if os.environ.get("FAKE_REJECT_INLINE") == "1" else 0
     entry["returncode"] = code
@@ -38,6 +45,8 @@ elif args[:2] == ["pr", "view"]:
     out = json.dumps(state["pr"])
 elif args[:2] == ["api"] and "/commits/" in args[1]:
     out = state["pr"]["baseRefOid"]
+elif args[:2] == ["api"] and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")):
+    out = "[]"
 elif args[:2] == ["api"] and args[1].endswith("/reviews"):
     payload = json.loads(sys.stdin.read())
     entry["review"] = payload
@@ -52,6 +61,12 @@ elif args[:2] == ["api"] and args[1].endswith("/reviews"):
     sys.exit(code)
 elif args[:2] in (["pr", "review"], ["pr", "comment"]):
     entry["body"] = args[args.index("--body") + 1]
+elif args[:2] == ["pr", "edit"]:
+    state["pr"].setdefault("labels", []).append(args[args.index("--add-label") + 1])
+    state_path.write_text(json.dumps(state))
+elif args[:2] == ["pr", "close"]:
+    state["pr"]["state"] = "CLOSED"
+    state_path.write_text(json.dumps(state))
 elif args[:2] == ["pr", "merge"]:
     entry["head"] = args[args.index("--match-head-commit") + 1]
     entry["subject"] = args[args.index("--subject") + 1]
@@ -121,10 +136,12 @@ class WatcherIntegrationTests(unittest.TestCase):
         self.git("commit", "-qm", "Fix")
         self.git("push", "-q", "origin", "+HEAD:refs/pull/7/head")
         self.head = self.git("rev-parse", "HEAD")
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.pr = {"number": 7, "title": "fix: increment", "body": "Fixes #6", "state": "OPEN", "isDraft": False,
                    "headRefOid": self.head, "headRefName": "fix", "baseRefName": "main", "baseRefOid": self.base,
                    "isCrossRepository": False, "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
-                   "reviewDecision": "", "url": "https://example.com/pr/7"}
+                   "reviewDecision": "", "url": "https://example.com/pr/7",
+                   "createdAt": now, "updatedAt": now}
         self.state_path.write_text(json.dumps({"repo": "example/one", "pr": self.pr}))
         self.config_path = self.root / "config.json"
         self.config_path.write_text(json.dumps({
@@ -158,7 +175,7 @@ class WatcherIntegrationTests(unittest.TestCase):
         self.env["FAKE_REVIEW_FINDINGS"] = json.dumps([{"path": "fix.py", "line": 2, "severity": "P1",
                                                         "summary": "Example defect", "suggestion": "Correct it"}])
         calls = self.run_watch()
-        review = next(call["review"] for call in calls if "review" in call)
+        review = next(call["review"] for call in calls if call.get("review"))
         self.assertEqual(review["commit_id"], self.head)
         self.assertEqual(review["comments"][0]["path"], "fix.py")
         self.assertEqual(review["comments"][0]["line"], 2)
@@ -178,7 +195,7 @@ class WatcherIntegrationTests(unittest.TestCase):
         self.env["FAKE_REVIEW_FINDINGS"] = json.dumps([{"path": "fix.py", "line": 99, "severity": "P1",
                                                         "summary": "Wrong anchor", "suggestion": "None"}])
         calls = self.run_watch()
-        self.assertFalse(any("review" in call for call in calls))
+        self.assertFalse(any(call.get("review") for call in calls))
         self.assertFalse(any(call.get("argv", [])[:2] == ["pr", "merge"] for call in calls))
 
 
