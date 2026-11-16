@@ -1048,8 +1048,8 @@ class WatcherTests(unittest.TestCase):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
         for outcome, fields in (
                 ("merged", {"verification_policy": 1, "merged": True}),
-                ("passed", {"verification": "passed", "verification_policy": 1, "review_posted": True}),
-                ("passed_with_base_failures", {"verification": "base_failure", "verification_policy": 1, "review_posted": True}),
+                ("passed", {"verification": "passed", "verification_policy": 1, "review_posted": True, "success_posted": True}),
+                ("passed_with_base_failures", {"verification": "base_failure", "verification_policy": 1, "review_posted": True, "success_posted": True}),
                 ("findings", {"semantic": "findings", "review_posted": True}),
                 ("repair_exhausted", {"repair_exhausted": True, "repair_rounds": 3}),
         ):

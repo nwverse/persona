@@ -726,9 +726,9 @@ class Watcher:
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("retry_after", 0) > time.time():
             return
         if old.get("head") == head and old.get("evidence_key") == evidence_key \
-                and old.get("retry_reason") in ("semantic_review", "verification_repair", "semantic_repair") \
+                and old.get("retry_reason") in ("semantic_review", "verification_repair", "semantic_repair", "base_update") \
                 and ((old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
-                     or (old.get("retry_reason") in ("verification_repair", "semantic_repair")
+                     or (old.get("retry_reason") in ("verification_repair", "semantic_repair", "base_update")
                          and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
             # The completed backoff permits a fresh independent attempt budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
@@ -772,16 +772,30 @@ class Watcher:
             if not old.get("failure_posted"):
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings"):
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing"):
             if old.get("outcome") == "merged":
                 return
             if self.dry_run:
                 return
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
                                                 and old.get("semantic") == "passed") \
-                    and not (old.get("outcome") == "passed_with_findings" and not old.get("success_posted")) \
+                    and not (old.get("outcome") in ("passed_with_findings", "passed") and not old.get("success_posted")) \
                     and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
                     and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0):
+                return
+            if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
+                    and old.get("verification") in ("passed", "base_failure") and not old.get("success_posted"):
+                with self.merging(repo):
+                    current_pr = pr_snapshot(repo, number)
+                    if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
+                            or not self.mergeable(current_pr):
+                        return
+                    if not linked_issue(current_pr["body"], repo):
+                        raise WatchError("PR has no linked issue; not merged")
+                    self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             review_posted=True, success_posted=True)
+                    self.finish_merge(config, current_pr, current)
                 return
             # A dry run keeps semantic/test evidence but has no external side
             # effects. A live run resumes publication and the merge gate.
@@ -1009,7 +1023,7 @@ class Watcher:
                 failure_fingerprint = fingerprint(repo, number, head, "repair-infrastructure", str(error))
                 publish = latest.get("infrastructure_fingerprint") != failure_fingerprint
                 self.state.put(repo, number, head, evidence_key=evidence_key,
-                               outcome="retry" if attempts < INFRASTRUCTURE_ATTEMPT_LIMIT else "failed",
+                               outcome="retry",
                                repair_attempts=attempts,
                                repair_rounds=int(latest.get("repair_rounds", 0)),
                                verification=latest.get("verification"), checks=latest.get("checks", []),

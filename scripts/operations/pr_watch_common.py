@@ -116,40 +116,41 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
                 raise WatchError("cannot recover an unsafe fetch refspec")
             refreshed = run(["git", "ls-remote", remote_name, *remote_refspecs], cwd=cwd,
                             timeout=60, environ=environ)
-            if refreshed.returncode == 0:
-                entries = [line.split(None, 1) for line in refreshed.stdout.splitlines() if line.strip()]
-                if (len(entries) == 1 and len(entries[0]) == 2
-                        and entries[0][1] in remote_refspecs and SHA.fullmatch(entries[0][0])):
-                    # The commit was received but the ref transaction was
-                    # refused. Re-fetch just the object without rename checks,
-                    # then finish the exact ref update requested by the caller.
-                    checked(["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
-                             remote_name, entries[0][0]], cwd=cwd, timeout=timeout, environ=environ)
-                    checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
-                            timeout=60, environ=environ)
-                    original_refspec = next(value for value in original_refspecs
-                                            if (value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]
-                                                or "refs/" + value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]))
-                    if ":" in original_refspec:
-                        destination = original_refspec.split(":", 1)[1]
-                        if not destination.startswith("refs/"):
-                            raise WatchError("fetch recovery needs a fully qualified destination ref")
-                        checked(["git", "update-ref", destination, entries[0][0]], cwd=cwd,
-                                timeout=60, environ=environ)
-                    else:
-                        common_text = checked(["git", "rev-parse", "--git-dir"], cwd=cwd).strip()
-                        common = (Path(cwd).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
-                        if common.name != ".git" or common.parent != Path(cwd).resolve():
-                            raise WatchError("fetch recovery requires a trusted main checkout")
-                        destination = common / "FETCH_HEAD"
-                        temporary = common / "FETCH_HEAD.pr-watch-tmp"
-                        temporary.write_text(entries[0][0] + "\t\tbranch '" + entries[0][1] + "' of " + remote_name + "\n",
-                                             encoding="utf-8")
-                        os.chmod(temporary, 0o600)
-                        temporary.replace(destination)
-                        if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=cwd).strip() != entries[0][0]:
-                            raise WatchError("fetch recovery could not establish the exact FETCH_HEAD")
-                    return entries[0][0] + "\n"
+            if refreshed.returncode:
+                raise WatchError("cannot resolve the exact remote ref after a refused fetch: " + bounded(refreshed.stderr, 800))
+            entries = [line.split(None, 1) for line in refreshed.stdout.splitlines() if line.strip()]
+            if not (len(entries) == 1 and len(entries[0]) == 2
+                    and entries[0][1] in remote_refspecs and SHA.fullmatch(entries[0][0])):
+                raise WatchError("refused fetch could not resolve one exact remote ref")
+            # The commit was received but the ref transaction was refused.
+            # Re-fetch the validated SHA and finish the exact requested ref.
+            checked(["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
+                     remote_name, entries[0][0]], cwd=cwd, timeout=timeout, environ=environ)
+            checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
+                    timeout=60, environ=environ)
+            original_refspec = next(value for value in original_refspecs
+                                    if (value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]
+                                        or "refs/" + value.rsplit(":", 1)[0].lstrip("+") == entries[0][1]))
+            if ":" in original_refspec:
+                destination = original_refspec.split(":", 1)[1]
+                if not destination.startswith("refs/"):
+                    raise WatchError("fetch recovery needs a fully qualified destination ref")
+                checked(["git", "update-ref", destination, entries[0][0]], cwd=cwd,
+                        timeout=60, environ=environ)
+            else:
+                common_text = checked(["git", "rev-parse", "--git-dir"], cwd=cwd).strip()
+                common = (Path(cwd).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
+                if common.name != ".git" or common.parent != Path(cwd).resolve():
+                    raise WatchError("fetch recovery requires a trusted main checkout")
+                destination = common / "FETCH_HEAD"
+                temporary = common / "FETCH_HEAD.pr-watch-tmp"
+                temporary.write_text(entries[0][0] + "\t\tbranch '" + entries[0][1] + "' of " + remote_name + "\n",
+                                     encoding="utf-8")
+                os.chmod(temporary, 0o600)
+                temporary.replace(destination)
+                if checked(["git", "rev-parse", "FETCH_HEAD"], cwd=cwd).strip() != entries[0][0]:
+                    raise WatchError("fetch recovery could not establish the exact FETCH_HEAD")
+            return entries[0][0] + "\n"
         raise WatchError("%s failed (%s): %s" % (Path(argv[0]).name, result.returncode, detail))
     return result.stdout
 
