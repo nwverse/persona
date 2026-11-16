@@ -42,7 +42,7 @@ describe("SessionList baseline, filters and structural sharing", () => {
     expect(PAGE_SIZE).toBe(50);
     const list = make();
     const snapshot = list.getSnapshot();
-    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
+    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
     expect(list.getSnapshot()).toBe(snapshot);
     expect(api).not.toHaveBeenCalled();
   });
@@ -955,21 +955,94 @@ describe("generation isolation and inflight coalescing", () => {
     expect(pages).toHaveBeenCalledTimes(2);
   });
 
-  it("coalesces invalidation bursts and schedules one trailing delta during an inflight read", async () => {
-    const list = make();
-    await list.load();
-    const pending = deferred<ListPage<Row>>();
-    pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
-    list.invalidate(); list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    pending.resolve(page([], { revision: "intermediate" }));
-    await list.load();
-    expect(pages).toHaveBeenCalledTimes(3);
-    expect(requestParams().at(-1)?.since).toBe("intermediate");
+  it("coalesces invalidation bursts and schedules one trailing delta, at the window's end, during an inflight read", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const pending = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
+      list.invalidate(); list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      pending.resolve(page([], { revision: "intermediate" }));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      expect(requestParams().at(-1)?.since).toBe("intermediate");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes idle between a busy fleet's hints and reads a requested page before the next refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const delta = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(delta.promise);
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      list.invalidate(); // the next agent's update lands while that read is out
+      await vi.advanceTimersByTimeAsync(0);
+      delta.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      // idle until the window ends, so Load more (drawn only while the list is not loading) is on screen
+      expect(list.getSnapshot()).toMatchObject({ loading: false, hasMore: true });
+      expect(pages).toHaveBeenCalledTimes(2);
+      // the window ends during a refresh that has Load more's page queued behind it: the page goes first
+      const refresh = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(refresh.promise)
+        .mockImplementation(async (path) => params(path).has("since") ? page([], { revision: "delta" }) : page(rows(50, 50)));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      list.invalidate();
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(2_000); // another window ends while the refresh is still out
+      refresh.resolve(page([], { revision: "delta" }));
+      await paging;
+      expect(requestParams().slice(3).map((p) => p.cursor ? "page" : "refresh")).toEqual(["page", "refresh"]);
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a page is loading only for a page someone asked for, and counts a window from when a slow read came back", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const slow = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(slow.promise);
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      // a background refresh: Load more stays (loadingMore is what hides it)
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: false, hasMore: true });
+      await vi.advanceTimersByTimeAsync(1_500);
+      slow.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      const settled = pages.mock.calls.length;
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(1_000); // 2.5 s after the read went out, 1 s after it came back
+      expect(pages.mock.calls.length).toBe(settled);
+      await vi.advanceTimersByTimeAsync(1_000); // 2 s after it came back
+      expect(pages.mock.calls.length).toBeGreaterThan(settled);
+      const next = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(next.promise);
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: true });
+      next.resolve(page(rows(50, 50)));
+      await paging;
+      expect(list.getSnapshot()).toMatchObject({ loading: false, loadingMore: false });
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throttles a hint storm into one read per window, with the changes of the whole window in it", async () => {
