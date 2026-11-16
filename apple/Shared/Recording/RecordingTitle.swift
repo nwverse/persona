@@ -34,7 +34,8 @@ nonisolated enum RecordingTitle {
         if entry.isDay, let date = entry.dayTitleDate { return String(localized: "Day · \(date)") }
         let when = entry.createdAt.formatted(date: .abbreviated, time: .shortened)
         if entry.isRolling { return String(localized: "Rolling · \(when)") }
-        return entry.isMeeting ? String(localized: "Meeting · \(when)") : String(localized: "Recording · \(when)")
+        // A recording that isn't a meeting is a note (#8731, D7): it says so, as the Meetings list's pill does.
+        return entry.isMeeting ? String(localized: "Meeting · \(when)") : String(localized: "Note · \(when)")
     }
 
     /// The name to keep from the hub's `name` and `name_source` (the upload's answer, reconciliation, the detail's meta):
