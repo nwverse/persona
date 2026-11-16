@@ -1,8 +1,7 @@
 import type { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import type { AgentListAdapter, AgentListInput, AgentListRow } from '../core/AgentListAdapter';
-import type { AgentListGroupProjection } from '../core/AgentListProjection';
-import { NativeAgentListAdapter } from '../core/AgentListAdapter';
+import { CoreAgentListAdapter } from '../core/AgentListAdapter';
 
 interface AgentRepository {
   call(path: string, method?: string, body?: Record<string, Object>, operationId?: string, admit?: () => boolean): Promise<Record<string, Object>>;
@@ -37,13 +36,18 @@ export class AgentWorkspaceGroup {
   showMachine: boolean = false;
   showRepository: boolean = false;
   showWorktree: boolean = false;
+  folded: boolean = false;
+  parent: string = '';
+  stateCounts: Record<string, Object> = {};
+  spoken: string = '';
+  totalRowCount: number = 0;
   rows: ResourceRow[] = [];
 
   constructor(id: string, machineId: string, machineName: string, repositoryPath: string, repositoryName: string,
     worktreePath: string, worktreeName: string, branch: string, rows: ResourceRow[] = []) {
     this.id = id; this.machineId = machineId; this.machineName = machineName; this.repositoryPath = repositoryPath;
     this.repositoryName = repositoryName; this.worktreePath = worktreePath; this.worktreeName = worktreeName;
-    this.branch = branch; this.rows = rows;
+    this.branch = branch; this.rows = rows; this.totalRowCount = rows.length;
   }
 }
 
@@ -84,7 +88,7 @@ class AgentPreferences {
 export class AgentWorkspace {
   @Trace groups: AgentWorkspaceGroup[] = [];
   @Trace quickFilter: string = 'all';
-  @Trace groupingMode: string = 'flat';
+  @Trace groupingMode: string = 'state';
   @Trace machineFilter: string = '';
   @Trace search: string = '';
   @Trace history: boolean = false;
@@ -116,19 +120,16 @@ export class AgentWorkspace {
   private freezeSuppressed: boolean = false;
   private historyRequest: number = 0;
   private persistTimer: number = -1;
-  private adapter: AgentListAdapter = new NativeAgentListAdapter();
-  private listInput: AgentListInput | undefined;
-  private listShadow: ((input: AgentListInput) => void) | undefined;
-
-  /** Only DEBUG/test installs a shadow observer; it cannot replace native rows. */
-  setListShadow(observer: ((input: AgentListInput) => void) | undefined): void {
-    this.listShadow = observer;
-    if (observer && this.listInput) observer(this.listInput);
-  }
-
+  private adapter: AgentListAdapter;
+  constructor(adapter?: AgentListAdapter) { this.adapter = adapter || new CoreAgentListAdapter(); }
+  private folded: string[] = [];
+  private expandedIdle: string[] = [];
+  private expandedQuiet: string[] = [];
+  private currentNow: string = '';
+  private heldSession: string = '';
   historySupported(): boolean { return !!this.client?.directoryOwners().some((owner: ClientModel) => owner.features.includes('agent_session_archives')); }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
-  hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.rows.length > 0); }
+  hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.totalRowCount > 0); }
   visibleRows(): ResourceRow[] {
     const rows: ResourceRow[] = [];
     this.groups.forEach((group: AgentWorkspaceGroup) => group.rows.forEach((row: ResourceRow) => rows.push(row)));
@@ -163,18 +164,21 @@ export class AgentWorkspace {
     this.viewScope = JSON.stringify([this.scope, this.owner]);
     this.openingView = true; this.loading = true; this.busy = false; this.error = '';
     this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
-    this.quickFilter = 'all'; this.groupingMode = 'flat'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
+    this.quickFilter = 'all'; this.groupingMode = 'state'; this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
     this.readingDetail = false; this.freezeSuppressed = false;
     this.preferences.clear(); this.pinsSpaces = []; this.pinsSessions = []; this.mutesSpaces = []; this.mutesSessions = []; this.mutesAllowed = [];
     try {
       const saved = Wire.parse(await client.loadView('agent-workspace'));
       if (!this.loadCurrent(client, revision)) return;
-      this.quickFilter = ['all', 'needs_you', 'working', 'unread'].includes(Wire.text(saved, 'quick')) ? Wire.text(saved, 'quick') : 'all';
-      this.groupingMode = ['flat', 'machine', 'repository', 'worktree'].includes(Wire.text(saved, 'grouping')) ? Wire.text(saved, 'grouping') : 'flat';
+      this.quickFilter = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting'].includes(Wire.text(saved, 'quick')) ? Wire.text(saved, 'quick') :
+        ({needs_you: 'needsYou'}[Wire.text(saved, 'quick')] || 'all');
+      this.groupingMode = ['state', 'machine', 'space'].includes(Wire.text(saved, 'grouping')) ? Wire.text(saved, 'grouping') : 'state';
       this.machineFilter = Wire.text(saved, 'machine'); this.search = Wire.text(saved, 'search');
       this.history = Wire.bool(saved, 'history');
       if (this.history && client.connected && !this.historySupported()) this.history = false;
       this.selectedKey = Wire.text(saved, 'selected');
+      this.folded = Wire.strings(saved, 'folded'); this.expandedIdle = Wire.strings(saved, 'expanded_idle');
+      this.expandedQuiet = Wire.strings(saved, 'expanded_quiet');
       this.sourceRows = this.history ? this.historyRows.slice() : this.rowsForClient(client);
       this.syncSelected(client);
       this.rebuild();
@@ -234,12 +238,13 @@ export class AgentWorkspace {
   setReadingDetail(value: boolean): void {
     if (value === this.readingDetail) return;
     if (value) {
-      this.rebuild();
+      this.heldSession = ''; this.rebuild();
       this.readingDetail = true;
       this.freezeSuppressed = false;
       this.frozenGroups = this.sourceReady() ? this.copyGroups(this.groups) : undefined;
     } else {
       this.readingDetail = false;
+      this.heldSession = '';
       this.freezeSuppressed = false;
       this.frozenGroups = undefined;
       this.rebuild();
@@ -251,13 +256,33 @@ export class AgentWorkspace {
   }
 
   setQuickFilter(value: string): void {
-    if (!['all', 'needs_you', 'working', 'unread'].includes(value)) return;
+    if (!['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'].includes(value)) return;
     this.releaseFreeze(); this.quickFilter = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   setGroupingMode(value: string): void {
-    if (!['flat', 'machine', 'repository', 'worktree'].includes(value) || value === this.groupingMode) return;
+    if (!['state', 'machine', 'space'].includes(value) || value === this.groupingMode) return;
     this.releaseFreeze(); this.groupingMode = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+  }
+
+  toggleFold(id: string): void {
+    if (this.groups.some((group) => group.parent === 'quiet' && group.id === id)) {
+      this.expandedQuiet = this.expandedQuiet.includes(id) ? removeKey(this.expandedQuiet, id) : this.expandedQuiet.concat([id]);
+    } else if (id === 'state/idle') {
+      this.folded = this.folded.includes('!state/idle') ? removeKey(this.folded, '!state/idle') : this.folded.concat(['!state/idle']);
+      this.toggleIdleRows(id);
+      return;
+    } else {
+      this.folded = this.folded.includes(id) ? removeKey(this.folded, id) : this.folded.concat([id]);
+    }
+    this.releaseFreeze();
+    this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+  }
+
+  toggleIdleRows(id: string): void {
+    this.releaseFreeze();
+    this.expandedIdle = this.expandedIdle.includes(id) ? removeKey(this.expandedIdle, id) : this.expandedIdle.concat([id]);
+    this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   async setMachineFilter(value: string): Promise<void> {
@@ -297,7 +322,9 @@ export class AgentWorkspace {
   selectRow(row: ResourceRow): void {
     if (row.kind !== 'session' || !this.groups.some((group: AgentWorkspaceGroup) =>
       group.rows.some((item: ResourceRow) => rowKey(item) === rowKey(row)))) return;
-    this.externalSelection = row; this.selectedKey = rowKey(row); this.saveViewLater();
+    this.externalSelection = row; this.selectedKey = rowKey(row);
+    this.heldSession = row.state === 'unread' ? rowMachine(row) + '/' + rowSession(row) : '';
+    this.saveViewLater();
   }
 
   isPinned(row: ResourceRow): boolean { return this.preferencesFor(row).pinsSessions.includes(this.sessionKey(row)); }
@@ -634,48 +661,36 @@ export class AgentWorkspace {
     this.freezeSuppressed = false; this.frozenGroups = this.sourceReady() ? this.copyGroups(this.groups) : undefined;
   }
 
-  private frozenProjection(groups: AgentWorkspaceGroup[]): AgentListGroupProjection[] {
-    const latest = new Map<string, ResourceRow>();
-    this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
-    return groups.map((group) => ({id: group.id, machineId: group.machineId, machineName: group.machineName,
-      repositoryPath: group.repositoryPath, repositoryName: group.repositoryName, worktreePath: group.worktreePath,
-      worktreeName: group.worktreeName, branch: group.branch, showMachine: group.showMachine,
-      showRepository: group.showRepository, showWorktree: group.showWorktree,
-      rows: group.rows.map((row: ResourceRow) => {
-        const current = latest.get(rowKey(row)) || row, raw = current.data();
-        raw['machine_id'] = rowMachine(current); raw['session_id'] = rowSession(current); raw['title'] = current.title;
-        raw['cwd'] = current.path; raw['state'] = current.state; raw['manager'] = current.manager; raw['app_hub_group'] = current.group;
-        return {id: current.id, raw, source: current};
-      })}));
-  }
-
   private rebuild(): void {
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
-      if (this.listShadow) {
-        const input = this.makeListInput();
-        this.listInput = input; this.listShadow(input);
-      }
       const latest = new Map<string, ResourceRow>();
       this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
       this.groups = this.frozenGroups.map((group: AgentWorkspaceGroup) => {
         const copy = this.copyGroup(group);
         copy.rows = group.rows.map((row: ResourceRow) => latest.get(rowKey(row)) || row);
+        if (group.id === 'state/idle') copy.folded = !this.folded.includes('!state/idle');
         return copy;
       });
       this.frozenGroups = this.copyGroups(this.groups);
       return;
     }
-    const input = this.makeListInput();
-    this.listInput = input;
-    if (this.listShadow) this.listShadow(input);
-    const groups = this.adapter.project(input);
-    this.groups = groups.map((group) => new AgentWorkspaceGroup(group.id, group.machineId,
-      group.machineName, group.repositoryPath, group.repositoryName, group.worktreePath, group.worktreeName,
-      group.branch, group.rows.map((row: AgentListRow) => row.source as ResourceRow)));
-    this.groups.forEach((group: AgentWorkspaceGroup, index: number) => {
-      group.showMachine = groups[index].showMachine;
-      group.showRepository = groups[index].showRepository;
-      group.showWorktree = groups[index].showWorktree;
+    let groups;
+    try {
+      groups = this.adapter.project(this.makeListInput()).groups;
+    } catch (_) {
+      // Keep the last usable projection; an unavailable native core is not an empty successful result.
+      this.error = 'failed';
+      return;
+    }
+    const byId = new Map<string, ResourceRow>();
+    this.sourceRows.forEach((row) => byId.set((row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row), row));
+    this.groups = groups.map((group) => {
+      const native = new AgentWorkspaceGroup(group.id, group.machineId, group.machineName, '', '', '', '', '');
+      native.folded = group.folded; native.parent = group.parent || ''; native.stateCounts = group.state_counts || {};
+      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
+      native.showMachine = group.id.startsWith('machine/');
+      native.rows = group.visible_rows.map((id) => byId.get(id)).filter((row): row is ResourceRow => !!row);
+      return native;
     });
     if (this.readingDetail && this.sourceReady() && !this.freezeSuppressed && !this.frozenGroups) this.frozenGroups = this.copyGroups(this.groups);
   }
@@ -689,12 +704,12 @@ export class AgentWorkspace {
     });
     return {rows, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
-      frozen: this.readingDetail && !this.freezeSuppressed && this.frozenGroups ? this.frozenProjection(this.frozenGroups) : undefined,
       kept: this.frozenGroups?.flatMap((group) => group.rows.map((row: ResourceRow) =>
         (row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row))) || [],
       machines: this.client?.directoryOwners().flatMap((owner: ClientModel) => owner.machines.map((row: ResourceRow) =>
         ({id: row.id, name: row.title, group: owner.profile.id}))) || [],
-      coreSettings: {sort: 'state', folded: [], expanded_idle: [], expanded_quiet: [], compact: false},
+      coreSettings: {sort: 'state', folded: this.folded, expanded_idle: this.expandedIdle, expanded_quiet: this.expandedQuiet,
+        compact: false, now: this.currentNow, held: this.heldSession},
       preferencesFor: (row: AgentListRow) => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow) => this.machineIdentity(row.source as ResourceRow),
       machineName: (row: AgentListRow) => {
@@ -707,7 +722,9 @@ export class AgentWorkspace {
   private copyGroup(group: AgentWorkspaceGroup): AgentWorkspaceGroup {
     const copy = new AgentWorkspaceGroup(group.id, group.machineId, group.machineName, group.repositoryPath, group.repositoryName,
       group.worktreePath, group.worktreeName, group.branch, group.rows.slice());
-    copy.showMachine = group.showMachine; copy.showRepository = group.showRepository; copy.showWorktree = group.showWorktree; return copy;
+    copy.showMachine = group.showMachine; copy.showRepository = group.showRepository; copy.showWorktree = group.showWorktree;
+    copy.folded = group.folded; copy.parent = group.parent; copy.stateCounts = group.stateCounts;
+    copy.spoken = group.spoken; copy.totalRowCount = group.totalRowCount; return copy;
   }
 
   private copyGroups(groups: AgentWorkspaceGroup[]): AgentWorkspaceGroup[] { return groups.map((group: AgentWorkspaceGroup) => this.copyGroup(group)); }
@@ -724,8 +741,10 @@ export class AgentWorkspace {
     this.persistTimer = setTimeout(() => {
       this.persistTimer = -1;
       if (!client || !this.loadCurrent(client, revision) || this.viewScope !== viewScope) return;
-      const values: Object[] = [this.quickFilter, this.groupingMode, this.machineFilter, this.search, this.history, this.selectedKey];
-      client.saveView('agent-workspace', JSON.stringify(Wire.payload(['quick', 'grouping', 'machine', 'search', 'history', 'selected'], values)))
+      const values: Object[] = [this.quickFilter, this.groupingMode, this.machineFilter, this.search, this.history, this.selectedKey,
+        this.folded, this.expandedIdle, this.expandedQuiet];
+      client.saveView('agent-workspace', JSON.stringify(Wire.payload(['quick', 'grouping', 'machine', 'search', 'history', 'selected',
+        'folded', 'expanded_idle', 'expanded_quiet'], values)))
         .catch(() => undefined);
     }, 180);
   }

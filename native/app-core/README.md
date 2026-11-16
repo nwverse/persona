@@ -130,24 +130,21 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
-## HarmonyOS Agents-list adapter (#8957)
+## HarmonyOS Agents-list core (#8957, #8966)
 
-`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
-ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
-`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
-core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
-replace the native rows, and snapshot/native failures affect only diagnostics.
+`CoreAgentListAdapter` calls the synchronous pure `coreProjectSort` NAPI function directly. It is the only production
+Agents-list sorter: the temporary ArkTS projection, debug shadow, snapshot worker and comparison reports are deleted.
+`AgentWorkspace` maps the core's complete groups, `visible_rows`, folds and counts back to the original `ResourceRow`
+identities used by native actions. The default is iOS By Status; By Machine and By Project are the other choices.
+State/space folds, idle expansion, quick filters including BackgroundWaiting, pin/mute ranks, search operators and
+multi-Hub machine identities all use the same settings as the core. Native failure retains the last usable projection
+and exposes the existing failure state instead of presenting an empty successful list. There is no second release
+sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
 
-Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
-query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
-`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
-available in this environment.
-
-The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
-native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
-both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
-`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
-membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+`harmony/tests/core-host/agent-sort-adapter.test.mjs` drives the production adapter's real native-import contract and
+the real core through all 30 unchanged `agents_list` fixtures. The complete expected objects match **30/30**. Host
+workspace tests also exercise frozen-reading identity, explicit folds, filters and offline-history membership. The
+portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
 

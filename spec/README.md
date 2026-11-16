@@ -47,7 +47,7 @@ spec/
 | --- | --- |
 | continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开. Also replayed by the shared Rust core (`native/app-core`, `cargo test`) and through its Android binding (`:core:rustcore`), #6871 |
 | lines | 见各自 [README](fixtures/lines/README.md) |
-| sort | 见各自 [README](fixtures/sort/README.md) |
+| sort | 见各自 [README](fixtures/sort/README.md)。该 domain 的参考实现是 `native/app-core` 的 `persona_core::sort`，由这些 iOS 推导的夹具校验；HarmonyOS 正式代码通过 `coreProjectSort` 直接使用核心投影（#7579、#8966）。 |
 | answer | 见各自 [README](fixtures/answer/README.md) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |

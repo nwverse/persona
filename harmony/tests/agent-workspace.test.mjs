@@ -2,9 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+
+const coreHelper = process.env.PERSONA_CORE_HOST_REPLAY;
+globalThis.agentWorkspaceCoreSort = (input) => {
+  if (!coreHelper) throw new Error('PERSONA_CORE_HOST_REPLAY is required for the real-core AgentWorkspace tests');
+  const result = spawnSync(coreHelper, [], {input: (() => {
+    const payload = Buffer.from(input);
+    const frame = Buffer.alloc(5);
+    frame.writeUInt32LE(payload.length + 1, 0); frame[4] = 10;
+    return Buffer.concat([frame, payload]);
+  })(), encoding: 'buffer', timeout: 10000, maxBuffer: 32 * 1024 * 1024});
+  if (result.error || result.status !== 0) throw new Error('real core helper failed');
+  const size = result.stdout.readUInt32LE(0);
+  if (size < 1 || result.stdout[4] !== 1) throw new Error('real core rejected the input');
+  return result.stdout.subarray(5, 4 + size).toString('utf8');
+};
+
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === 'libpersona_core_ohos.so') return {url: 'agent-workspace-core:', shortCircuit: true};
     if (context.parentURL?.endsWith('/AgentWorkspace.ets') && specifier === './Wire')
       return { url: new URL('./Wire.ets', context.parentURL).href, shortCircuit: true };
     if (context.parentURL?.includes('/entry/src/main/ets/')) {
@@ -16,6 +34,8 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    if (url === 'agent-workspace-core:') return {format: 'module', shortCircuit: true,
+      source: 'export default {coreProjectSort(input) { return globalThis.agentWorkspaceCoreSort(input); }};'};
     if (url.endsWith('.ets') || url.endsWith('/AgentListAdapter.ts') || url.endsWith('/AgentListProjection.ts')) {
       const source = readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, '');
       return { format: 'module', source: stripTypeScriptTypes(source), shortCircuit: true };
@@ -159,14 +179,14 @@ test('history loads only when the hub advertises the archive capability and hono
   await workspace.setMachineFilter('m1');
   await workspace.setHistory(true);
   assert.ok(state.calls.some((call) => call.method === 'GET' && call.path === '/api/v1/sessions/archived?machine_id=m1&manager=work'));
-  assert.deepEqual(workspace.groups.flatMap((group) => group.rows).map((row) => row.id), ['archive-1']);
+  assert.deepEqual(workspace.groups.flatMap((group) => group.rows), [], 'offline history is not live membership');
 });
 
-test('the flat list shows friendly identity and state while retaining complete inspection metadata', async () => {
+test('the iOS state list shows friendly identity and state while retaining complete inspection metadata', async () => {
   const row = agent('s1', { cwd: '/work/persona', repo_root: '/work/persona', worktree: '/work/persona', last_text: 'Checking the build' });
   const { workspace } = await opened({ sessions: [row], machines: [machine('m1')] });
-  assert.equal(workspace.groupingMode, 'flat');
-  assert.deepEqual(workspace.groups.map((group) => group.id), ['flat']);
+  assert.equal(workspace.groupingMode, 'state');
+  assert.deepEqual(workspace.groups.map((group) => group.id), ['state/working']);
   assert.equal(workspace.groups[0].showMachine, false);
   assert.equal(workspace.groups[0].showRepository, false);
   assert.equal(workspace.groups[0].showWorktree, false);
@@ -174,23 +194,21 @@ test('the flat list shows friendly identity and state while retaining complete i
   assert.deepEqual(workspace.listMetadata(row), ['Hub', 'Computer m1', 'working', 'Checking the build']);
 });
 
-test('native grouping choices show only their selected levels and grouping changes release the membership freeze', async () => {
+test('iOS state, machine and space groupings share core visibility and release reading freeze', async () => {
   const first = agent('s1', { repo_root: '/work/persona', worktree: '/work/persona' });
   const second = agent('s2', { repo_root: '/work/persona', worktree: '/work/persona/feature', branch: 'feature' });
   const third = agent('s3', { machine_id: 'm2', repo_root: '/other/repo', cwd: '/other/repo', worktree: '/other/repo' });
   const { workspace, client } = await opened({ sessions: [first, second, third], machines: [machine('m1'), machine('m2')] });
   assert.equal(workspace.visibleRows().length, 3);
+  assert.deepEqual(workspace.groups.map((group) => group.id), ['state/working']);
   workspace.setGroupingMode('machine');
-  assert.equal(workspace.groups.length, 2);
+  assert.deepEqual(workspace.groups.map((group) => group.id), ['machine/m1', 'machine/m2']);
   assert.ok(workspace.groups.every((group) => group.showMachine && !group.showRepository && !group.showWorktree));
-  workspace.setGroupingMode('repository');
+  workspace.setGroupingMode('space');
   assert.equal(workspace.groups.length, 2);
-  assert.ok(workspace.groups.every((group) => !group.showMachine && group.showRepository && !group.showWorktree));
-  workspace.setGroupingMode('worktree');
-  assert.equal(workspace.groups.length, 3);
-  assert.ok(workspace.groups.every((group) => !group.showMachine && !group.showRepository && group.showWorktree));
-
-  workspace.setGroupingMode('flat');
+  assert.ok(workspace.groups.every((group) => !group.showMachine && !group.showRepository && !group.showWorktree));
+  workspace.setGroupingMode('state');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['s1', 's2', 's3']);
   workspace.setReadingDetail(true);
   client.sessions = [first];
   workspace.update(client, true);
@@ -231,7 +249,7 @@ test('a detail reading freezes membership and refreezes after explicit filter ch
   client.sessions = [latest, added];
   workspace.update(client, true);
   const frozen = workspace.groups.flatMap((group) => group.rows);
-  assert.deepEqual(frozen.map((row) => row.id), ['s1', 's2']);
+  assert.deepEqual(frozen.map((row) => row.id), ['s1'], 'the core folds idle state by default');
   assert.equal(frozen[0].state, 'idle');
   workspace.setQuickFilter('working');
   assert.deepEqual(workspace.groups.flatMap((group) => group.rows).map((row) => row.id), ['s3']);
@@ -243,6 +261,7 @@ test('a detail reading freezes membership and refreezes after explicit filter ch
   assert.equal(workspace.visibleRows()[0].state, 'idle');
 
   workspace.setQuickFilter('all');
+  workspace.toggleFold('state/idle');
   const refrozen = workspace.visibleRows().map((row) => row.id);
   assert.deepEqual(refrozen, ['s4', 's3']);
   client.sessions = [updated, next, agent('s5', { state: 'needs_you', updated_at: '2026-11-11T15:00:00Z' })];
@@ -301,15 +320,15 @@ test('a scope change while reading pins prevents the old pairing from writing', 
 test('list filters and selection restore within their manager scope', async () => {
   const { workspace, state, client } = await opened();
   workspace.setQuickFilter('working');
-  workspace.setGroupingMode('repository');
+  workspace.setGroupingMode('space');
   await new Promise((resolve) => setTimeout(resolve, 220));
   assert.equal(JSON.parse(state.views.get('hub:work:agent-workspace')).quick, 'working');
-  assert.equal(JSON.parse(state.views.get('hub:work:agent-workspace')).grouping, 'repository');
+  assert.equal(JSON.parse(state.views.get('hub:work:agent-workspace')).grouping, 'space');
   state.scope = 'hub:personal'; state.manager = 'personal'; client.profile.manager = 'personal'; state.generation++;
-  state.views.set('hub:personal:agent-workspace', JSON.stringify({ quick: 'needs_you', grouping: 'worktree', machine: 'p1', search: 'review', selected: '["session","personal","p1","p1-s1"]' }));
+  state.views.set('hub:personal:agent-workspace', JSON.stringify({ quick: 'needsYou', grouping: 'space', machine: 'p1', search: 'review', selected: '["session","personal","p1","p1-s1"]' }));
   await workspace.open(client);
-  assert.equal(workspace.quickFilter, 'needs_you');
-  assert.equal(workspace.groupingMode, 'worktree');
+  assert.equal(workspace.quickFilter, 'needsYou');
+  assert.equal(workspace.groupingMode, 'space');
   assert.equal(workspace.machineFilter, 'p1');
   assert.equal(workspace.search, 'review');
   assert.equal(workspace.selectedKey, '["session","personal","p1","p1-s1"]');
@@ -342,7 +361,7 @@ test('a mutation journal admission is revoked when its captured Hub goes away',a
 
 test('a background directory load cannot bypass established reading membership',async()=>{const first=agent('frozen-a'),second=agent('frozen-b'),{workspace,client}=await opened({sessions:[first,second]});workspace.setReadingDetail(true);client.directoryReady=true;client.directoryLoading=true;client.directorySessions=[agent('new-member'),agent('frozen-a',{state:'idle'})];workspace.update(client,true);assert.deepEqual(workspace.visibleRows().map(row=>row.id),['frozen-a','frozen-b']);assert.equal(workspace.visibleRows()[0].state,'idle');});
 test('forgetting a foreign Hub removes frozen rows, history, selection and action authority',async()=>{const a=clientFixture(),b=clientFixture();a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';const first=agent('same'),second=agent('same');first.group='hub-a';second.group='hub-b';a.client.directoryReady=true;a.client.directorySessions=[first,second];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client,true);w.selectExternal(second);w.historyRows=[second];const ticket=w.actionTicket(second);assert.equal(ticket(),true);w.forgetHub('hub-b');assert.deepEqual(w.visibleRows().map(row=>row.group),['hub-a']);assert.equal(w.selectedKey,'');assert.equal(w.historyRows.length,0);assert.equal(ticket(),false);});
-test('an archive-only foreign owner is included and its open confirmation cannot survive reconnect',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('archived',{archived:true,state:'offline'})]});a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';b.client.features=['agent_session_archives'];b.client.sessions=[];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client);assert.equal(w.historySupported(),true);await w.setHistory(true);assert.ok(b.state.calls.some(call=>call.path.startsWith('/api/v1/sessions/archived')));assert.equal(w.visibleRows()[0].group,'hub-b');await w.setHistory(false);const row=a.client.sessions[0],ticket=w.actionTicket(row);assert.equal(ticket(),true);a.state.generation++;assert.equal(ticket(),false);});
+test('an archive-only foreign owner is included and its open confirmation cannot survive reconnect',async()=>{const a=clientFixture(),b=clientFixture({history:[agent('archived',{archived:true,state:'offline'})]});a.client.profile.id='hub-a';b.client.profile.id='hub-b';b.state.scope='hub-b:work';b.client.features=['agent_session_archives'];b.client.sessions=[];a.client.directoryOwners=()=>[a.client,b.client];a.client.directoryOwnerFor=row=>row.group==='hub-b'?b.client:a.client;const w=new AgentWorkspace();await w.open(a.client);assert.equal(w.historySupported(),true);await w.setHistory(true);assert.ok(b.state.calls.some(call=>call.path.startsWith('/api/v1/sessions/archived')));assert.equal(w.visibleRows().length,0,'the archived offline Agent is not live membership');await w.setHistory(false);const row=a.client.sessions[0],ticket=w.actionTicket(row);assert.equal(ticket(),true);a.state.generation++;assert.equal(ticket(),false);});
 
 const nativePageSource=readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets',import.meta.url),'utf8');
 function nativePageMethod(name){const start=nativePageSource.search(new RegExp('^  private (?:async )?'+name+'\\(','m'));assert.ok(start>=0);const body=nativePageSource.indexOf('{',start);let depth=1,quote='',escape=false,at=body+1;for(;at<nativePageSource.length&&depth;at++){const c=nativePageSource[at];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}return nativePageSource.slice(start,at);}
