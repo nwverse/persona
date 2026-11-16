@@ -361,11 +361,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
 // environment against main 96a337b73: ja 480,986 B to 481,164 B (en 477,857 B to 478,035 B, zh-Hans 478,676 B to
 // 478,854 B). The page's last view is drawn from a chunk of its own (lib/extension-view-cache.ts, with ExtensionView).
-// #9071: the start page adds 304 B in each language, measured in one environment against main ebd68bcec (ja 480,986 B
-// to 481,290 B; en 477,857 B to 478,161 B, zh-Hans 478,676 B to 478,980 B): an opening at the root address goes to the
+// #9071: the start page adds 419 B in each language, measured in one environment against main 1ddb1e326 (ja 480,827 B
+// to 481,246 B; en 477,709 B to 478,128 B, zh-Hans 478,522 B to 478,941 B): an opening at the root address goes to the
 // chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
-// when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk.
-export const FIRST_SCREEN_BUDGET = 9_999_999; // TEMP-MEASURE
+// when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk. Main's room is kept on top.
+export const FIRST_SCREEN_BUDGET = 481_583;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
