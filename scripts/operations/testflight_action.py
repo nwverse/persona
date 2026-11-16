@@ -50,7 +50,8 @@ def main():
     parser.add_argument("--commit", required=True)
     args = parser.parse_args()
     # The outer operation lock is intentionally retained until wait + membership verification finish.
-    if os.environ.get("PERSONA_OPERATION_RELEASE_LOCKED") != "1":
+    locks = json.loads(os.environ.get("PERSONA_OPERATION_LOCKS", "{}"))
+    if os.environ.get("PERSONA_OPERATION_RELEASE_LOCKED") != "1" and not locks.get("release"):
         lock = Path(__file__).with_name("operation_lock.py")
         return subprocess.call([sys.executable, str(lock), "release", "--", sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
     prepare(args.repo, args.worktree, args.commit)
@@ -67,7 +68,7 @@ def main():
     build = state["build"]
     print("TestFlight commit=" + args.commit + " build=" + build + " phase=" + state["phase"], flush=True)
     found = asc.build_by_version(build)
-    if not found and state["phase"] in ("prepared", "upload_failed"):
+    if not found and state["phase"] in ("prepared", "upload_started", "upload_failed"):
         state["phase"] = "upload_started"
         save(checkpoint, state)
         environment = os.environ.copy()
