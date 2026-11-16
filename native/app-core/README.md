@@ -206,12 +206,12 @@ state for all three supported operations; a report contains only domain, rule an
 label, question, answer, identifier or exception message. Every 10 completed comparisons logs only
 `answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
 
-The replay compares all 15 `questions.json` and 8 `recommended.json` complete expected objects through both the
+The replay compares all 15 `questions.json` and 9 `recommended.json` complete expected objects through both the
 current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
 as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
 evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
-both packaged ABIs. The additional U+200B display boundary is #9189; the retained `other` draft distinction found by
-the stricter multi-step shadow is #9238. Neither is normalized by this adapter.
+both packaged ABIs. The U+200B display boundary was independently fixed by #9189 and is included in the ninth case;
+the retained `other` draft distinction found by the stricter multi-step shadow is #9238 and is not normalized here.
 
 ## Reproducing phase-1 evidence
 

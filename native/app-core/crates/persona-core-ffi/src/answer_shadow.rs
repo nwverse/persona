@@ -4,8 +4,8 @@
 //! At most one additional job can wait in the channel; no job, result or error is logged and Java is never called back.
 
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 pub(crate) enum Operation {
     Project,
@@ -20,15 +20,25 @@ struct Job {
 
 static WORKER: OnceLock<Mutex<SyncSender<Job>>> = OnceLock::new();
 
-fn worker() -> &'static Mutex<SyncSender<Job>> {
-    WORKER.get_or_init(|| {
+fn lock_worker() -> Option<MutexGuard<'static, SyncSender<Job>>> {
+    let mutex = WORKER.get_or_init(|| {
         let (sender, receiver) = sync_channel::<Job>(1);
         std::thread::Builder::new()
             .name("persona-answer-shadow".to_owned())
             .spawn(move || run(receiver))
             .expect("the DEBUG answer worker must start");
         Mutex::new(sender)
-    })
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if let Ok(guard) = mutex.try_lock() {
+            return Some(guard);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::yield_now();
+    }
 }
 
 fn run(receiver: Receiver<Job>) {
@@ -63,16 +73,16 @@ pub(crate) fn call(operation: Operation, input: String) -> Option<String> {
         input,
         result: sender,
     };
-    // This call is already on the client's background shadow worker. Waiting for one slot retains at most one job;
-    // the main thread never enters this function. The result wait below is bounded independently.
-    worker().lock().ok()?.send(job).ok()?;
+    // Both lock acquisition and queue insertion are bounded. A full queue or a stuck worker drops only this
+    // diagnostic call; it cannot strand another Kotlin worker holding more question/answer content.
+    lock_worker()?.try_send(job).ok()?;
     receiver.recv_timeout(Duration::from_secs(1)).ok().flatten()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::sync::{Arc, mpsc};
 
     #[test]
     fn real_worker_projects_and_displays_without_retaining_an_input_queue() {
@@ -141,5 +151,38 @@ mod tests {
         worker
             .join()
             .expect("the controlled worker must finish without a panic");
+    }
+
+    #[test]
+    fn a_stuck_worker_and_a_full_queue_do_not_hold_the_caller_lock_forever() {
+        let mutex = Arc::new(Mutex::new(()));
+        let _guard = mutex.lock().expect("the test must hold the worker-shaped lock");
+        let (result_sender, result_receiver) = mpsc::sync_channel(0);
+        let waiting = Arc::clone(&mutex);
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(20);
+            let acquired = loop {
+                if let Ok(_guard) = waiting.try_lock() {
+                    break true;
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::yield_now();
+            };
+            result_sender.send(acquired).expect("the timed attempt must finish");
+        });
+        assert_eq!(result_receiver.recv_timeout(Duration::from_secs(1)), Ok(false));
+        let (sender, _receiver) = mpsc::sync_channel::<Job>(0);
+        let (result, _) = mpsc::sync_channel(0);
+        assert!(
+            sender
+                .try_send(Job {
+                    operation: Operation::Display,
+                    input: "a full queue must reject this input".to_owned(),
+                    result,
+                })
+                .is_err()
+        );
     }
 }

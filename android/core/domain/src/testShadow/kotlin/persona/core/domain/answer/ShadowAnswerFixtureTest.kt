@@ -21,7 +21,7 @@ import persona.core.contracts.Interaction
 import persona.core.contracts.JsonCodec
 import persona.core.rustcore.RustCoreAnswer
 
-/** Replays the unchanged 15 + 8 fixtures through the current Kotlin path and the real host JNI boundary. */
+/** Replays the current 15 + 9 fixtures through the current Kotlin path and the real host JNI boundary. */
 class ShadowAnswerFixtureTest {
     private val root = generateSequence(File(".").canonicalFile) { it.parentFile }
         .firstOrNull { File(it, ".git").exists() && File(it, "android").isDirectory } ?: error("Cannot locate repository")
@@ -48,7 +48,7 @@ class ShadowAnswerFixtureTest {
                 totals[file] = totals.getOrDefault(file, 0) + 1
             }
         }
-        assertEquals(mapOf("questions.json" to 15, "recommended.json" to 8), totals)
+        assertEquals(mapOf("questions.json" to 15, "recommended.json" to 9), totals)
         println("Kotlin and real host-JNI answer replay: ${totals.values.sum()} complete expected objects; known differences are asserted separately")
     }
 
@@ -138,7 +138,7 @@ class ShadowAnswerFixtureTest {
             "recommended.json" to setOf(
                 "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
                 "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
-                "recommended_trims_prefix_space", "recommended_unspaced",
+                "recommended_trims_prefix_space", "recommended_unspaced", "recommended_corefoundation_boundary",
             ),
         )
         val knownDifferences = emptyMap<String, JsonObject>()

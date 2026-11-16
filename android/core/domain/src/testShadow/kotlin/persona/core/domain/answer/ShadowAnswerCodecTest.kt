@@ -33,8 +33,8 @@ class ShadowAnswerCodecTest {
         val kotlin = shadow.display("​ A\n (Recommended)")
         shadow.awaitIdle()
         assertTrue(kotlin.recommended)
-        assertEquals("​ A", kotlin.text)
-        assertEquals(reports.map { it.rule }.toString(), true, reports.any { it.rule == "display" })
+        assertEquals("A\n", kotlin.text)
+        assertEquals(reports.map { it.rule }.toString(), true, reports.none { it.rule == "display" })
         assertEquals(reports.map { it.rule }.toString(), true, reports.none { it.rule == "rust-failure" || it.rule == "rust-output" })
     }
 
