@@ -109,6 +109,21 @@ struct AssistantStarterModelsTests {
         #expect(model.options(for: changed).isEmpty)
     }
 
+    @Test func aMissingFirstModelCatalogKeepsLaunchersSelectableAndAllowsRetry() async {
+        let hub = FakeHub()
+        hub.on("GET", launchersPath, json: #"{"launchers":[{"name":"team","model":"chosen"},{"name":"other"}]}"#)
+        hub.on("GET", modelsPath) { _ in throw APIError(status: 404, message: "Model catalog unavailable") }
+        let model = starter(hub, cache: AssistantStarterCache())
+        let source = AssistantStarterModels.source(box, launcher: "team", fallback: nil)
+        #expect(!(await model.load(box, launcher: "team", fallback: nil)))
+        #expect(model.launchers.map(\.name) == ["team", "other"])
+        #expect(model.retained("high", source: source) == "high")
+        hub.on("GET", modelsPath, json: catalog())
+        #expect(await model.load(box, launcher: "team", fallback: nil))
+        #expect(model.options(for: source).map(\.id) == ["low", "high"])
+        #expect(hub.sent("GET", modelsPath).count == 2)
+    }
+
     @Test func onlyExplicitlyKnownEmptyCapabilitiesClearEffort() async {
         let hub = FakeHub()
         hub.on("GET", launchersPath, json: launcherJSON())

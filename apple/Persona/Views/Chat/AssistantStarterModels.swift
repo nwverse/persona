@@ -98,12 +98,13 @@ nonisolated enum AssistantStarterEffort {
             let response = try await deps.launchers(machine, manager, refresh)
             guard requestID == request, !Task.isCancelled else { return false }
             let listed = response.launchers.filter(\.runsAssistant)
+            // Available launchers remain selectable even if this launcher's model catalog is temporarily unavailable.
+            launchers = listed
             guard let name = launcher ?? response.default?.launcher ?? fallback,
                   let api = deps.api(machine.group)?.manager(manager) else { return false }
             let list = try await api.launcherModels(machine: machine.id, launcher: name, refresh: refresh, purpose: "assistant")
             guard requestID == request, !Task.isCancelled else { return false }
             let known = AssistantStarterEffort.knownOptions(launcher: name, response: response, list: list)
-            launchers = listed
             efforts = known ?? previous?.efforts ?? []
             if known != nil || previous?.efforts != nil {
                 cache.keep(.init(launchers: listed, efforts: known ?? previous?.efforts), for: source)
