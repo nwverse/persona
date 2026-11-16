@@ -37,7 +37,7 @@ emulator results never fill the physical-device column.
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table and final-marker source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, and 14 final-marker expectations | Split 21; repair not implemented | Split 21 on macOS; repair not implemented | Split 21; repair not implemented | Split NAPI unexecuted; repair NAPI not implemented | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | Not implemented | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
 checks. `:core:rustcore:test` is the real host-JNI suite; `:core:data` / `:feature:agents` host tests cover their
@@ -127,7 +127,9 @@ projection to keep the image entry's owner, compares complete post-overlay and s
 real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
 path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
 optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
-full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
+`full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution. SwiftPM
+replays the same bounded leaf on macOS (#9237 / #9246): 28 complete post-overlay objects and eight no-line boundaries.
+Its full-suite pass after #9252 is not separately claimed by this audit; no real-NAPI, production or device result follows.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test

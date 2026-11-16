@@ -575,7 +575,8 @@ Phase 3 lands in several PRs.
     Linux C ABI evidence, not Swift, Apple ABI, NAPI or device acceptance.
   - The two source-order layout cases, rendered lines, incremental rebuilds and production adapters are outside this
     slice. Static turns now have C ABI and macOS SwiftPM replay (#8912, #8952), but no real-NAPI replay; viewed images
-    have C ABI replay (#9017), but no SwiftPM or ArkTS host projection. Both turn comparisons deliberately ignore
+    have C ABI replay (#9017) and macOS SwiftPM replay of 28 complete objects plus eight no-line boundaries (#9237 /
+    #9246), but no ArkTS host projection. Both turn comparisons deliberately ignore
     rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
     `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
