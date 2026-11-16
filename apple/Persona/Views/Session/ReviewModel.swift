@@ -43,12 +43,13 @@ nonisolated struct ReviewPick: Hashable, Sendable {
 }
 
 nonisolated enum ReviewLogic {
-    /// A file's hunks as rows: each hunk's header, then its lines numbered from where it starts.
+    /// A file's hunks as rows: each hunk's header, then its lines numbered from where it starts. A hunk git names no
+    /// function for (every hunk of a new file) has no header row, as on the web, not an empty band (#8733).
     static func rows(_ file: GitReview.File) -> [ReviewRow] {
         var out: [ReviewRow] = []
         var i = 0
         for h in file.hunks ?? [] {
-            out.append(ReviewRow(kind: .hunk(h.header), index: -1))
+            if !h.header.isEmpty { out.append(ReviewRow(kind: .hunk(h.header), index: -1)) }
             for l in CodeDiffModel.lines(oldStart: h.oldStart, newStart: h.newStart, raw: h.lines) {
                 out.append(ReviewRow(kind: .line(l), index: i))
                 i += 1

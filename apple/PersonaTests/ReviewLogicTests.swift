@@ -99,7 +99,11 @@ struct ReviewLogicTests {
         #expect(headers == ["", "", "item 18", ""])
         #expect(r.base?.ref == "origin/main" && r.base?.hash.isEmpty == false)
         let notes = try #require(r.files.first { $0.path == "notes.txt" })
-        #expect(ReviewLogic.rows(notes).count == 2 + 5 + 8)
+        // only the named hunk has a header row: an empty header draws no band
+        let rows = ReviewLogic.rows(notes)
+        #expect(rows.count == 1 + 5 + 8)
+        #expect(rows.compactMap { r -> String? in if case .hunk(let h) = r.kind { return h } else { return nil } } == ["item 18"])
+        #expect(rows.filter { $0.index >= 0 }.map(\.index) == Array(0..<13))
     }
 
     @Test func readsARepositoryWithNoCommitYet() throws {
