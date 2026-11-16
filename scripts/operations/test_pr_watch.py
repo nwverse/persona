@@ -238,6 +238,32 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state["retry_reason"], "semantic_review")
         self.assertGreater(state["retry_after"], time.time() + 3000)
 
+    def test_review_failure_does_not_reset_the_attempt_budget_before_backoff(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", review_attempts=1,
+                               retry_reason="semantic_review", retry_after=0,
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", side_effect=pr_watch_common.WatchError("timeout")) as review:
+            self.watcher.process("example/one", 7)
+        self.assertEqual(review.call_count, 2)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["review_attempts"], 3)
+        self.assertGreater(self.watcher.state.get("example/one", 7)["retry_after"], time.time() + 3000)
+
+    def test_verification_repair_backoff_resets_only_after_it_expires(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", repair_attempts=3,
+                               retry_reason="verification_repair", retry_after=0,
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("failed")), \
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_attempts"], 1)
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \

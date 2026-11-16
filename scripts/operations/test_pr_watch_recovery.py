@@ -136,7 +136,7 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(execute.call_args_list[1].args[0],
                          ["git", "ls-remote", "origin", "refs/heads/main"])
         with patch.object(pr_watch_common, "run", side_effect=[
-                subprocess.CompletedProcess([], 2, "", "rename refused"),
+                subprocess.CompletedProcess([], 2, "", "rename detection was skipped"),
                 subprocess.CompletedProcess([], 0, "b" * 40 + "\trefs/pull/7/head\n", ""),
                 subprocess.CompletedProcess([], 0, "", "")]) as execute:
             self.assertEqual(pr_watch_common.checked(
@@ -147,6 +147,18 @@ class RecoveryIntegrationTests(unittest.TestCase):
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 128, "", "fatal: corrupt")):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
+
+        with patch.object(pr_watch_common, "run", side_effect=[
+                subprocess.CompletedProcess([], 2, "", "rename detection refused"),
+                subprocess.CompletedProcess([], 0, "a" * 40 + "\trefs/heads/main^{}\n" + "b" * 40 + "\trefs/heads/main\n", "")]):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
+        with patch.object(pr_watch_common, "run", side_effect=[
+                subprocess.CompletedProcess([], 128, "", "fatal: corrupt"),
+                subprocess.CompletedProcess([], 0, "a" * 40 + "\trefs/heads/main\n", "")]) as execute:
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
+        self.assertEqual(execute.call_count, 1)
 
     def test_repair_commit_message_has_no_tool_attribution(self):
         source = (HERE / "pr_watch_repair.py").read_text()

@@ -105,10 +105,9 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
     result = run(argv, cwd=cwd, timeout=timeout, environ=environ, input_text=input_text)
     if result.returncode:
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
-        if argv[:2] == ["git", "fetch"]:
-            # Fetch rejects an up-to-date refspec when a newer object triggers
-            # rename detection, then exits 2 without changing that ref. This is
-            # a refused ref update, not permission to use an unverified SHA.
+        if argv[:2] == ["git", "fetch"] and "rename detection" in detail:
+            # Only a refused update caused by rename detection can be checked
+            # this way. Other Git failures retain their original diagnostic.
             remote_name = argv[3] if len(argv) > 3 else "origin"
             refspecs = [refspec.split(":", 1)[0].lstrip("+") for refspec in argv[4:]]
             if remote_name.startswith("-") or any(refspec.startswith("-") for refspec in refspecs):
@@ -116,11 +115,12 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
             refreshed = run(["git", "ls-remote", remote_name, *refspecs], cwd=cwd,
                             timeout=60, environ=environ)
             if refreshed.returncode == 0:
-                remote = [line.split()[0] for line in refreshed.stdout.splitlines() if line.strip()]
-                if len(remote) == 1 and SHA.fullmatch(remote[0]):
-                    checked(["git", "cat-file", "-e", remote[0] + "^{commit}"], cwd=cwd,
+                entries = [line.split(None, 1) for line in refreshed.stdout.splitlines() if line.strip()]
+                if (len(entries) == 1 and len(entries[0]) == 2
+                        and entries[0][1] in refspecs and SHA.fullmatch(entries[0][0])):
+                    checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
                             timeout=60, environ=environ)
-                    return remote[0] + "\n"
+                    return entries[0][0] + "\n"
         raise WatchError("%s failed (%s): %s" % (Path(argv[0]).name, result.returncode, detail))
     return result.stdout
 

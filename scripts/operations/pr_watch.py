@@ -681,11 +681,12 @@ class Watcher:
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("retry_after", 0) > time.time():
             return
         if old.get("head") == head and old.get("evidence_key") == evidence_key \
-                and old.get("retry_reason") == "semantic_review" \
-                and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT:
-            # The completed backoff permits a fresh independent review budget.
+                and old.get("retry_reason") in ("semantic_review", "verification_repair") \
+                and ((old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
+                     or (old.get("retry_reason") == "verification_repair" and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
+            # The completed backoff permits a fresh independent attempt budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                 review_attempts=0, retry_after=0)
+                                 review_attempts=0, repair_attempts=0, retry_after=0)
         if old.get("outcome") in ("continuation", "repair_published", "base_updated") \
                 and old.get("head") == head and old.get("evidence_key") == evidence_key:
             return
@@ -826,8 +827,6 @@ class Watcher:
                                    retry_reason="semantic_review",
                                    failure=current.get("failure") or "semantic review is unavailable")
                     return False
-                if current.get("outcome") == "retry" and current.get("retry_reason") == "semantic_review":
-                    review_attempts = 0
                 findings = None
                 for attempt in range(INFRASTRUCTURE_ATTEMPT_LIMIT - review_attempts):
                     try:
