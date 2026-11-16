@@ -75,6 +75,7 @@ internal class AgentsViewModel(
      */
     listContext: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext,
     archiveService: AgentArchives? = null,
+    private val listAdapter: persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create(),
 ) : ViewModel() {
     val archives = archiveService?.let { api -> AgentArchivesState(api, viewModelScope) { key, archived ->
         if (archived) bindings?.onSessionClosed?.invoke(key)
@@ -223,6 +224,7 @@ internal class AgentsViewModel(
         combine(settings, groupFilter, assistant, ::Triple),
         combine(operationState, todosFlow.combine(directionsFlow, ::Pair), todosSupportedFlow, ::Triple)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todosAndTree, todosSupported) ->
         val (todos, directions) = todosAndTree
+        val now = Instant.now()
         // The current assistant's (the hub's lists are every manager's, each row with its own).
         val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
         val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
@@ -242,12 +244,14 @@ internal class AgentsViewModel(
         // Server row search uses complete index text; searching the truncated summary again would lose matches.
         // A paged list: the hub matched the words ([hubQuery]); the conditions (machine:, is:pinned…) are checked here.
         val projectionSettings = if (pagination.paged) effective.copy(query = AgentQuery.parse(effective.query).conditions) else effective
-        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept), directions)
+        val sorted = scopedAgentList(rows, knownMachines, prefs, projectionSettings, todos, openedRowsOfTheirOwn(previous, effective.kept), directions,
+            listAdapter, now = now)
         val result = retainOpenedRows(sorted, previous, effective.kept).also { previous = it }
         val all = scopedAgentList(rows, knownMachines, prefs,
-            projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos, directions = directions)
+            projectionSettings.copy(quick = AgentQuickFilter.All, kept = emptySet()), todos, directions = directions, now = now)
         // The chips count what each computer would show under the current range, search and quick filter.
-        val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos, directions = directions)
+        val everywhere = scopedAgentList(rows, knownMachines, prefs, projectionSettings.copy(machineFilter = "", kept = emptySet()), todos,
+            directions = directions, now = now)
             .groups.flatMap { it.rows }.filterNot { it.isNestedSubtask }
         AgentsPageState(sessions, knownMachines, prefs, effective, result, all.groups.sumOf { group -> group.rows.count { !it.isNestedSubtask } },
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),

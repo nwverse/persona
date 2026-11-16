@@ -129,6 +129,24 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## Android Agents-list adapter and sort shadow (#8954)
+
+`:feature:agents` supplies its existing scoped list projection to `AgentListAdapter`. Kotlin remains authoritative; the
+default factory and the entire Release source set return only `KotlinAgentListAdapter`, with no observer or shadow class.
+The optional DEBUG observer uses `projectSort` on its own FIFO worker after the Kotlin result has returned. Enable it in
+JVM tests with `-Ppersona.sort=shadow`, or launch `DebugEntryActivity` with `--es debug.sortShadow on`, then force-stop
+and relaunch (`off` disables it). Reports use the `PersonaCoreShadow` tag and hold only `agents-list-sort`, a rule code
+and counts/flags/enum values: never titles, paths, queries, identifiers or exception messages.
+
+The core's `state`, `machine` and `space` projections compare complete published outputs. The default `Repo` grouping
+uses the core's `space` projection and compares project/leaf ordering without pretending the core owns Android's
+repository-tree, to-do, direction, history or multi-hub grouping extensions; unsupported inputs are named by rule, not
+silently called parity. Input conversion includes the core's `held` field when the host supplies iOS `heldInList` state.
+The production Kotlin path still owns `retainOpenedRows`, history and children. A caller-supplied instant makes `since:`
+searches deterministic. The 30 checked-in `agents_list` fixtures run through both production Kotlin and the real host
+JNI projection; conversion, redaction, native failure, production entry and Release isolation have focused JVM tests.
+This is host evidence only: no physical-device shadow run, UI change, Rust promotion or iOS behavior change.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes

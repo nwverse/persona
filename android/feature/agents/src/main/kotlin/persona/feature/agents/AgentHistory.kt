@@ -15,7 +15,14 @@ internal fun scopedAgentList(
     todos: List<persona.core.contracts.Todo> = emptyList(), ownRows: Set<String> = emptySet(),
     /** The hub's direction tree, for "By direction" (#4352). */
     directions: persona.core.contracts.DirectionTree? = null,
+    adapter: persona.core.data.AgentListAdapter? = null,
+    held: String? = null,
+    now: java.time.Instant = java.time.Instant.now(),
 ): AgentListResult {
+    val adapted = adapter?.project(persona.core.data.AgentListAdapter.Input(
+        rows, machines, preferences.pins, preferences.mutes, settings, todos, directions, held, now,
+    ))
+    if (adapted != null) return adapted
     // The rows this range's list of running sessions draws, where it has one: a subtask among them hangs under its
     // parent only while a row above it is among them too, so a working agent whose creator was let go is not lost with
     // it (#4494, codexTaskForest). They are what scopedRootAgentList hands buildFlatAgentList, and what that draws.
