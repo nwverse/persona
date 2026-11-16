@@ -293,6 +293,22 @@ class ContinuityOperationTest {
         }
     }
 
+    @Test fun aPushedFoldMemberDoesNotDiscardDownloadedExpansionItems() = runBlocking {
+        Harness(listOf(item(1), fold(2), item(4))).use { h ->
+            h.open()
+            val held = CompletableDeferred<ItemsResponse>()
+            h.transport.fetch = { held.await() }
+            val expansion = h.scope.async { h.repository.expandFold(key, 2, 3) }
+            h.frames.run()
+            // The push replaces the fold before the range response arrives, as in the synchronous parity test.
+            h.adapter.accept(ContinuityAdapter.Input.Push(ContinuityAdapter.Batch(listOf(item(3)), "h", 3, 3)))
+            h.frames.run()
+            held.complete(ItemsResponse(listOf(item(2), item(3)), history = "h"))
+            pump(h.frames) { expansion.isCompleted }
+            assertEquals(listOf(item(2), item(3)), expansion.await())
+        }
+    }
+
     @Test fun suspendingInputDoesNotHoldTheAppliedStateLock() = runBlocking {
         Harness(listOf(fold(2))).use { h ->
             h.open()

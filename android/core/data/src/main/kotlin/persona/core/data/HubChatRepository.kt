@@ -491,7 +491,8 @@ class HubChatRepository(
             it.kind == "fold" && it.seq == fromSeq && it.fold?.throughSeq == toSeq
         } } ?: return emptyList()
         if (!synchronized(entry.activeFolds) { entry.activeFolds.add(fold.id) }) return emptyList()
-        val work = mutableSetOf<String>()
+        // Downloaded items by id, latest page wins: a changed fold's refetch replaces its discarded first page.
+        val work = LinkedHashMap<String, Item>()
         try {
             val (generation, history) = entry.inputs.withLock { entry.historyGeneration to entry.submittedHistory }
             var actions = awaitActionsAsync(entry, Input.OpenFold(fold.id), generation) ?: return emptyList()
@@ -505,13 +506,14 @@ class HubChatRepository(
                     check(history == entry.reducer.history)
                     check(page.history == null || history == null || page.history == history)
                 }
-                work += page.items.map { it.id }
+                page.items.forEach { work[it.id] = it }
                 // A changed fold can request another page even when HTTP more=false. Only the applied Ack ends it.
                 actions = awaitActionsAsync(entry, Input.Range(page.items, page.more, fold.id), generation) ?: return emptyList()
             }
-            val result = entry.lock.withLock { publish(entry); entry.reducer.items.filter { it.id in work } }
+            // Like the synchronous path, return what was downloaded even if a push removed the fold meanwhile.
+            entry.lock.withLock { publish(entry) }
             persist(entry)
-            return result
+            return work.values.toList()
         } finally { withContext(NonCancellable) {
             try { acceptAsync(entry, Input.RangeFailed(fold.id)) }
             finally { synchronized(entry.activeFolds) { entry.activeFolds.remove(fold.id) } }
