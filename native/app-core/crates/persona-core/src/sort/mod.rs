@@ -160,6 +160,9 @@ pub struct Settings {
     pub query: String,
     #[serde(default)]
     pub machine_filter: String,
+    /// Archived history may include offline rows, without making ordinary offline live sessions visible.
+    #[serde(default)]
+    pub history: bool,
     #[serde(default)]
     pub kept: Vec<String>,
     #[serde(default)]
@@ -262,6 +265,9 @@ struct Row {
     group: String,
     manager: Option<String>,
     state: AgentState,
+    /// Archive history's membership flag; ordinary offline rows remain excluded.
+    listed: bool,
+    archived: bool,
     sort_date: Option<i128>,
     is_waiting: bool,
     background_waiting: bool,
@@ -319,6 +325,8 @@ impl Row {
             group: group.to_owned(),
             manager: session.manager.clone(),
             state,
+            listed: state.is_live() || (input.settings.history && session.archived),
+            archived: session.archived,
             sort_date: sort_date.and_then(utc_timestamp),
             is_waiting: state.is_quiet() && session.is_waiting(),
             background_waiting: state == AgentState::Working && session.background_waiting,
@@ -334,7 +342,7 @@ impl Row {
     }
 
     fn stays(&self) -> bool {
-        !self.state.is_quiet() || self.pinned || self.held || self.is_waiting || self.awaits_reply()
+        !self.state.is_quiet() || self.pinned || self.held || self.is_waiting || self.awaits_reply() || self.archived
     }
 
     fn awaits_reply(&self) -> bool {
@@ -725,7 +733,7 @@ const STATE_SECTIONS: [(&str, &str); 8] = [
 ];
 
 fn state_groups(rows: &[&Row], quick: Quick, settings: &Settings, by_rank: bool, oldest_first: bool) -> Vec<Group> {
-    let live: Vec<&Row> = rows.iter().copied().filter(|row| row.state.is_live()).collect();
+    let live: Vec<&Row> = rows.iter().copied().filter(|row| row.listed).collect();
     STATE_SECTIONS
         .iter()
         .enumerate()
@@ -758,7 +766,7 @@ fn machine_groups(rows: &[&Row], input: &Input, quick: Quick, by_rank: bool) -> 
             let members: Vec<&Row> = rows
                 .iter()
                 .copied()
-                .filter(|row| row.machine_path == path && row.state.is_live())
+                .filter(|row| row.machine_path == path && row.listed)
                 .collect();
             if members.is_empty() {
                 return None;
@@ -803,7 +811,11 @@ fn plain_group(
     idle_key: Option<String>,
 ) -> Group {
     let visible_rows = if folded {
-        Vec::new()
+        members
+            .iter()
+            .filter(|row| settings.history && row.archived)
+            .map(|row| row.id.clone())
+            .collect()
     } else if quick != Quick::All {
         ids(&members)
     } else {
@@ -845,7 +857,7 @@ struct Space<'a> {
 
 fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -> (Vec<Group>, bool) {
     let mut spaces: BTreeMap<String, Space> = BTreeMap::new();
-    for row in rows.iter().copied().filter(|row| row.state.is_live()) {
+    for row in rows.iter().copied().filter(|row| row.listed) {
         let machine_path = row.machine_path.clone();
         let space = spaces
             .entry(format!("{}/{}", machine_path, row.space_id))

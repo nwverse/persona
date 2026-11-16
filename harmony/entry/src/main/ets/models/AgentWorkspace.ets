@@ -1,6 +1,7 @@
 import type { ClientModel } from './ClientModel';
 import { ResourceRow, Wire } from './Wire';
 import type { AgentListAdapter, AgentListInput, AgentListRow } from '../core/AgentListAdapter';
+import type { CoreAgentListGroup } from '../core/AgentListProjection';
 import { CoreAgentListAdapter } from '../core/AgentListAdapter';
 
 interface AgentRepository {
@@ -667,7 +668,7 @@ export class AgentWorkspace {
   private refreezeAfterFilter(): void {
     if (!this.readingDetail) return;
     this.freezeSuppressed = false;
-    if (this.sourceReady()) this.frozenGroups = this.copyGroups(this.groups);
+    if (this.sourceReady() || this.groups.length > 0) this.frozenGroups = this.copyGroups(this.groups);
   }
 
   private rebuild(): void {
@@ -683,18 +684,19 @@ export class AgentWorkspace {
     if (this.client) this.syncSelected(this.client);
     const byId = new Map<string, ResourceRow>();
     this.sourceRows.forEach((row) => byId.set(coreRowId(row), row));
-    if (this.readingDetail && !this.freezeSuppressed && !this.frozenGroups && this.groups.length > 0) {
-      this.frozenGroups = this.copyGroups(this.groups);
-    }
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
+      const frozenIds = new Set<string>(this.frozenGroups.flatMap((group) => group.memberIds));
+      const rowsById = new Map<string, ResourceRow>();
+      groups.forEach((group) => group.visible_rows.forEach((id) => {
+        if (frozenIds.has(id)) rowsById.set(id, byId.get(id));
+      }));
       this.groups = this.frozenGroups.map((group) => {
         const copy = this.copyGroup(group);
         const projected = groups.find((entry) => entry.id === group.id);
         if (projected) copy.folded = projected.folded;
-        copy.rows = group.memberIds.map((id) => byId.get(id)).filter((row): row is ResourceRow => !!row && row.state !== 'offline');
+        copy.rows = group.memberIds.filter((id) => rowsById.has(id)).map((id) => rowsById.get(id));
         return copy;
       }).filter((group) => group.rows.length > 0 || group.totalRowCount > 0);
-      this.frozenGroups = this.copyGroups(this.groups);
       return;
     }
     this.groups = groups.map((group) => {
@@ -731,7 +733,7 @@ export class AgentWorkspace {
         return current;
       }) || [],
       coreSettings: {sort: 'state', folded: this.folded, expanded_idle: this.expandedIdle, expanded_quiet: this.expandedQuiet,
-        compact: false, now: new Date().toISOString(), held: this.heldSession},
+        compact: false, history: this.history, now: new Date().toISOString(), held: this.heldSession},
       preferencesFor: (row: AgentListRow) => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow) => this.machineIdentity(row.source as ResourceRow),
       machineName: (row: AgentListRow) => {

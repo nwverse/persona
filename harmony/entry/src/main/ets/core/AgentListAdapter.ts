@@ -48,7 +48,7 @@ export function coreAgentSortInput(input: AgentListInput): CoreSortInput {
     pins: {spaces: pinsSpaces, sessions: pinsSessions}, mutes: {spaces: mutesSpaces, sessions: mutesSessions, allowed: mutesAllowed},
     hub_preferences: hubPreferences,
     manager_preferences: managerPreferences,
-    settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: machineFilter, kept: input.kept}};
+    settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: machineFilter, kept: input.kept, history: input.history}};
 }
 
 export function coreMachineFilter(input: AgentListInput): string | undefined {

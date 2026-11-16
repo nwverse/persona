@@ -94,3 +94,21 @@ fn manager_preferences_and_held_are_owner_qualified() {
     assert_eq!(projection.groups[1].rows, ["hub|beta|shared|second"]);
     assert!(!projection.groups[1].rows.contains(&"hub|alpha|shared|first".to_owned()));
 }
+
+#[test]
+fn archived_offline_rows_are_visible_only_in_explicit_history() {
+    let mut value = input("machine", "");
+    value["sessions"][0]["state"] = json!("offline");
+    value["sessions"][0]["status"] = json!("offline");
+    value["sessions"][0]["archived"] = json!(true);
+    let without_history: Input = serde_json::from_value(value.clone()).expect("input");
+    assert_eq!(persona_core::sort::project(&without_history).groups.len(), 1);
+    value["settings"]["history"] = json!(true);
+    let with_history: Input = serde_json::from_value(value).expect("history input");
+    let groups = persona_core::sort::project(&with_history).groups;
+    assert!(
+        groups
+            .iter()
+            .any(|group| group.rows.contains(&"hub|alpha|shared|first".to_owned()))
+    );
+}

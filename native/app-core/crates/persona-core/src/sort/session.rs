@@ -80,6 +80,9 @@ pub struct Session {
     pub attention_reason: Option<String>,
     #[serde(default)]
     pub assistant: bool,
+    /// A persisted archive snapshot, whose offline state is historical rather than live membership.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub awaits_reply: bool,
     #[serde(default)]
