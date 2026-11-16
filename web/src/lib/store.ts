@@ -165,10 +165,10 @@ function set(patch: Partial<State>) {
   // Most sessions never encounter a deletion: only filter affected collections once one is known.
   if (hasDeletedConversations()) {
     for (const [mid, list] of Object.entries(patch.sessions ?? {})) {
-      if (list.some((s) => !availableConversation(s))) next.sessions = { ...next.sessions, [mid]: list.filter(availableConversation) };
+      if (!list.every(availableConversation)) next.sessions = { ...next.sessions, [mid]: list.filter(availableConversation) };
     }
-    if (patch.sessionSummaries?.some((s) => !availableConversation(s))) next.sessionSummaries = next.sessionSummaries.filter(availableConversation);
-    if (patch.assistant?.conversations.some((s) => !availableConversation(s))) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
+    if (patch.sessionSummaries?.every(availableConversation) === false) next.sessionSummaries = next.sessionSummaries.filter(availableConversation);
+    if (patch.assistant?.conversations.every(availableConversation) === false) next.assistant = { ...patch.assistant, conversations: patch.assistant.conversations.filter(availableConversation) };
   }
   state = holdSeen(next, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);

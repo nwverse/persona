@@ -266,7 +266,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     };
   }, [asked, scope, currentScope]);
   useEffect(() => { setFound((f) => f.answer ? { ...f, answer: { ...f.answer, results: f.answer.results.filter((r) => !conversationDeleted(r.machine_id, r.session_id)) } } : f); }, [revision]);
-  const said = { answer: asked && found.q === asked && found.scope === scope ? found.answer : undefined };
+  const answer = asked && found.q === asked && found.scope === scope ? found.answer : undefined;
   const hits = useMemo((): Row[] => {
     if (mode !== "jump") return [];
     const query = text.toLowerCase();
@@ -287,7 +287,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     }
     // what the manager found: a chat found by a message opens at it (not one found by its title); one not listed here
     // (archived) is the result's own row
-    for (const r of said.answer?.results ?? []) {
+    for (const r of answer?.results ?? []) {
       if (conversationDeleted(r.machine_id, r.session_id)) continue;
       const key = `j:${r.session_id}`;
       const hit = r.hits[0];
@@ -323,7 +323,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
     let others = 0;
     const window = all.filter((row) => remoteKeys.has(row.key) || others++ < 40);
     return [...recentRows, ...savedRows, ...orderGroups<Row & { score: number }>([window, mail, go]).flat()];
-  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, said.answer, saved.state.document, saved.state.unsupported, runtimeSearch.hits, runtimeSearch.loaded, runtimeSearch.supported, runtimeSearch.loading, runtimeSearch.loadingMore, runtimeSearch.hasMore, runtimeSearch.error, runtimeSearch.moreError, runtimeSearch.mergeHits, revision]);
+  }, [mode, text, operators, agentSearch, sessions, assistant, machines, pins, interactions, machinePanes, inboxItems, places, recentChats, answer, saved.state.document, saved.state.unsupported, runtimeSearch.hits, runtimeSearch.loaded, runtimeSearch.supported, runtimeSearch.loading, runtimeSearch.loadingMore, runtimeSearch.hasMore, runtimeSearch.error, runtimeSearch.moreError, runtimeSearch.mergeHits, revision]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {
