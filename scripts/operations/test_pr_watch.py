@@ -272,6 +272,21 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(review.call_count, 2)
         self.assertEqual(self.watcher.state.get("example/one", 7)["base"], new_base)
 
+    def test_review_only_findings_never_push_an_automatic_repair(self):
+        self.config["repositories"][0]["merge"] = False
+        self.watcher = pr_watch.Watcher(self.config, verbose=False)
+        self.watcher.worktree = lambda *args: self.root / "checkout"
+        self.watcher.remove_worktree = lambda *args: None
+        findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(self.watcher, "repair_findings") as repair, \
+                patch.object(pr_watch_repair, "commit_and_push_repair") as publish:
+            self.watcher.process("example/one", 7)
+        repair.assert_not_called()
+        publish.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "findings")
+
     def test_snapshot_failure_does_not_mark_head_failed(self):
         with patch.object(pr_watch, "pr_snapshot", side_effect=pr_watch_common.WatchError("closed")), \
                 patch.object(self.watcher.state, "put") as put:

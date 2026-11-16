@@ -636,11 +636,6 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     if not isinstance(verify_config, dict) or not verify_config:
         raise WatchError("automatic repair requires the repository's real verification configuration")
     follows_main = allow_merge_only and original_pr is not None
-    if pr.get("baseRefName") == "main" and not pr.get("isCrossRepository"):
-        # A normal repair keeps its exact verified commit and follows a base
-        # that only moved forward. The push is still an ordinary fast-forward;
-        # the new head receives a fresh review against the actual base.
-        follows_main = True
     identity_pr = original_pr or pr
     if identity_pr is not None:
         latest = pr_snapshot(repo, identity_pr["number"])

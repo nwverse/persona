@@ -208,15 +208,16 @@ class RepairIntegrationTests(unittest.TestCase):
         gh.assert_not_called()
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
 
-    def test_a_model_repair_follows_a_forward_moving_base(self):
+    def test_an_ordinary_repair_stops_when_main_moves_for_reverification(self):
         newer = self.push_main("newer")
         (self.repo / "repair.txt").write_text("repair\n")
         self.git("add", "repair.txt")
         with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
                 patch.object(pr_watch_repair, "pr_snapshot", return_value=dict(self.pr, baseRefOid=newer)):
-            pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
-                                                   {"profile": "commands", "commands": [["true"]]})
-        self.assertNotEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "head/base moved"):
+                pr_watch_repair.commit_and_push_repair("example/one", self.pr, str(self.repo), self.main, "failure",
+                                                       {"profile": "commands", "commands": [["true"]]})
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/fix/example").split()[0], self.head)
 
     def test_a_model_repair_refuses_a_rewritten_base(self):
         rewritten = self.push_main("rewritten", parent=self.base)

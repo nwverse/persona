@@ -807,8 +807,10 @@ class Watcher:
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          review_posted=not self.dry_run)
             if current.get("semantic") == "findings":
-                if self.dry_run:
-                    self.log("%s#%s has blocking semantic findings; repair is disabled in dry-run" % (repo, number))
+                if self.dry_run or not config["merge"]:
+                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                             outcome="findings")
+                    self.log("%s#%s has blocking semantic findings; repair is not enabled" % (repo, number))
                     return False
                 phase = "semantic_repair"
                 return self.repair_findings(config, pr, worktree, findings)
