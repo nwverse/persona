@@ -64,8 +64,18 @@ describe("Session info", () => {
     await show(claude);
     const rows = rowsOf();
     expect(rows.Context).toBe("1.2K tokens");
+    expect(rows.Output).toBe("0 tokens");
     expect(rows.Turns).toBe("0");
     expect(rows["Permission mode"]).toBe(modeTitle("plan"));
+  });
+
+  // Millions read as millions, not "1235K" (#9205); a context of 0 (no reply yet, or just compacted: #9207) is not known.
+  it("writes big counts in millions and leaves an unknown context out", async () => {
+    info = { session_id: "c1", model: "claude-opus-5-5", context_tokens: 0, output_tokens: 1_234_567, compactions: 1, turns: 3 };
+    await show(claude);
+    const rows = rowsOf();
+    expect(rows.Output).toBe("1.23M tokens");
+    expect(Object.keys(rows)).not.toContain("Context");
   });
 
   it("is nothing until its first open, then the same dialog from its own chunk", async () => {
