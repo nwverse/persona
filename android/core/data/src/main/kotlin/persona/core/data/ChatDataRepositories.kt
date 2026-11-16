@@ -30,6 +30,7 @@ class ChatDataRepositories private constructor(
     private val legacyDirectory: File? = null,
     transcript: (suspend (SessionKey, List<Item>) -> Unit)? = null,
     awaitingTranscript: Flow<Set<SessionKey>> = emptyFlow(),
+    continuityFactory: (String, (ContinuityAdapter.Applied) -> Unit) -> ContinuityAdapter = ContinuityAdapters::create,
 ) {
     /** Reuses the pairing's database and lifetime; closing a view never discards its cache. */
     constructor(
@@ -38,9 +39,10 @@ class ChatDataRepositories private constructor(
         connection: HubConnection,
         foreground: StateFlow<Boolean>,
         preferenceTransport: HubPreferencesTransport? = null,
+        continuityFactory: (String, (ContinuityAdapter.Applied) -> Unit) -> ContinuityAdapter = ContinuityAdapters::create,
     ) : this(data.items, File(data.noBackupDirectory, "lists"), transport, connection, data.coroutineScope,
         foreground, preferenceTransport, transcript = data.messages::observeTranscript,
-        awaitingTranscript = data.messages.awaitingTranscript) {
+        awaitingTranscript = data.messages.awaitingTranscript, continuityFactory = continuityFactory) {
         data.checkActive()
         data.openWindowReconciliation.register(scope, chats::reconcileOpened)
         data.messages.connectActivity { key ->
@@ -92,7 +94,7 @@ class ChatDataRepositories private constructor(
     val shownRepository = sessions.showing(shownSessions)
     val chats = HubChatRepository(transport, connection, items, sessions, scope,
         foreground, seen = preferenceTransport?.let { remote -> { key -> remote.seen(key) } }, transcript = transcript,
-        awaitingTranscript = awaitingTranscript, releaseAfterMillis = CLOSED_CHAT_RELEASE_MILLIS)
+        awaitingTranscript = awaitingTranscript, releaseAfterMillis = CLOSED_CHAT_RELEASE_MILLIS, continuityFactory = continuityFactory)
 
     suspend fun close(discard: Boolean = false) = withContext(NonCancellable + Dispatchers.IO) {
         job.cancelAndJoin()

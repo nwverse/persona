@@ -279,6 +279,15 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "desktop/scripts/link-real-common.mjs": {
+      "reason": "Receipt redaction retains the exact legacy pairing URL scheme and environment prefix accepted by existing clients.",
+      "tokens": [
+        "JARVIS_",
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "desktop/src/link-contract.cts": {
       "reason": "Exact OS URL scheme retained for installed clients and existing pairing links.",
       "tokens": [
@@ -496,6 +505,14 @@
       "tokens": [
         "jarvis",
         "jarvis-blob"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/native-ui-fixture.py": {
+      "reason": "Native UI fixture verifies that the deployed operation header preserves the legacy identity accepted by existing hubs.",
+      "tokens": [
+        "X-Jarvis-Op-Id"
       ],
       "path_tokens": [],
       "external_refs": []

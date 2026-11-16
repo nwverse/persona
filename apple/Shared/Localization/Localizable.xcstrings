@@ -80523,6 +80523,28 @@
         }
       }
     },
+    "Leave it empty to name it automatically." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave it empty to name it automatically."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空欄のままにすると、自動で名前が付きます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留空则自动命名。"
+          }
+        }
+      }
+    },
     "Leave Worktree" : {
       "localizations" : {
         "en" : {
