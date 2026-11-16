@@ -407,22 +407,21 @@ func (g *gate) changed() {
 // httpError is an answer other than 200. body keeps the established clipped text; the full parsed envelope is retained
 // for failure classification and gate logs.
 type httpError struct {
-	status          int
-	body            string
-	retryAfter      time.Duration
-	retryAfterGiven bool
-	code            string
-	message         string
-	errorType       string
-	envelope        bool
-	noRetry         bool
+	status     int
+	body       string
+	retryAfter time.Duration
+	code       string
+	message    string
+	errorType  string
+	envelope   bool
+	noRetry    bool
 }
 
 func newHTTPError(resp *http.Response, raw []byte) *httpError {
 	code, message, errorType, envelope := gatewayErrorDetailsWithType(raw)
-	after, validAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+	after := parseRetryAfter(resp.Header.Get("Retry-After"))
 	return &httpError{status: resp.StatusCode, body: strings.TrimSpace(string(raw[:min(len(raw), 300)])),
-		retryAfter: after, retryAfterGiven: validAfter, code: code, message: message, errorType: errorType,
+		retryAfter: after, code: code, message: message, errorType: errorType,
 		envelope: envelope, noRetry: noRetryHeader(resp.Header)}
 }
 
@@ -472,10 +471,10 @@ func Transient(err error) bool {
 // parseRetryAfter reads digits-only Retry-After seconds or an HTTP date. Malformed and absent values are not a
 // cooldown; callers require a positive duration for the 429 quota-reset exception. Large values cap before the
 // duration multiplication can overflow.
-func parseRetryAfter(v string) (time.Duration, bool) {
+func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return 0, false
+		return 0
 	}
 	digits := true
 	for i := 0; i < len(v); i++ {
@@ -487,24 +486,23 @@ func parseRetryAfter(v string) (time.Duration, bool) {
 	if digits {
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
-			return 0, false
+			return 0
 		}
 		if n >= uint64(afterMost/time.Second) {
-			return afterMost, true
+			return afterMost
 		}
-		return time.Duration(n) * time.Second, true
+		return time.Duration(n) * time.Second
 	}
 	t, err := http.ParseTime(v)
 	if err != nil {
-		return 0, false
+		return 0
 	}
-	return min(max(t.Sub(now()), 0), afterMost), true
+	return min(max(t.Sub(now()), 0), afterMost)
 }
 
 // retryAfter reads Retry-After: seconds or an HTTP date, returning zero when it is absent or malformed.
 func retryAfter(v string) time.Duration {
-	d, _ := parseRetryAfter(v)
-	return d
+	return parseRetryAfter(v)
 }
 
 var quotaWords = lazyre.New(`quota|usage limit|exhaust|insufficient|credit|billing`)
@@ -641,7 +639,7 @@ func classify(err error) (reason string, after time.Duration, detail string) {
 		reason = ReasonQuota
 	case h.status == http.StatusPaymentRequired:
 		reason = ReasonQuota
-	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfterGiven && h.retryAfter > 0:
+	case h.status == http.StatusTooManyRequests && h.noRetry && h.retryAfter > 0:
 		// Only a valid positive 429 cooldown is a quota reset instead of an ordinary busy answer. Other no-retry
 		// statuses retain their raw behavior; busy statuses without one still use the gate.
 		reason = ReasonQuota

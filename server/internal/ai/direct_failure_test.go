@@ -49,6 +49,9 @@ func TestDirectHTTPFailureKindsAcrossProtocols(t *testing.T) {
 		{"native numeric code retains type and message", 404, `{"type":"error","error":{"type":"not_found_error","code":40401,"message":"model: example-model"}}`, FailureModelUnavailable, false},
 		{"native endpoint 404 stays endpoint-only", 404, `{"type":"error","error":{"type":"not_found_error","message":"unknown endpoint"}}`, FailureOther, false},
 		{"upstream service unavailable is not a missing model", 404, `{"error":{"type":"api_error","message":"upstream model service unavailable"}}`, FailureOther, false},
+		{"selected model unavailable to this key", 404, `{"error":{"message":"The selected model is unavailable to this API key"}}`, FailureModelUnavailable, false},
+		{"model not available to this key", 404, `{"error":{"message":"model is not available to this API key"}}`, FailureModelUnavailable, false},
+		{"model service unavailable is not key inaccessibility", 404, `{"error":{"type":"api_error","message":"model service is unavailable"}}`, FailureOther, false},
 		{"deeper nested context code", 400, `{"error":{"error":{"code":"context_length_exceeded","message":"request rejected"}}}`, FailureContextTooLong, false},
 		{"top-level model code", 404, `{"type":"error","code":"model_not_found","message":"request rejected"}`, FailureModelUnavailable, false},
 		{"unsupported endpoint beats model wording", 404, `{"error":{"code":"unsupported_endpoint","message":"model example-model does not exist on this endpoint"}}`, FailureOther, false},
@@ -251,7 +254,7 @@ func TestDirectChatNoRetryAllowsModifiedCompatibilityRequests(t *testing.T) {
 		body        string
 	}{
 		{"max_tokens", "max_tokens", 400, `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."}}`},
-		{"stream_options", "stream_options", 400, `{"error":{"message":"Unrecognized request argument supplied: stream_options"}}`},
+		{"stream_options", "stream_options", 400, `{"error":{"code":"future_code","message":"Unrecognized request argument supplied: stream_options"}}`},
 		{"include_usage", "stream_options", 422, `{"detail":[{"loc":["body","include_usage"],"msg":"Extra inputs are not permitted"}]}`},
 		{"reasoning_effort", "reasoning_effort", 400, `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`},
 	}
@@ -321,6 +324,37 @@ func TestDirectChatNoRetryCompatibilityChangeIsBounded(t *testing.T) {
 	}
 }
 
+func TestDirectChatRecognizedCodesSkipCompatibilityRequests(t *testing.T) {
+	t.Run("budget code beats stream_options wording", func(t *testing.T) {
+		fakeClock(t)
+		body := `{"error":{"code":"budget_exhausted","message":"Unrecognized request argument supplied: stream_options"}}`
+		err, requests := directAPIError(t, "chat", http.StatusBadRequest, body)
+		requireDirectPause(t, err, ReasonQuota)
+		if requests != 1 {
+			t.Fatalf("requests = %d, want the recognized quota code to stop at 1", requests)
+		}
+	})
+	for _, tc := range []struct {
+		code string
+		want FailureKind
+	}{
+		{"model_not_found", FailureModelUnavailable},
+		{"context_length_exceeded", FailureContextTooLong},
+		{"unsupported_endpoint", FailureOther},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			body := fmt.Sprintf(`{"error":{"code":%q,"message":"Unrecognized request argument supplied: stream_options"}}`, tc.code)
+			err, requests := directAPIError(t, "chat", http.StatusBadRequest, body)
+			if requests != 1 || IsPaused(err) || FailureKindOf(err) != tc.want {
+				t.Fatalf("requests = %d, error = %v, kind = %v; want one raw request with kind %v", requests, err, FailureKindOf(err), tc.want)
+			}
+			if want := "ai: HTTP 400: " + body; err == nil || err.Error() != want {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 func TestDirectStreamFailureKinds(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -339,6 +373,7 @@ func TestDirectStreamFailureKinds(t *testing.T) {
 		{"messages whole JSON top-level numeric code", "", `{"type":"error","code":40402,"message":"model: example-model","error":{"type":"not_found_error"}}`, FailureModelUnavailable, "ai: error: not_found_error: model: example-model", false},
 		{"messages string error model wording", "", `{"error":"unknown model example-model"}`, FailureModelUnavailable, "ai: error: error: unknown model example-model", false},
 		{"messages upstream service unavailable stays transient", "", `data: {"type":"error","error":{"type":"api_error","message":"upstream model service unavailable"}}` + "\n\n", FailureOther, "ai: error: api_error: upstream model service unavailable", true},
+		{"messages model service unavailable stays transient", "", `data: {"type":"error","error":{"type":"api_error","message":"model service is unavailable"}}` + "\n\n", FailureOther, "ai: error: api_error: model service is unavailable", true},
 		{"messages unknown code context wording", "", `data: {"type":"error","error":{"type":"invalid_request_error","code":"future_code","message":"prompt is too long"}}` + "\n\n", FailureContextTooLong, "ai: error: invalid_request_error: prompt is too long", false},
 		{"messages unknown code server status unchanged", "", `data: {"type":"error","error":{"type":"api_error","code":"future_code","message":"prompt is too long"}}` + "\n\n", FailureOther, "ai: error: api_error: prompt is too long", true},
 		{"messages unsupported endpoint", "", `data: {"type":"error","error":{"type":"not_found_error","code":"unsupported_endpoint","message":"model example-model does not exist"}}` + "\n\n", FailureOther, "ai: error: not_found_error: model example-model does not exist", false},

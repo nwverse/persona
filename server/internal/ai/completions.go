@@ -50,6 +50,15 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		if resp.StatusCode != http.StatusOK {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			resp.Body.Close()
+			// Recognized machine codes always win over compatibility wording: a limit or a model/context/endpoint
+			// failure must never trigger a modified request, even when its message names a rejected field.
+			httpFailure := newHTTPError(resp, raw)
+			if _, recognized := failureKindForCode(httpFailure.code); recognized {
+				return Reply{}, false, httpFailure
+			}
+			if _, recognized := limitReasonForCode(httpFailure.code, httpFailure.message); recognized {
+				return Reply{}, false, httpFailure
+			}
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
 			// reject stream_options or reasoning_effort. Each such response leads to a modified request, not a replay
 			// of the rejected one, so X-Should-Retry: false forbids neither the modified request nor learning from it.
@@ -74,7 +83,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 				delete(body, "stream_options")
 				continue
 			}
-			return Reply{}, false, newHTTPError(resp, raw)
+			return Reply{}, false, httpFailure
 		}
 		reply, err := readCompletions(resp.Body)
 		resp.Body.Close()
@@ -201,6 +210,7 @@ func ChatRequiresCompletionTokens(raw []byte) bool {
 func ChatRejectsReasoningEffort(raw []byte) bool {
 	var envelope struct {
 		Error   json.RawMessage `json:"error"`
+		Code    json.RawMessage `json:"code"`
 		Message string          `json:"message"`
 		Detail  []struct {
 			Loc []any  `json:"loc"`
@@ -208,6 +218,9 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
+		if chatReasoningValueCode(decodeErrorCode(envelope.Code)) {
+			return false
+		}
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
 				Message json.RawMessage `json:"message"`
@@ -259,6 +272,7 @@ func chatReasoningCeilingCode(code string) bool {
 func ChatRejectsNoEffortValue(raw []byte) bool {
 	var envelope struct {
 		Error   json.RawMessage `json:"error"`
+		Code    json.RawMessage `json:"code"`
 		Message string          `json:"message"`
 		Detail  []struct {
 			Loc []any  `json:"loc"`
@@ -266,20 +280,24 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
+		if chatReasoningCeilingCode(decodeErrorCode(envelope.Code)) {
+			return false
+		}
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
-				Message string `json:"message"`
-				Param   string `json:"param"`
-				Code    string `json:"code"`
+				Message json.RawMessage `json:"message"`
+				Param   json.RawMessage `json:"param"`
+				Code    json.RawMessage `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningCeilingCode(object.Code) || strings.Contains(strings.ToLower(object.Message), "reasoning_effort_above_ceiling") {
+				code, message, param := decodeErrorCode(object.Code), decodeErrorString(object.Message), decodeErrorString(object.Param)
+				if chatReasoningCeilingCode(code) || strings.Contains(strings.ToLower(message), "reasoning_effort_above_ceiling") {
 					return false
 				}
-				if chatReasoningValueCode(object.Code) {
-					return strings.EqualFold(strings.TrimSpace(object.Param), "reasoning_effort") || chatNoEffortValueMessage(object.Message, "")
+				if chatReasoningValueCode(code) {
+					return strings.EqualFold(strings.TrimSpace(param), "reasoning_effort") || chatNoEffortValueMessage(message, "")
 				}
-				return chatNoEffortValueMessage(object.Message, object.Param)
+				return chatNoEffortValueMessage(message, param)
 			}
 			var message string
 			return json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
