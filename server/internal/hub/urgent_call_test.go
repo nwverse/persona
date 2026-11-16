@@ -108,7 +108,7 @@ func TestRingCallNoPhone(t *testing.T) {
 	if route, _ := h.push.callRouteOfID("phone"); route.Route != pushNone || route.Reason != pushNoToken {
 		t.Fatalf("call route %+v", route)
 	}
-	time.Sleep(50 * time.Millisecond)
+	// ringCall sends nothing when no phone can take calls: it returns before starting any send.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.got) != 0 {
