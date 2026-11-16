@@ -16,8 +16,6 @@ nonisolated struct NativeContinuityInput: Sendable {
     var moreAfter = false
     var rangeMore = false
     var fold: Item?
-    /// DEBUG-only observation of the caller's next scheduling decision; it never changes native transport.
-    var followsWithFill = false
 
     static func batch(_ kind: Kind, items: [Item], span: ItemSpan, backlog: Bool = false,
                       hasMore: Bool? = nil, moreAfter: Bool = false) -> Self {

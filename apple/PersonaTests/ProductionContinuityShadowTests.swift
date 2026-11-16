@@ -162,18 +162,66 @@ struct ProductionContinuityShadowTests {
         shadow.close(store)
     }
 
-    @Test func prefetchFillKeepsNativeNextFillRequestEvidence() async throws {
-        ProductionContinuityShadow.shared.installForTests()
+    @Test func completedPrefetchThenNewGapUsesItsOwnAfterRequest() async throws {
         let shadow = ProductionContinuityShadow.shared
         let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "prefetch-fill"))
         _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 1, to: 3)))
-        var prefetch = NativeContinuityInput.batch(.after, items: [item(2), item(3)], span: ItemSpan(history: "h", from: 0, to: 3))
-        prefetch.followsWithFill = true
-        _ = store.apply(prefetch)
+        // A prefetch can complete the core fill. It does not imply another native request after this synchronous call.
+        _ = store.apply(.batch(.after, items: [item(2), item(3)], span: ItemSpan(history: "h", from: 0, to: 3)))
+        let pushed = NativeContinuityInput.batch(.pushed, items: [item(5)], span: ItemSpan(history: "h", from: 5, to: 5))
+        #expect(store.apply(pushed) == .fill)
         let result = try await shadow.compare(store)
-        #expect(result.compared == 2)
+        #expect(result.compared == 3)
         #expect(result.mismatches == 0)
         shadow.close(store)
+    }
+
+    @Test func prefetchAcrossAnOccupiedNativeFillGateKeepsActualRequestEvidence() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "shadow-fill-gate-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let model = AppModel(stateFolder: folder)
+        model.linksUpForTests = false
+        model.connectOnly(.demo)
+        let key = SessionKey(machineID: "fixture", sessionID: "occupied-fill-gate")
+        let store = model.chat(key)
+        _ = store.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", from: 0, to: 1), backlog: true))
+        let responses = ContinuityFillResponses()
+        var client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "test-only"))
+        client.transport = { request in try await responses.answer(request) }
+        model.apiForTests = client
+
+        let first = Task { await model.fill(key) }
+        try await responses.waitForAfter(1)
+        // The independent HTTP prefetch is contiguous with the new push, so native calls fill after its response.
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3)))
+        #expect(model.applyPrefetch(store, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3), moreAfter: false) == .fill)
+        await model.fill(key) // The existing native fill owns this gate; there is no second transport request.
+        #expect(await responses.count == 1)
+        try await responses.release(after: 1, items: [item(2)], from: 1, to: 2, moreAfter: true)
+        await first.value
+        await model.fill(key)
+        try await responses.waitForAfter(3)
+        try await responses.release(after: 3, items: [item(4)], from: 3, to: 4)
+        _ = store.apply(.batch(.pushed, items: [item(6)], span: ItemSpan(history: "h", from: 6, to: 6)))
+        // A later prefetch completes that outstanding core request, then a new gap must ask for its own page.
+        #expect(model.applyPrefetch(store, items: [item(5), item(6)], span: ItemSpan(history: "h", from: 4, to: 6), moreAfter: false) == .none)
+        _ = store.apply(.batch(.pushed, items: [item(8)], span: ItemSpan(history: "h", from: 8, to: 8)))
+        let result = try await ProductionContinuityShadow.shared.compare(store)
+        #expect(store.items.map(\.seq) == [1, 2, 3, 4, 5, 6, 8])
+        #expect(result.compared == 7)
+        #expect(result.mismatches == 0)
+        ProductionContinuityShadow.shared.close(store)
+    }
+
+    @Test func disabledShadowDoesNotCreateAClientForDirectSchedulingInputs() {
+        let shadow = ProductionContinuityShadow()
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "disabled-shadow"))
+        shadow.install(enabled: false)
+        _ = store.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", to: 1), backlog: true, hasMore: true))
+        shadow.loadOlder(store)
+        shadow.failed(.fillFailed, in: store)
+        #expect(shadow.coreClientForTests == nil)
     }
 
     @Test func shapeCountsAndPresenceFlagsNeverCarrySequences() {
@@ -186,6 +234,46 @@ struct ProductionContinuityShadowTests {
         #expect(!shape.contains("private-history"))
         #expect(!shape.contains("1234567"))
         #expect(!shape.contains("982451653"))
+    }
+}
+
+private actor ContinuityFillResponses {
+    enum Failure: Error { case timeout, wrongRequest }
+    private var pending: [(after: Int, resume: CheckedContinuation<Data, Error>)] = []
+    var count: Int { pending.count }
+
+    func answer(_ request: LocalRequest) async throws -> Data {
+        guard request.path.hasSuffix("/items"), let value = request.query["after_seq"], let after = Int(value) else {
+            throw Failure.wrongRequest
+        }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { resume in pending.append((after, resume)) }
+        } onCancel: {
+            Task { await cancelAll() }
+        }
+    }
+
+    func waitForAfter(_ expected: Int) async throws {
+        for _ in 0..<200 {
+            if pending.contains(where: { $0.after == expected }) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await cancelAll()
+        throw Failure.timeout
+    }
+
+    func release(after: Int, items: [Item], from: Int, to: Int, moreAfter: Bool = false) throws {
+        guard let index = pending.firstIndex(where: { $0.after == after }) else { throw Failure.wrongRequest }
+        let pending = pending.remove(at: index)
+        let encoded = try items.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+        pending.resume.resume(returning: try JSONSerialization.data(withJSONObject: [
+            "items": encoded, "history": "h", "from_seq": from, "to_seq": to, "more_after": moreAfter,
+        ]))
+    }
+
+    private func cancelAll() {
+        for request in pending { request.resume.resume(throwing: Failure.timeout) }
+        pending.removeAll()
     }
 }
 

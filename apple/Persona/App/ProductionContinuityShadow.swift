@@ -73,7 +73,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private var mismatches = 0
     private var reports: [Report: Int] = [:]
 
-    init(reportSink: @escaping @Sendable (Report) -> Void) {
+    init(reportSink: @escaping @Sendable (Report) -> Void = { _ in }) {
         self.reportSink = reportSink
     }
 
@@ -151,6 +151,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     @MainActor func loadOlder(_ store: ChatStore) {
+        guard enabled.withLock({ $0 }) else { return }
         let snapshot = store.nativeSnapshot()
         let native = store.nativeResult()
         let input = Input(snapshot: snapshot, value: .event(.loadOlder), native: native, gap: nil, fold: nil, storeKey: store.key)
@@ -166,6 +167,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     @MainActor func failed(_ kind: NativeContinuityInput.Kind, in store: ChatStore, fold: Item? = nil) {
+        guard enabled.withLock({ $0 }) else { return }
         let snapshot = store.nativeSnapshot()
         let native = store.nativeResult()
         let input = Input(snapshot: snapshot, value: .event(kind, fold: fold), native: native, gap: nil, fold: fold, storeKey: store.key)
@@ -260,6 +262,10 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
     }
 
+    var coreClientForTests: PersonaCoreClient? {
+        queue.sync { client }
+    }
+
     private func core() throws -> PersonaCoreClient {
         if let client { return client }
         let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { [weak self] chat, _ in
@@ -310,14 +316,13 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             guard let kind = Self.requestKind(entry.effect) else { continue }
             requests.insert(kind)
         }
-        let filling = chats[id]?.filling == true
         let loadingOlder = chats[id]?.loadingOlder == true
         let openingFolds = chats[id]?.openingFolds ?? []
         let kind = input.value.kind
         // `.after` can finish a fill or ask for its next page; its own effects decide. `.reloaded` and failures
-        // always end it. A push never expires a response that is still outstanding.
+        // always end it. Native scheduling happens after an await and can share a fill gate, so it is not inferred here.
         if kind == .after {
-            chats[id]?.filling = input.value.followsWithFill || requests.contains(.after) || requests.contains(.latest)
+            chats[id]?.filling = requests.contains(.after) || requests.contains(.latest)
         }
         if kind == .reloaded || kind == .fillFailed {
             chats[id]?.filling = false
@@ -328,10 +333,11 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         if kind == .range || kind == .rangeFailed, let foldID = input.fold?.id {
             chats[id]?.openingFolds.remove(foldID)
         }
+        let filling = chats[id]?.filling == true
         let needed: RequestKind? = switch kind {
         case .latest, .pushed:
             switch input.gap {
-            case .fill: filling ? nil : .after
+            case .fill: filling || requests.contains(.after) ? nil : .after
             case .reload: .latest
             default: nil
             }
@@ -344,9 +350,6 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
         if let needed, !requests.contains(needed) {
             report(id, rule: "missing-request", shape: shape)
-        }
-        if kind == .latest || kind == .pushed, case .fill = input.gap, filling || requests.contains(.after) {
-            chats[id]?.filling = true
         }
         if kind == .loadOlder, loadingOlder || requests.contains(.older) {
             chats[id]?.loadingOlder = true
