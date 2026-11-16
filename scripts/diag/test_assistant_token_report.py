@@ -205,6 +205,17 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("owner", s["by_kind"])
         self.assertNotIn("private context", json.dumps(s))
 
+    def test_codex_image_wrappers_do_not_duplicate_user_round(self):
+        raw = {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "hello"}, {"type": "input_text", "text": "image metadata"},
+            {"type": "input_image", "image_url": "data:image/png;base64,example"}, {"type": "input_text", "text": "</image>"}]}}
+        item = {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "id": "u",
+                "content": [{"type": "text", "text": "hello"}, {"type": "local_image", "path": "/private"}]}}}
+        s = self.run_lines([{"type": "session_meta", "payload": {}}, raw, item])
+        self.assertEqual(s["by_kind"]["owner"]["rounds"], 1)
+        self.assertEqual(s["by_kind"]["owner"]["typed_bytes"], 5)
+        self.assertNotIn("private", json.dumps(s))
+
     def test_mixed_transcripts_report_unknown_total_without_erasing_known_row(self):
         with tempfile.TemporaryDirectory() as d:
             claude = Path(d) / "c.jsonl"

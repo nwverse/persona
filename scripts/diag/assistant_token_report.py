@@ -237,8 +237,13 @@ class Report:
         def flush():
             nonlocal pending
             if pending is not None:
-                record(*pending)
+                record(pending[0], pending[1])
                 pending = None
+
+        def matches_pending(text):
+            # A response carrying images may also contain image wrapper text absent from UserMessage. Compare the
+            # complete textual item to an entire raw text part, never to an arbitrary prefix.
+            return pending is not None and (pending[0] == text or text in pending[2])
 
         with open(path, errors="replace") as f:
             for line in f:
@@ -253,10 +258,12 @@ class Report:
                 if e.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
                     last_event = None
                     parts = p.get("content") or []
-                    text = "\n".join(x.get("text", "") for x in parts if isinstance(x, dict) and x.get("type") == "input_text")
+                    texts = [x.get("text", "") for x in parts if isinstance(x, dict) and x.get("type") == "input_text"]
+                    text = "\n".join(texts)
                     if text and not CODEX_CONTEXT.match(text):
                         flush()
-                        pending = (text, counted)
+                        has_image = any(isinstance(x, dict) and x.get("type") in ("input_image", "image") for x in parts)
+                        pending = (text, counted, texts if has_image else [])
                 elif e.get("type") == "event_msg" and p.get("type") == "item_completed":
                     item = p.get("item") or {}
                     if item.get("type") != "UserMessage" or (item.get("id") and item["id"] in seen_ids):
@@ -265,7 +272,7 @@ class Report:
                         seen_ids.add(item["id"])
                     text = "\n".join(x.get("text", "") for x in item.get("content", []) if isinstance(x, dict) and x.get("type") == "text")
                     if text and not CODEX_CONTEXT.match(text):
-                        if pending and pending[0] == text:
+                        if matches_pending(text):
                             counted = pending[1]
                             pending = None
                         else:
@@ -277,7 +284,7 @@ class Report:
                     text = p["message"]
                     if CODEX_CONTEXT.match(text):
                         continue
-                    if pending and pending[0] == text:
+                    if matches_pending(text):
                         counted = pending[1]
                         pending = None
                     else:
