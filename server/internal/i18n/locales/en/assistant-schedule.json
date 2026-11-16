@@ -28,6 +28,7 @@
   "streak_body": "Last one: {reason}. I won’t bring this up again until it goes through once.",
   "streak_unknown": "no reason given",
   "deleted_not_again": "{id}「{name}」 was deleted by the user while this run was going, so nothing was scheduled. Don't schedule it again; just finish this run.",
+  "deleted_elsewhere_not_again": "{id}「{name}」 was deleted from another conversation while this run was going, so nothing was scheduled. Don't schedule it again; just finish this run.",
   "waiting_skipped": "{name} didn't run this time: its last run is waiting for you",
   "waiting_skipped_body": "Its last run is waiting for your approval or answer. Once you handle it, the next run goes as usual. Open it to see what it needs.",
   "cron_empty": "Write a cron expression, like 0 9 * * 1-5 (minute hour day-of-month month day-of-week)",
