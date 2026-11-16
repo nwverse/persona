@@ -60,6 +60,10 @@ The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JN
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
 fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
 gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
+8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
+input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
+UI timing or connect a production Android adapter.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
