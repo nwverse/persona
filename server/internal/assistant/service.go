@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
 
@@ -49,10 +50,15 @@ type Options struct {
 	// RepositoryConfig is this manager's operator configuration file. Only its
 	// explicit repository_trusted_targets can opt private destinations in.
 	RepositoryConfig string
+	// RemoteImageCache is where the remote image route keeps the pictures it fetched (remote_image.go; a cache the
+	// directory of which may be deleted at any time); "" keeps them in no file (tests).
+	RemoteImageCache string
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
+	remoteImages *remoteimage.Fetcher
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
@@ -276,6 +282,7 @@ func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
+	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf})
 	if s.store == nil {
 		s.store = func() Store { return nil }
 	}
@@ -340,6 +347,7 @@ func New(o Options) *Service {
 	s.providerCatalogRoutes()
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
+	s.remoteImageRoutes()
 	return s
 }
 

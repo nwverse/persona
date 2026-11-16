@@ -69,6 +69,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			return nil, planInvalid{err}
 		}
 		s.resolveTaskRepo(ctx, &p.Tasks[i]) // where it runs after the card's edits (its workspace, not the plan's cwd)
+		task := &p.Tasks[i]
+		if task.Continues != "" && task.Brief == nil {
+			// Cards saved before briefs must bind the current scope before they can start.
+			if err := s.planBriefs(ctx, "", p.Conversation, p.Tasks[i:i+1]); err != nil {
+				return nil, planInvalid{err}
+			}
+		}
+		if err := s.checkContinuationScope(task); err != nil {
+			return nil, planInvalid{err}
+		}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {
@@ -128,17 +138,17 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					s.taskCard(ctx, sup, todo.ID, "") // the leader sees its task's card too; the plan's stays where it was made
 				}
 			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, sup, t)
 		} else if sup, ok := s.defaultPlanSupervisor(ctx, p.Conversation, t.Parent); ok {
 			// Any other conversation's task is its own to supervise: its signals go to the conversation that planned it,
 			// which also sees its card and reviews it. No second card when that is the planning conversation itself.
 			if t.ReuseTodo == "" && sup != p.Conversation {
 				s.taskCard(ctx, sup, todo.ID, "")
 			}
-			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, sup, t)
 		}
 		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
-			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			s.supervisePlanTask(ctx, todo.ID, p.Conversation, t)
 			continue
 		}
 		if t.ReuseTodo != "" {
@@ -160,6 +170,26 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 	}
 	return p, nil
+}
+
+// supervisePlanTask keeps a continuation's ledger in step with its brief even
+// if the scope changed between accepting the card and preparing dispatch.
+func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, t *PlanTask) {
+	if t.Continues == "" {
+		s.superviseTodo(ctx, id, supervisor, t.DoneWhen, t.ExpectMinutes)
+		return
+	}
+	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		brief, ok := s.briefOfTodo(t.Continues)
+		if !ok {
+			return false
+		}
+		v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(brief.Criteria), brief.ExpectNow
+		return true
+	})
+	if err != nil {
+		s.logf("task %s: supervision: %v", id, err)
+	}
 }
 
 // notReusable is the refusal of a todo_id: it says why, so the assistant can plan again without it.
@@ -249,6 +279,9 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	if task.Continues == id {
 		var todo Todo
 		todo, err = s.taskTodoForConversation(conversation, id)
+		if err == nil && task.Brief != nil {
+			err = s.checkContinuationScope(&task)
+		}
 		if err == nil {
 			stopped, err = s.stopContinuedTaskAgents(ctx, todo)
 		}

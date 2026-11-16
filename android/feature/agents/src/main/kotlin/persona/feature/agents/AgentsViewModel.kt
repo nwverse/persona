@@ -286,7 +286,10 @@ internal class AgentsViewModel(
             machineCounts(knownMachines, everywhere), everywhere.size, groupCounts(everySession, everyMachine, prefs, effective, ops),
             // With botmux shown, "All"'s own "Lark groups" count is it; hidden, counted without a fourth list.
             botmuxCount = if (effective.hideBotmux) botmuxCount(rows, prefs, effective)
-                else all.counts[AgentQuickFilter.Feishu] ?: 0, loaded = true).let { state ->
+                else all.counts[AgentQuickFilter.Feishu] ?: 0,
+            // Loaded as of the hub status this page was built from: [page] joins the latest status to a page that may be
+            // one throttled build behind, and a page built before the load must not say the list is in.
+            loaded = pagination.loaded).let { state ->
             // Computer projects use the same held marker as the main projection; ordinary space members stay as before.
             val spaces = agentSpaces(rows.map { it.copy(heldInList = it.id == heldSession) })
             state.copy(spaces = spaces, spacesById = spacesByGroup(result, prefs.grouping, spaces), directionsAvailable = directions != null)
@@ -309,7 +312,7 @@ internal class AgentsViewModel(
             catch (error: Exception) { _failure.value = error }
         }
     }, groupListCounts) { projected, status, _, metadata ->
-        if (!status.paged) projected.copy(loaded = status.loaded, pagination = status)
+        if (!status.paged) projected.copy(loaded = projected.loaded && status.loaded, pagination = status)
         else {
             val counts = status.counts
             val machineCounts = status.machineCounts
@@ -340,7 +343,7 @@ internal class AgentsViewModel(
                 machineTotal = machineCounts.total,
                 groupCounts = machineCounts.machine.entries.groupBy { GroupKeys.namespaceOf(it.key) }
                     .mapValues { (_, rows) -> rows.sumOf { it.value } },
-                loaded = status.loaded, pagination = status,
+                loaded = projected.loaded && status.loaded, pagination = status,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), AgentsPageState())
