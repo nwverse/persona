@@ -715,7 +715,8 @@ class Watcher:
             if self.dry_run:
                 return
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
-                                                and old.get("semantic") == "passed"):
+                                                and old.get("semantic") == "passed") \
+                    and not (old.get("outcome") == "passed_with_findings" and not old.get("success_posted")):
                 return
             # A dry run keeps semantic/test evidence but has no external side
             # effects. A live run resumes publication and the merge gate.

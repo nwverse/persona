@@ -117,6 +117,25 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("Automated independent semantic review", api.call_args_list[1].args[0][-1])
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
 
+    def test_p2_after_a_verification_failure_resumes_and_merges_without_duplicate_comments(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="passed_with_findings",
+                               semantic="passed", findings=[finding], review_posted=True,
+                               success_posted=False, verification="passed",
+                               checks=[{"name": "test", "command": ["true"], "ok": True}])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_called_once()
+        self.assertEqual(self.github.call_count, 1)
+        self.assertIn("Automated independent semantic review", self.github.call_args.args[0][-1])
+
     def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
         self.watcher.config["repositories"][0]["merge"] = False
         findings = [
