@@ -39,7 +39,8 @@ type askEnv struct {
 	readable    map[string]map[string]any // messages the bot can read back, by id
 	roots       int
 	reportDelay *int // nil emulates a Hub from before this setting
-	dmRoots     int  // new messages the bot sent into the owner's private chat
+	fullReply   bool
+	dmRoots     int // new messages the bot sent into the owner's private chat
 	clock       *fakeClock
 }
 
@@ -74,7 +75,7 @@ func newAskEnv(t *testing.T, database *db.DB) *askEnv {
 			chats = append(chats, e.home)
 		}
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: e.features, PublicURL: e.publicURL,
-			Chats: chats, HomeChat: e.home, SourceReportDelayMinutes: e.reportDelay}, nil
+			Chats: chats, HomeChat: e.home, SourceReportDelayMinutes: e.reportDelay, SourceReportFullReply: e.fullReply}, nil
 	})
 	e.f.answerApp(AppFeishu, FeishuText, func(p json.RawMessage) (any, error) {
 		var m map[string]any
@@ -195,7 +196,7 @@ func TestElsewhereOpensATopicAndATodo(t *testing.T) {
 		if want := (TodoThread{Channel: channel.Feishu, ChatID: askHome, ThreadID: "omt_home", Title: todo.Title}); todo.Thread == nil || *todo.Thread != want {
 			t.Fatalf("thread %+v, want %+v", todo.Thread, want)
 		}
-		if want := (TodoSource{Channel: channel.Feishu, ChatID: askSrc, MessageID: "om_ask1"}); todo.Source == nil || *todo.Source != want {
+		if want := (TodoSource{Channel: channel.Feishu, ChatID: askSrc, MessageID: "om_ask1", Handoff: "om_root1"}); todo.Source == nil || *todo.Source != want {
 			t.Fatalf("source %+v, want %+v", todo.Source, want)
 		}
 		if todo.Supervision == nil || todo.Supervision.Supervisor != "mask" {
@@ -906,7 +907,16 @@ func TestSourceReportWhenAccepted(t *testing.T) {
 		e.outcome(id, "已修好")
 		// Done by a path that does not read an outcome, so the wait is what the accepted todo's report depends on.
 		done := time.Now().UTC()
-		if _, ok := e.s.applyTodoRow(ctx, id, db.TodoRow{ID: id, Title: "修登录崩溃", DoneAt: &done, UpdatedAt: done}, nil); !ok {
+		row := db.TodoRow{ID: id, Title: "修登录崩溃", DoneAt: &done, UpdatedAt: done}
+		if database != nil {
+			ready := true
+			saved, err := database.UpdateTodo(ctx, id, nil, nil, &ready, done)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row = *saved
+		}
+		if _, ok := e.s.applyTodoRow(ctx, id, row, nil); !ok {
 			t.Fatal("not applied")
 		}
 		s := e.s
@@ -1142,10 +1152,10 @@ func TestSourceReportIsClaimedOnce(t *testing.T) {
 	e.ask(ownerAsk("om_c1", "/ai 修登录崩溃"))
 	id := onlyTodo(e.s).ID
 	// Another assistant on the store planned and told it first: that is in the database, not in this one's memory.
-	if ok, err := database.PlanTodoSourceReport(context.Background(), id, "别处说过了", time.Now()); err != nil || !ok {
+	if ok, err := database.PlanTodoSourceReport(context.Background(), id, "别处说过了", time.Now(), false, onlyTodo(e.s).DoneAt); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	if _, _, ok, err := database.ClaimTodoSourceReport(context.Background(), id, time.Now().Add(time.Hour), sourceReportTries); err != nil || !ok {
+	if _, _, _, ok, err := database.ClaimTodoSourceReport(context.Background(), id, time.Now().Add(time.Hour), sourceReportTries); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	e.closeDone(id)
@@ -1604,7 +1614,7 @@ func TestSourceReportClaimFollowsThePlanInTheStore(t *testing.T) {
 		t.Fatal(changed, err)
 	}
 	later := e.clock.Now().Add(time.Hour)
-	if ok, err := database.PlanTodoSourceReport(ctx, id, "别处重排的结论", later); err != nil || !ok {
+	if ok, err := database.PlanTodoSourceReport(ctx, id, "别处重排的结论", later, false, onlyTodo(e.s).DoneAt); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	e.clock.advance(sourceReportDelay + time.Second) // this one's own time: its timer finds the store's later

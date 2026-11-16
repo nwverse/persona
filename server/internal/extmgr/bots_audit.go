@@ -19,7 +19,8 @@ const (
 	auditBotPairGuessed = "bot_pair_guessed" // {fails}: the pairing was dropped after too many wrong codes
 	auditBotUnpaired    = "bot_unpaired"     // the owner was removed
 
-	auditBotSourceReportDelay = "bot_source_report_delay" // {minutes}: source-group preview window
+	auditBotSourceReportDelay     = "bot_source_report_delay"      // {minutes}: source-group preview window
+	auditBotSourceReportFullReply = "bot_source_report_full_reply" // {enabled}: forward the final answer
 
 	// {chat_id}: a group chat the owner opted in, or took out again (the /topics command, or the app's list).
 	auditBotTopicChatAdded   = "bot_topic_chat_added"

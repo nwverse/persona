@@ -44,6 +44,7 @@ export interface FeishuBotStatus {
   /** Minutes an unanswered card waits before the one nudge under it, 0 off (#6084); a hub from before leaves it out (60). */
   nudge_after?: number;
   source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli?: LarkCLIStatus;
 }
 
@@ -73,6 +74,7 @@ export interface FeishuBotUpdate {
   features?: Partial<BotFeatures>;
   nudge_after?: number;
   source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli_profile?: string;
 }
 

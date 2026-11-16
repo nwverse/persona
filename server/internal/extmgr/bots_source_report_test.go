@@ -50,3 +50,25 @@ func TestBotSourceReportDelaySetting(t *testing.T) {
 	}
 	read(10)
 }
+
+func TestBotSourceReportFullReplySetting(t *testing.T) {
+	w := newBotWorld(t)
+	const path = "/api/v1/bots/feishu"
+	const setting = "source_report_full_reply"
+	_, view := w.do(t, "GET", path, "")
+	if view[setting] != false {
+		t.Fatalf("default full reply: %v", view[setting])
+	}
+	if code, view := w.do(t, "PUT", path, `{"source_report_full_reply":true,"source_report_delay_minutes":0}`); code != 200 || view[setting] != true || view["source_report_delay_minutes"] != float64(0) {
+		t.Fatalf("could not save both settings: %d %v", code, view)
+	}
+	if status := w.feishu(t, assistantwire.FeishuStatusGet, nil); status[setting] != true {
+		t.Fatalf("full reply was not carried to the assistant: %v", status)
+	}
+	if code, _ := w.do(t, "PUT", path, `{"source_report_full_reply":false,"source_report_delay_minutes":61}`); code != 400 || !w.settings().SourceReportFullReply {
+		t.Fatalf("an invalid delay applied its full reply change: %d", code)
+	}
+	if code, view := w.do(t, "PUT", path, `{"source_report_full_reply":false}`); code != 200 || view[setting] != false || view["source_report_delay_minutes"] != float64(0) {
+		t.Fatalf("could not turn off full replies: %d %v", code, view)
+	}
+}

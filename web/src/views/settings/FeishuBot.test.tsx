@@ -533,6 +533,19 @@ describe("Feishu bot dialog", () => {
     expect(select().value).toBe("0");
   });
 
+  it("turns on the complete final answer and can turn it off again", async () => {
+    await open(saved({ source_report_full_reply: false }));
+    const toggle = () => switches().find((b) => b.getAttribute("aria-label") === t("settings-feishubot.source_report_full_title"))!;
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    for (const on of [true, false]) {
+      await act(async () => toggle().click());
+      const pending = calls.update.at(-1)!;
+      expect(pending.body).toEqual({ source_report_full_reply: on });
+      await act(async () => pending.resolve(saved({ source_report_full_reply: on })));
+      expect(toggle().getAttribute("aria-checked")).toBe(String(on));
+    }
+  });
+
   it("sets the original-group reply to immediate and restores the ten-minute preview", async () => {
     await open(saved({ source_report_delay_minutes: 10 }));
     const select = document.body.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.source_report_delay_title")}"]`)!;

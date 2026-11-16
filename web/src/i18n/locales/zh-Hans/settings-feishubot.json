@@ -108,5 +108,7 @@
   "larkcli_profile_default": "lark-cli 默认配置",
   "larkcli_profile_fixed": "{name}（由配置文件指定）",
   "feature_answer_new_card_title": "回复发成新卡片",
-  "feature_answer_new_card_detail": "一轮结束时，回复作为新卡片发在对话最下面，飞书会提醒你，进度卡原地折叠。关闭时回复写进原来的进度卡"
+  "feature_answer_new_card_detail": "一轮结束时，回复作为新卡片发在对话最下面，飞书会提醒你，进度卡原地折叠。关闭时回复写进原来的进度卡",
+  "source_report_full_title": "回传完整最终答复",
+  "source_report_full_detail": "原群里的所有人都能看到这份最终答复。关闭时，机器人只回简短结论。"
 }

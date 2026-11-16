@@ -113,18 +113,20 @@ func (s *Service) writeSourceStop(ctx context.Context, id string) (changed bool,
 
 // planSourceReport records what will be told for todo id and when, in the store and in memory; false when it was planned
 // already, stopped or told (the caller that wins shows the topic the plan).
-func (s *Service) planSourceReport(ctx context.Context, id, text string, due time.Time) (bool, error) {
+func (s *Service) planSourceReport(ctx context.Context, todo Todo, text string, due time.Time, fullReply bool) (bool, error) {
+	id := todo.ID
 	s.todos.writing.Lock()
 	defer s.todos.writing.Unlock()
 	s.todos.mu.RLock()
 	t, ok := s.todos.todos[id]
-	can := ok && t.Source != nil && !t.Source.NoReport && t.Source.ReportedAt == "" && t.Source.ReportDueAt == ""
+	can := ok && t.DoneAt != nil && t.DoneAt.Equal(*todo.DoneAt) &&
+		t.Source != nil && !t.Source.NoReport && t.Source.ReportedAt == "" && t.Source.ReportDueAt == ""
 	s.todos.mu.RUnlock()
 	if !can {
 		return false, nil
 	}
 	if st := s.todoDB(); st != nil {
-		planned, err := st.PlanTodoSourceReport(ctx, id, text, due)
+		planned, err := st.PlanTodoSourceReport(ctx, id, text, due, fullReply, todo.DoneAt)
 		if err != nil || !planned {
 			return false, err
 		}
@@ -132,6 +134,7 @@ func (s *Service) planSourceReport(ctx context.Context, id, text string, due tim
 	s.todos.mu.Lock()
 	if t, ok := s.todos.todos[id]; ok && t.Source != nil {
 		t.Source.ReportText, t.Source.ReportDueAt = text, due.UTC().Format(time.RFC3339Nano)
+		t.Source.ReportFullReply = fullReply
 	}
 	s.todos.mu.Unlock()
 	return true, nil
@@ -155,7 +158,7 @@ func (s *Service) claimSourceReport(ctx context.Context, id string) (src TodoSou
 	at := s.tposts.clock().UTC()
 	if st := s.todoDB(); st != nil {
 		// The store says whether it is time and what is to be told: another assistant may have planned it afresh since.
-		n, text, claimed, err := st.ClaimTodoSourceReport(ctx, id, at, sourceReportTries)
+		n, text, fullReply, claimed, err := st.ClaimTodoSourceReport(ctx, id, at, sourceReportTries)
 		if err != nil {
 			s.logf("todo %s: claim the report back: %v", id, err)
 			return TodoSource{}, 0, false
@@ -163,7 +166,7 @@ func (s *Service) claimSourceReport(ctx context.Context, id string) (src TodoSou
 		if !claimed {
 			return TodoSource{}, 0, false // told, or stopped, by another assistant on the store
 		}
-		attempts, src.ReportText = n, text
+		attempts, src.ReportText, src.ReportFullReply = n, text, fullReply
 	}
 	src.ReportedAt, src.Attempts = at.Format(time.RFC3339Nano), attempts
 	s.todos.mu.Lock()
@@ -195,7 +198,7 @@ func (s *Service) dropSourcePlan(id string) {
 	}
 	s.todos.mu.Lock()
 	if t, ok := s.todos.todos[id]; ok && t.Source != nil && t.Source.ReportedAt == "" {
-		t.Source.ReportText, t.Source.ReportDueAt = "", ""
+		t.Source.ReportText, t.Source.ReportDueAt, t.Source.ReportFullReply = "", "", false
 	}
 	s.todos.mu.Unlock()
 }
@@ -306,6 +309,10 @@ func (s *Service) sweepSourceReports() {
 // the time has come, tell the source what came of it. Nothing for a todo that was reopened since, or done longer ago than
 // sourceReportKeep.
 func (s *Service) sourceReportNow(id string) {
+	s.sourceReportStep(id, false)
+}
+
+func (s *Service) sourceReportStep(id string, finalOnly bool) {
 	s.todos.runMu.Lock()
 	defer s.todos.runMu.Unlock()
 	if !s.reportable(id) {
@@ -333,7 +340,10 @@ func (s *Service) sourceReportNow(id string) {
 		return
 	}
 	if t.Source.ReportDueAt == "" {
-		s.prepareSourceReport(ctx, t, st, now)
+		s.prepareSourceReport(ctx, t, st, finalOnly)
+		return
+	}
+	if finalOnly {
 		return
 	}
 	due, err := time.Parse(time.RFC3339Nano, t.Source.ReportDueAt)
@@ -354,7 +364,7 @@ func (s *Service) sourceReportNow(id string) {
 	if !ok {
 		return
 	}
-	err = s.sendSourceReport(ctx, src, id, src.ReportText)
+	err = s.sendSourceReport(ctx, src, id)
 	if err == nil {
 		s.logf("todo %s: reported back to its source", id)
 		return
@@ -368,7 +378,7 @@ func (s *Service) sourceReportNow(id string) {
 	}
 	// It will not go (the chat refuses, the original is gone) or it has used its tries: the claim stays, so it is not tried
 	// again, and the topic is told.
-	s.tellOwner(ctx, t, st, "source_report_unreachable", i18n.Args{"error": clip(oneLine(err.Error()), 200)}, "sx:"+id)
+	s.tellOwner(ctx, t, st, "source_report_unreachable", i18n.Args{"error": clip(oneLine(err.Error()), 200)}, "sx:"+id, false)
 }
 
 // permanentReportError says whether a failed report can never go: the hub refuses the chat or the message, or Feishu gave a
@@ -384,35 +394,68 @@ func permanentReportError(err error) bool {
 
 // prepareSourceReport previews delayed replies where the owner can cancel with "/noreply", then persists the
 // deadline and schedules delivery. A zero delay uses the same plan and send path without a preview.
-func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStatus, now time.Time) {
+func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStatus, finalOnly bool) {
 	th := t.Thread
 	if t.Source.Anchor == "" && (th == nil || th.Channel != channel.Feishu || !slices.Contains(st.Chats, th.ChatID)) {
 		s.logf("todo %s: not reporting back: no eligible topic for the source report", t.ID)
 		return
 	}
-	text := s.sourceReportText(ctx, t)
+	var text string
+	if st.SourceReportFullReply && t.StartError == "" && !t.Cancelled() {
+		reply, pending := s.sourceFinalReply(ctx, t)
+		if pending && reply == "" && time.Since(*t.DoneAt) < sourceReportWait {
+			s.sourceReportSoon(t.ID, 5*time.Second)
+			return
+		}
+		text = reply
+	}
+	fullReply := text != ""
+	if !fullReply {
+		if finalOnly {
+			return // the short outcome may still be recorded
+		}
+		if st.SourceReportFullReply && t.StartError == "" && !t.Cancelled() {
+			text = i18n.T(s.botLang(ctx), "assistant-feishu.source_report_no_final")
+		} else {
+			text = s.sourceReportText(ctx, t)
+		}
+	}
 	minutes := assistantwire.SourceReportDelayDefault
 	if st.SourceReportDelayMinutes != nil {
 		minutes = *st.SourceReportDelayMinutes
 	}
 	delay := time.Duration(minutes) * time.Minute
-	due := now.Add(delay)
+	due := s.tposts.clock().Add(delay)
 	if delay > 0 {
 		key := "source_report_notice"
-		if t.Source.Anchor != "" {
-			key = "source_report_notice_chat"
+		if fullReply {
+			key = "source_report_full_notice"
 		}
-		if !s.tellOwner(ctx, t, st, key, i18n.Args{"minutes": minutes, "text": text}, "sn:"+t.ID+due.UTC().Format(time.RFC3339Nano)) {
+		suffix := ""
+		if t.Source.Anchor != "" {
+			suffix = "_chat"
+		}
+		uuid := "sn:" + t.ID + due.UTC().Format(time.RFC3339Nano)
+		args := i18n.Args{"minutes": minutes, "text": text}
+		if !s.tellOwner(ctx, t, st, key+suffix, args, uuid, fullReply) {
 			return
 		}
+		if fullReply {
+			preview := i18n.T(s.botLang(ctx), "assistant-feishu."+key+suffix, args)
+			if _, inline := feishubot.InlineAnswer(preview); !inline {
+				if !s.tellOwner(ctx, t, st, "source_report_file_notice"+suffix, i18n.Args{"minutes": minutes}, uuid+":file", false) {
+					return
+				}
+			}
+		}
 	}
-	planned, err := s.planSourceReport(ctx, t.ID, text, due)
+	planned, err := s.planSourceReport(ctx, t, text, due, fullReply)
 	if err != nil {
 		s.logf("todo %s: plan the report back: %v", t.ID, err)
 		return
 	}
 	if planned {
-		s.sourceReportSoon(t.ID, delay)
+		s.sourceReportSoon(t.ID, max(0, due.Sub(s.tposts.clock())))
 	}
 }
 
@@ -420,12 +463,12 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 // latest message known there (the bot's lines to a topic, feishu_thread_posts.go), or, for a todo that has no topic (its
 // source has an anchor), into the owner's private chat as a reply under the anchor. key makes the same line, sent again,
 // land once. false when it could not be written.
-func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key string, args i18n.Args, uuid string) bool {
+func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key string, args i18n.Args, uuid string, fullReply bool) bool {
 	if t.Source != nil && t.Source.Anchor != "" {
 		text := i18n.T(s.botLang(ctx), "assistant-feishu."+key, args)
 		// no_detour: with the anchor gone the line is lost rather than posted as a message of its own, which could not be
 		// replied to with "/noreply" (as in a topic, where nothing is planned then).
-		if err := s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"reply_to": t.Source.Anchor, "text": text, "no_detour": true, "uuid": reportKey(uuid, t.ID)}, nil); err != nil {
+		if err := s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"reply_to": t.Source.Anchor, "text": text, "no_detour": true, "uuid": reportKey(uuid, t.ID), "full_answer": fullReply}, nil); err != nil {
 			s.logf("todo %s: tell the private chat: %v", t.ID, err)
 			return false
 		}
@@ -442,7 +485,7 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 	}
 	text := i18n.T(s.botLang(ctx), "assistant-feishu."+key, args)
 	to := feishuTarget{ChatID: th.ChatID, InThread: true, NoDetour: true}
-	if err := s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": reportKey(uuid, t.ID)}), nil); err != nil {
+	if err := s.appCall(ctx, AppFeishu, FeishuText, to.params(map[string]any{"reply_to": anchor, "text": text, "uuid": reportKey(uuid, t.ID), "full_answer": fullReply}), nil); err != nil {
 		s.logf("todo %s: tell its topic: %v", t.ID, err)
 		return false
 	}
@@ -451,10 +494,13 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 
 // sendSourceReport writes text under the message that asked, through the channel it came in by. Feishu: a reply to the
 // message in its chat (the only place the hub lets the bot write in a group that is not opted in, docs/extensions/bots.md).
-func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID, text string) error {
+func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID string) error {
 	switch src.Channel {
 	case channel.Feishu:
-		return s.appCall(ctx, AppFeishu, FeishuText, map[string]any{"chat_id": src.ChatID, "reply_to": src.MessageID, "text": text, "uuid": reportKey(todoID, src.MessageID)}, nil)
+		return s.appCall(ctx, AppFeishu, FeishuText, map[string]any{
+			"chat_id": src.ChatID, "reply_to": src.MessageID, "text": src.ReportText, "uuid": reportKey(todoID, src.MessageID),
+			"full_answer": src.ReportFullReply, "no_detour": true,
+		}, nil)
 	}
 	return fmt.Errorf("no way back to channel %q", src.Channel)
 }

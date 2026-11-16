@@ -72,12 +72,13 @@ const (
 	// a reply in the parent's thread; the hub refuses any chat but the owner's private chat and the group chats the
 	// owner opted in, and with neither field the call is what it always was.
 	FeishuPost = "feishu.post"
-	// FeishuText: {reply_to?, text, chat_id?, in_thread?, uuid?, no_detour?} → {message_id}: plain text as a reply,
+	// FeishuText: {reply_to?, text, chat_id?, in_thread?, uuid?, no_detour?, full_answer?} → {message_id}: plain text as a reply,
 	// else into the owner's chat; chat_id, in_thread, uuid (cut to 50 characters here) and no_detour are FeishuPost's.
 	// One more place is open to it (#6146): a reply to a message the hub took as the owner's "@bot /ai …" in a group that
 	// is not opted in (FeishuFromElsewhere), which lands under that message and nowhere else in the group (at most
 	// 2000 characters, never a detour into the chat); a send into that group, or a reply to any other message in it,
-	// is refused as ever.
+	// is refused as ever. With full_answer, the owner must enable full replies, a parent is required, and the
+	// answer is sent as literal rich text, or as a text attachment when too large for inline delivery.
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
@@ -260,6 +261,8 @@ type FeishuStatus struct {
 	NudgeAfter *int `json:"nudge_after,omitempty"`
 	// SourceReportDelayMinutes is the preview window before replying to a source group. Zero skips the preview.
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
+	// SourceReportFullReply is the owner's opt-in to posting the task's final answer in its source group.
+	SourceReportFullReply bool `json:"source_report_full_reply,omitempty"`
 }
 
 // NudgeAfterDefault is nudge_after when never set: minutes a card of the Lark bot waits before it is nudged.

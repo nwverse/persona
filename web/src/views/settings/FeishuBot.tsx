@@ -5,7 +5,7 @@
 // Each change goes to the hub at once and the page shows what the hub answered; a failed one leaves it as it was.
 import { BindSteps, ChannelLink } from "./Channels";
 import { Disclosure } from "./ProviderFields";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
@@ -163,6 +163,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   const features = status?.features ?? DEFAULT_FEATURES;
   const nudgeAfter = status?.nudge_after ?? DEFAULT_NUDGE_AFTER;
   const reportDelay = status?.source_report_delay_minutes;
+  const fullReply = status?.source_report_full_reply;
+  const fullReplyDetail = useId();
   // Read at answer time, not when the request (or the pairing poll) started: typing meanwhile must count.
   const changedRef = useRef(changed);
   changedRef.current = changed;
@@ -403,6 +405,16 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
                 ))}
               </select>
             </div>
+            {fullReply !== undefined && (
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <Icon name="chat" size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-ink">{t("settings-feishubot.source_report_full_title")}</div>
+                  <div id={fullReplyDetail} className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{t("settings-feishubot.source_report_full_detail")}</div>
+                </div>
+                <Switch on={fullReply} disabled={saving} describedBy={fullReplyDetail} label={t("settings-feishubot.source_report_full_title")} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_full_reply: on }))} />
+              </div>
+            )}
             {reportDelay !== undefined && (
               <div className="flex items-start gap-3 px-4 py-2.5">
                 <Icon name="clock" size={15} className="mt-0.5 shrink-0 text-accent" />
