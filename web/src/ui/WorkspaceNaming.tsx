@@ -121,8 +121,13 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
         if (!context.isCurrent()) return;
         rules = record.workspace_rules; setRevision(record.revision); setRepositories(set.repositories); if (!keepDraft) setSelected(set.repositories.map((r) => r.repo_id));
       }
-      if (!keepDraft) setDraft(rules); setSaved(rules); setInherited(todoId ? info.effective_workspace_rules ?? {} : { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" });
-      if (!keepDraft) setMachine(info.machine_id ?? ""); setSupported(true); setLoaded(true);
+      if (!keepDraft) setDraft(rules);
+      // The freshly fetched rules are the dirty-comparison baseline even when the draft is kept, so a
+      // clear the server did not persist stays visible as unsaved and can be retried.
+      setSaved(rules);
+      setInherited(todoId ? info.effective_workspace_rules ?? {} : { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" });
+      if (!keepDraft) setMachine(info.machine_id ?? "");
+      setSupported(true); setLoaded(true);
     } catch { if (context.isCurrent()) setError(t("workspace-naming.failed")); }
     finally { if (context.isCurrent()) { saving.current = false; setBusy(false); } }
   };

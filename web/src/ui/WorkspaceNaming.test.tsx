@@ -126,6 +126,46 @@ it("keeps a cleared draft after a failed save and saved-baseline reload, then re
   await answer(calls.at(-1)!, settings); expect(button("Save").disabled).toBe(true);
 });
 
+const taskRuleCalls = () => calls.filter((call) => call.path.endsWith("/workspace-rules"));
+const taskRepositoryCalls = () => calls.filter((call) => call.path.endsWith("/repositories"));
+const taskSettings = { ...settings, effective_workspace_rules: defaults };
+const taskRepositories = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 0, repositories: [] };
+
+it("keeps a cleared task override after a failed save and reload, then retries with the saved revision", async () => {
+  await render("assistant", "todo_example"); await click("Workspace naming");
+  await answer(calls[0], taskSettings);
+  await answer(taskRuleCalls()[0], { todo_id: "todo_example", revision: 4, workspace_rules: { task_directory_template: "custom/{task-id}" } });
+  await answer(taskRepositoryCalls()[0], taskRepositories);
+  const field = document.querySelectorAll("input")[1];
+  expect(field.value).toBe("custom/{task-id}");
+  await type(""); await click("Save"); await answer(calls.at(-1)!, { error: "unavailable" }, 503);
+  expect(field.value).toBe(""); expect(button("Save").disabled).toBe(false);
+  await click("Reload saved settings");
+  await answer(calls.at(-1)!, taskSettings);
+  await answer(taskRuleCalls().at(-1)!, { todo_id: "todo_example", revision: 4, workspace_rules: { task_directory_template: "custom/{task-id}" } });
+  await answer(taskRepositoryCalls().at(-1)!, taskRepositories);
+  expect(field.value).toBe(""); expect(button("Save").disabled).toBe(false);
+  await click("Save"); const retry = calls.at(-1)!;
+  expect(retry.path).toBe("/todos/todo_example/workspace-rules");
+  expect(JSON.parse(retry.init.body as string)).toEqual({ expected_revision: 4, workspace_rules: { base_directory: null, task_directory_template: null, branch_template: null } });
+  await answer(retry, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
+  expect(button("Save").disabled).toBe(true);
+});
+
+it("stops retrying when a failed response's removal actually persisted", async () => {
+  await render("assistant", "todo_example"); await click("Workspace naming");
+  await answer(calls[0], taskSettings);
+  await answer(taskRuleCalls()[0], { todo_id: "todo_example", revision: 4, workspace_rules: { task_directory_template: "custom/{task-id}" } });
+  await answer(taskRepositoryCalls()[0], taskRepositories);
+  const field = document.querySelectorAll("input")[1];
+  await type(""); await click("Save"); await answer(calls.at(-1)!, { error: "unavailable" }, 503);
+  await click("Reload saved settings");
+  await answer(calls.at(-1)!, taskSettings);
+  await answer(taskRuleCalls().at(-1)!, { todo_id: "todo_example", revision: 5, workspace_rules: {} });
+  await answer(taskRepositoryCalls().at(-1)!, taskRepositories);
+  expect(field.value).toBe(""); expect(button("Save").disabled).toBe(true);
+});
+
 const rootPath = "/home/example/workspace/task-todo_example";
 const named = (layout: "root" | "container", repositories: Array<[string, string, string]>, timezone = "UTC"): Preview => ({
   status: "complete", sample: true, diagnostics: [], plan: {
