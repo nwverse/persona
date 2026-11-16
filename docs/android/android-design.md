@@ -275,6 +275,10 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   as in the Duo's Agents tab; the avatar there still opens the sidebar as the drawer, so Settings stays one sidebar away from both pages. Folding turns the column back into the drawer (closed)
   and unfolding back into the column; unfolding with the drawer open over the Assistant page shows the column instead. The drawer and the column keep separate saveable state (`shared-sidebar`, `shared-sidebar-column`):
   the Assistant page stays composed behind Agents, so both can be composed at once.
+- **Full-window search** (`AssistantFullSearch`, #9171): in a regular window the sidebar's Search opens over the whole window as the open iPhone Duo's chats-only full search (`AssistantFullSearch` on iOS
+  with `onOpenAgent` nil): the field at the foot above the keyboard (`imePadding`), a close button beside it, Persona's chats above (latest first), filtered as typed with the same local matches and
+  manager search (`assistant_search`) the sidebar uses. A row opens that chat beside the column and closes the search; Close and system Back close it too. Compact (folded) windows keep today's
+  drawer search unchanged. The two-scope (Chats | Agents) version belongs to the Sidebar layout and is not part of this.
 - Two panes use Navigation 3's list-detail scene (`rememberListDetailSceneStrategy`); the shell centrally assigns list and detail roles (`paneMetadata` in `Root.kt`):
   Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); settings categories | settings subpage (all settings subpages therefore use navigation).
   On a wide phone Inbox retains its list | Lark conversation / email / event roles. In a regular window `AssistantPanePolicy` instead selects `directive.onePane()` and removes Inbox's parallel pane roles,

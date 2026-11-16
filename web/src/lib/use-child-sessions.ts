@@ -14,7 +14,7 @@ import { onHubEvent, useStore } from "./store";
 import type { Session } from "./types";
 
 const NONE: Session[] = [];
-const EMPTY: ListSnapshot<Session> = { rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
+const EMPTY: ListSnapshot<Session> = { rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
 const noSubscribe = () => () => {};
 const noSnapshot = () => EMPTY;
 

@@ -3292,9 +3292,12 @@ struct ChatView: View {
 
     // Out of the modifier chain: inline, Swift 6.3 timed out type-checking the Release build.
     private var prewarmSource: String { "\(shownKey.machineID)/\(shownKey.sessionID)|\(store.resets)" }
-    private var prewarmKey: String { "\(prewarmSource)|\(store.version)" }
+    /// In the background it changes too, so leaving cancels a prewarm between rows and coming back runs it again.
+    private var prewarmKey: String { "\(prewarmSource)|\(store.version)|\(RowMemo.prewarms(in: scenePhase))" }
 
     private func prewarmRows() async {
+        // Not while the app is in the background (#9108): a recording may be keeping it running, under iOS's CPU limit.
+        guard RowMemo.prewarms(in: scenePhase) else { return }
         let source = prewarmSource
         if scratch.prewarmSource != source {
             scratch.prewarmSource = source
@@ -3385,6 +3388,7 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(backLabel)
+            .modifier(SidebarButtonID(active: backShowsList))
             .noBackWhen(hidesBack)
             Spacer(minLength: 0)
             Button { Haptics.tap(); showChrome() } label: {
@@ -4095,8 +4099,16 @@ struct ChatView: View {
     }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
-    private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
-    private var backLabel: String { pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]") }
+    /// A root picked in the list, with the list closed (#8603): the sidebar's button, as on the main conversation, not a ‹
+    /// that opened the sidebar. Only a page pushed from inside another has ‹.
+    private var backSymbol: String {
+        if backShowsList { return split?.drawer == true ? Theme.Icon.sidebarMenu : Theme.Icon.sidebar }
+        return pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back
+    }
+    private var backLabel: String {
+        if backShowsList { return String(localized: "Show Sidebar") }
+        return pane == .git || pane == .files ? String(localized: "Back [Task Sheets 572cf4]") : host?.leaveLabel ?? String(localized: "Back [Task Sheets 572cf4]")
+    }
 
     /// The open header's ‹. Inside the row's glass container `noBackWhen` does not hide it: the container draws the
     /// button's glass and symbol itself, so a disabled ‹ that did nothing showed on every chat that is a split's first
@@ -4115,6 +4127,12 @@ struct ChatView: View {
             #else
             headerBackButton
             #endif
+        } else if backShowsList {
+            // A root picked in the list, with the list closed (#8603): the sidebar's button (`backSymbol`) with how many
+            // Agents need the user, as on the main conversation.
+            headerBackButton
+                .modifier(SidebarButtonID(active: true))
+                .overlay(alignment: .topTrailing) { SidebarWaitingBadge() }
         } else {
             headerBackButton
         }
@@ -7933,7 +7951,7 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
                 .offset(y: -c)
                 .opacity(Double(1 - min(1, p * 1.5)))
                 .allowsHitTesting(p < 0.5)
-                .modifier(GoneWhen(gone: p * 1.5 >= 1))
+                .modifier(GoneWhen(gone: p * 1.5 >= 1, height: chrome.height))
             // Not there at all until it starts to show (it is clear below half way).
             if p > 0.5 {
                 ChatRegion(name: "ChromeCompact.body", content: compact)
@@ -7947,20 +7965,25 @@ private struct ChromeHeader<Full: View, Compact: View>: View {
     }
 }
 
-/// The open header once it has faded out: still laid out (its height is what folding measures) but hidden, so its
-/// buttons leave VoiceOver and XCUITest. `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit):
-/// slid up under the clip, its Back sat in the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// The open header once it has faded out: gone from the tree, so its buttons leave VoiceOver and XCUITest.
+/// `accessibilityHidden` alone was not enough (its back and ⋯ are glass, UIKit): slid up under the clip, its Back sat in
+/// the status bar's band, invisible, "hittable", and a tap there went nowhere.
+/// On iOS a clear placeholder of its last measured height takes its place (folding reads that height). It was a
+/// `.hidden()` copy of the header: another identity, so every fold built the whole header again, its glass and the
+/// agents' tabs, and every unfold once more (#9103). Now folding only drops it and unfolding builds it once. While
+/// folded its height is not measured; it is again as soon as it opens.
 /// On the Mac it only leaves VoiceOver: it is already clear and takes no clicks there (`allowsHitTesting`), and
-/// swapping it for a hidden copy built the whole header again, its glass and the agents' tabs, at every fold and
-/// unfold: 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
+/// swapping it for a hidden copy cost 71–82 ms of hitches a second scrolling a chat up and down, 9–29 without (#1337).
 private struct GoneWhen: ViewModifier {
     var gone: Bool
+    /// The open header's measured height (`ChatChrome.height`).
+    var height: CGFloat
 
     func body(content: Content) -> some View {
         #if os(macOS)
         content.accessibilityHidden(gone)
         #else
-        if gone { content.hidden() } else { content }
+        if gone { Color.clear.frame(height: height) } else { content }
         #endif
     }
 }
@@ -8194,5 +8217,14 @@ struct DismissReader: View {
         Color.clear
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+/// The identifier of a chat's leading button while it opens the sidebar (#8603): not the symbol's, so a test tells it
+/// from a ‹.
+private struct SidebarButtonID: ViewModifier {
+    var active: Bool
+    func body(content: Content) -> some View {
+        if active { content.accessibilityIdentifier("chat-sidebar-button") } else { content }
     }
 }

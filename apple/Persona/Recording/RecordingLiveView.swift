@@ -201,7 +201,8 @@ struct RecordingPersonaStrip: View {
 
     private var attendance: RecordingAttendance { entry.attendance ?? RecordingAttendance(role: .off) }
     /// The role as the hub has it: off while nobody is chosen to attend.
-    private var role: MeetingAttendance { attendance.sentRole }
+    /// Persona's part as the strip shows it: notes (its room follows, Persona not in it, #8851) shows as Off.
+    private var role: MeetingAttendance { attendance.sentRole.shown }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -241,7 +242,7 @@ struct RecordingPersonaStrip: View {
 
     private var word: String {
         switch role {
-        case .off: String(localized: "Turn on Persona")
+        case .off, .notes: String(localized: "Turn on Persona")
         case .listener: String(localized: "Persona is listening")
         case .participant: String(localized: "Persona is taking part")
         }
@@ -250,7 +251,7 @@ struct RecordingPersonaStrip: View {
     private var menu: some View {
         Menu {
             Picker(selection: Binding(get: { role }, set: { turn($0) })) {
-                ForEach(MeetingAttendance.allCases, id: \.self) { Text($0.title).tag($0) }
+                ForEach(MeetingAttendance.choices, id: \.self) { Text($0.title).tag($0) }
             } label: { Text("Persona") }
             if role.attends {
                 Button { showAttendee = true } label: { Label("Who Attends…", systemImage: Theme.Icon.people) }

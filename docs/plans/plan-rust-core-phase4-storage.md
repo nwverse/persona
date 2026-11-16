@@ -2,8 +2,8 @@
 
 This is the design for phase 4 of `docs/plans/plan-rust-core.md`: the per-hub caches and the snapshot that launch
 draws from (D6) move into the Rust core, files first (decision 4). Its exit condition is "cold launch draws from the
-snapshot before any sync". Nothing here is implemented yet; the open questions at the end are for the maintainer, and
-this document records the recommendation for each.
+snapshot before any sync". Nothing here is implemented yet. The maintainer decided every question at the end on
+2026-11-16 by taking its recommended option; this document records both the recommendation and the decision.
 
 **Who it serves**: everyone who uses the phone apps, indirectly, exactly as the parent plan. The user-visible goal is
 that a cold launch paints the same lists and the same last two turns it painted when the app was last open, without
@@ -342,10 +342,15 @@ draws from the snapshot before any sync" exit condition stays a per-platform pro
 **Verdict**: rejected by decision 4; recorded here because it is the do-nothing baseline the measurements in 3.10
 must beat or match.
 
-## 5. Questions for the maintainer
+## 5. Questions for the maintainer — all decided 2026-11-16
 
-**Q1. Scope identity: how does the core key a "hub scope" when iOS groups hubs and Android/HarmonyOS key by hub id +
-pairing generation?** This is the hardest open question, because the two models are not isomorphic. iOS's `groupIDs`
+The maintainer decided on 2026-11-16 that every question below takes its recommended option. Each item is marked
+**decided** with that date; the design content is unchanged.
+
+**Q1 — decided.** Scope identity: how does the core key a "hub scope" when iOS groups hubs and Android/HarmonyOS key by hub id +
+pairing generation? **Decided by the maintainer on 2026-11-16: take the recommended option** — the host supplies the
+scope id as an opaque string, and this phase does not unify multi-hub identity across platforms. The original analysis
+follows for context. This was the hardest open question, because the two models are not isomorphic. iOS's `groupIDs`
 is a list of independent *user-facing* groups: the same physical hub may appear under two groups, and a re-pair that
 keeps the user's group must not wipe that group's caches. Android's `HubScope(hubId, generation).path` is a
 *storage* key: re-pairing deliberately creates a fresh empty directory. A single "hub id + generation everywhere,
@@ -355,72 +360,74 @@ and treat the scope id as an opaque string inside the core.** The core never int
 directory name and a key prefix. This keeps "nothing the user sees changes" true on iOS (group semantics untouched)
 and on Android (re-pair semantics untouched), at the cost of the core not enforcing D6's `<hub_id>/<generation>/`
 layout uniformly. The alternative — migrate iOS to hub id + generation — is a user-visible multi-hub behavior change
-and belongs in its own issue with its own acceptance, not smuggled into a storage port. If the maintainer prefers
-uniformity over minimal change, that alternative is a deliberate product decision to make here, explicitly.
+and belongs in its own issue with its own acceptance, not smuggled into a storage port.
 
-**Q2. Is dropping-and-refetching on every content-version bump acceptable as the only migration strategy for phase
-4?** Recommendation: **yes**, matching iOS's folder bumps and Android's `DELETE FROM` migrations. The risk is a
-visible empty state on upgrade if the hub is unreachable at that moment; mitigate by keeping the previous version's
-files readable for one release (read-only fallback) when the bump is semantic-only rather than layout-incompatible,
-as iOS already does with `dropOlder`.
+**Q2 — decided.** Is dropping-and-refetching on every content-version bump acceptable as the only migration strategy for phase
+4? **Decided by the maintainer on 2026-11-16: take the recommended option (yes).** Recommendation, unchanged: **yes**,
+matching iOS's folder bumps and Android's `DELETE FROM` migrations. The risk is a visible empty state on upgrade if
+the hub is unreachable at that moment; mitigate by keeping the previous version's files readable for one release
+(read-only fallback) when the bump is semantic-only rather than layout-incompatible, as iOS already does with
+`dropOlder`.
 
-**Q3. Should iOS adopt Android's 32 MiB per-scope chat-cache budget?** Recommendation: **yes**, with chats on screen
-pinned, because an unbounded Caches directory grows for the app's lifetime and Settings › Storage already presents
-it as one bucket; but this is a user-visible behavior change on iOS (old chats may need a refetch where they
-previously painted instantly), so it needs an explicit decision. Alternative: keep iOS unbounded in phase 4 and add
-the budget in a separate change with its own acceptance.
+**Q3 — decided.** Should iOS adopt Android's 32 MiB per-scope chat-cache budget? **Decided by the maintainer on
+2026-11-16: take the recommended option** — yes, with chats on screen pinned. Because this is a user-visible behavior
+change on iOS (old chats may need a refetch where they previously painted instantly), its implementation needs its
+own iOS screenshot and behavior acceptance as a separate deliverable of the phase 4 work, not as a side effect of
+the storage port. Recommendation, unchanged: **yes**, with chats on screen pinned, because an unbounded Caches
+directory grows for the app's lifetime and Settings › Storage already presents it as one bucket. The rejected
+alternative was to keep iOS unbounded in phase 4 and add the budget in a separate change with its own acceptance.
 
-**Q4. Add a CRC32 checksum to each cache file, and quarantine corrupt files instead of deleting them?**
-Recommendation: **add the checksum** (4 bytes, catches silent corruption that a valid-magic/garbage-payload file
-would otherwise pass off as a decode error) and **quarantine one copy** per file for diagnostics, auto-deleted on
-the next successful write. Both are cheap and align with D6's "preserve the original file" instinct without
-treating caches as durable.
+**Q4 — decided.** Add a CRC32 checksum to each cache file, and quarantine corrupt files instead of deleting them?
+**Decided by the maintainer on 2026-11-16: take the recommended option.** Recommendation, unchanged: **add the
+checksum** (4 bytes, catches silent corruption that a valid-magic/garbage-payload file would otherwise pass off as a
+decode error) and **quarantine one copy** per file for diagnostics, auto-deleted on the next successful write. Both
+are cheap and align with D6's "preserve the original file" instinct without treating caches as durable.
 
-**Q5. Does opening a chat from storage reuse `Action::OpenChat` or a new `Action::OpenChatStored`?** Recommendation:
-**a new sibling variant `OpenChatStored { chat }`**, with `OpenChat`'s existing shape unchanged (§2 frames the base
-shape as stable; adding a sibling is a compatible extension, not a contradiction). `OpenChat` today takes its
-snapshot from the caller, which is exactly what the iOS shadow run needs: the native loader produces the snapshot,
-the core mirrors it, and the two are compared. `OpenChatStored` is the post-shadow production path, where the core
-reads its own file. Overloading `OpenChat` with "empty snapshot means read from disk" would hide an IO operation
-inside an action whose contract is pure and would make the shadow comparison ambiguous. Cost: one more wire variant
-and codec regeneration; the existing `OpenChat` and its tests are untouched.
+**Q5 — decided.** Does opening a chat from storage reuse `Action::OpenChat` or a new `Action::OpenChatStored`?
+**Decided by the maintainer on 2026-11-16: take the recommended option — a new sibling variant
+`OpenChatStored { chat }`**, with `OpenChat`'s existing shape unchanged (§2 frames the base shape as stable; adding
+a sibling is a compatible extension, not a contradiction). `OpenChat` today takes its snapshot from the caller,
+which is exactly what the iOS shadow run needs: the native loader produces the snapshot, the core mirrors it, and
+the two are compared. `OpenChatStored` is the post-shadow production path, where the core reads its own file.
+Overloading `OpenChat` with "empty snapshot means read from disk" would hide an IO operation inside an action whose
+contract is pure and would make the shadow comparison ambiguous. Cost: one more wire variant and codec regeneration;
+the existing `OpenChat` and its tests are untouched.
 
-**Q6. Any change to the encryption / file-protection posture?** Recommendation: **no change in phase 4**. Caches
-stay plain bytes in the OS sandbox with the platform default protection, exactly as on all three platforms today;
-secrets never enter these files. If per-file encryption is later wanted, it belongs with a threat-model discussion
-(see the open hub-token-boundary proposal) and a Keystore/Keychain/Asset-Store key-handle capability on
-`PlatformHost`, not with this phase. Flagging because moving files into a core-written directory is the natural
-moment someone would ask.
+**Q6 — decided.** Any change to the encryption / file-protection posture? **Decided by the maintainer on 2026-11-16:
+take the recommended option — no change in phase 4.** Caches stay plain bytes in the OS sandbox with the platform
+default protection, exactly as on all three platforms today; secrets never enter these files. If per-file encryption
+is later wanted, it belongs with a threat-model discussion (see the open hub-token-boundary proposal) and a
+Keystore/Keychain/Asset-Store key-handle capability on `PlatformHost`, not with this phase.
 
-**Q7. Where does the windowing/eviction logic live while it is being ported?** Recommendation: **in `persona-core`
-as a new pure domain `cache_window`**, with fixtures derived from current iOS `ChatCache.tail` behavior (including
-the subagent-launch retention and the same-seq continuation rule), replayed by Android and HarmonyOS the way every
-moved domain is. It is small, but it is real behavior with real edge cases, and treating it as "just part of
-storage" would skip the fixtures-first rule.
+**Q7 — decided.** Where does the windowing/eviction logic live while it is being ported? **Decided by the maintainer
+on 2026-11-16: take the recommended option — in `persona-core` as a new pure domain `cache_window`**, with fixtures
+derived from current iOS `ChatCache.tail` behavior (including the subagent-launch retention and the same-seq
+continuation rule), replayed by Android and HarmonyOS the way every moved domain is. It is small, but it is real
+behavior with real edge cases, and treating it as "just part of storage" would skip the fixtures-first rule.
 
-**Q8. Where does `AgentSync`'s rev ledger (`agent-sync.json`) live?** §1.1 lists it but the design above does not
-place it. It is per-hub, read on every launch, and drives which of the ~40 recent sessions get warmed — so it is on
-the cold-launch path even though it is not user-visible. Recommendation: **move it into the core as part of the
-launch snapshot's scope**, stored as its own small file (`sync-revs.bin`) beside `snapshot.bin`, because the core
-will own "which chats need refreshing" once it owns the caches; the alternative (leave it in native `StateCache`)
-keeps a second per-hub JSON file with its own write coalescing alive precisely where phase 4 is trying to
-consolidate. Flagging because it is easy to overlook and would otherwise be a leftover.
+**Q8 — decided.** Where does `AgentSync`'s rev ledger (`agent-sync.json`) live? §1.1 lists it but the design above
+does not place it. It is per-hub, read on every launch, and drives which of the ~40 recent sessions get warmed — so
+it is on the cold-launch path even though it is not user-visible. **Decided by the maintainer on 2026-11-16: take
+the recommended option** — move it into the core as part of the launch snapshot's scope, stored as its own small
+file (`sync-revs.bin`) beside `snapshot.bin`, because the core will own "which chats need refreshing" once it owns
+the caches. The rejected alternative (leave it in native `StateCache`) would have kept a second per-hub JSON file
+with its own write coalescing alive precisely where phase 4 is trying to consolidate.
 
-**Q9. Core lifetime versus `AppModel` lifetime.** iOS creates one `AppModel` for the app, not one per hub, and adds
-and removes groups at runtime. §3.7 therefore commits to `Action::AddScope` / `Action::RemoveScope` rather than
-core recreation. Recommendation: **one core per app process, scopes added and removed by action**, and that is a
-design commitment, not an open fork. It is listed here so the maintainer sees that "one core per hub" was considered
-and rejected: per-hub cores would each carry their own worker thread and runtime registry entry, and iOS's group
-merging (`HubDataStore`'s openGroup/home distinction) would force core teardown on a routine operation.
+**Q9 — decided.** Core lifetime versus `AppModel` lifetime. iOS creates one `AppModel` for the app, not one per hub,
+and adds and removes groups at runtime. §3.7 therefore commits to `Action::AddScope` / `Action::RemoveScope` rather
+than core recreation. **Decided by the maintainer on 2026-11-16: take the recommended option — one core per app
+process, scopes added and removed by action.** The rejected alternative was per-hub cores: each would carry its own
+worker thread and runtime registry entry, and iOS's group merging (`HubDataStore`'s openGroup/home distinction)
+would force core teardown on a routine operation.
 
-**Q10. Downgrade safety: an older app version opens a scope a newer version wrote.** D6's durable rule is "newer
-reads older, older refuses to overwrite newer". Caches are exempt from that rule's *migration* half (drop and
-refetch), but the manifest is JSON the older core can still parse. Recommendation: **the manifest carries the
-envelope magic version, and an older core that sees a higher version treats the whole scope directory as
-not-mine** — it neither reads the `.bin` files (their magic would refuse anyway) nor writes into the directory,
-falling back to an empty cache and a sync. This prevents an older build from racing a newer build's files after a
-downgrade, and matches how iOS's folder-name version bump already makes old folders invisible to new builds and vice
-versa. No cross-version writes are allowed in either direction.
+**Q10 — decided.** Downgrade safety: an older app version opens a scope a newer version wrote. D6's durable rule is
+"newer reads older, older refuses to overwrite newer". Caches are exempt from that rule's *migration* half (drop and
+refetch), but the manifest is JSON the older core can still parse. **Decided by the maintainer on 2026-11-16: take
+the recommended option** — the manifest carries the envelope magic version, and an older core that sees a higher
+version treats the whole scope directory as not-mine: it neither reads the `.bin` files (their magic would refuse
+anyway) nor writes into the directory, falling back to an empty cache and a sync. This prevents an older build from
+racing a newer build's files after a downgrade, and matches how iOS's folder-name version bump already makes old
+folders invisible to new builds and vice versa. No cross-version writes are allowed in either direction.
 
 ## 6. Out of scope for phase 4
 

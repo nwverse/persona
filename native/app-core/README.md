@@ -44,7 +44,7 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
 `libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
-`persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
+`persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
@@ -73,9 +73,11 @@ visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bin
 The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
 stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
 partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
-`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
+`markersOnly` cases/controls plus digit boundaries. Table repair (#9164) replays all 22 repair and 15 table/text end
+assertions from Apple's table-related tests, including half-written rows, early delimiter rows, list indentation and
+lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
-8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
+9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
@@ -163,24 +165,24 @@ ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally
 classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
 production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
 not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
-## HarmonyOS Agents-list adapter (#8957)
+## HarmonyOS Agents-list core (#8957, #8966)
 
-`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
-ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
-`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
-core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
-replace the native rows, and snapshot/native failures affect only diagnostics.
+`CoreAgentListAdapter` calls the synchronous pure `coreProjectSort` NAPI function directly. It is the only production
+Agents-list sorter: the temporary ArkTS projection, debug shadow, snapshot worker and comparison reports are deleted.
+`AgentWorkspace` maps the core's complete groups, `visible_rows`, folds and counts back to the original `ResourceRow`
+identities used by native actions. The default is iOS By Status; By Machine and By Project are the other choices.
+State/space folds, idle expansion, quick filters including BackgroundWaiting, pin/mute ranks, search operators and
+multi-Hub machine identities all use the same settings as the core. When manager is supplied, machine paths are
+`group|manager|id` (or `manager|id` for the default Hub); legacy input without it retains `group|id`. This keeps
+same-Hub, same-ID managers independent (#9068). Per-Hub pin/mute preference scoping is the separate #9027 contract.
+Native failure retains the last usable projection
+and exposes the existing failure state instead of presenting an empty successful list. There is no second release
+sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
 
-Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
-query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
-`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
-available in this environment.
-
-The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
-native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
-both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
-`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
-membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+`harmony/tests/core-host/agent-sort-adapter.test.mjs` drives the production adapter's real native-import contract and
+the real core through all 30 unchanged `agents_list` fixtures. The complete expected objects match **30/30**. Host
+workspace tests also exercise frozen-reading identity, explicit folds, filters and offline-history membership. The
+portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
 ## Reproducing phase-1 evidence
@@ -221,10 +223,19 @@ notices/statuses. Exact manifests, malformed inputs and deliberately wrong expec
 The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
 `coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
 label, while the other three take JSON documents.
+`harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
+all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
+turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
+same generated ArkTS codec and existing registry dispatch/flush/drain commands replay four operation cases at all 10
+checkpoints, with exact item IDs and 13 complete turn objects; an existing burst is also replayed through the
+standalone `replace` branch. Exact manifests, malformed/wrong-shaped inputs and deliberately wrong static and
+checkpoint expectations are checked. The helper supplies a fold range only after the real runtime requests it. No
+turn fixture, overlay or turn-grouping semantics changes.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
 mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
 a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
-device. No production client uses the new exports yet.
+device. In particular, the turn helper evidence does not replace #8808's real Linux NAPI addon loader. No production
+client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 

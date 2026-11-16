@@ -22,6 +22,35 @@ struct Case {
 }
 
 #[test]
+fn a_nested_item_does_not_hide_another_known_bad_scalar() {
+    // Source: apple/Shared/LiveConnection.swift `ServerEvent.decode` decodes the complete Envelope before its switch;
+    // Envelope.rows is Int?, so a string there must refuse rather than become Frame::Other (#9187).
+    // Source-undetermined: this mixed input has both a bad rows scalar and an invalid history escape. The old
+    // fallback incorrectly returned Other; the shared Envelope must refuse it. No exact Foundation first-error key
+    // is claimed without an executed Swift oracle.
+    let wrong_scalar = br#"{"type":"hello","items":[],"rows":"bad","history":"\ud83d"}"#;
+    assert!(transport::decode_frame(wrong_scalar).is_err());
+
+    // The same source-derived `rows` rule in isolation has an unambiguous protocol-key error.
+    let rows = br#"{"type":"hello","items":[],"rows":"bad"}"#;
+    assert_eq!(
+        transport::decode_frame(rows).unwrap_err().to_string(),
+        "wrong_type: rows"
+    );
+
+    // Source: the same Envelope's args is JSONValue. PersonaWire JSONValue decodes numbers as Double;
+    // swift-foundation JSONDecoder.swift rejects non-finite / underflowed numbers. Production classifies that raw
+    // numeric failure as malformed_json with a position only, not as a tolerated Other event or a content leak.
+    let raw_number = br#"{"type":"hello","items":[],"args":1e999,"rows":"bad"}"#;
+    let error = transport::decode_frame(raw_number).expect_err("raw number must not bypass the gate");
+    assert_eq!(error.code(), "malformed_json");
+    assert!(
+        !error.to_string().contains("1e999"),
+        "a refusal must not repeat payload content"
+    );
+}
+
+#[test]
 fn production_frame_decoder_replays_the_source_derived_envelope_cases() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../spec/fixtures/wire-envelope");
     let document: Document = serde_json::from_slice(&std::fs::read(root.join("frames.json")).unwrap()).unwrap();

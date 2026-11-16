@@ -5,6 +5,7 @@ import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
+import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
@@ -71,7 +72,8 @@ fun ChatLinkHost(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val pool = remember(context) { ChatWebViewPool(context) }
+    val webFeatures = LocalChatWebFeatures.current
+    val pool = remember(context, webFeatures) { ChatWebViewPool(context, webFeatures) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val lifecycleState by lifecycle.currentStateAsState()
@@ -132,7 +134,7 @@ fun ChatLinkHost(
             if (event == Lifecycle.Event.ON_START) pool.resume()
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer); pool.destroy() }
+        onDispose { lifecycle.removeObserver(observer) }
     }
     // Memory pressure (the app in the background, or the system asks): pages not on screen go; each is a renderer.
     DisposableEffect(pool, context) {
@@ -245,11 +247,15 @@ fun ChatLinkHost(
                         }
                     }, onWebpage = { nativeWebpage = it }) { title, whole -> nativeTitle = title; nativeWhole = whole }
                 }
-                if (view != null) DisposableEffect(view, picks) {
-                    view.picks = picks
-                    view.onPick = picked
-                    view.onExternal = { external = it }
-                    onDispose { pool.release(view) }
+                if (view != null) {
+                    // Only a committed composition activates the view; acquires from abandoned compositions stay evictable.
+                    SideEffect { view.picks = picks; pool.activate(view) }
+                    // Only the view going away releases it: a change of picks must not destroy the page being shown.
+                    DisposableEffect(view) {
+                        view.onPick = picked
+                        view.onExternal = { external = it }
+                        onDispose { pool.release(view) }
+                    }
                 }
                 fun close() { scope.launch { drag.animateTo(LinkDetent.Hidden) } }
                 fun back() { if (view != null && !view.gone && view.canGoBack()) view.goBack() else close() }
@@ -330,9 +336,7 @@ fun ChatLinkHost(
                         // Feishu documents and Moments posts in their native views while the hub has them (#1530); each can
                         // still switch to the page, which takes the WebView then (a crashed one is gone: "Reopen" above).
                         val page: @Composable () -> Unit = {
-                            if (view != null && !view.gone) key(view) {
-                                AndroidView(factory = { view }, modifier = Modifier.fillMaxSize(), onRelease = { pool.release(it) })
-                            }
+                            if (view != null && !view.gone) key(view) { ChatLinkWebSlot(view, Modifier.fillMaxSize()) }
                         }
                         val read = linkManager ?: manager
                         // A link inside it (another document, a post) opens as the manager it is read as.
@@ -348,9 +352,7 @@ fun ChatLinkHost(
                         }
                     } else if (view != null && !view.gone) key(view) {
                         JPage(title = stringResource(R.string.chat_link_page), modifier = Modifier.fillMaxWidth().weight(1f), topBar = {}) { padding ->
-                            AndroidView(factory = { view },
-                                modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = pagePadding),
-                                onRelease = { pool.release(it) })
+                            ChatLinkWebSlot(view, Modifier.fillMaxSize().padding(padding).padding(horizontal = pagePadding))
                         }
                     } else Spacer(Modifier.fillMaxWidth().weight(1f))
                 }
@@ -381,8 +383,23 @@ fun ChatLinkHost(
                 if (!openExternal(context, link)) feedback?.notice(noApp)
             })
         }
+        // Declared after the card's own effects, which Compose forgets in reverse order: when the host goes, the pool closes first,
+        // so the page's release only destroys it instead of building a replacement for a pool that is about to be destroyed.
+        DisposableEffect(pool) { onDispose { pool.destroy() } }
     }
 }
+
+/**
+ * The page's slot in the card. Leaving composition only detaches the view; destroying it is [ChatWebViewPool.release], which the
+ * host's `DisposableEffect(view)` calls once, when the page stops showing. A slot that comes back with the same view gets it alive.
+ */
+@Composable
+internal fun ChatLinkWebSlot(view: ChatSelectionWebView, modifier: Modifier = Modifier) {
+    AndroidView(factory = { (view.parent as? ViewGroup)?.removeView(view); view }, modifier = modifier)
+}
+
+/** Which WebView features the host's pool may use; the platform's answers unless a test fixes them. */
+internal val LocalChatWebFeatures = staticCompositionLocalOf { ChatWebFeatures.Platform }
 
 /**
  * The machine a conversation runs on, for its port links (docs/operations/ports.md "Recognizing links in replies"): its id and name, the names

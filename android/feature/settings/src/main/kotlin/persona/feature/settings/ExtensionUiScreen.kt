@@ -25,8 +25,8 @@ import kotlinx.coroutines.launch
 import persona.core.contracts.api.SUBSCRIPTIONS_UI
 
 // The places an extension's View is drawn (docs/extensions/extensions.md "Declarative UI"): a page of its own (extension_page, from the
-// extension's page in Settings › Extensions; nav_page, from the "Extensions" section of the settings home) and a section on a launcher's
-// page (launcher_section). The UI slots of the settings home and a machine's page are in ExtensionSlots.kt.
+// extension's page in Settings › Extensions; nav_page, from the "Extensions" section of Settings › Extensions) and a section on a launcher's
+// page (launcher_section). The UI slots of Settings › Extensions and a machine's page are in ExtensionSlots.kt.
 
 val LocalExtensionPageVisible = compositionLocalOf { true }
 
