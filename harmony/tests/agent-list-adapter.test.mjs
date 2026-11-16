@@ -1,0 +1,127 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { registerHooks, stripTypeScriptTypes } from 'node:module';
+import { readFileSync } from 'node:fs';
+
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === 'libpersona_core_ohos.so') return {url: 'agent-sort-native:', shortCircuit: true};
+    if (specifier === '@kit.PerformanceAnalysisKit') return {url: 'agent-sort-hilog:', shortCircuit: true};
+    if (context.parentURL?.includes('/entry/src/main/ets/')) {
+      const url = new URL(specifier, context.parentURL);
+      if (url.pathname.endsWith('/Wire')) url.pathname += '.ets';
+      else if (!/\.[a-z]+$/i.test(url.pathname)) url.pathname += '.ts';
+      return {url: url.href, shortCircuit: true};
+    }
+    return next(specifier, context);
+  },
+  load(url, context, next) {
+    if (url === 'agent-sort-native:') return {format: 'module', shortCircuit: true, source: `
+      export default {coreProjectSort(input) { globalThis.agentSortInput = input; return JSON.stringify(globalThis.agentSortOutput); }};
+    `};
+    if (url === 'agent-sort-hilog:') return {format: 'module', shortCircuit: true,
+      source: 'export const hilog={info(...args){globalThis.agentSortLog=args},warn(...args){globalThis.agentSortLog=args}};'};
+    if (url.endsWith('.ts') || url.endsWith('.ets')) return {format: 'module', shortCircuit: true,
+      source: stripTypeScriptTypes(readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, '').replace(/@Concurrent\s*/g, ''))};
+    return next(url, context);
+  },
+});
+
+const {NativeAgentListAdapter, nativeCoreProjection, shadowAgentList, coreAgentSortInput} = await import('../entry/src/main/ets/core/AgentListAdapter.ts');
+const {differingAgentSortRules, agentInputShape} = await import('../entry/src/main/ets/core/AgentListProjection.ts');
+const {DebugAgentListShadow} = await import('../entry/src/main/ets/platform/DebugAgentListShadow.ets');
+const {ResourceRow} = await import('../entry/src/main/ets/models/Wire.ets');
+
+function row(id, state = 'idle', extra = {}) {
+  const data = {session_id: id, machine_id: 'machine-a', title: `Private ${id}`, cwd: `/private/${id}`,
+    repo_root: `/private/${id}`, worktree: `/private/${id}`, state, status: state,
+    updated_at: '2026-01-01T00:00:10Z', ...extra};
+  const source = ResourceRow.from(data, 'session');
+  return {id, raw: data, source};
+}
+const preferences = {pinsSpaces: [], pinsSessions: [], mutesSpaces: [], mutesSessions: [], mutesAllowed: []};
+function input(rows = [row('a', 'working'), row('b', 'idle')], grouping = 'flat') {
+  return {rows, history: false, grouping, quick: 'all', query: '', machineFilter: '', kept: [], reading: false,
+    machines: [{id: 'machine-a', name: 'Example computer'}, {id: 'machine-b', name: 'Example computer'}],
+    coreSettings: {sort: 'state', folded: [], expanded_idle: [], expanded_quiet: [], compact: false},
+    preferencesFor: () => preferences, machineIdentity: (r) => r.raw.machine_id, machineName: (r) => 'Example computer'};
+}
+const empty = {counts: {needsYou: 0, unread: 0, working: 0, backgroundWaiting: 0}, groups: [], unread_shown: []};
+
+test('native adapter returns the original ResourceRow identity and all existing group flags', () => {
+  const native = new NativeAgentListAdapter();
+  for (const grouping of ['flat', 'machine', 'repository', 'worktree']) {
+    const groups = native.project(input([row('a', 'working'), row('b', 'idle', {machine_id: 'machine-b'})], grouping));
+    assert.ok(groups.length > 0);
+    assert.ok(groups.flatMap((g) => g.rows).every((r) => r.source instanceof ResourceRow));
+    assert.ok(groups.every((g) => g.showMachine === (grouping === 'machine') &&
+      g.showRepository === (grouping === 'repository') && g.showWorktree === (grouping === 'worktree')));
+  }
+});
+
+test('shadow compares the actual core output and keeps native results authoritative', () => {
+  const list = input();
+  const native = nativeCoreProjection(list);
+  globalThis.agentSortOutput = native;
+  const reports = [];
+  assert.equal(shadowAgentList(list, native, (raw) => {globalThis.agentSortOutput = native; return JSON.stringify(native);}, (r) => reports.push(r)), true);
+  assert.deepEqual(reports, []);
+  const before = new NativeAgentListAdapter().project(list).map((g) => g.rows.map((r) => r.id));
+  globalThis.agentSortOutput = empty;
+  assert.equal(shadowAgentList(list, native, () => JSON.stringify(empty), (r) => reports.push(r)), false);
+  assert.deepEqual(new NativeAgentListAdapter().project(list).map((g) => g.rows.map((r) => r.id)), before);
+  assert.deepEqual(reports.map((r) => r.rule), ['counts', 'group-order']);
+  const serialized = JSON.stringify(reports);
+  for (const secret of ['Private a', '/private/a', 'machine-a', 'session_id', 'cwd', 'Private b']) assert.ok(!serialized.includes(secret), serialized);
+});
+
+test('each projection dimension gets a rule; malformed and throwing native calls cannot escape', () => {
+  const native = nativeCoreProjection(input());
+  const wrong = structuredClone(native);
+  wrong.groups[0].visible_rows = [];
+  wrong.groups[0].title = 'Different';
+  wrong.unread_shown = ['unknown/value'];
+  assert.deepEqual(differingAgentSortRules(native, wrong), ['visible-rows', 'group-metadata', 'unread-shown']);
+  for (const output of [{}, {groups: [], counts: {}}]) {
+    const reports = [];
+    assert.equal(shadowAgentList(input(), native, () => JSON.stringify(output), (r) => reports.push(r)), false);
+    assert.deepEqual(reports.map((r) => r.rule), ['native-failure']);
+  }
+  const reports = [];
+  assert.equal(shadowAgentList(input(), native, () => {throw new Error('private content must not escape');}, (r) => reports.push(r)), false);
+  assert.ok(!JSON.stringify(reports).includes('private content'));
+  assert.equal(coreAgentSortInput(input([row('a')], 'worktree')), undefined, 'never relabel worktree as machine');
+});
+
+test('input shape is counts and enum flags only, including a nonempty private query', () => {
+  const list = {...input(), query: 'private query'};
+  const shape = agentInputShape(coreAgentSortInput(list));
+  assert.ok(shape.includes('query=set'));
+  assert.ok(!shape.includes('private query'));
+});
+
+test('debug receiver reports only shape and counts and never loads Rust during snapshot', () => {
+  const reports = [], shadow = new DebugAgentListShadow((r) => reports.push(r));
+  const snapshot = shadow.snapshot(input());
+  assert.ok(snapshot);
+  assert.equal(globalThis.agentSortInput, undefined, 'snapshot must not call NAPI');
+  shadow.receive([]);
+  assert.equal(reports.length, 0);
+  shadow.receive([{domain: 'agents-list-sort', rule: 'row-order', inputShape: 'sessions=1'}]);
+  assert.equal(reports.length, 1);
+  shadow.failure();
+  assert.deepEqual(reports.at(-1).inputShape, 'worker-failed=true');
+  assert.equal(globalThis.agentSortLog, undefined, 'a custom reporter owns diagnostics');
+});
+
+test('release has no shadow module reference and DEBUG is the only dynamic-load gate', () => {
+  const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const start = index.slice(index.indexOf('private startAgentListShadow'), index.indexOf('aboutToDisappear'));
+  assert.match(start, /if \(!BuildProfile\.DEBUG(?: \|\| [^)]+)?\) return;/);
+  assert.ok(start.indexOf('BuildProfile.DEBUG') < start.indexOf("import('../platform/DebugAgentListShadow')"));
+  assert.ok(!/^import\s+\{[^}]*\}\s+from\s+['"]\.\.\/platform\/DebugAgentListShadow['"];?$/m.test(index), 'no runtime static import');
+  assert.ok(index.includes("import type { DebugAgentListShadow }"));
+  const worker = readFileSync(new URL('../entry/src/main/ets/platform/DebugAgentListShadow.ets', import.meta.url), 'utf8');
+  assert.match(worker, /@Concurrent\nexport function runDebugAgentSortShadow/);
+  assert.ok(!/new taskpool\.Task\(shadow\./.test(index));
+});

@@ -1,5 +1,5 @@
 import { ThemeScope } from '../design/ThemeScope';
-import { util } from '@kit.ArkTS';
+import { util, taskpool } from '@kit.ArkTS';
 import { AdminWorkspacePage } from '../components/AdminWorkspacePage';
 import { ExtensionPage } from '../components/ExtensionPage';
 import { ExtensionNavigationPage } from '../components/ExtensionNavigationPage';
@@ -26,6 +26,10 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ComposeListItemV2, ContentItemV2, KeyboardAvoidMode, TextModifier, SymbolGlyphModifier, CapsuleSegmentButtonV2, SegmentButtonV2Items, ColorMetrics, LengthMetrics, uiMaterial } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { ClientModel, client } from '../models/ClientModel';
+import { NativeAgentListAdapter } from '../core/AgentListAdapter';
+import type { AgentListInput } from '../core/AgentListAdapter';
+import type { AgentSortReport } from '../core/AgentListProjection';
+import type { DebugAgentListShadow } from '../platform/DebugAgentListShadow';
 import { ResourceRow, HubProfile, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Pairing, PairingTarget } from '../platform/Pairing';
@@ -108,6 +112,10 @@ struct Index {
   @Local tool: number = 0;
   private titleMaterial: uiMaterial.Material = uiMaterial.isImmersiveMaterialSupported() ? new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN }) : uiMaterial.Material.empty;
   @Local agentWorkspace: AgentWorkspace = new AgentWorkspace();
+  private agentShadow: DebugAgentListShadow | undefined;
+  private agentShadowTask: taskpool.Task | undefined;
+  private agentShadowQueue: Promise<void> = Promise.resolve();
+  private agentShadowStarted: boolean = false;
   @Local environment: NativeEnvironment = nativeEnvironment;
   @Local spacesShown: boolean = false;
   @Local spacesInset: number = 0;
@@ -261,8 +269,36 @@ struct Index {
     this.syncConversationRows(); this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE); this.updateBreakpoint(); this.consumePairingLink(); this.restoreScope(); this.consumeNotification();
     this.bindDeviceOwner(this.model);
     this.applications.bind(this.model); this.applications.refresh();
+    this.startAgentListShadow();
   }
-  aboutToDisappear(): void { this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions(); }
+  private startAgentListShadow(): void {
+    if (!BuildProfile.DEBUG || this.agentShadowStarted) return;
+    this.agentShadowStarted = true;
+    import('../platform/DebugAgentListShadow').then(({DebugAgentListShadow, runDebugAgentSortShadow}) => {
+      if (!this.agentShadowStarted) return;
+      const shadow = new DebugAgentListShadow();
+      this.agentShadow = shadow;
+      this.agentWorkspace.setListShadow((input: AgentListInput) => {
+        let snapshot;
+        try { snapshot = shadow.snapshot(input); } catch (_) { shadow.failure(); return; }
+        if (!snapshot) return;
+        this.agentShadowQueue = this.agentShadowQueue.then(async () => {
+          if (this.agentShadow !== shadow) return;
+          const task = new taskpool.Task(runDebugAgentSortShadow, snapshot.input, snapshot.projection);
+          this.agentShadowTask = task;
+          try {
+            if (this.agentShadow === shadow) shadow.receive(await taskpool.execute(task) as AgentSortReport[]);
+          } catch (_) { if (this.agentShadow === shadow) shadow.failure(); }
+          finally { this.agentShadowTask = undefined; }
+        });
+      });
+    }).catch(() => undefined);
+  }
+  aboutToDisappear(): void {
+    this.agentShadowStarted = false; this.agentShadow = undefined;
+    if (this.agentShadowTask) { taskpool.cancel(this.agentShadowTask); this.agentShadowTask = undefined; }
+    this.agentWorkspace.setListShadow(undefined); this.agentWorkspace.hide(); this.applications.dispose(); this.dismissChatActions();
+  }
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }

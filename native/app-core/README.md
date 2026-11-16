@@ -129,6 +129,27 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## HarmonyOS Agents-list adapter (#8957)
+
+`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
+ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
+`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
+core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
+replace the native rows, and snapshot/native failures affect only diagnostics.
+
+Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
+query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
+`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
+available in this environment.
+
+The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
+native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
+both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
+`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
+membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
+`devecocli`, so a release HAP was not built.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
