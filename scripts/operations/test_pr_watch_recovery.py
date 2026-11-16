@@ -146,6 +146,22 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertNotIn(str(stale), state.data["worktree_leases"])
 
+    def test_companion_lease_is_retained_until_its_directory_is_gone(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        companion = Path(str(stale) + "-base-check")
+        companion.mkdir()
+        (companion / "evidence").write_text("do not forget")
+        state = type("State", (), {"lock": __import__("threading").RLock(),
+                                   "data": {"worktree_leases": {
+                                       str(stale): {"active": False, "heartbeat": 1},
+                                       str(companion): {"active": False, "heartbeat": 1},
+                                   }}})()
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=lambda checkout, state_file, path: stale.rmdir()):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 1)
+        self.assertIn(str(companion), state.data["worktree_leases"])
+        self.assertTrue(companion.exists())
+
     def test_reclamation_skips_leases_from_other_repositories(self):
         other = self.worktrees / "persona-extensions-7-old"
         other.mkdir()

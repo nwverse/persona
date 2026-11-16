@@ -358,14 +358,14 @@ class WatcherTests(unittest.TestCase):
                                base=SHA_BASE, format=1, outcome="reviewed", semantic="findings",
                                findings=findings, review_posted=False, published_findings=[])
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(SHA_B)), \
-                patch.object(self.watcher, "comment_findings") as publish, \
+                patch.object(self.watcher, "comment_findings", side_effect=lambda repo, number, snapshot, findings, **kwargs: self.watcher.record_review_publication(repo, number, snapshot, findings, True)) as publish, \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
                 patch.object(pr_watch, "verify", return_value=[]), \
                 patch.object(self.watcher, "merge", return_value=False):
             self.watcher.process("example/one", 7)
         publish.assert_called_once_with("example/one", 7, pr(SHA_B), findings, inline=False)
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
-        history = self.watcher.state.data["finding_publications"]["example/one#7"]
+        history = self.watcher.state.data["finding_publications"]["example/one#7"][SHA_A]
         self.assertEqual(history["published_findings"], findings)
 
     def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
@@ -1559,6 +1559,75 @@ class WatcherTests(unittest.TestCase):
         payload = execute.call_args.kwargs["input_text"]
         self.assertIn("no automatic repair or merge", payload)
         self.assertNotIn("merging continue", payload)
+
+    def test_semantic_backoff_is_not_cleared_by_verification_policy_migration(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="retry", retry_reason="semantic_review",
+                               retry_after=time.time() + 3600, review_attempts=3)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["review_attempts"], 3)
+        self.assertEqual(state["retry_reason"], "semantic_review")
+
+    def test_review_only_publication_retry_reuses_completed_review(self):
+        self.watcher.repositories["example/one"]["merge"] = False
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="reviewed", semantic="findings",
+                               findings=[finding], review_posted=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "comment_findings") as publish, \
+                patch.object(self.watcher, "worktree") as worktree, \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        publish.assert_called_once_with("example/one", 7, pr(), [finding])
+        worktree.assert_not_called()
+        review.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "findings")
+
+    def test_completed_base_failure_retry_preserves_its_disclosure(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="retry", semantic="passed",
+                               verification="base_failure", findings=[], success_posted=False,
+                               base_failures={"reproduced": True, "reason": "same named test"},
+                               checks=[{"name": "test", "command": ["true"], "ok": False}])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "success_review") as publish, \
+                patch.object(self.watcher, "merge", return_value=True):
+            self.watcher.process("example/one", 7)
+        self.assertIsNotNone(publish.call_args.args[4])
+        self.assertEqual(publish.call_args.args[4]["reason"], "same named test")
+
+    def test_repository_policy_reset_reverifies_exact_head(self):
+        self.watcher.state.data["repository_policy"] = "old"
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="passed", semantic="passed",
+                               verification="passed", verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               success_posted=True, findings=[])
+        self.watcher.migrate_policy("new")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        verify.assert_called_once()
+
+    def test_publication_history_is_independent_per_head(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.record_review_publication("example/one", 7, pr(SHA_A), [finding], True)
+        self.watcher.record_review_publication("example/one", 7, pr(SHA_B), [finding], False)
+        history = self.watcher.state.data["finding_publications"]["example/one#7"]
+        self.assertEqual(history[SHA_A]["published_findings"], [finding])
+        self.assertEqual(history[SHA_B]["published_findings"], [])
 
     def test_completed_retry_resumes_success_without_repeating_verification(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A

@@ -71,8 +71,12 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
                 existed = path.exists()
                 remove_worktree(checkout, state_file, path)
                 if existed and not path.exists():
+                    companion = Path(str(path) + "-base-check")
+                    if not companion.exists():
+                        leases.pop(str(path) + "-base-check", None)
+                    # A nonempty companion remains leased and recoverable; do
+                    # not unregister it merely because the main path vanished.
                     leases.pop(str(path), None)
-                    leases.pop(str(path) + "-base-check", None)
                     removed += 1
                     if state is not None:
                         try:

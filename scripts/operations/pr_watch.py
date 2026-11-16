@@ -218,7 +218,7 @@ class Watcher:
                 # In particular, a fork's continuation belongs to its original
                 # PR and must not be created a second time by a migration.
                 if policy_changed and item.get("outcome") not in ("merged", "continuation"):
-                    for field in ("semantic", "verification", "checks", "review_posted", "success_posted",
+                    for field in ("semantic", "verification", "verification_policy", "checks", "review_posted", "success_posted",
                                   "review_fingerprint", "published_fingerprint", "published_findings"):
                         item.pop(field, None)
                     item["outcome"] = "retry"
@@ -471,13 +471,12 @@ class Watcher:
         key = repo + "#" + str(number)
         with self.state.lock:
             item = self.state.data.setdefault("finding_publications", {}).setdefault(key, {})
-            current = item.get("findings", [])
-            if current != findings:
-                item.update(head=pr["headRefOid"], findings=findings,
-                            published_findings=findings if posted else [])
-            elif posted:
-                item["published_findings"] = findings
-            item["updated_at"] = int(time.time())
+            head = pr.get("headRefOid") or pr.get("head")
+            if not isinstance(head, str) or not pr_watch_common.SHA.fullmatch(head):
+                raise WatchError("review publication requires an exact head")
+            item[head] = {"findings": findings,
+                                      "published_findings": findings if posted else [],
+                                      "updated_at": int(time.time())}
             atomic_json(self.state.path, self.state.data)
 
     def comment_findings(self, repo, number, pr, findings, inline=True):
@@ -861,7 +860,7 @@ class Watcher:
         evidence_key = repo + "#" + str(number) + "@" + pr["baseRefOid"] + ".." + head
         if old.get("evidence_key") != evidence_key:
             previous = old
-            history = self.state.data.get("finding_publications", {}).get(repo + "#" + str(number), {})
+            history = self.state.data.get("finding_publications", {}).get(repo + "#" + str(number), {}).get(previous.get("head"), {})
             unpublished = (previous.get("head") and previous.get("findings")
                            and history.get("published_findings") != previous["findings"])
             if unpublished and not self.dry_run:
@@ -869,14 +868,14 @@ class Watcher:
                 # of the complete old review. Publish it once as grouped text,
                 # then review the new head independently.
                 self.comment_findings(repo, number, pr, previous["findings"], inline=False)
-                self.record_review_publication(repo, number, pr, previous["findings"], posted=True)
+                self.record_review_publication(repo, number, previous, previous["findings"], posted=True)
             old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if (old.get("head") == head and old.get("format") == FORMAT_VERSION
-                and old.get("retry_reason") != "semantic_review"
+                and old.get("retry_reason") not in ("semantic_review", "verification_repair", "semantic_repair", "base_update")
                 and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
                 and old.get("verification") not in ("passed", "base_failure")
                 and not old.get("repair_exhausted")
-                and old.get("outcome") not in ("merged", "continuation", "findings", "repair_comment_pending")):
+                and old.get("outcome") not in ("merged", "continuation", "findings", "repair_comment_pending", "reviewed")):
             # A prerequisite failure is not evidence against this exact head.
             # Retry only its verification under the new policy. Completed gates,
             # published findings and exhausted repair budgets keep their meaning.
@@ -952,6 +951,26 @@ class Watcher:
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
+                and old.get("format") == FORMAT_VERSION and old.get("outcome") == "reviewed"
+                and old.get("semantic") in ("findings", "passed") and old.get("findings")):
+            if self.dry_run:
+                return False
+            if not old.get("review_posted"):
+                self.comment_findings(repo, number, pr, old["findings"])
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     review_posted=True, published_findings=old["findings"],
+                                     published_fingerprint=old.get("review_fingerprint"))
+            if not config["merge"]:
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="findings")
+                return False
+            if old.get("semantic") == "passed":
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="passed_with_findings")
+            else:
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="findings")
+        if (old.get("head") == head and old.get("evidence_key") == evidence_key
                 and old.get("format") == FORMAT_VERSION and old.get("outcome") == "retry"
                 and old.get("semantic") == "passed"
                 and old.get("verification") in ("passed", "base_failure")
@@ -959,11 +978,14 @@ class Watcher:
             # A completed retry retains valid exact-head evidence. Normalize
             # it into the existing publication path instead of verifying in a
             # loop merely because an infrastructure retry once set `retry`.
+            if old.get("verification") == "base_failure":
+                outcome = "passed_with_base_failures"
+            else:
+                outcome = "passed_with_findings" if old.get("findings") else "passed"
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                 outcome="passed_with_findings" if old.get("findings") else "passed",
-                                 retry_reason=None, retry_after=0)
+                                 outcome=outcome, retry_reason=None, retry_after=0)
         if old.get("head") == head and old.get("format") == FORMAT_VERSION \
-                and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry") \
+                and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry", "reviewed") \
                 and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure")) \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
                      or old.get("verification") in ("passed", "base_failure")) \
@@ -972,9 +994,12 @@ class Watcher:
                 return
             if self.dry_run:
                 return
+            if old.get("review_posted") and not config["merge"]:
+                return
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
                                                 and old.get("semantic") == "passed") \
                     and not (old.get("outcome") in ("passed_with_findings", "passed") and not old.get("success_posted")) \
+                    and old.get("outcome") != "reviewed" \
                     and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
                     and old.get("outcome") != "repairing" \
                     and not (old.get("outcome") == "passed_with_findings" and old.get("verification") in ("passed", "base_failure")
