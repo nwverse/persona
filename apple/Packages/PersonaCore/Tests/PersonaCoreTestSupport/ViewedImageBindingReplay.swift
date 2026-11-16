@@ -82,6 +82,12 @@ extension ProjectionBindingReplay {
         ])
         let explicitImageIndex = try require(items(derived).firstIndex(where: { $0.text("kind") == "image" }), "explicit-size image")
         let explicit = try replacingItem(derived, id: try require(items(derived)[explicitImageIndex].text("id"), "image id")) { item in
+            item = explicitObject
+        }
+        let explicitImage = try require(items(explicit)[explicitImageIndex]["image"], "explicit-size payload")
+        let derivedImage = try require(items(derived)[explicitImageIndex]["image"], "derived-size payload")
+        guard explicitImage["size"] == .number("9"), derivedImage["size"] == nil else {
+            throw ProjectionFixtureError.invalidFixture("explicit-size mutation is absent or already present in the derived input")
         }
         try assert(explicit, viewed("vi-2#0", ["s:image/png:9:16x10"]), "viewed_images/explicit inline-data size")
         guard try ProjectionFixture.project(explicit, "explicit identity", using: PersonaCoreProjections.viewedImages)
@@ -200,15 +206,17 @@ extension ProjectionBindingReplay {
             }, "viewed_images/agent \(status) result")
         }
         try ProjectionFixture.rejectMalformed(PersonaCoreProjections.viewedImages, label: "viewed_images")
+        let ordinaryActual = try ProjectionFixture.project(tool.input, "wrong ordinary owner", using: PersonaCoreProjections.viewedImages)
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            ordinaryExpected, wrong: viewed("vi-fold:2#0", []), label: "viewed_images/wrong owner and identity"
+            ordinaryActual, wrong: viewed("vi-fold:2#0", []), label: "viewed_images/wrong owner and identity"
         )
+        let foldedActual = try ProjectionFixture.project(try withFoldImages(fold, foldImages), "wrong folded owner", using: PersonaCoreProjections.viewedImages)
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            foldedExpected, wrong: viewed("vi-1#0", ["i:5#0"]), label: "viewed_images/wrong folded expectation"
+            foldedActual, wrong: viewed("vi-1#0", ["i:5#0"]), label: "viewed_images/wrong folded expectation"
         )
+        let queuedActual = try ProjectionFixture.project(queued, "wrong queued owner", using: PersonaCoreProjections.viewedImages)
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            viewed("vi-1#0", ["p:/w/first.png"]), wrong: viewed("vi-5#0", ["p:/w/second.png"]),
-            label: "viewed_images/wrong queued owner"
+            queuedActual, wrong: viewed("vi-5#0", ["p:/w/second.png"]), label: "viewed_images/wrong queued owner"
         )
         guard completeObjects == 28, noLineBoundaries == 8 else {
             throw ProjectionFixtureError.invalidFixture("viewed-image replay inventory changed: \(completeObjects)/\(noLineBoundaries)")
