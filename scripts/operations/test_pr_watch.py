@@ -1646,6 +1646,22 @@ class WatcherTests(unittest.TestCase):
         merge.assert_called_once()
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
 
+    def test_infrastructure_retry_never_skips_saved_blocking_findings(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="retry", semantic="findings",
+                               findings=[finding], review_posted=True, published_findings=[finding],
+                               retry_reason="verification_repair", retry_after=0)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge") as merge:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+        verify.assert_not_called()
+        merge.assert_not_called()
+
     def test_verification_failure_uses_bounded_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \

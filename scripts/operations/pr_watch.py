@@ -1230,7 +1230,8 @@ class Watcher:
                                          review_posted=not self.dry_run,
                                          published_findings=findings if not self.dry_run else current.get("published_findings", []),
                                          published_fingerprint=current.get("review_fingerprint"))
-            if current.get("semantic") == "findings":
+            if current.get("semantic") == "findings" or any(
+                    finding.get("severity") in ("P0", "P1") for finding in findings):
                 if self.dry_run or not config["merge"]:
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                              outcome="findings")
