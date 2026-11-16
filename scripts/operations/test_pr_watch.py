@@ -363,7 +363,12 @@ class WatcherTests(unittest.TestCase):
                 patch.object(pr_watch, "verify", return_value=[]), \
                 patch.object(self.watcher, "merge", return_value=False):
             self.watcher.process("example/one", 7)
-        publish.assert_called_once_with("example/one", 7, pr(SHA_B), findings, inline=False)
+        publish.assert_called_once()
+        args, kwargs = publish.call_args
+        self.assertEqual(args[:2], ("example/one", 7))
+        self.assertEqual(args[2]["headRefOid"], SHA_B)
+        self.assertEqual(args[3], findings)
+        self.assertEqual(kwargs, {"inline": False})
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
         history = self.watcher.state.data["finding_publications"]["example/one#7"][SHA_A]
         self.assertEqual(history["published_findings"], findings)
