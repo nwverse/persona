@@ -338,6 +338,30 @@ Phase 1 (#6871) lands in several PRs.
     benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
     the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
     not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
+  - **Lock-free dispatch and zero-copy JNI hand-off (#9048).** The previous dispatch path held `queue: Mutex<Queue>`
+    on the caller only to do `pending += 1` and check `stopping`, and `Runtime::dispatch(&[u8])` always copied the
+    action bytes a second time even when the caller already owned them. `Shared.pending` and `Shared.stopping` are
+    now an `AtomicU64` and an `AtomicBool`; the worker decrements with `fetch_sub` and only takes a mutex when the
+    queue becomes empty and a `flush` waiter needs waking. The stop flag's Acquire/Release pairs with the channel
+    send so an action accepted before shutdown still precedes Stop. A new `Runtime::dispatch_owned(Vec<u8>)` moves
+    the encoded bytes straight into the worker's channel; the JNI `NativeBridge.dispatch` uses it so the
+    `convert_byte_array` `Vec<u8>` is no longer cloned into a second buffer. The C ABI `persona_core_dispatch` keeps
+    its borrowed-slice signature and routes through `dispatch(&[u8])` (one copy, same as before). The diagnostics
+    `pending_lock*` counters stay at zero and only the patch-lock span is measured. Same host, same protocol (100
+    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), `:core:rustcore:boundaryCostTest`
+    on `47d9e8468d` base versus the optimized branch:
+    - dispatch p50 across 4 base runs 1.63–2.85 µs (mean 2.27) and 6 optimized runs 1.84–2.97 µs (mean 2.35);
+      p99 base 3.29–5.04 µs (mean 4.37) and optimized 3.48–7.43 µs (mean 4.78); max base ≤ 14.13 µs, optimized
+      ≤ 20.22 µs. **The two distributions overlap**: this change is a structural simplification, not a measurable
+      host speedup. Both sides already sit far below the 50 µs budget on this host.
+    - drain+decode+apply p50 base 3.76–4.20 µs, optimized 3.47–4.99 µs; p99 base 16.25–32.08 µs, optimized
+      16.16–38.22 µs; max base 80.82–472.32 µs, optimized 53.25–302.50 µs. Same overlap; the 1 ms budget is met
+      on host by both.
+    All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
+    `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
+    reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
+    x86_64 emulator A/B data was not collected on this run (no KVM on the devbox; the owned software-emulator boot
+    stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
@@ -517,13 +541,14 @@ Phase 3 lands in several PRs.
     boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
     malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
     the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
-  - `persona_core::stream_repair` adds only the open-fence repair and code/text end projection (#9051), with real
+  - `persona_core::stream_repair` adds the open-fence repair and code/text end projection (#9051), with real
     Kotlin/JNI replay of 21 complete source-derived repaired strings and six explicit code/text end cases from
     `StreamRepairTests`. It preserves
     opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
-    Malformed input and a deliberately wrong expected object are rejected. Tables, inline markup, math blocks,
-    `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the #4044
-    performance goal remain open.
+    The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
+    with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
+    are rejected. Tables, inline markup, math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift
+    bindings, production adapters and the #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and

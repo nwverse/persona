@@ -153,7 +153,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_dispatch(
         let Ok(action) = env.convert_byte_array(&action) else {
             return false;
         };
-        runtime.dispatch(&action)
+        // Move the Vec<u8> straight into the worker's channel; no second copy on the main thread.
+        runtime.dispatch_owned(action)
     }))
     .map_or(JNI_FALSE, boolean)
 }
