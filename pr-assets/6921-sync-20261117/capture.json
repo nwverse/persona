@@ -1,0 +1,134 @@
+{
+  "head": "173e051006da53a65f0fbc040b73acc3caaddacb",
+  "web_tree": "ac4d2c77343a077839ee2b9d106f547480f2ea23",
+  "browser": "149.0.7827.55",
+  "platform": "linux",
+  "node": "v24.20.0",
+  "screenshots": [
+    {
+      "file": "1440-light-standard-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "1440-light-standard-options.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "390-dark-large-source.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "390-dark-large-options.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "automatic-enabled.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "release-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-waiting.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "interrupt-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm-narrow-dark-large.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    }
+  ],
+  "interactions": [
+    "auto opt-in; source change disables auto and hides backups; program-only backup cancel/confirm; wait controls disabled; Update now cancel/confirm",
+    [
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto_update_nodes": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "release"
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "web-dev"
+        }
+      },
+      {
+        "path": "/hub/update/backups/snapshot-20261112000100000000-cccccccccccc/apply",
+        "method": "POST",
+        "input": {}
+      },
+      {
+        "path": "/hub/update",
+        "method": "POST",
+        "input": {
+          "now": true
+        }
+      }
+    ]
+  ]
+}
