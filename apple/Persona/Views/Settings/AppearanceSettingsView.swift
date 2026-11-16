@@ -17,6 +17,7 @@ struct AppearanceSection: View {
     @StoredValue(NavigationLayout.key) private var navigation = ""
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
+    @StoredValue(ScreenshotBannerPrefs.enabledKey) private var screenshotBanner = ScreenshotBannerPrefs.enabledByDefault
 
     var body: some View {
         Section {
@@ -77,6 +78,16 @@ struct AppearanceSection: View {
                                       symbol: Theme.Icon.composerGlow, tint: Theme.Hue.purple,
                                       accessibilityID: "settings-composer-glow", isOn: $composerGlow)
                 }
+                #if os(iOS)
+                // A chat's screenshots show the assistant's banner where the top bar is (#9508); not offered where the
+                // system has no layer to keep the bar out of a screenshot.
+                if ScreenshotBanner.isAvailable {
+                    SettingsSwitchRow(title: String(localized: "Persona Banner in Screenshots"),
+                                      detail: String(localized: "Screenshots and screen recordings of chats show your assistant's picture and name at the top"),
+                                      symbol: Theme.Icon.screenshotBanner, tint: Theme.persona,
+                                      accessibilityID: "settings-screenshot-banner", isOn: $screenshotBanner)
+                }
+                #endif
             }
             .bareListRow()
         } header: {

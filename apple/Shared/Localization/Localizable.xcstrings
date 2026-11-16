@@ -12703,6 +12703,29 @@
       },
       "extractionState" : "manual"
     },
+    "(Persona) [Brand Lockup]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(Persona)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(Persona)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(Persona)"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "(The original is longer and was cut here.)" : {
       "localizations" : {
         "en" : {
@@ -109131,6 +109154,29 @@
       },
       "extractionState" : "manual"
     },
+    "Persona Banner in Screenshots" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Banner in Screenshots"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スクリーンショットに Persona のバナーを表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截屏时显示 Persona 标识"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Persona runs the Claude Code CLI on %@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:" : {
       "localizations" : {
         "en" : {
@@ -136261,6 +136307,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "DSH、pi 这类 runtime 连到这台电脑"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Screenshots and screen recordings of chats show your assistant's picture and name at the top" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screenshots and screen recordings of chats show your assistant's picture and name at the top"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットのスクリーンショットや画面収録の上部に、アシスタントの画像と名前を表示します"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天页截屏、录屏时，顶部显示助手的头像和名字"
           }
         }
       },
