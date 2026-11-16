@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -262,5 +263,96 @@ func TestChatEffortUsesDeclaredModelCapabilities(t *testing.T) {
 				t.Fatalf("wire effort = %v, want %q", body["reasoning_effort"], tc.wire)
 			}
 		})
+	}
+}
+
+func TestChatDefaultTriageOffValueFallbackAndCache(t *testing.T) {
+	var requests []map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		if body["reasoning_effort"] == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"unsupported_value","message":"Unsupported value: 'none'. Supported values are: 'minimal', 'low', 'medium', 'high'.","param":"reasoning_effort"}}`))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer gateway.Close()
+	s, mux := launcherTestService(t)
+	create := `{"name":"chat-triage","kind":"api","api":"chat","base_url":` + strconv.Quote(gateway.URL) + `,"model":"m","api_key":` + strconv.Quote(fakeKey) + `}`
+	if code, raw := launcherCall(t, mux, "POST", "/api/v1/launchers", create); code != http.StatusOK {
+		t.Fatal(raw)
+	}
+	binding, err := s.resolveModel(context.Background(), "inbox.triage")
+	if err != nil || binding.Provider != "launcher.chat-triage" || binding.Effort != "off" {
+		t.Fatalf("default triage binding = %+v, %v", binding, err)
+	}
+	config, err := s.apiConfig(context.Background(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ai.New(config)
+	for i := 0; i < 2; i++ {
+		if _, err := client.Chat(context.Background(), ai.Request{Messages: []ai.Message{{Role: ai.RoleUser, Content: "ping"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config.ReasoningEffort = "high"
+	if _, err := ai.New(config).Chat(context.Background(), ai.Request{Messages: []ai.Message{{Role: ai.RoleUser, Content: "ping"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("requests = %d, want 4: %v", len(requests), requests)
+	}
+	if requests[0]["reasoning_effort"] != "none" || requests[3]["reasoning_effort"] != "high" {
+		t.Fatalf("explicit levels were not preserved: %v", requests)
+	}
+	for _, i := range []int{1, 2} {
+		if _, present := requests[i]["reasoning_effort"]; present {
+			t.Fatalf("request %d should omit the rejected none field: %v", i+1, requests[i])
+		}
+	}
+}
+
+func TestChatProbeOffValueRetryAndCache(t *testing.T) {
+	var requests []map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		if body["reasoning_effort"] == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"unsupported_value","message":"Unsupported value: 'none'. Supported values are: 'minimal', 'low', 'medium', 'high'.","param":"reasoning_effort"}}`))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"},\"finish_reason\":\"stop\"}]}\n\n"))
+	}))
+	defer gateway.Close()
+	s, _ := launcherTestService(t)
+	for i := 0; i < 2; i++ {
+		effort := "off"
+		out := s.providerTest(context.Background(), probeInput{BaseURL: gateway.URL, APIKey: fakeKey, Model: "m", API: "chat", Effort: &effort})
+		if out["ok"] != true || out["effort"] != "" {
+			t.Fatalf("degraded off probe = %v", out)
+		}
+	}
+	effort := "high"
+	out := s.providerTest(context.Background(), probeInput{BaseURL: gateway.URL, APIKey: fakeKey, Model: "m", API: "chat", Effort: &effort})
+	if out["ok"] != true || out["effort"] != "high" {
+		t.Fatalf("explicit high probe = %v", out)
+	}
+	if len(requests) != 4 || requests[0]["reasoning_effort"] != "none" || requests[3]["reasoning_effort"] != "high" {
+		t.Fatalf("probe requests = %v", requests)
+	}
+	for _, i := range []int{1, 2} {
+		if _, present := requests[i]["reasoning_effort"]; present {
+			t.Fatalf("probe request %d should omit none: %v", i+1, requests[i])
+		}
 	}
 }
