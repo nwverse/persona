@@ -278,8 +278,9 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   their lists initially fill the right column and their details push onto the same Assistant back stack. Back returns from detail
   to list and then to the main conversation without changing tabs or replacing the stack. Inbox never inserts a third list-detail
   column. This supersedes #3041's full-window secondary-page choice under the user's 2026-11 large-window parity decision.
-  The avatar at the Assistant root hides and shows the column; it starts shown and keeps that choice through rotation and folding
-  (`rememberSaveable`). Its width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
+  The avatar at the Assistant root hides and shows the column. Both the sidebar column and the Agents list start shown on a first launch;
+  a choice made beside the page is kept across rotation, folding and relaunch (`ShellPosition`, `ColumnMemory`), while a choice made over the page,
+  on a hidden tab, in a demo or under automation is not kept. The sidebar column's width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
   with a hairline toward the page. On Agents the left column is the Agents list,
   as in the Duo's Agents tab; the avatar there still opens the sidebar as the drawer, so Settings stays one sidebar away from both pages. Folding turns the column back into the drawer (closed)
   and unfolding back into the column; unfolding with the drawer open over the Assistant page shows the column instead. The drawer and the column keep separate saveable state (`shared-sidebar`, `shared-sidebar-column`):

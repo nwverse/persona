@@ -705,6 +705,13 @@ sending identity or confirmation behavior.
 
 ### 3.4 Lists and rows
 
+- **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
+  ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
+  of unpinned repositories. Match the exact machine/source/workspace identity, never the folder or project name; empty
+  pinned workspaces and their unloaded, unarchived conversations remain available. Search and state filters still apply
+  and explicit folds remain under the user's control. The source app changes these pins; Persona's session/project
+  preferences and Assistant directions stay independent (`docs/integrations/paseo.md`, "Pinned workspaces").
+
 - Tiles (an extension's `grid` and `carousel`, `ExtensionTiles.swift`, #827): `Theme.Radius.card` on the chip fill, `Theme.Size.tileMin` / `tileHeight` / `tileNarrow` / `tileRegular`; one that is on takes its named color's tint and a ring of it, the words never take the color.
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
