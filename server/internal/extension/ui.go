@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -39,7 +40,19 @@ type UIItem struct {
 	// its own (WidgetRefreshDefault when 0). A widget's only.
 	Families       []string `json:"families,omitempty"`
 	RefreshMinutes int      `json:"refresh_minutes,omitempty"`
+	// Group is the sidebar group a nav_page goes in unless the user put it elsewhere (#9071, docs/extensions/extensions.md
+	// "UI slots"): pages of any extension naming the same id share it. Its title is translated in l10n's groups.
+	Group *UIGroup `json:"group,omitempty"`
 }
+
+// UIGroup is a sidebar group a nav_page names: its id (a-z, 0-9, -) and its title in the manifest's language.
+type UIGroup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// uiGroupID is a group id's shape.
+var uiGroupID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Refresh is how often widget u is drawn again on its own.
 func (u UIItem) Refresh() time.Duration {
@@ -123,9 +136,11 @@ var (
 // generated files, drafts of a pending review and its bar, resolving threads, a code's line links, and an action
 // answering with lines or with components in place; 6 pictures, controls in rows, candlestick, area, donut and pie
 // charts and sparks, a row's extra actions, grids and carousels, date, time, multiple choice and multi-line fields,
-// title styles, named colors and more icons (#5464). An app says which it draws (context.ui_version, 1 when it says
-// nothing); the hub leaves out of a View what the app does not know, or draws it with what it knows (Fit).
-const UIVersion = 6
+// title styles, named colors and more icons (#5464); 7 a section's key for the native stream (#5956), which needs no
+// downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158); 9 a tile's gauge (#9337). An app
+// says which it draws (context.ui_version, 1 when it says nothing); the hub leaves out of a View what the app does not
+// know, or draws it with what it knows (Fit).
+const UIVersion = 9
 
 // PageSlot says whether placement is the extension's own page: extension_page, or plugin_page as it was called.
 func PageSlot(placement string) bool {

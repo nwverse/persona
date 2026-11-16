@@ -126,7 +126,6 @@
  "web/src/views/chat/ComposerPanel.tsx": 8,
  "web/src/views/chat/ContextDetails.tsx": 5,
  "web/src/views/chat/ContextGroup.tsx": 1,
- "web/src/views/chat/ContextMeter.tsx": 1,
  "web/src/views/chat/Delegated.tsx": 13,
  "web/src/views/chat/EarlierStretches.tsx": 1,
  "web/src/views/chat/EngineHandoffPanel.tsx": 2,

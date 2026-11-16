@@ -175,6 +175,8 @@ data class InboxSnapshot(
     val loading: Boolean = false,
     val error: String? = null,
     val contentSource: LarkContentSource? = null,
+    /** Whether the session catalog has completed its first load; an empty catalog before then is not "agent gone". */
+    val targetsReady: Boolean = false,
     /** Machine names by id, for saying where an Agent runs. */
     val machines: Map<String, String> = emptyMap(),
     /** How triage stands: new items waiting outside the list (#1773); null from an older hub. */

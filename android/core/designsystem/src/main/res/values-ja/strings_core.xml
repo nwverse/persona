@@ -216,6 +216,9 @@
     <string name="designsystem_core_source_identity_conflict">ID競合</string>
     <string name="designsystem_core_source_claude_background">Claudeバックグラウンド</string>
     <string name="designsystem_core_source_claude_desktop">Claude デスクトップアプリ</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$sデスクトップ版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用した項目</string>
     <string name="designsystem_core_source_claude_terminal">ターミナルの Claude</string>
     <string name="designsystem_core_source_no_send">このソースからはまだ送信できません</string>
     <string name="designsystem_core_read_only_because">表示のみ：%1$s</string>

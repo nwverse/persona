@@ -159,6 +159,8 @@ struct InboxPage: View {
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
                 .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
+                // The selection's actions clear of the open Duo's floating tabs' switch (#4231); no bar of its own otherwise.
+                .tabSwitchBottomBarRoom(shown: picked != nil)
                 .sheet(item: $composing) { d in ComposeView(draft: d, accounts: d.accounts ?? accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
@@ -729,6 +731,13 @@ struct InboxPage: View {
         }
     }
 
+    /// The line under a chosen empty section's title (docs/assistant/inbox.md "Section bar"): the rest are a choice away,
+    /// or for Done what fills it.
+    nonisolated static func emptyMessage(_ choice: InboxChoice) -> String {
+        choice == .done ? String(localized: "What you mark done shows up here.")
+            : String(localized: "The rest are in the other sections above.")
+    }
+
     /// Nothing open: All Caught Up and its seal, or under the chips or a search a neutral mark that says what is empty and
     /// the way back to the whole Inbox (the chips are kept on this device, so a list left filtered opens filtered); a
     /// section chosen on the bar with nothing in it says so in its own words.
@@ -737,9 +746,8 @@ struct InboxPage: View {
         case .section:
             // An open section is empty only while another has rows (`InboxBar.empty`); Done also when nothing is open
             // anywhere, so it says what fills it instead of pointing at sections that may be empty too.
-            EmptyStateView(symbol: Theme.Icon.inbox, title: Self.emptyTitle(bar.chosen),
-                           message: bar.chosen == .done ? String(localized: "Items you mark as done show up here.")
-                                                        : String(localized: "Pick another section above."), tint: .secondary)
+            EmptyStateView(symbol: Theme.Icon.inbox, title: Self.emptyTitle(bar.chosen), message: Self.emptyMessage(bar.chosen),
+                           tint: .secondary)
         case .caughtUp:
             EmptyStateView(symbol: "checkmark.seal", title: String(localized: "All Caught Up"),
                            message: String(localized: "New Lark messages and emails show up here."))
@@ -901,6 +909,7 @@ struct InboxPage: View {
             }
         }
         .listStyle(.plain)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
@@ -1349,7 +1358,7 @@ struct InboxRow: View {
                     Text(LarkTime.short(item.updatedAt)).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize()
                 }
                 HStack(alignment: .top, spacing: Theme.Space.sm) {
-                    if let summary = item.summary, !summary.isEmpty {
+                    if let summary = item.lineSummary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + summary))
                                 // The hierarchical styles, not `Color.primary`: a Mac list's selected row turns that
@@ -1428,7 +1437,7 @@ struct InboxRow: View {
 
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
-        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        if item.isAssistantRow { return item.linePreview } // the tag says who: no "Assistant:" in front
         #if !os(macOS)
         if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
         #endif

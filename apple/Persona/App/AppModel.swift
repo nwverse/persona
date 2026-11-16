@@ -2667,6 +2667,11 @@ final class AppModel {
         case .meetingLive:
             break // the meeting conversation is the iPhone's (#3862)
         #endif
+        case .urgentCall(let id, let state):
+            #if os(iOS)
+            UrgentCallCenter.shared.changed(id: id, state: state)
+            #endif
+            _ = (id, state)
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
@@ -2781,6 +2786,7 @@ final class AppModel {
         case .pluginBadge: "plugin_ui"
         case .extensionInvalidate: "extension_ui"
         case .meetingLive: "meeting_live"
+        case .urgentCall: "urgent_call"
         case .error: "error"
         }
     }

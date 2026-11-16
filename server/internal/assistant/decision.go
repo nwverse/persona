@@ -87,7 +87,7 @@ func neverDefault(why string) bool { return why == whyIrreversible || why == why
 // decisionElse is what a refused needs_user is told to do instead.
 const decisionElse = "When nothing needs the user, don't use needs_user: decide it yourself and send the agent on (agent_send), " +
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
-	"decision either: park it (parked, with reason, waiting_on and until), and it comes back to you at that time."
+	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
@@ -544,7 +544,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 	defer cancel()
 	for _, w := range s.awaitingAcceptance(ctx) {
 		a := w.ask
-		if !decideAsk(&a) {
+		if !decideAsk(&a) || a.AgentReply != nil {
 			continue
 		}
 		// One that recommends nothing goes back as undecidable instead (undecidableSignal): not both.
@@ -557,7 +557,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		b := &s.accept
 		b.mu.Lock()
 		cur := b.asks[w.todo]
-		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() {
+		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() || cur.AgentReply != nil {
 			b.mu.Unlock()
 			continue
 		}

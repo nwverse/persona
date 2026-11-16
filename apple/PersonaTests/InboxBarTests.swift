@@ -113,6 +113,27 @@ struct InboxBarTests {
         #expect(InboxPage.emptyTitle(.all) == String(localized: "All Caught Up"))
     }
 
+    /// The line under an empty choice is the contract's, word for word in each language (docs/assistant/inbox.md
+    /// "Section bar"), so the three clients read alike.
+    @Test func theLineUnderAnEmptyChoiceIsTheContracts() throws {
+        #expect(InboxPage.emptyMessage(.done) == String(localized: "What you mark done shows up here."))
+        for choice in [InboxChoice.action, .working, .fyi] {
+            #expect(InboxPage.emptyMessage(choice) == String(localized: "The rest are in the other sections above."))
+        }
+        let words: [String: [String]] = [
+            "en": ["The rest are in the other sections above.", "What you mark done shows up here."],
+            "zh-Hans": ["其余的在上面的其他分区里。", "标为已处理的会出现在这里。"], // i18n-ignore: the contract's words
+            "ja": ["残りは上のほかの区分にあります。", "対応済みにしたものがここに表示されます。"], // i18n-ignore: the contract's words
+        ]
+        for (language, expected) in words {
+            let path = try #require(Bundle.main.path(forResource: language, ofType: "lproj"), "no \(language) strings")
+            let bundle = try #require(Bundle(path: path))
+            let got = ["The rest are in the other sections above.", "What you mark done shows up here."]
+                .map { bundle.localizedString(forKey: $0, value: nil, table: nil) }
+            #expect(got == expected, "\(language)")
+        }
+    }
+
     @Test func theLandingRecordFollowsTheItemInFront() {
         let landing = InboxBarLanding()
         let a = item("a", tier: "fyi")

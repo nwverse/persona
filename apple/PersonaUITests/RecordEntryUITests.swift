@@ -24,8 +24,8 @@ final class RecordEntryUITests: XCTestCase {
         try post(hub, "/mock/meeting_attendance", ["on": true, "default": "off"])
     }
 
-    /// One Record button (no Start Recording beside it) and, under it, Type: Meeting by default with Persona's options;
-    /// Note hides them and leaves the same button.
+    /// One start button (no Start Recording beside it) and, on the quick start, Meeting | Note: Meeting by default with
+    /// who is in it (Invite Persona, #8731); Note hides that and leaves the same button.
     @MainActor func testOneRecordButtonAndTheMeetingNoteChoice() throws {
         let hub = try mockHub()
         let app = launch(hub, ["-openShellPage", "recordings"])
@@ -36,20 +36,21 @@ final class RecordEntryUITests: XCTestCase {
         let kind = element(app, "recording-kind")
         reveal(kind, in: app)
         XCTAssertTrue(kind.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(waitFor { self.text(kind).contains("会议") }, "Meeting by default: \(text(kind))")
-        let role = element(app, "meeting-attendance-role")
+        let meetingSegment = kind.buttons["会议"].firstMatch
+        XCTAssertTrue(waitFor { meetingSegment.isSelected }, "Meeting by default: \(app.debugDescription)")
+        // The hub's default here is Listen, so Persona is already in it (#8731: Invite Persona Automatically on).
+        let role = element(app, "meeting-persona-invited")
         reveal(role, in: app)
-        XCTAssertTrue(role.waitForExistence(timeout: 15), "a meeting shows Persona's options: \(app.debugDescription)")
+        XCTAssertTrue(role.waitForExistence(timeout: 15), "a meeting shows who is in it: \(app.debugDescription)")
         scrollToTop(app)
         try shot(app, "start")
 
         reveal(kind, in: app)
-        kind.tap()
-        let note = app.buttons["笔记"].firstMatch
+        let note = kind.buttons["笔记"].firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 5), app.debugDescription)
         note.tap()
-        XCTAssertTrue(waitFor { self.text(kind).contains("笔记") }, "Note picked: \(text(kind))")
-        XCTAssertTrue(waitFor(5) { !role.exists }, "a note hides Persona's options")
+        XCTAssertTrue(waitFor { note.isSelected }, "Note picked: \(app.debugDescription)")
+        XCTAssertTrue(waitFor(5) { !role.exists }, "a note hides who is in it")
         XCTAssertFalse(element(app, "meeting-private-start").exists)
         XCTAssertFalse(app.buttons["meeting-attendee"].exists)
         XCTAssertTrue(element(app, "recording-kind-detail").exists, "what a note is, under the choice")
@@ -60,12 +61,9 @@ final class RecordEntryUITests: XCTestCase {
         try shot(app, "start-note")
 
         reveal(kind, in: app)
-        kind.tap()
-        let meeting = app.buttons["会议"].firstMatch
-        XCTAssertTrue(meeting.waitForExistence(timeout: 5), app.debugDescription)
-        meeting.tap()
+        meetingSegment.tap()
         reveal(role, in: app)
-        XCTAssertTrue(role.waitForExistence(timeout: 5), "Meeting shows Persona's options again")
+        XCTAssertTrue(role.waitForExistence(timeout: 5), "Meeting shows who is in it again")
     }
 
     /// The drawer's row is Recordings, a place like the rows under it (#5517): a tap opens the page with its Record

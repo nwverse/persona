@@ -20,6 +20,9 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: Date?
     var tier: String?
     var summary: String?
+    /// An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it. Its `summary` and
+    /// `preview` are the same words without the marks; older hubs leave it out.
+    var body: String? = nil
     var reason: String?
     var read: Bool?
     /// Navigation counts only unread Needs you items; reading never files them.
@@ -322,7 +325,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
+        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, body, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
         case status, urgent, recap, handling, suggestion, follow, now, chain, related, manager, handoffs
         case mergedFrom = "merged_from"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"

@@ -358,6 +358,7 @@
     <string name="settings_ready_needs_confirm">需要手动确认</string>
     <string name="settings_ready_skipped_note">已跳过，可随时回来设置</string>
     <string name="settings_ready_open">去设置</string>
+    <string name="settings_ready_allow_notifications">允许</string>
     <string name="settings_ready_open_failed">系统设置打不开，请从手机设置进入 Persona 应用详情。</string>
     <string name="settings_ready_undo_confirm">撤销确认</string>
     <string name="settings_ready_mark_done">已完成</string>

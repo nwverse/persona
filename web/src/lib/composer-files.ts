@@ -4,7 +4,8 @@
 // the composer, so an upload goes on when the box shows another conversation or closes, and a failed one stays to try
 // again or remove.
 import { useSyncExternalStore } from "react";
-import { ApiError, errorText } from "./api";
+import { ApiError, credentialOwner, errorText, onCredentialChange } from "./api";
+import { conversationDeletionScope, conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 import { FILE_RE } from "./compatibility";
 import { getState } from "./store";
 import type { AttachedFile } from "./turns";
@@ -32,6 +33,7 @@ export interface ComposerFile {
 
 interface Job {
   key: string;
+  owner: string;
   mid: string;
   blob: File;
   dest?: string;
@@ -40,6 +42,8 @@ interface Job {
 
 const lists = new Map<string, ComposerFile[]>();
 const jobs = new Map<string, Job>();
+const owners = new Map<string, string>();
+const currentOwner = () => JSON.stringify([typeof localStorage === "undefined" ? "" : credentialOwner(), conversationDeletionScope()]);
 const listeners = new Set<() => void>();
 const EMPTY: ComposerFile[] = [];
 let seq = 0;
@@ -49,8 +53,9 @@ function emit() {
 }
 
 function set(key: string, list: ComposerFile[]) {
-  if (list.length) lists.set(key, list);
-  else lists.delete(key);
+  if (conversationKeyDeleted(key)) list = [];
+  if (list.length) { lists.set(key, list); owners.set(key, currentOwner()); }
+  else { lists.delete(key); owners.delete(key); }
   emit();
 }
 
@@ -61,7 +66,7 @@ function update(key: string, id: string, change: Partial<ComposerFile>) {
 }
 
 export function getComposerFiles(key: string): ComposerFile[] {
-  return lists.get(key) ?? EMPTY;
+  return !conversationKeyDeleted(key) && owners.get(key) === currentOwner() ? lists.get(key) ?? EMPTY : EMPTY;
 }
 
 export function useComposerFiles(key: string): ComposerFile[] {
@@ -95,13 +100,14 @@ export function fileDestination(own: string | undefined, features: readonly stri
 /** Files picked for the composer `key` of a conversation on machine `mid`. Returns what was refused and why, for the
  *  composer to say: over the count, or too big. */
 export function addFiles(key: string, mid: string, picked: File[], dest?: string): { tooMany: number; tooBig: string[] } {
+  if (conversationKeyDeleted(key)) return { tooMany: 0, tooBig: [] };
   const room = Math.max(0, MAX_FILES - getComposerFiles(key).length);
   const tooBig = picked.slice(0, room).filter((f) => f.size > MAX_FILE_BYTES).map((f) => f.name);
   const taken = picked.slice(0, room).filter((f) => f.size <= MAX_FILE_BYTES);
   const where = fileDestination(dest, getState().features);
   const added = taken.map((blob) => {
     const id = `f${++seq}`;
-    jobs.set(id, { key, mid, blob, dest: where });
+    jobs.set(id, { key, mid, blob, dest: where, owner: currentOwner() });
     return { id, name: blob.name, size: blob.size, sent: 0, state: "waiting" as const };
   });
   if (added.length) set(key, [...getComposerFiles(key), ...added]);
@@ -136,6 +142,7 @@ export function takeReadyFiles(key: string): AttachedFile[] {
 /** Files already on the machine, ready tiles again (a send that did not go, a queued message taken back), as many as
  *  fit; returns the ones that did not. */
 export function restoreFiles(key: string, files: AttachedFile[]): AttachedFile[] {
+  if (conversationKeyDeleted(key)) return files;
   const room = Math.max(0, MAX_FILES - getComposerFiles(key).length);
   const back = files.slice(0, room).map((file) => ({ id: `f${++seq}`, name: file.name, size: file.size ?? 0, sent: file.size ?? 0, state: "ready" as const, file }));
   if (back.length) set(key, [...back, ...getComposerFiles(key)]);
@@ -205,6 +212,7 @@ async function run(id: string) {
   };
   try {
     const { uploadAttachment } = await uploadCode();
+    if (jobs.get(id) !== job || job.owner !== currentOwner() || conversationKeyDeleted(job.key)) return;
     let out;
     try {
       out = await uploadAttachment(job.mid, job.blob, { dest: job.dest, signal: ctl.signal, onProgress: progress });
@@ -214,7 +222,7 @@ async function run(id: string) {
       job.dest = undefined;
       out = await uploadAttachment(job.mid, job.blob, { signal: ctl.signal, onProgress: progress });
     }
-    if (jobs.get(id) !== job) return;
+    if (jobs.get(id) !== job || job.owner !== currentOwner() || conversationKeyDeleted(job.key)) return;
     const size = out.size || job.blob.size;
     jobs.delete(id); // on the machine: the picked file is no longer needed
     update(job.key, id, { state: "ready", sent: size, size, file: { kind: "file", path: out.path, name: job.blob.name, size } });
@@ -228,3 +236,14 @@ async function run(id: string) {
     pump(job.key);
   }
 }
+
+// Retire the picked blobs as well as their tiles; an ignored abort must not restore the old conversation.
+onConversationDeleted((mid, sid) => {
+  const key = `${mid}/${sid}`;
+  for (const [id, job] of jobs) if (job.key === key) { job.ctl?.abort(); jobs.delete(id); }
+  set(key, []);
+});
+onCredentialChange(() => {
+  for (const job of jobs.values()) job.ctl?.abort();
+  jobs.clear(); lists.clear(); owners.clear(); emit();
+});

@@ -44,6 +44,12 @@ INNER_CLASS = "dalvik.annotation.InnerClass"
 ROOM_DATABASE = "androidx.room.RoomDatabase"
 PLATFORM = ("android.", "java.", "javax.")
 REQUIRED_MEMBERS = {
+    # firstBaselineAligned recognizes the captured missing-lookahead failure by these two frames. Inlining either method
+    # erases that signature; proguard-rules.pro keeps just these members, and the release check reads them from the dex.
+    "androidx.compose.ui.node.LookaheadDelegate": {
+        ("getAlignmentLinesOwner", "()Landroidx/compose/ui/node/AlignmentLinesOwner;")},
+    "androidx.compose.ui.node.InnerNodeCoordinator$LookaheadDelegateImpl": {
+        ("calculateAlignmentLine", "(Landroidx/compose/ui/layout/AlignmentLine;)I")},
     # Reached only from JavaScript (MarkdownRenderer.page: addJavascriptInterface(Bridge, "PersonaRender")).
     "persona.core.designsystem.MarkdownRenderer$Bridge": {("done", "(ILjava/lang/String;)V"),
                                                           ("fail", "(ILjava/lang/String;)V")},

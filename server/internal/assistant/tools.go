@@ -59,6 +59,9 @@ func toolsNamed(names []string) []proto.Tool {
 
 // Tool runs one of the assistant's MCP tools for the conversation call.SessionID on machine call.MachineID.
 func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+	if err := s.conversationAvailable(ctx, call.MachineID, call.SessionID); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	call.Name = compat.Tool(call.Name)
 	args := call.Arguments
 	if len(args) == 0 {
@@ -282,7 +285,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !s.taskInSpace(ctx, a.ID, space) { // another space's task is as good as none (health.go)
 			return "", fmt.Errorf("no task %q", a.ID)
 		}
-		ok, err := s.deleteTask(ctx, a.ID)
+		ok, err := s.deleteTaskFrom(ctx, a.ID, self) // this conversation may ask for it again (scheduleOwn)
 		if err != nil {
 			return "", err
 		}
@@ -1196,7 +1199,11 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		} else if ix.Kind == proto.IxScreen {
 			what = "终端对话框等你处理"
 		}
-		k := [2]string{ix.MachineID, ix.SessionID}
+		session := ix.SessionID
+		if ix.FoldedUnder != "" {
+			session = ix.FoldedUnder
+		}
+		k := [2]string{ix.MachineID, session}
 		what += " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], clip(what, 400))
 	}
@@ -1219,9 +1226,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant {
+			if c.Assistant || c.FoldedUnder() != "" {
 				continue
 			}
+			c.State = c.FoldedState()
 			// Archived ones are out of the apps' lists: only "archived" lists them, and "all" with them marked.
 			switch state {
 			case "all":
