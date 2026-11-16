@@ -122,7 +122,7 @@ class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {
             is ContinuityAdapter.Input.RangeFailed -> { sync.cancelFold(); emptyList() }
         }
         val view = state
-        return ContinuityAdapter.Applied(chat, view, gap, requests,
-            verified = gap == Gap.None && (input is ContinuityAdapter.Input.Push || view.items.none { it.seq > view.covered }))
+        // The synchronous repository checks coverage at the original publish sites, not on control/range inputs.
+        return ContinuityAdapter.Applied(chat, view, gap, requests, verified = gap == Gap.None)
     }
 }

@@ -95,9 +95,9 @@ class ContinuitySynchronousLockTest {
                 // implementation it suspends on entry.lock, rather than entering under this reader.
                 val (probe, waitedForReader) = lock.withLock(readerOwner) {
                     val probe = async(start = CoroutineStart.UNDISPATCHED) {
-                        invokeSuspend(repository, "accept", entry,
+                        invokeSuspend(repository, "pushSynchronous", entry,
                             Input.Push(Batch(listOf(item(1)), "h", fromSeq = 0, toSeq = 1,
-                                backlog = true, hasMore = false)), null)
+                                backlog = true, hasMore = false)))
                     }
                     probe to !probe.isCompleted
                 }
