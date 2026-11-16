@@ -693,18 +693,27 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 val primary = entry.contentKey in rootKeys
                 val assistantRoot = entry.contentKey == assistantRootKey
                 val barHeight = remember { mutableIntStateOf(0) }
+                val tabSplit = LocalAgentsTabSplit.current
+                val entrySplit = rememberEntrySplitDetail(tabSplit, entry.contentKey)
                 val page: @Composable () -> Unit = {
-                    CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
-                        LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
-                        LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
-                        LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
-                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
-                            leading = { currentLeading.value(assistantRoot) }) else null) {
-                        if (primary) Box(Modifier.fillMaxSize()) {
-                            entry.Content()
-                            // The home bar holds no title to say the link is down: a pill under it does, as on iOS (#4339 C14).
-                            HomeLinkPill(currentConnection.value, barHeight.intValue)
-                        } else entry.Content()
+                    val content: @Composable () -> Unit = {
+                        CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
+                            LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
+                            LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
+                            LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
+                                onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
+                                leading = { currentLeading.value(assistantRoot) }) else null) {
+                            if (primary) Box(Modifier.fillMaxSize()) {
+                                entry.Content()
+                                // The home bar holds no title to say the link is down: a pill under it does, as on iOS (#4339 C14).
+                                HomeLinkPill(currentConnection.value, barHeight.intValue)
+                            } else entry.Content()
+                        }
+                    }
+                    if (tabSplit != null) {
+                        CompositionLocalProvider(LocalSplitDetail provides entrySplit, content = content)
+                    } else {
+                        content()
                     }
                     // Register after the root page's own Back handler, even when NavDisplay composes it later.
                     BackHandler(assistantRoot && selected == AppTab.Persona && currentColumnsOver.value && sidebarOverlayShown.value) {
@@ -865,14 +874,22 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                 }
                             }
                         }
+                        val agentsTabSplit = rememberAgentsTabSplit(
+                            tab = tab,
+                            stack = stacks.getValue(tab),
+                            twoPanes = sceneDirective.maxHorizontalPartitions > 1 && !columnsOver,
+                            listHidden = listDetail.listHidden,
+                            onShowList = listDetail::expand,
+                        )
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
+                                LocalAgentsTabSplit provides agentsTabSplit,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
                                 val display: @Composable () -> Unit = {
                                     NavDisplay(backStack = stacks.getValue(tab),
                                         modifier = Modifier.fillMaxSize().then(if (shown || tab == AppTab.Persona) Modifier else Modifier.unplaced()),
                                         onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                        sceneStrategies = listOf(agentsOverlay, listDetail),
+                                        sceneStrategies = listOf(agentsOverlay, listDetail.strategy),
                                         // A pushed page slides in over the page it came from, which stays drawn underneath; going
                                         // back, it slides away over the page below. Pages stay opaque the whole way (fading them
                                         // showed both pages' text on top of each other) and nothing in between shows the background.

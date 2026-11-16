@@ -164,17 +164,21 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                 onContextCleared = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) })
             if (pane != null && filesAvailable) {
                 BackHandler { pane = null; openedPath = null; openedLine = null }
-                SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
-                    composer.value = insertFilePath(composer.value, path, insertionFocused)
-                    pane = null
-                    openedPath = null
-                    openedLine = null
-                    composer.focusRequest++
-                }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
-                    connection = connectionState)
+                CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
+                    SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
+                        composer.value = insertFilePath(composer.value, path, insertionFocused)
+                        pane = null
+                        openedPath = null
+                        openedLine = null
+                        composer.focusRequest++
+                    }, initialPane = pane!!, initialPath = openedPath, initialLine = openedLine,
+                        connection = connectionState)
+                }
             }
-            if (terminal != null && !assistant) persona.feature.terminal.TerminalCover(
-                key, terminalOpen, { terminalOpen = false; resumeOnOpen = false }, terminal, resumer, resumeOnOpen = resumeOnOpen)
+            if (terminal != null && !assistant) CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
+                persona.feature.terminal.TerminalCover(
+                    key, terminalOpen, { terminalOpen = false; resumeOnOpen = false }, terminal, resumer, resumeOnOpen = resumeOnOpen)
+            }
         }
     }
 }
