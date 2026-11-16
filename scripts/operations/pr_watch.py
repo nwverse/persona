@@ -951,8 +951,20 @@ class Watcher:
                                repair_exhausted=True)
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
+        if (old.get("head") == head and old.get("evidence_key") == evidence_key
+                and old.get("format") == FORMAT_VERSION and old.get("outcome") == "retry"
+                and old.get("semantic") == "passed"
+                and old.get("verification") in ("passed", "base_failure")
+                and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", []))):
+            # A completed retry retains valid exact-head evidence. Normalize
+            # it into the existing publication path instead of verifying in a
+            # loop merely because an infrastructure retry once set `retry`.
+            old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                 outcome="passed_with_findings" if old.get("findings") else "passed",
+                                 retry_reason=None, retry_after=0)
         if old.get("head") == head and old.get("format") == FORMAT_VERSION \
-                and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing") \
+                and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry") \
+                and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure")) \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
                      or old.get("verification") in ("passed", "base_failure")) \
                 and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])):

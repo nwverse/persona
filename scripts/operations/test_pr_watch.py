@@ -1560,6 +1560,23 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("no automatic repair or merge", payload)
         self.assertNotIn("merging continue", payload)
 
+    def test_completed_retry_resumes_success_without_repeating_verification(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", semantic="passed",
+                               verification="passed", retry_reason="verification_repair",
+                               checks=[{"name": "test", "command": ["true"], "ok": True}],
+                               findings=[], success_posted=False, review_posted=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
+
     def test_verification_failure_uses_bounded_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
