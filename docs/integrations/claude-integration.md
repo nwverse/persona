@@ -734,6 +734,17 @@ Before, its status file's `idle` was listed `idle`, which the hub takes as seen:
 - **No terminal runs it:** Run Agent Here with it and a switch of a running session to it are refused (a terminal would type `claude-desktop` into a shell); a resume that names it (New Agent's launcher, which the hub sends for a session nothing says the launcher of) runs plain `claude` (`terminalLauncher`).
 - Only macOS (`claudeDesktopOpens`: the app is asked to import in the background); on Windows the launcher is not offered. Tests: `node/claudedesktop_new_test.go`.
 
+## Installing the Persona plugin
+
+Sessions Persona has no terminal for (the desktop app's Code sessions, other terminals) take the owner's messages as typed input
+through the Persona plugin for Claude Code (`integrations/claude-code-plugin`). The resident node carries the plugin of its own build,
+writes it to `~/.persona/claude-code-plugin` (the plugin's own marketplace, `persona`) and installs it at the user scope with Claude
+Code's own CLI (`claude plugin marketplace add`, `claude plugin install persona@persona --scope user`, `claude plugin update`):
+automatically on macOS and Windows, never against a choice the user made in Claude Code (turned off or removed there), and never into a
+config directory Claude Code has not created. A user-scope plugin loads in the desktop app's local Code sessions too; inside the app, where
+`/plugin` does not run, **+ › Plugins** shows it. New sessions load it; open ones keep what they loaded. Commands, defaults, opt-out and
+status: [link.md](../operations/link.md) "Claude Code plugin".
+
 ## Blocking configuration directories (#676)
 
 Platform sessions sharing a configuration directory with personal sessions (cannot separate directories) are filtered by that platform's extension using in-session markers; see `docs/extensions/extensions.md` (“Agent filtering”).

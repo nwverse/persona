@@ -232,6 +232,34 @@ class AgentsTreeTest {
         assertEquals(listOf(0, 1, 0, 0), counted.headingCounts.map { it.second })
     }
 
+    @Test fun byMachineHeadingCountsFromRowsWhenStateCountsAreNull() {
+        // #9319: shared fixtures leave state_counts null for Machine groups; the feature helper counts from rows.
+        fun at(id: String, machine: String, state: String, waiting: Boolean = false) = AgentSession(Session(
+            machineId = machine, sessionId = id, state = state, backgroundWaiting = waiting,
+            updatedAt = "2026-01-01T00:00:00Z"))
+        val list = buildAgentList(
+            listOf(
+                at("a", "mac", "needs_you"), at("b", "mac", "working"), at("c", "mac", "working", waiting = true),
+                at("d", "mac", "unread"), at("e", "mac", "idle"), at("f", "mac", "unknown"),
+                at("g", "box", "idle"),
+            ),
+            machines,
+            settings = AgentListSettings(grouping = AgentGrouping.Machine),
+        )
+        val mac = list.groups.single { it.id == "machine/mac" }
+        assertNull(mac.stateCounts)
+        assertEquals(1, mac.waitingInBackground)
+        assertEquals(
+            listOf(persona.core.designsystem.Status.NeedsYou, persona.core.designsystem.Status.Working,
+                persona.core.designsystem.Status.Unread, persona.core.designsystem.Status.Idle),
+            machineHeadingCounts(mac).map { it.first },
+        )
+        assertEquals(listOf(1, 1, 1, 2), machineHeadingCounts(mac).map { it.second })
+        val box = list.groups.single { it.id == "machine/box" }
+        assertNull(box.stateCounts)
+        assertEquals(listOf(0, 0, 0, 1), machineHeadingCounts(box).map { it.second })
+    }
+
     @Test fun aSpaceHeadingCountsItsIdleAgentsAfterTheClockAsTheComputerDoes() {
         // iOS `SpaceHeader` draws `StateCounts`, whose last count is the idle agents (Idle and Unknown; the ones that only wait
         // in the background are counted apart): a gray dot and a number (#4338 A5). The computer heading counts the same.

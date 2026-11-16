@@ -1,5 +1,22 @@
 # Lessons: hub / node and networking
 
+## A transport made for one request opens a connection for one request (2026-11-16, #9202)
+
+The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
+but each new relay stream is `extensions.accept` on the bus plus the manager's WebSocket back to the hub, about four round trips. Between a
+hub and a manager on a 142 ms link every relayed request took about a second, while the hub's own answers took a millisecond. The manager
+side had served many requests per stream all along; only the hub threw the stream away.
+
+- On a hop between machines, keep the transport, and with it the pool, for as long as what it dials through. Here that is the manager's
+  bus connection: a new connection gets a new transport, and the old one's idle streams are closed when that connection ends.
+- A pooled connection over a long link can die without a sound (a stalled tunnel, a NAT that forgot it). Ping the idle ones, so the next
+  request does not wait for an answer that is not coming.
+- net/http keeps upgrades apart: a request with `Upgrade` has its own pool key, so a WebSocket never takes a pooled stream and its stream
+  is never pooled after it. A request whose context ends closes its connection instead of pooling it, so revoking a caller still closes
+  the stream its request was on.
+- `httptrace`'s `PutIdleConn` runs after the connection is already back in the pool, so the next request may have taken it by then.
+  Count the uses (`GotConn`) and compare them, rather than setting an idle flag.
+
 ## A command on the hub's machine does not come from loopback because it runs there (2026-11-16, #9182)
 
 The hub's own commands (`hub pair`, `hub admin`, `hub peer`, `hub setup`, `hub doctor`, `personad extension`) dialled
@@ -665,6 +682,24 @@ namespace; resolve the fallback into the ids of the table being written (the dev
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
+## A backup's runtime-file filter is not for the owner's files (2026-11-14, #5951)
+
+The whole-install backup skipped `*.log`, `*.lock`, `*.pid`, `*.sock` and `.tmp-` names in every directory it copied,
+the knowledge base included: a `meeting.log` or `yarn.lock` there was left out, the manifest listed only what was
+copied, so verification passed, and a restore replaced the directory with one missing them. Skip runtime artifacts
+only in directories the product itself writes (and sockets, by type, anywhere); copy the knowledge base, skills and
+extensions in full, and never filter on the restore side. The same review found two more gaps where a missing value
+read as "anything goes": a `password=` query parameter dropped before `pg_dump` (take the password from
+`pgx.ParseConfig`, as the connection does), and a manager database with no `sealing_key` row accepting any key
+(prove the bundled key opens its sealed values). A relative path from a manifest is checked against its root
+(`../victim` is clean but outside).
+
+libpq expands a connection URI only when it is the explicit `dbname` argument, never from `PGDATABASE`: the backup's
+`PGDATABASE=postgres://…` made `pg_dump` ignore host, port and user and try the default socket, and PostgreSQL 18's
+`pg_restore` without `-d` refuses to run at all. Fake clients in unit tests accepted both, so only a real server
+showed it. Pass `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE=<name>` and the ssl* variables, the password in `PGPASSWORD`,
+and `--dbname=<plain name>` to `pg_restore`.
 
 ## A failed swap must not look like a new install
 

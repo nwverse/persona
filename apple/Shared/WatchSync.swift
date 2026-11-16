@@ -288,7 +288,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
             done(false)
             return
         }
-        // Both handlers run on WatchConnectivity's queue: `@Sendable` keeps them off the main actor (BackgroundCallbackTests).
+        // Both handlers run on WatchConnectivity's queue: `@Sendable` keeps them off the main actor (test_apple_background_callbacks.py).
         WCSession.default.sendMessage(["request": "config"], replyHandler: { @Sendable reply in
             nonisolated(unsafe) let r = reply
             Task { @MainActor in

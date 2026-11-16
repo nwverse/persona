@@ -1000,6 +1000,10 @@ Deployment: update hub and node together (`resume_only` is new; old node ignores
 **A turn schedules its successor** ("Finally use schedule_followup with at=30m and the same prompt"): hub recognizes the task from run history;
 same title or prompt doesn't create another. One-shot relative-time (`30m`) renewal becomes a 30-minute `interval`; later identical requests update the prompt without changing time,
 and don't re-enable tasks disabled in the App. Copied leading "⏰ … (your scheduled follow-up)" lines are removed to prevent growth.
+A task deleted while its run was going is not brought back by that run asking for it again (#4792): it is told so and nothing is
+scheduled. The exception is the run's own conversation having deleted it (`cancel_followup` / `delete_routine`, e.g. to change its rule):
+asking for it again then makes a new task (#9090). Which conversation deleted a task is kept in memory for 30 minutes; after a hub
+restart, a deletion is taken as the user's.
 `interval` messages say "It will run again on schedule; no need to arrange the next run", and assistant instructions recommend `every`.
 
 Migration: first startup without `assistant.tasks` moves `assistant.routines` / `assistant.followups` (ids, times, prior statuses unchanged),
@@ -1221,9 +1225,10 @@ supervisor" below, `setup_suggest_tier.go`); every rule of this section holds fo
   the background supervisor's model). An app that does not draw `setup` leaves its owner, without
   the Lark card, to read the lines in the model's answer, which is the model's copy and not checked against the
   computed lines.
-- **Where a mechanism is turned on.** Session triage's three switches, the standing authorizations and the
-  remembered kinds of task are on the assistant's own settings page in the web app (`/settings?tab=persona`; iOS
-  Settings › General, Android Settings › AI); the lines name the switch by the label it has there. The background
+- **Where a mechanism is turned on.** Session triage's three switches and the remembered kinds of task are on the
+  assistant's own settings page in the web app (`/settings?tab=persona`; iOS Settings › General, Android Settings › AI).
+  Standing authorizations are listed there too, and Apple (#7002) and Android (#9247) also list and revoke them from
+  Settings and the assistant's profile. The lines name the switch by the label it has on the web page. The background
   supervisor's model is its purpose's page of Model Settings (`/settings?tab=models&purpose=assistant.supervise`). Leader
   conversations: **Pin** in a conversation's menu. The spot-check share: asking Persona, confirmed on a card. The
   assistant answering agents' questions and the independent review have no switch in any app: their lines say so and

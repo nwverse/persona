@@ -296,8 +296,19 @@ type schedule struct {
 	rounds map[string][]schedRound
 	// clean: by conversation, the scheduled task whose clean round it is (schedule_grant.go noteCleanRound).
 	clean map[string]string
+	// deletedBy: by deleted task, the conversation whose cancel_followup / delete_routine deleted it, and when
+	// (deleteTaskFrom). That conversation's run asking for the task again is its own call, not the run bringing back
+	// what the user or another conversation deleted (scheduleOwn, #9090). Kept for runWatchTimeout, in memory only:
+	// after a hub restart a deletion is taken as the user's, as before.
+	deletedBy map[string]taskDeletion
 	// limitWait: tests' wait before retrying a run a usage limit stopped (nil: until the reset, limitRetryWait).
 	limitWait func(reset, now time.Time) time.Duration
+}
+
+// taskDeletion is who deleted a task: the conversation (session id) whose tool did, at that time.
+type taskDeletion struct {
+	session string
+	at      time.Time
 }
 
 // missedRuns returns scheduled failures that have not been followed by a successful run.
@@ -798,7 +809,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // to schedule the next one"): the same task is kept, with the launcher and permission mode the user picked for it, instead of a new
 // follow-up per run. A one-off rescheduled by a relative time becomes a task every that long; one that already
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
-// told so, nothing is scheduled (#4792). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
+// told so, nothing is scheduled (#4792), unless this conversation deleted it itself (#9090). A one-off given a cron rule (`cron`, zero spec for none) runs on it from now on. ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
 func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, cron cronRule, push, inbox *string, freshEachRun *bool, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
 	if sessionID == "" {
@@ -823,9 +834,14 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	r := sc.runs[last]
 	i := sc.indexLocked(r.RefID)
 	if i < 0 {
-		// Deleted while this run was going: its "schedule the next one" must not bring it back (#4792).
+		// Deleted while this run was going: its "schedule the next one" must not bring back what the user or another
+		// conversation deleted (#4792). This conversation deleting it and asking for it again is a new task (#9090).
+		by := sc.deletedBy[r.RefID].session
 		sc.mu.Unlock()
-		if ranRecently(r) && copiesRun(r, title, rawPrompt) {
+		if ranRecently(r) && copiesRun(r, title, rawPrompt) && by != sessionID {
+			if by != "" {
+				return i18n.T(s.lang(ctx), "assistant-schedule.deleted_elsewhere_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), "", true, nil
+			}
 			return i18n.T(s.lang(ctx), "assistant-schedule.deleted_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), "", true, nil
 		}
 		return "", "", false, nil
@@ -964,8 +980,14 @@ func (s *Service) taskInSpace(ctx context.Context, id, space string) bool {
 	return i < 0 || sc.tasks[i].Space == space
 }
 
-// deleteTask removes a task (cancel_followup, delete_routine, the app); false when there is none.
+// deleteTask removes a task (the app, or the hub undoing one it just made); false when there is none.
 func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
+	return s.deleteTaskFrom(ctx, id, "")
+}
+
+// deleteTaskFrom is deleteTask by conversation sessionID's cancel_followup / delete_routine ("": not a
+// conversation's), noting which conversation deleted it (deletedBy).
+func (s *Service) deleteTaskFrom(ctx context.Context, id, sessionID string) (bool, error) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return false, err
@@ -981,6 +1003,7 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 			sc.mu.Unlock()
 			return false, err
 		}
+		sc.noteDeletionLocked(id, sessionID, time.Now())
 	}
 	delete(sc.waitTold, id)
 	sc.mu.Unlock()
@@ -989,6 +1012,24 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 		s.broadcastSchedule()
 	}
 	return i >= 0, nil
+}
+
+// noteDeletionLocked keeps who deleted task id (sessionID, "" when no conversation did), dropping what is older than
+// runWatchTimeout: a run that started before then is no longer told its task was deleted (ranRecently).
+func (sc *schedule) noteDeletionLocked(id, sessionID string, now time.Time) {
+	for k, d := range sc.deletedBy {
+		if now.Sub(d.at) >= runWatchTimeout {
+			delete(sc.deletedBy, k)
+		}
+	}
+	if sessionID == "" {
+		delete(sc.deletedBy, id)
+		return
+	}
+	if sc.deletedBy == nil {
+		sc.deletedBy = map[string]taskDeletion{}
+	}
+	sc.deletedBy[id] = taskDeletion{session: sessionID, at: now}
 }
 
 // describeSchedule lists the tasks of space ("" the assistant's own, "health"): a conversation sees and changes only

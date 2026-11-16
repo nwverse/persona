@@ -129,6 +129,7 @@ struct MeetingPageBar: View {
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .frame(maxWidth: .infinity)
+        .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
         .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
         .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
         .onChange(of: fieldDisabled) { _, disabled in
