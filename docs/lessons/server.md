@@ -2509,3 +2509,16 @@ nothing ran the old build after the new one.
   has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
+
+## A probe on the caller's context must not cache its failure (2026-11-16, #8859)
+
+- The node's ffmpeg probe for the live screen's x264 ran on the status call's context and cached its answer per file,
+  pass or fail. On the first deployed node a fresh process found Homebrew's ffmpeg in 0.12 s under the node's own
+  environment, yet the node kept reporting none: its first probe had failed, and nothing would try again until the
+  ffmpeg file changed. The probe logged nothing, so why it failed couldn't be read back.
+- A check whose answer is kept runs on a deadline of its own (`context.WithoutCancel` plus its timeout), not the
+  caller's: a cancelled or nearly expired call must not decide what every later call sees.
+- Keep a pass as long as what it checked is unchanged; keep a failure only for a while (a minute here), then try again.
+- Log each outcome once, with the reason for a failure, so the next "it says none" is read from the log, not guessed.
+- Verify on the real machine before calling a probe done: the tests passed with a fake and with the real ffmpeg in a
+  fresh process; only the long-running node showed the cached failure.
