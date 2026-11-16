@@ -183,8 +183,10 @@ export function validRepositoryDraft(rows: TaskRepositoryInput[], identities?: R
     }
     if (!validRequestedRef(row.requested_ref)) return false;
     const identity = identities?.get(row.repo_id);
-    // An identity-aware draft must resolve every repository; a raw-shape-only draft cannot prove duplicates.
+    // An identity-aware draft must resolve every repository. Without identities a URL link cannot be proven to belong
+    // to its repository or deduplicated, so that draft fails closed; structured/no-link metadata stays checkable.
     if (identities && !identity) return false;
+    if (!identities && (row.links ?? []).some((link) => link && "url" in link)) return false;
     if (identity) {
       const key = `${identity.provider}|${identity.instance_url}|${identity.path}`;
       if (repositories.has(key)) return false;
@@ -256,8 +258,10 @@ export function cleanRepositoryDraft(rows: TaskRepositoryInput[]): TaskRepositor
 /** Explicit association creation stays outside the ordinary Todo client's startup path. */
 export async function createTodoWithRepositories(context: RepositoryRequestContext, title: string, notes: string, due: { due_at?: string; due_date?: string } | undefined, bindings: CreateRepositoryBindings, identities: ReadonlyMap<string, RepositoryIdentity>): Promise<Todo> {
   const repositories = bindings ? cleanRepositoryDraft(bindings.repositories) : [];
-  // The form checks this too; the submit guard keeps an invalid optional draft from ever becoming a POST.
-  if (!bindings || !revision(bindings.catalog_revision) || !validRepositoryDraft(repositories, identities)) throw new Error("Invalid repository association draft");
+  // The form checks this too; the submit guard keeps an invalid optional draft from ever becoming a POST. A missing
+  // runtime identity map must fail closed even when a JavaScript caller omits the TypeScript parameter.
+  const hasIdentities = !!identities && typeof (identities as { get?: unknown }).get === "function";
+  if (!bindings || !revision(bindings.catalog_revision) || !hasIdentities || !validRepositoryDraft(repositories, identities)) throw new Error("Invalid repository association draft");
   const result = await api<{ todo: Todo }>("/todos", {
     ...repositoryRequestOptions(context), method: "POST",
     json: { title: title.trim(), notes: notes.trim() || undefined, ...due, repository_bindings: { ...bindings, repositories } },

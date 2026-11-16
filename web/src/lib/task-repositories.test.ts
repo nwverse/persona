@@ -169,6 +169,26 @@ it("rejects a duplicate link by normalized repository, kind and number without l
   vi.unstubAllGlobals();
 });
 
+it("fails closed for a URL draft without identity context and never posts", async () => {
+  const duplicate = [
+    { kind: "issue" as const, number: "7", title: "Structured title" },
+    { url: "http://github.com/Example/Web/issues/7", title: "Alias title" },
+  ];
+  expect(validRepositoryDraft([{ repo_id: "web", requested_ref: { kind: "default" }, links: duplicate }])).toBe(false);
+  expect(validRepositoryDraft([{ repo_id: "web", requested_ref: { kind: "default" }, links: [{ kind: "issue", number: "7" }] }])).toBe(true);
+  expect(validRepositoryDraft([])).toBe(true);
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const context = repositoryRequestContext("assistant", credentialOwner(), () => true);
+  const call = createTodoWithRepositories as unknown as (...args: unknown[]) => Promise<{ id: string }>;
+  await expect(call(context, "Title", "", undefined, {
+    catalog_revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, links: duplicate }],
+  })).rejects.toThrow("Invalid repository association draft");
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
+
 it("creates exactly once after a duplicate is corrected, keeping the chosen title", async () => {
   const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ todo: { id: "t1", title: "Title" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetchMock);
