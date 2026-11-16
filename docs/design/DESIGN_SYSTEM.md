@@ -1554,6 +1554,8 @@ control when it sits lower in the row.
 - **Tested** by `KeepTappedRowTests`: in the middle, at the newest end and at the oldest end, one open and one close
   each, in both chats, asserting the tapped row's screen position frame by frame.
 
+- **Edit diffs use the existing side panel (#9160)**: an edit row opens a Changes panel at that file and call, not a modal that hides the conversation. The panel gives the exchange's edited files a tree and keeps the selected diff beside a scrollable conversation on wide screens; a scope switch reads the whole session, including folded history. Live edits never move the reader to another file: the current diff appends in place, and other files use a new-changes pill. The old modal had no room for that navigation and could not leave the explanation and diff visible together; the existing panel already supplies the container, narrow-screen return and session memory, so no second viewer remains.
+
 ### 4.8 Pending requests
 
 Task decisions on the web reuse the task-routing chip for **Answer in chat** (#5929). It identifies the task and
