@@ -145,6 +145,58 @@ func TestNodeTrafficDoesNotKeepAStalledLinkOpen(t *testing.T) {
 	}
 }
 
+// Transport framing can split even a small node event across raw reads (streaming decompression, lost segments).
+// Such a split is not a frame a pong can be queued behind, so it must not keep a stalled link alive (#8771).
+func TestSmallSplitNodeTrafficDoesNotKeepAStalledLinkOpen(t *testing.T) {
+	oldWait, oldWindow := pingWait, pingActivityWindow
+	pingWait, pingActivityWindow = 50*time.Millisecond, 500*time.Millisecond
+	t.Cleanup(func() { pingWait, pingActivityWindow = oldWait, oldWindow })
+	r, w := io.Pipe()
+	peer := rpc.New("h", io.Discard)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- peer.Serve(context.Background(), r) }()
+	stop := make(chan struct{})
+	go func() {
+		// A well under 16 KiB event, deliberately delivered in three raw reads, more often than the activity window.
+		parts := []string{`{"event":"session.screen","par`, `ams":{"session_id":"s1","status":"wor`, `king"}}` + "\n"}
+		for {
+			for _, part := range parts {
+				if _, err := io.WriteString(w, part); err != nil {
+					return
+				}
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		_ = w.Close()
+		_ = r.Close()
+		peer.Close(io.EOF)
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Error("Serve did not stop")
+		}
+	})
+	d, _ := pingMachine(t, peer)
+	for i := 1; i <= pingMissLimit; i++ {
+		d.measureNodes(context.Background())
+		if i < pingMissLimit {
+			assertPeerOpen(t, peer)
+		}
+	}
+	select {
+	case <-peer.Done():
+	default:
+		t.Fatalf("still open after %d unanswered pings: small split node traffic kept it alive", pingMissLimit)
+	}
+}
+
 // A node's own large event (a session list of hundreds of KiB, #8771) arrives in many reads, but as a whole line: the
 // reads in its middle can explain a pong queued behind the frame only while it is still arriving. Once the event is
 // through and no frame is moving, two unanswered pings close the link; the completed event must not keep clearing
@@ -267,9 +319,12 @@ func TestPingTimeoutsDoNotCloseDuringLargeTransfer(t *testing.T) {
 		}
 	})
 	d, _ := pingMachine(t, peer)
+	head := `{"event":"file.chunk","params":"`
 	chunks := []string{
-		`{"event":"file.chunk","params":"`,
-		`first part of a large file; `,
+		head,
+		// This read takes the open frame past the rpc middle-frame threshold (16 KiB): only a frame that big can
+		// genuinely hold the pong on the node's single writer, so only it counts while still arriving (#8771).
+		strings.Repeat("x", 16<<10+1024),
 		`the pong is still queued behind this frame; `,
 		`more bytes before another ping`,
 	}

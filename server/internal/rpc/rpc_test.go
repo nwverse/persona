@@ -270,10 +270,10 @@ func servePipe(t *testing.T, p *Peer) (write func(read string)) {
 	}
 }
 
-// A frame still arriving is activity from its second read on, while each read continues it without finishing it:
-// its first read alone could as well be a small line cut by the read boundary (#8771).
+// A frame still arriving counts as activity only once it outgrows pingFrameMiddleBytes: below that, transport framing
+// could just be splitting a small line across reads, which must not keep a dead link alive (#8771).
 func TestPingActivityTracksAnUnfinishedFrame(t *testing.T) {
-	const start, more = `{"event":"file.chunk","params":"`, `still being written`
+	const start = `{"event":"file.chunk","params":"`
 	p := New("h", io.Discard)
 	if got := p.PingActivity(); !got.IsZero() {
 		t.Fatalf("PingActivity before Serve = %v, want zero", got)
@@ -283,9 +283,13 @@ func TestPingActivityTracksAnUnfinishedFrame(t *testing.T) {
 	if got := p.PingActivity(); !got.IsZero() {
 		t.Fatalf("the read that began a frame counted as activity: %v", got)
 	}
-	write(more)
+	write(`still being written`)
+	if got := p.PingActivity(); !got.IsZero() {
+		t.Fatalf("the middle of a small frame counted as activity: %v", got)
+	}
+	write(strings.Repeat("x", pingFrameMiddleBytes+100))
 	if got := p.PingActivity(); got.IsZero() {
-		t.Fatal("PingActivity stayed zero although the middle of a frame was read")
+		t.Fatal("PingActivity stayed zero although a large frame is still arriving")
 	}
 }
 
@@ -335,8 +339,10 @@ func TestPingActivityCountsRepliesAndFramesStillArriving(t *testing.T) {
 		{name: "small event cut in two", reads: []string{`{"event":"session.screen","par`, `ams":{}}` + "\n"}, active: false},
 		{name: "small lines cut across reads", reads: []string{event + `{"id":"n2","met`, `hod":"state.load"}` + "\n" + `{"ev`, `ent":"x"}` + "\n"}, active: false},
 		{name: "first read of a frame", reads: []string{`{"event":"file.chunk","params":"`}, active: false},
-		{name: "middle of a frame", reads: []string{`{"event":"file.chunk","params":"`, `still arriving`}, active: true},
-		{name: "middle of a frame begun behind a line", reads: []string{event + `{"event":"file.chunk","params":"`, `still arriving`}, active: true},
+		{name: "small frame mid-arrival", reads: []string{`{"event":"file.chunk","params":"`, `still arriving`}, active: false},
+		{name: "small frame mid-arrival begun behind a line", reads: []string{event + `{"event":"file.chunk","params":"`, `still arriving`}, active: false},
+		{name: "large frame mid-arrival", reads: []string{`{"event":"file.chunk","params":"`, strings.Repeat("x", pingFrameMiddleBytes+100)}, active: true},
+		{name: "large frame mid-arrival begun behind a line", reads: []string{event + `{"event":"file.chunk","params":"`, strings.Repeat("x", pingFrameMiddleBytes+100)}, active: true},
 		{name: "large event that arrived whole", reads: []string{`{"event":"sessions.changed","params":{"list":"` + strings.Repeat("x", 4096) + `"}}` + "\n"}, active: false},
 		{name: "large event whose pieces all arrived", reads: []string{`{"event":"sessions.changed","params":"`, `more of the list`, `the rest"}` + "\n"}, active: false},
 		{name: "large reply whose pieces all arrived", reads: []string{`{"id":"h1","result":"`, `more of the answer`, `the rest"}` + "\n"}, active: true},
@@ -373,6 +379,8 @@ func TestPingActivityClassifiesReadAheadBeforeReply(t *testing.T) {
 		{name: "complete request", tail: `{"id":"n1","method":"state.load","params":{"result":"x"}}` + "\n", active: false},
 		{name: "partial event", tail: `{"event":"file.chunk","params":"still arriving`, active: false},
 		{name: "partial request", tail: `{"id":"n1","method":"state.load","params":{"result":"still arriving`, active: false},
+		{name: "request piece inside params with a nested result", tail: `{"result":"still arriving`, active: false},
+		{name: "event piece inside params with a nested result", tail: `"screen":{"result":1},"x":"still`, active: false},
 		{name: "complete second deadline", tail: `{"id":"h2","error":{"message":"context deadline exceeded"}}` + "\n", active: false},
 		{name: "partial second deadline", tail: `{"id":"h2","error":{"message":"context dead`, active: false},
 	} {

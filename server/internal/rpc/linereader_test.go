@@ -84,20 +84,30 @@ func scanned(r io.Reader, size, maximum, piece int, scanner bool) (lines []strin
 }
 
 // readShapes counts, from the reads alone, what a lineReader's middle hook is told of: the reads that go on with a
-// line begun in an earlier read and do not finish it.
+// line begun in an earlier read, do not finish it, and have already grown past pingFrameMiddleBytes.
 type readShapes struct {
-	r      io.Reader
-	middle int
-	open   bool // the reads so far end inside a line
+	r       io.Reader
+	middle  int
+	open    bool // the reads so far end inside a line
+	openLen int  // bytes of the line still open
 }
 
 func (s *readShapes) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	if n > 0 && n <= len(p) { // a lineReader drops a bad count's bytes (bufio.ErrBadReadCount)
-		if s.open && bytes.IndexByte(p[:n], '\n') < 0 {
-			s.middle++
+		chunk := p[:n]
+		if s.open && bytes.IndexByte(chunk, '\n') < 0 {
+			s.openLen += n
+			if s.openLen > pingFrameMiddleBytes {
+				s.middle++
+			}
 		}
-		s.open = p[n-1] != '\n'
+		if i := bytes.LastIndexByte(chunk, '\n'); i >= 0 {
+			s.openLen = n - i - 1
+		} else if !s.open {
+			s.openLen = n
+		}
+		s.open = chunk[n-1] != '\n'
 	}
 	return n, err
 }

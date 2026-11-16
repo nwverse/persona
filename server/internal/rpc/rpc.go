@@ -184,12 +184,14 @@ func New(prefix string, w io.Writer) *Peer {
 // PingActivity is when this connection last received input that can explain a ping answered late (#8771): a reply to a
 // call from this side, on time or late, as the other side got that call; or the middle of a frame still arriving (a
 // read that continues a line begun before it and does not finish it), which a pong can be queued behind on the other
-// side's single writer. A frame that has arrived whole counts no more: a pong behind it comes next, and counts as a
-// reply. Requests and events the other side starts itself do not count: they keep coming when nothing sent from here
-// gets through (a node with running Agents sends them, its session list of hundreds of KiB among them, every few
-// seconds over a link whose other direction has stalled). Neither does a deadline error reply, which only says a relay
-// answered its own timeout, nor a read that begins or finishes a line: a busy peer's small lines are cut at arbitrary
-// read boundaries too. A line that cannot be decoded still counts, as nothing shows it is not a reply.
+// side's single writer. Only a frame already bigger than pingFrameMiddleBytes can be such a queue: small lines are
+// split across reads by the transport itself (streaming decompression, lost segments), so their pieces never count.
+// A frame that has arrived whole counts no more: a pong behind it comes next, and counts as a reply. Requests and
+// events the other side starts itself do not count: they keep coming when nothing sent from here gets through (a node
+// with running Agents sends them, its session list of hundreds of KiB among them, every few seconds over a link whose
+// other direction has stalled). Neither does a deadline error reply, which only says a relay answered its own timeout,
+// nor a read that begins or finishes a line: a busy peer's small lines are cut at arbitrary read boundaries too. A
+// line that cannot be decoded still counts, as nothing shows it is not a reply.
 func (p *Peer) PingActivity() time.Time {
 	ns := p.pingActivity.Load()
 	if ns == 0 {
@@ -227,8 +229,8 @@ func replyMessage(m message) bool {
 
 // bufferedActivity reports ping activity already read behind a deadline reply, so that it counts before the deadline
 // wakes its caller: a complete later line that is a reply but not another deadline, or that cannot be decoded; or an
-// unfinished line that names a result but no method or event (a line names those before params or a result). A
-// partial error remains uncounted until its whole line proves that it is not another deadline. Requests and events do
+// unfinished line whose envelope names a result but no method or event (a line names those before params or a result).
+// A partial error remains uncounted until its whole line proves that it is not another deadline. Requests and events do
 // not count, whole or begun: a line begun in this read is not the middle of a frame (lineReader.middle).
 func bufferedActivity(b []byte) bool {
 	for len(b) > 0 {
@@ -250,7 +252,15 @@ func bufferedActivity(b []byte) bool {
 	if err := json.Unmarshal(tail, &m); err == nil {
 		return replyMessage(m) && !deadlineMessage(m)
 	}
-	return bytes.Contains(tail, []byte(`"result"`)) && !bytes.Contains(tail, []byte(`"method"`)) && !bytes.Contains(tail, []byte(`"event"`))
+	// A tail cut off inside params can contain a nested "result" key that belongs to a request or event, so only an
+	// envelope prefix with the reply's own id and result (and no method or event) counts. A piece that starts inside a
+	// params object carries no envelope id and stays unclassified rather than keeping a dead link alive.
+	head := tail
+	if i := bytes.Index(tail, []byte(`"params"`)); i >= 0 {
+		head = tail[:i]
+	}
+	return bytes.Contains(head, []byte(`"id"`)) && bytes.Contains(head, []byte(`"result"`)) &&
+		!bytes.Contains(head, []byte(`"method"`)) && !bytes.Contains(head, []byte(`"event"`))
 }
 
 // Serve reads messages until r fails; it returns the read error.
