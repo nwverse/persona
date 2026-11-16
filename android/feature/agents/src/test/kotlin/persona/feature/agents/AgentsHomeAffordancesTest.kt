@@ -122,6 +122,35 @@ class AgentsHomeAffordancesTest {
         rule.onAllNodes(androidx.compose.ui.test.hasText("Sort:", substring = true)).assertCountEquals(0)
     }
 
+    // #9199: iOS hides Sort under By App and Recently Used; Collapse / Expand All under Recently Used.
+    @Test fun sortIsNotOfferedUnderByApp() {
+        val model = showScreen()
+        rule.runOnIdle { model.grouping(persona.core.domain.sort.AgentGrouping.App) }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("List settings").performClick()
+        rule.onNodeWithText("All machines").assertIsDisplayed()
+        rule.onAllNodes(androidx.compose.ui.test.hasText("Sort:", substring = true)).assertCountEquals(0)
+    }
+
+    @Test fun sortIsNotOfferedUnderRecentlyUsed() {
+        val model = showScreen()
+        rule.runOnIdle { model.grouping(persona.core.domain.sort.AgentGrouping.Recent) }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("List settings").performClick()
+        rule.onNodeWithText("All machines").assertIsDisplayed()
+        rule.onAllNodes(androidx.compose.ui.test.hasText("Sort:", substring = true)).assertCountEquals(0)
+    }
+
+    @Test fun collapseExpandAllAreNotOfferedUnderRecentlyUsed() {
+        val model = showScreen()
+        rule.runOnIdle { model.grouping(persona.core.domain.sort.AgentGrouping.Recent) }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("List settings").performClick()
+        rule.onNodeWithText("All machines").assertIsDisplayed()
+        rule.onAllNodesWithText("Collapse all").assertCountEquals(0)
+        rule.onAllNodesWithText("Expand all").assertCountEquals(0)
+    }
+
     // #4338 A11, as iOS's row menu: a working agent can be interrupted from its row; a finished one offers nothing to stop.
     @Test fun aWorkingRowOffersInterrupt() {
         showScreen(rows = listOf(Session("box", "busy", title = "Busy task", state = "working")))
