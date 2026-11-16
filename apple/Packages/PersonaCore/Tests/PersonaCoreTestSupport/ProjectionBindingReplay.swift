@@ -106,10 +106,17 @@ public enum ProjectionBindingReplay {
                 expectedOther = .object([try ProjectionFixture.require(question.text("question"), "question"): .string("")])
             }
         }
-        try ProjectionFixture.assertEqual(transition["page"], operation["page"], "answer/\(name)/page")
-        try ProjectionFixture.assertEqual(transition["other"], expectedOther, "answer/\(name)/other")
+        try ProjectionFixture.assertEqual(
+            try ProjectionFixture.require(transition["page"], "page"),
+            try ProjectionFixture.require(operation["page"], "page"), "answer/\(name)/page"
+        )
+        try ProjectionFixture.assertEqual(
+            try ProjectionFixture.require(transition["other"], "other"), expectedOther, "answer/\(name)/other"
+        )
         if name != "multiple_pick_waits_for_submit", name != "multiple_pick_toggles_off" {
-            try ProjectionFixture.assertEqual(transition["picks"], expectedPicks, "answer/\(name)/picks")
+            try ProjectionFixture.assertEqual(
+                try ProjectionFixture.require(transition["picks"], "picks"), expectedPicks, "answer/\(name)/picks"
+            )
         }
         var actual: [String: ContinuityJSON] = [
             "allowed": try ProjectionFixture.require(transition["allowed"], "allowed"),
