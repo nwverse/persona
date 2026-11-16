@@ -618,6 +618,47 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	}
 }
 
+// A legacy one-shot list waits for the leader being linked, bounded; a revision-aware caller returns immediately and
+// recovers through its cursor instead. The wait alone grants rights to nobody.
+func TestLegacyTaskLeaderListWaitsForItsLink(t *testing.T) {
+	s, _ := newQuietService(t)
+	old := leaderListWait
+	leaderListWait = 400 * time.Millisecond
+	t.Cleanup(func() { leaderListWait = old })
+	ctx := context.Background()
+
+	if got := s.leaderTools(ctx, "box", "sx"); got != nil {
+		t.Fatalf("no leader is starting: %v", got)
+	}
+	s.leaderStarts.Add(1)
+	start := time.Now()
+	if got := s.leaderTools(ctx, "box", "sx"); got != nil || time.Since(start) < 300*time.Millisecond {
+		t.Fatalf("an unlinked agent while a leader starts: %v after %s", got, time.Since(start))
+	}
+	todo, err := s.createTaskTodo(ctx, "leader", "", "conv1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(100*time.Millisecond, func() {
+		_ = s.linkTodoAgentWithSource(ctx, todo.ID, "box", "sx", "leader", "/code/app", "", "", sourceLeader, "")
+		s.leaderStarts.Add(-1)
+	})
+	if got := leaderToolNames(s.leaderTools(ctx, "box", "sx")); !slices.Equal(got, []string{"task_plan", "task_review"}) {
+		t.Fatalf("the leader's list after its link: %v", got)
+	}
+
+	s.leaderStarts.Add(1)
+	defer s.leaderStarts.Add(-1)
+	start = time.Now()
+	watched := s.sessionMCPToolsSince(ctx, "box", "other", false, false, "a-revision")
+	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+		t.Fatalf("a revision-aware list waited for the legacy startup window: %s", elapsed)
+	}
+	if got := leaderToolNames(watched["tools"].([]proto.Tool)); slices.Contains(got, "task_plan") || slices.Contains(got, "task_review") {
+		t.Fatalf("an unrelated agent gained leader rights: %v", got)
+	}
+}
+
 // Registration after the initial list invalidates its cursor. No startup counter
 // or finite wait window is involved, and late watch subscription cannot lose it.
 func TestTaskLeaderListRefreshesAfterItsLink(t *testing.T) {
@@ -908,6 +949,81 @@ func TestTaskLeaderNeedsUserGoesToItsOwnSupervisor(t *testing.T) {
 	}
 	if v := todoNow(s, w2.ID).Supervision; v.State != reviewNeedsUser {
 		t.Fatalf("the ledger after the third rework: %+v", v)
+	}
+}
+
+func leaderNeedsUserReview(t *testing.T, s *Service, todoID, recommend string) {
+	t.Helper()
+	res := s.mcpCall(context.Background(), "box", "s1", "task_review", mustJSON(map[string]any{
+		"todo_id": todoID, "verdict": "needs_user", "reason": "The owner must choose the release action", "recommend": recommend,
+	}), false)
+	if res.IsError {
+		t.Fatalf("leader needs_user review was rejected: %+v", res)
+	}
+}
+
+func flushLeaderDecisionDigest(s *Service) {
+	b := &s.supervise
+	b.mu.Lock()
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	for id, g := range b.pending {
+		g.At = time.Now().Add(-time.Hour)
+		b.pending[id] = g
+	}
+	b.last = time.Now().Add(-time.Hour)
+	b.mu.Unlock()
+	s.superviseTimes = shortSuperviseTimings
+	s.sendDigest(context.Background())
+}
+
+func leaderDecisionFixture(t *testing.T) (*Service, *fakeHub, string) {
+	t.Helper()
+	s, f := newQuietService(t)
+	startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	return s, f, w.ID
+}
+
+func TestTaskLeaderNeedsUserRecommendationRevisionIsNotDeduplicated(t *testing.T) {
+	s, f, id := leaderDecisionFixture(t)
+	leaderNeedsUserReview(t, s, id, "approve the release")
+	flushLeaderDecisionDigest(s)
+	if got := f.notices(); len(got) != 1 || !strings.Contains(got[0], "approve the release") {
+		t.Fatalf("first decision did not reach the supervisor: %q", got)
+	}
+
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	leaderNeedsUserReview(t, s, id, "do not release; roll back first")
+	if task := todoNow(s, id); task.DoneAt != nil || task.Supervision.State != reviewNeedsUser || len(task.Supervision.Reviews) != 2 {
+		t.Fatalf("second review was not recorded on the same open needs-user task: %+v", task.Supervision)
+	}
+	flushLeaderDecisionDigest(s)
+	got := f.notices()
+	if len(got) != 2 || !strings.Contains(got[len(got)-1], "do not release; roll back first") {
+		t.Fatalf("revised recommendation was suppressed; notices (%d): %q", len(got), got)
+	}
+}
+
+func TestTaskLeaderNeedsUserIdenticalRecommendationIsDeduplicated(t *testing.T) {
+	s, f, id := leaderDecisionFixture(t)
+	leaderNeedsUserReview(t, s, id, "approve the release")
+	flushLeaderDecisionDigest(s)
+	if got := len(f.notices()); got != 1 {
+		t.Fatalf("first decision notices = %d", got)
+	}
+
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	leaderNeedsUserReview(t, s, id, "approve the release")
+	if task := todoNow(s, id); len(task.Supervision.Reviews) != 2 {
+		t.Fatalf("repeated review was not recorded: %+v", task.Supervision)
+	}
+	flushLeaderDecisionDigest(s)
+	if got := f.notices(); len(got) != 1 {
+		t.Fatalf("an unchanged recommendation was notified again: %q", got)
 	}
 }
 

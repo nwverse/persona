@@ -129,17 +129,48 @@ progress** everything running that does not need them. Each thing is one row in 
 each count is its rows:
 
 - **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
-  for a decision or review (an open `ask`; `pending_review` / `needs_user` on an open task), one whose turn broke off on a
-  model error (`interrupted`) or whose start failed while it is still the user's to retry; in the main chat, an Agent
-  opened by hand (no task) that asks something; a plan waiting for Start (one row per plan); a message card waiting for
-  Send; the conversation's own cards.
+  for a decision that is the owner's (an open `ask`; `needs_user` on an open task; on Android and Apple also a
+  `pending_review` that is overdue, next bullet), one whose turn broke off on a model error (`interrupted`) or whose start failed while it is
+  still the user's to retry; in the main chat, an Agent opened by hand (no task) that asks something; a plan waiting
+  for Start (one row per plan); a message card waiting for Send; the conversation's own cards.
+- **A supervisor's review is not the owner's.** A supervised task judged finished waits in `pending_review` for its
+  supervisor (the background supervisor, a leader, or the conversation that handed it out; "Supervision" and
+  "Background supervisor" below), who closes it with `task_review`. That review is Persona's to do, so the Needs you
+  badge does not count it. It comes to the owner only when something of it is theirs: its agent asks, it has an open
+  `ask` (please verify), or the review ends in `needs_user`. Unchanged by this: the To-dos page's sections, the
+  direction tree's `review` state, the Today card's "Waiting for your review" and pushes. Before 2026-11-15 every
+  `pending_review` task was listed under Needs you, a rule older than the background supervisor (#4927): most of what
+  the owner was shown there was a review Persona finished on its own minutes later.
+  - **Web: Persona reviewing** (#8678, zh 等 Persona 验收, ja Persona の確認待ち): every such task with nothing of it
+    running (its status a finished turn, `awaitsReview`) is a row in an entry of its own, after In progress, however
+    long the review has waited and whether or not the hub sends `pending_since`. The entry is there only while one
+    waits (or its tray is open), is drawn neutral (a grey `ink-3` dot and `ink-2` label, never the attention or
+    working colour) since nothing in it is the user's, and counts its rows like the others. Its rows say "Supervisor
+    reviewing" (zh 督办验收中, ja 監督の確認待ち) and open the task. It comes before Waiting for merge: a task under
+    review whose PR is open and waits for a maintainer is here, not there (`supervisor_review_with_open_pr`). A
+    review whose agent is at work again is In progress with it. Until #8678 the web put a review overdue by an hour
+    (or with no `pending_since`) in Needs you, as Android and Apple still do: users opened such a row, found only the
+    Agent's finished conversation and nothing to answer, and could not tell what was wanted of them. The entry keeps a
+    stalled or missing supervisor's review in sight without making it the owner's.
+  - **Android and Apple** (until they adopt the entry): the task is **In progress**, its row saying "Supervisor
+    reviewing", for the first hour of the review, and in Needs you after that (`supervision.pending_since`; the
+    threshold is `REVIEW_OVERDUE_MS` on Android, `AssistantEntries.reviewOverdueAfter` on Apple), or at once from a hub
+    that does not send `pending_since`. The row stays in In progress whatever the To-dos page files the task under,
+    each client re-reads the clock once a minute, and a task under review with an open PR is In progress, not Waiting
+    for merge, until the review is overdue. `spec/fixtures/entries` pins this split and, in `web_review`, the rows the
+    web lists under Persona reviewing instead.
+- **Waiting for merge** (web only, #7614): a task whose fresh, open, non-draft PR waits for a maintainer with nothing
+  of it active and nothing the owner's (the To-dos page's `pr_open` rule, `docs/assistant/todo-status-sop.md`) is a
+  third group shown only when it has rows, outside In progress and its count. Needs you and a supervisor's review
+  (Persona reviewing) come first. Android and iOS do not read `pr_status` and keep such a task in In progress.
 - **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened by
   hand. A task its supervisor parked (#3804, "Supervision" below) is here on the web, saying "Parked until <time> ·
   <reason>", however long it has been still (never folded under shelved); it is never in Needs you for being parked.
   Android and iOS do not know the state yet and file it by its other facts; `spec/fixtures/entries` has no parked case. A task's agents are never rows of their own: the task's row carries their state and progress meter, and opens the
   task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line. A row can stay
   visible while the To-dos page no longer counts it open (a parked task past 48 h, a seen review): the chip badge reads
-  the row's `data-counts-open` flag, so the counted to-dos across both entries equal the To-dos header's "Not done".
+  the row's `data-counts-open` flag, so the counted to-dos across the entries (Needs you, In progress, and on the web
+  Persona reviewing and Waiting for merge) equal the To-dos header's "Not done".
 - Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
   back to In progress. An entry with nothing counted (no number on it), Needs you or In progress, is grey and still opens:
   to the rows it lists uncounted, or to its line ("All caught up", "Nothing in progress"); the web drew such an In
@@ -155,7 +186,9 @@ each count is its rows:
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
 `assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
 (`apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift`, #3393). All three replay `spec/fixtures/entries`, which pins
-which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
+which entry every case goes to, and which In progress rows say their supervisor is reviewing them (Apple:
+`AssistantEntriesFixtureTests`); the web reads those rows, and the overdue reviews, from `web_review` as its Persona
+reviewing entry (#8678). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
 ### Background activity in In progress (#3588)
@@ -191,7 +224,7 @@ rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
 Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
-the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; receipts, reviews and reports are not drawn at all on iOS since #8237 ("Receipts" below); Android's Glass style still draws them, with Persona's hand-offs, message cards and the hub's notice lines, as iOS did before (`docs/plans/android-ios-alignment/chats.md` C13).
+the existing task details. On iOS and Android the dispatch answer is one hand-off card per Agent a dispatch started or a task took over (#5110; iOS `DispatchHandoffCard`: title, New / Already Active / Resumed, when that Agent last moved and its state, ↗). A card with an Agent opens that Agent's page. The web draws the same cards, which open that Agent in the side panel or as its page, as Settings says ("Hand-off cards (web)" below). Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat; receipts, reviews and reports are not drawn at all since #8237 (Android: #8312; "Receipts" below). Persona's hand-offs, message cards and the hub's notice lines stay in the conversation (`docs/plans/android-ios-alignment/chats.md` C13).
 
 **Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
 on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
@@ -294,7 +327,7 @@ interruption bookkeeping below and the trays' order still read them. How a task 
   manager, so the MacBook's Agents are the default page's), with `MOCK_TASKS_NO_ASKS=1` for a chat no question card
   covers; `QuietReceiptsUITests` checks and shoots them.
 
-What follows is what the hub writes and how the clients drew receipts before #8237 (Android still does, #8312):
+What follows is what the hub writes and how the clients drew receipts before #8237:
 
 - When a task finishes (an attached Agent ends a turn with no pending interaction), append a green receipt at the bottom: task name, what was done (summary of the Agent's final text block),
   number of changed files, tests, PR, and next actions below: review changes, merge, tell the person who asked, etc.
@@ -333,7 +366,7 @@ keeps one outage from filling the chat:
   receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
   computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
   receipt still brings it along.
-- **Drawing** (`interruptLook`; Android only: iOS and the web draw no receipt since #8237, "Receipts" above): a receipt that names another in `group` is not drawn; a batch is one card,
+- **Drawing** (`interruptLook`; no client draws a receipt in an assistant conversation since #8237, Android #8312, "Receipts" above): a receipt that names another in `group` is not drawn; a batch is one card,
   "<computer> <cause>, N tasks interrupted → handled a / pending b", opening to each task with its result, each opening the
   task; a handled single receipt is a grey line "“<title>” was interrupted · <result>" that opens the task; a pending one is
   the red card as before. Only a batch with something pending, or a pending receipt, uses the danger color. In the main chat,
@@ -657,7 +690,7 @@ On by default. One built-in conversation follows up every supervised task whose 
 - **The setting**: `main_supervises_own_tasks` ("The main chat supervises its own tasks": `GET/PUT /api/v1/assistant`, `persona_settings` key `assistant.main_supervises_own_tasks`), off by default. On means there is no background supervisor in effect: signals raised from then on go to the main chat, as before #4927. Open tasks keep running either way, and a supervision message the background supervisor was already sent it still finishes.
 - **Nothing is written on the tasks**: a task's ledger keeps the main chat as `supervisor` and its `origin` stays the chat that planned it. Who gets a task's signals is decided when they are sent (`ownSupervisor`): the background supervisor while it is on and exists on the assistant's computer, else the main chat. Why not store it as `supervisor`: task cards, the dock, receipts, to-do events and the direction tree (tasks without a leader sit under the secretary) read the ledger and stay as they were; the main chat's right to review these tasks is the rule it always had; switching the setting moves every open task at once; and a background supervisor that is gone leaves no task naming a conversation that does not exist.
 - **Routing** (`digestTo`, `server/internal/assistant/supervise_leader.go`): a signal of a task whose ledger names the main chat (or no supervisor) goes to the background supervisor, in the leader variant of `prompts/assistant/supervise.md` with a line saying the tasks are not its own; this includes a task waiting for the user and a task leader's decision sent up to the main chat. What always went to the main chat stays there: `escalated`, failed and retried starts (the start remedies are main-chat tools) and `leader_stuck`. A leader's tasks stay the leader's, and a side chat's own tasks go to that chat (to the main chat when it is gone or the task waits for the user).
-- **What it may do**: `task_review` (accepted, rework, cancelled, needs_user, parked), `task_scope`, `agent_read`, `agent_send` (as the task's supervisor, not as a side conversation), `interaction_answer` and `ask_escalate`, for the tasks above, and for a task a side chat supervises itself (`backgroundSupervises`: any supervised task whose ledger names no current leader conversation and no task leader's agent; a card of such a task comes to it first, `askLadder`). The main chat may still review or message any of them.
+- **What it may do**: `task_review` (accepted, rework, cancelled, needs_user, parked), `task_scope`, `agent_read`, `agent_send` (as the task's supervisor, not as a side conversation: its `agent_send` or `agent_interrupt` with `then` to an accepted task's agent reopens the task, as the supervisor's would, for a task whose ledger names the main chat; a side chat's own task reopens only for that chat's sends, #7539), `interaction_answer` and `ask_escalate`, for the tasks above, and for a task a side chat supervises itself (`backgroundSupervises`: any supervised task whose ledger names no current leader conversation and no task leader's agent; a card of such a task comes to it first, `askLadder`). The main chat may still review or message any of them.
 - **What the main chat gets**: an accepted task takes no main-chat turn: the conclusion card goes to the owner as before, the review is an entry in the chat activity of the chat that planned the task, and the outcome is in the main chat's next snapshot. A `needs_user` sends the decision card as before and the `escalated` entry a leader's sends, which is a supervision message to the main chat (folded, not pushed); one that can wait (`can_wait`, `docs/assistant/todos.md` "Decisions that can wait") sends that entry only when it is pushed after all, as a leader's does. A concern's outcome is still a main-chat turn. A failed start is ended only by the turn of the conversation whose supervision message carried it (the main chat's): a background supervisor's or a leader's turn that ends meanwhile does not give the start up (`remedyGoesTo`, `server/internal/assistant/start_remedy.go`). The answers of `agent_supervise` and `agent_send` with a task say who follows the task up, as `task_plan`'s does.
 - **Announced once**: once the background supervisor exists, the main chat's context carries one line saying its tasks are followed up there from now on and that the owner can ask Persona to switch it back (`assistant.main_supervises_own_tasks`). The line goes with every main-chat message until one that carried it was delivered: `assistant.context` returns a receipt `{item_id: "background_supervisor", digest: <its id>}` among `view_error_receipts`, the node sends the receipts back once the message is on its way, and only then is `background_supervisor_announced` set (`announceBackground`, `announcedBackground`). A message that fails to go out, or goes without its context, leaves the line for the next one.
 - **Model**: purpose `assistant.supervise`, which follows Main chat until it is given its own (`docs/assistant/model-config.md`). It applies when the conversation starts and on every message sent to it.
@@ -1048,7 +1081,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
   Continue on the card uses `POST /api/v1/todos/{id}/retry`; hub sends the Agent "继续" (continue). Once it runs, the task returns to working; a normal turn ending emits another done receipt.
 - **Waiting for you**: no feed entry. The App directly uses the attached Agents' `pending_interactions`; handling (`resolve`) writes `answered`.
 - **Speak to a task**: `POST /api/v1/assistant/conversations/{id}/route {todo_id, text}`; hub uses `session.send` to send to the task's highest-priority Agent and writes `routed`.
-- **Persona learns about it**: the live snapshot adds "Tasks started from this chat," with each task's state, latest text, and changes since the previous snapshot (finished, waiting for you). No extra turn is triggered.
+- **Persona learns about it**: the live snapshot adds "Tasks started from this chat," with each task's state, latest text, and changes since the previous snapshot (finished, waiting for you). No extra turn is triggered. A conversation other than the main one sees only the tasks it handed out or supervises there (#8666, `docs/assistant/todos.md`).
 
 ## App (iOS)
 

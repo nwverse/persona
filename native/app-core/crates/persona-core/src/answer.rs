@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::apple_text::is_apple_whitespace;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,7 +58,7 @@ pub struct Operation {
     pub option_index: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Transition {
     pub allowed: bool,
     pub page: usize,
@@ -74,14 +76,6 @@ pub struct Answers {
 pub struct Display {
     pub text: String,
     pub recommended: bool,
-}
-
-/// CoreFoundation's whitespace set includes U+2000...U+200B, not Unicode White_Space alone.
-fn is_apple_whitespace(character: char) -> bool {
-    matches!(
-        character,
-        ' ' | '\t' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200b}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
-    )
 }
 
 fn trim_display(text: &str) -> &str {

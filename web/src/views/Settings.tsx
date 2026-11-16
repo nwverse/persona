@@ -58,9 +58,7 @@ import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope
 import { foundAliases, type EditDraft, type FoundAlias } from "../lib/provider-paste";
 import { dropImportLink, importLinkHeld, onImportLink } from "../lib/import-link";
 import { linkable } from "../lib/provider-link";
-import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
-import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
@@ -68,6 +66,7 @@ import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, itemIsPage, item
 import { searchSettings, type SearchGroup } from "./settings/search";
 import { GroupAction, GroupFooter, GroupTitle, hasFooter } from "./settings/SettingsGroups";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
+import { lazyDialog, lazyOverlay, useOpened } from "./LazyOverlay";
 import { formatList, t } from "../i18n";
 
 // ── types (docs/integrations/launchers.md) ───────────────────────────
@@ -756,6 +755,12 @@ function InstallRow() {
 
 // ── Models ──────────────────────────────────────────────
 
+// The provider wizard and the import open on a click, so their chunks (with ProviderPaste and ProviderScope, which
+// only they use) load on the first open, not with every Settings page: about 110 KB of the Settings chunk (#8840).
+// The wizard stays mounted once opened, as before: it keeps what each opening started (ProviderWizard.tsx).
+const ProviderWizard = lazyOverlay(() => import("./settings/ProviderWizard").then((m) => m.ProviderWizard));
+const ProviderImport = lazyDialog(() => import("./settings/ProviderImport").then((m) => m.ProviderImport));
+
 /** Forgets `add` / `launcher` once what they opened is closed, so going back or reloading does not open it again. */
 function dropLinkParams() {
   const q = new URLSearchParams(location.search);
@@ -788,6 +793,7 @@ function Models() {
   // One opened while the page is up (pasted over it) opens Add in place of a provider's details, but never over a
   // dialog with something typed in it (the wizard, the copy dialog, the alias import): it waits, held, until that closes.
   const busy = editing !== null || copying !== null || importing;
+  const wizardOpened = useOpened(editing !== null);
   const busyNow = useRef(busy);
   busyNow.current = busy;
   const takeLink = (l: string) => {
@@ -967,8 +973,8 @@ function Models() {
           setCopying(l);
         }}
       />
-      <ProviderWizard existing={editing} draft={editDraft} link={link} found={found} onClose={closeWizard} onSaved={() => void load()}
-        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />
+      {wizardOpened && <ProviderWizard open={editing !== null} existing={editing} draft={editDraft} link={link} found={found} onClose={closeWizard} onSaved={() => void load()}
+        onImportAlias={(a) => (closeWizard(), setImportAlias(a), setImporting(true))} onEditWith={(name, draft) => void editWith(name, draft)} />}
       <ProviderImport open={importing} machine={importAlias?.machine} alias={importAlias?.name} onClose={() => setImporting(false)} onImported={() => void load()} />
       <ProviderLinkCopy provider={copying} onClose={() => (setCopying(null), dropLinkParams())} />
       </div>

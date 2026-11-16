@@ -57,7 +57,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -3384,6 +3384,10 @@ TODO_ORPHANED_SINCE = ago(hours=5)
 # seen by another team (two taps, no default). POST …/accept with `response` "explain_first" keeps the round open
 # with `response` set, as the hub does; any other response or an option ends it.
 MOCK_DECISIONS = os.environ.get("MOCK_DECISIONS") == "1"
+# MOCK_ACCEPT_DIALOG=1 (#7343, docs/assistant/todos.md): every answer to a decision is refused as the hub refuses one a
+# dialog in its Agent's terminal holds back (423 dialog_open, with the dialog's first line and that Agent), so the
+# decision row says so and offers its terminal; nothing is taken.
+MOCK_ACCEPT_DIALOG = os.environ.get("MOCK_ACCEPT_DIALOG") == "1"
 DECISION_RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"]
 DECISION_FIELDS = {
     "todo_review": {
@@ -9037,6 +9041,10 @@ def tasks_area(h, method, p, raw):
         expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
         if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
+        elif MOCK_ACCEPT_DIALOG:
+            h.send_json({"code": "dialog_open", "error": "终端正在等待选择，请先到终端处理。", "delivered": "none",  # i18n-ignore
+                         "retryable": False, "dialog": "Approaching rate limits", "machine_id": "macbook",
+                         "session_id": "a1f3c2d4-0000-4000-8000-000000000002"}, 423)
         elif MOCK_DECISIONS and sent.get("response") == "explain_first" and tid in TODO_ASKS:
             DECISION_KEPT[tid] = "explain_first"  # the round stays open, no longer taken by default (decision.go)
             h.send_json({"ok": True})
@@ -9915,6 +9923,52 @@ if os.environ.get("MOCK_SOURCES"):
          "cwd": "/Users/me/code/reports", "kind": "permission", "agent": "dsh", "agent_label": "DSH",
          "created_at": ago(minutes=2), "expires_at": later(minutes=28), "tool_name": "read_file",
          "summary": "读取 finance/2026-Q3.xlsx", "tool_input": {"path": "finance/2026-Q3.xlsx"}})
+
+# MOCK_CANT_ANSWER=1 (#6868): question cards the phone can't answer. A live Codex thread on a shared app-server not joined
+# yet (send and attach, no approve, like MOCK_SOURCES' CODEX_LIVE) asks one, as in the report: its chat says why under the
+# card and offers Attach Live, which flips approve (POST …/attach) and lets the card be answered. A subagent of it (send,
+# attach and approve off, as the node lists one its parent drives, codex_registry.go) asks another: only the computer can.
+# /mock/reset unjoins the thread again (CantAnswerCardTests).
+CODEX_ASKS = "c0de6868-1111-4000-8000-000000000001"
+CODEX_ASKS_SUB = "c0de6868-2222-4000-8000-000000000002"
+CANT_ANSWER_START = {}
+if os.environ.get("MOCK_CANT_ANSWER") == "1":
+    _thread = "019a6868-7d2e-7b10-9a55-3e8c1f2d4a6%d"
+    SESSIONS += [
+        sess("server", CODEX_ASKS, "整理部署脚本", "/home/me/code/deploy", "blocked", "needs_you", "", 0, "", 0, 1,
+             "变量合好了，部署前问你一个问题。", agent="codex", agent_name="codex-desk", pending=1,
+             source_kind="codex_app_server", source_thread_id=_thread % 0, source_instance_id="desk", attached=False,
+             capabilities={"read": True, "send": True, "interrupt": True, "approve": False, "terminal": False, "attach": True},
+             **NO_SPACE),
+        sess("server", CODEX_ASKS_SUB, "核对 staging 变量", "/home/me/code/deploy", "blocked", "needs_you", "", 0, "", 0, 1,
+             "staging 有两个变量和生产不一样。", agent="codex", agent_name="codex-desk", pending=1,
+             source_kind="codex_app_server", source_thread_id=_thread % 1, source_instance_id="desk",
+             parent_thread_id=_thread % 0, is_subagent=True, parent_session_id=CODEX_ASKS, root_session_id=CODEX_ASKS,
+             read_only_reason="仅查看：这个子 Agent 由父 Agent 驱动",
+             capabilities={"read": True, "send": False, "interrupt": False, "approve": False, "terminal": False, "attach": False},
+             **NO_SPACE),
+    ]
+    CANT_ANSWER_START = {x["session_id"]: copy.deepcopy(x) for x in SESSIONS[-2:]}
+    for _sid, _title, _id, _q, _opts in (
+            (CODEX_ASKS, "整理部署脚本", "cxq_deploy_target", "先部署到哪个环境？",
+             [("staging", "先在预发环境验证变量和迁移。"), ("production", "直接上线，跳过预发。")]),
+            (CODEX_ASKS_SUB, "核对 staging 变量", "cxq_staging_vars", "这两个变量按哪边的值？",
+             [("按生产的值", "和线上保持一致。"), ("保留 staging 的值", "只在预发环境不同。")])):
+        INTERACTIONS.append(
+            {"id": _id, "machine_id": "server", "session_id": _sid, "session_title": _title, "cwd": "/home/me/code/deploy",
+             # The subagent asked first: its card folds into the thread's chat too (#8010), under the thread's own
+             # (newest first once the cards scroll).
+             "kind": "question", "agent": "codex", "created_at": ago(minutes=1 if _sid == CODEX_ASKS else 2),
+             "expires_at": later(hours=24),
+             "tool_name": "request_user_input", "tool_use_id": "call_" + _id,
+             "questions": [{"question": _q, "header": "部署", "multi_select": False,
+                            "options": [{"label": l, "description": d} for l, d in _opts]}]})
+    # With MOCK_SIDE_SESSIONS=1 too, the /btw side session (#7944) is one the node reads outside Persona's panes (its
+    # outsideCapabilities: no approve): its card in the review's chat says which side it is from, and why it is greyed.
+    for _s in SESSIONS:
+        if _s["session_id"] == SIDE_BTW:
+            _s["capabilities"] = {"read": True, "send": False, "interrupt": False, "approve": False, "terminal": False,
+                                  "attach": False}
 
 if os.environ.get("MOCK_OPENCODE"):
     INTERACTIONS.append(
@@ -11107,6 +11161,7 @@ def _claude_dirs_state(mid):
 KEYS = []  # bodies of …/keys (the terminal's key bar and text field; GET /mock/keys)
 REWINDS = []  # bodies of …/rewind (#2436; GET /mock/rewinds)
 QUEUE_EDITS = []  # bodies of …/queue with the queue they pulled back (GET /mock/queue)
+SEND_NOWS = []  # "machine/session" of every …/queue/send-now, refused ones too (GET /mock/send_nows; #7169: one tap, one)
 UPLOADS = []  # files received (GET /mock/uploads)
 SENT = []  # bodies of sends, one per client_msg_id (GET /mock/sent)
 SENT_TO = []  # where each of them went: machine_id, session_id, client_msg_id, text (GET /mock/sent_to)
@@ -13634,6 +13689,27 @@ def fs_find(mid):
     return None
 
 
+def fs_convs():
+    """The Feishu page's chats with MOCK_LARK, plus the topic group when MOCK_LARK_TOPIC is on.
+    Only the perf inbox mock sets both; plain MOCK_LARK keeps FS_CONVS alone."""
+    rows = list(FS_CONVS)
+    have = {c["id"] for c in rows}
+    rows += [c for c in LARK_CHATS if c["id"] not in have]
+    return rows
+
+
+def fs_thread(mid, q):
+    """A topic thread from LARK_THREADS (MOCK_LARK_TOPIC), else the rich-page FS_THREADS."""
+    thread = LARK_THREADS.get(mid)
+    if thread and thread[0].get("thread_id"):
+        page = lark_window(thread[1:], q)
+        return dict(page, messages=thread[:1] + page["messages"])
+    if thread:
+        return lark_window(thread, q)
+    root = fs_find(mid)
+    return {"messages": ([root] if root else []) + FS_THREADS.get(mid, []), "has_older": False}
+
+
 def fs_get(h, p, q):
     """GET /api/v1/lark/… and /mock/lark with MOCK_LARK (True when handled; the rest falls through)."""
     # The unread switch must cross a whole read-only page, not filter just the first screen (#6553).
@@ -13684,17 +13760,32 @@ def fs_get(h, p, q):
     if p == "/api/v1/lark/conversations":
         # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
         if os.environ.get("MOCK_LARK_LIST"):
-            rows = FS_CONVS + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
-                               for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            rows = (fs_convs() if os.environ.get("MOCK_LARK_TOPIC") else FS_CONVS) + [
+                dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
             cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
             h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
                          "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
             return True
+        # Plain MOCK_LARK keeps the body it had on main (no account_id). TOPIC adds f4 and the account stamp
+        # the Messages page requires (`LarkConversationsModel.owner`); without it the list is "Hub update needed".
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json({"conversations": fs_convs(), "next_cursor": "", "account_id": LARK_ACCOUNT_ID}); return True
         h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
-        h.send_json(fs_page(p.split("/")[5], q)); return True
+        feed = p.split("/")[5]
+        if os.environ.get("MOCK_LARK_TOPIC") and feed in LARK_TOPIC_FEEDS:
+            page = lark_window(LARK_MESSAGES.get(feed, []), q)
+            page["topic"] = True
+            h.send_json(page); return True
+        # MOCK_LARK_RICH mutates LARK_MESSAGES["f3"] (the long hiking history); the rich-page FS_MESSAGES["f3"] is short.
+        if os.environ.get("MOCK_LARK_RICH") and feed in LARK_MESSAGES:
+            h.send_json(lark_window(LARK_MESSAGES[feed], q)); return True
+        h.send_json(fs_page(feed, q)); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/thread"):
         mid = p.split("/")[5]
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json(fs_thread(mid, q)); return True
         root = fs_find(mid)
         h.send_json({"messages": ([root] if root else []) + FS_THREADS.get(mid, []), "has_older": False}); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/url-preview"):
@@ -13970,6 +14061,9 @@ def model_configuration(include_uses=False):
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
     providers += [{"id": "launcher.claude", "name": "claude", "kind": "launcher", "model": "model-chat"},
                   {"id": "legacy.ai", "name": "轻量 API", "kind": "api", "api": "messages", "model": "model-fast"}]
+    if os.environ.get("MOCK_MODEL_PICK") == "otherkind":
+        # The current main chat runs Codex while Main chat still defaults to Claude (#4662).
+        next(p for p in providers if p["id"] == "launcher.codex").update(agent="codex", agent_type="codex")
     if MEETING_MODELS:
         for provider in providers:
             launcher = next((l for l in LAUNCHERS if provider["id"] == "launcher." + l["name"]), None)
@@ -14323,7 +14417,9 @@ def machine_launchers(mid=""):
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
-                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api" and l["name"] != OWN_SERVICE_PROVIDER["name"]]
+    if OWN_SERVICE_SKIP and not own_service_skips(OWN_SERVICE_PROVIDER, mid):  # #8109: listed where its rule lets it run
+        out.append({k: OWN_SERVICE_PROVIDER[k] for k in ("name", "display_name", "base_url", "model", "source")})
     if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
         # docs/integrations/claude-integration.md "New sessions in the desktop app").
@@ -17993,6 +18089,18 @@ def paged_sessions(query):
     fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    scope = query.get("agents_only", ["0"])
+    if len(scope) != 1 or scope[0] not in ("0", "1", "false", "true"):
+        return {"error": "agents_only must be true, false, 1, or 0", "code": "invalid_query"}, 400
+    agents_only = scope[0] in ("1", "true")
+
+    def agent_row(s):
+        cwd = posixpath.normpath((s.get("cwd") or "").replace("\\", "/"))
+        parts = cwd.split("/")
+        health_dir = any(parent in (".persona", ".jarvis") and re.fullmatch(r"health(?:-m-[0-9a-f]+)?", name)
+                         for parent, name in zip(parts, parts[1:]))
+        return not (s.get("assistant") or s.get("space") == "health" or health_dir)
+
     # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
     # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
     roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
@@ -18020,7 +18128,8 @@ def paged_sessions(query):
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
 
     def matching(rows):
-        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+        rows = [s for s in rows if (not agents_only or agent_row(s))
+                and (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
                 and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
@@ -24732,7 +24841,8 @@ if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice
 
 
 # ---------- area: model defaults (#2455) ----------
-# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none),
+# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none)
+# and "New chats' Claude profile" (#4633: private / legacy, saved in its binding; "private" is stored as none),
 # GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s agent.new when absent), and the main
 # conversation asked for the Agent SDK but runs on the CLI (runtime_fallback).
 MODEL_DEFAULTS = os.environ.get("MOCK_MODEL_DEFAULTS") == "1"
@@ -24752,6 +24862,11 @@ def model_configuration(include_uses=False):
                 binding.pop("runtime")
         purpose["runtimes"] = ["cli", "agentsdk"]
         purpose["fields"] = purpose["fields"] + ["runtime"]
+        for binding in (purpose["override"], purpose["effective"]):
+            if binding.get("config_dir") == "private":
+                binding.pop("config_dir")
+        purpose["config_dirs"] = ["private", "legacy"]
+        purpose["fields"] = purpose["fields"] + ["config_dir"]
     return catalog
 
 
@@ -24785,6 +24900,7 @@ def model_defaults_launchers(h, p, q):
             default["runtime"] = b.get("runtime") or "cli"
     out = {"launchers": machine_launchers(p.split("/")[4]), "default": default}
     if pid == "agent.new":
+        out = with_own_service_unavailable(out, p.split("/")[4], h.headers.get("Accept-Language"))
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
         out["tiers_profile"] = {"id": "performance", "name": "Performance"}
@@ -24845,6 +24961,49 @@ if LAUNCHER_HEALTH:
                          "weather-app", 2, "agent-3", 3, 1, "", launcher="work_gw",
                          **launcher_health_refusal(next((m["name"] for m in MACHINES if m["id"] == "macbook"), "macbook"))))
 # ---------- end of area: launcher health ----------
+
+
+# ---------- area: a provider its own-service rule leaves out (#8109) ----------
+# MOCK_OWN_SERVICE_SKIP=1: a Persona-managed provider added with the defaults (DeepSeek: share all, own_service skip) and
+# the MacBook's Claude Code signed in on its own. New Agent's list (GET /api/v1/machines/{mid}/launchers, agent.new or no
+# purpose) leaves it out on the MacBook and says why in `unavailable` (code launcher_own_service, the hub's sentence in
+# the request's language); the server and the Mac Studio, without a sign-in of their own, list it. Settings › Model
+# providers has it, so How to fix opens its page.
+OWN_SERVICE_SKIP = os.environ.get("MOCK_OWN_SERVICE_SKIP") == "1"
+OWN_SERVICE_PROVIDER = {"name": "deepseek", "display_name": "DeepSeek", "source": "persona",
+                        "base_url": "https://api.deepseek.example.com/anthropic", "model": "deepseek-v4", "has_key": True,
+                        "auth": "bearer", "share": "all", "delivery": "on_demand", "own_service": "skip"}
+OWN_SERVICE_SIGNED_IN = ("macbook",)  # computers whose Claude Code has a sign-in of its own
+
+
+def own_service_skips(launcher, mid):
+    """The provider's own-service rule leaves it out on computer mid."""
+    return launcher.get("own_service") == "skip" and mid in OWN_SERVICE_SIGNED_IN
+
+
+def own_service_unavailable(mid, accept_language):
+    """New Agent's `unavailable` on computer mid (hub ownServiceSkipped): absent (None) when there is none."""
+    if not OWN_SERVICE_SKIP or mid not in OWN_SERVICE_SIGNED_IN:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    machine = next((m["name"] for m in MACHINES if m["id"] == mid), mid)
+    l = OWN_SERVICE_PROVIDER
+    reason = readiness_mock.t(readiness_mock.lang_of(accept_language), "assistant-models_launchers.err_own_service",
+                              machine=machine, harness="Claude Code", provider=l["display_name"])
+    return [{"name": l["name"], "display_name": l["display_name"], "kind": "launcher", "agent": "claude",
+             "code": "launcher_own_service", "reason": reason}]
+
+
+def with_own_service_unavailable(out, mid, accept_language):
+    """A launcher list's answer with `unavailable` added where the rule leaves the provider out (MOCK_OWN_SERVICE_SKIP)."""
+    skipped = own_service_unavailable(mid, accept_language)
+    return dict(out, unavailable=skipped) if skipped else out
+
+
+if OWN_SERVICE_SKIP:
+    LAUNCHERS.insert(0, dict(OWN_SERVICE_PROVIDER))
+# ---------- end of area: a provider its own-service rule leaves out ----------
 
 
 # ---------- HTTP ----------
@@ -25316,6 +25475,9 @@ class H(BaseHTTPRequestHandler):
             SESSIONS[:] = [x for x in SESSIONS if not x["session_id"].startswith("d4e6f8a0-")]
             # MOCK_RESUME_TERMINAL: the stopped Agents a test resumed are stopped again (#5521).
             SESSIONS[:] = [copy.deepcopy(RT_START[x["session_id"]]) if x["session_id"] in RT_START else x for x in SESSIONS]
+            # MOCK_CANT_ANSWER: the Codex thread a test attached is not joined again (#6868).
+            SESSIONS[:] = [copy.deepcopy(CANT_ANSWER_START[x["session_id"]]) if x["session_id"] in CANT_ANSWER_START else x
+                           for x in SESSIONS]
             del RECONNECTS[:], STARTED[:], SEEN[:]
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
@@ -25383,6 +25545,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/rewinds": return self.send_json({"rewinds": REWINDS})
         if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
+        if p == "/mock/send_nows": return self.send_json({"send_nows": SEND_NOWS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
         if p == "/mock/terminal_node":
             state, mid = q.get("state", [""])[0], q.get("machine", [TERMINAL_NODE["machine"]])[0]
@@ -25820,7 +25983,8 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
+            mid = p.split("/")[4]
+            return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -27709,16 +27873,19 @@ class H(BaseHTTPRequestHandler):
             KEYS.append(json.loads(self.last_body or b"{}"))
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/attach"):  # Attach live to a Codex app-server thread
-            for s in all_sessions():
+            for s in SESSIONS + ASSISTANT:  # the rows themselves: all_sessions() hands out copies, which lost the join
                 if s["session_id"] == unquote(p.split("/")[5]):
                     caps = s.get("capabilities") or {}
                     if not s.get("source_kind") or not caps.get("attach"):
                         return self.send_json({"error": "这个会话不能实时接入", "code": "codex_read_only", "delivered": "none"}, 403)
                     s["attached"] = True
                     s["capabilities"] = dict(caps, approve=True)  # joining lets the phone answer its approvals
+                    s["rev"] = (s.get("rev") or 0) + 1
+                    push_machine(s["machine_id"])  # as the hub pushes the node's new row: a delta hub's app keeps pushed rows
                     return self.send_json({"ok": True})
             return self.send_json({"error": "session not found"}, 404)
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue/send-now"):  # node session.queue.send_now (#6088)
+            SEND_NOWS.append(p.split("/")[4] + "/" + p.split("/")[5])
             s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
@@ -30013,8 +30180,11 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
 # launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
 # model with sonnetcc 400). =picked: the second chat starts
-# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+# with a pick. =otherkind: the main chat already runs Codex while its default stays Claude (#4662). GET /mock/model_pick:
+# the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
+# default and pushes a main-chat revision for the notice's live positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_DEFAULT = "claude"
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -30038,28 +30208,41 @@ if MODEL_PICK_MODE:
 
 
 def model_pick_reset():
+    global MODEL_PICK_DEFAULT
+    MODEL_PICK_DEFAULT = "claude"
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
         for s in ASSISTANT:
             if s["session_id"] == ASK2:
                 s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+    elif MODEL_PICK_MODE == "otherkind":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK1:
+                s.update(agent="codex", launcher="codex", model="gpt-5.5", effort="medium")
 
 
 def model_pick_route(handler, p, body):
     """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
     if not MODEL_PICK_MODE: return False
+    global MODEL_PICK_DEFAULT
     query = parse_qs(urlparse(handler.path).query)
     lang = cron_lang(handler.headers.get("Accept-Language"))
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+        if query.get("default"):
+            MODEL_PICK_DEFAULT = query["default"][0]
+            main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+            if main is not None:
+                main["rev"] = (main.get("rev") or 0) + 1
+            push_machine(ASSISTANT_CONFIG["machine_id"])
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus", "effort": "high"},
             "unavailable": [
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
@@ -30107,9 +30290,10 @@ def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
-MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
-                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+                 "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

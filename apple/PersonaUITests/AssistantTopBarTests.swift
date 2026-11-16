@@ -171,7 +171,7 @@ final class AssistantTopBarTests: XCTestCase {
         }
         XCTAssertTrue(app.drawerNewChatButton.exists, "the drawer has no New Chat action")
         // The main conversation is the first row, once: not under Pin or Recent (#2004, every layout). It is named after the
-        // current assistant (#6489), the mock hub's default manager 助手.
+        // current assistant (#6489), the mock hub's default manager 「助手」.
         let mainRow = app.buttons["sidebar-main"].firstMatch
         XCTAssertTrue(mainRow.exists && mainRow.label.hasPrefix("助手"), "no main conversation row named 助手:\n\(app.debugDescription)")
         XCTAssertLessThan(mainRow.frame.minY, app.buttons["sidebar-inbox"].firstMatch.frame.minY, "the main conversation is not the first row")
