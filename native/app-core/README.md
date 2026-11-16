@@ -74,7 +74,10 @@ input, a wrong expectation and the U+200B boundary. This does not execute Swift,
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
-consumer state, UI badges or actual background execution.
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860) uses the existing turn
+projection to keep the image entry's owner, compares the complete post-overlay viewed line through real Kotlin/JNI,
+and checks duplicate/running/error/Read-extension and wrong-expectation cases. It does not cover full ChatLine,
+folded images, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
