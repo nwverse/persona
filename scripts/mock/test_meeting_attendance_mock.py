@@ -109,7 +109,7 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
         latest = self.upload(rid)[1]  # omitted: attending turns off
         self.assertEqual(latest["attendance"], "off")
         # Stale, as the hub answers: the upload's own revision, the stored role.
-        want = {"id": rid, "revision": 1, "status": "stale", "attendance": "off"}
+        want = {"id": rid, "revision": 1, "status": "stale", "attendance": "off", "name": "Design review", "name_source": "title"}
         if "meeting_transcription" in self.call("GET", "/api/v1/health")[1]["features"]: want["transcription"] = "device"
         self.assertEqual(self.upload(rid, revision=1, attendance="listener")[1], want)
         self.upload(rid, complete=True, ended_at="2026-11-10T15:00:00+08:00")
@@ -164,7 +164,8 @@ class MeetingAttendanceMockTests(Hub, unittest.TestCase):
                                 ({"attendance": "participant", "attending_session": {"machine_id": "macbook"}}, "bad_session"),
                                 ({"attendance": "off", "attending_session": {"machine_id": "macbook"}}, None), ({"attendance": "participant"}, None)]:
             with self.subTest(fields=fields):
-                want = {"id": rid, "revision": 1, "status": "stale", "attendance": "listener", **({"attendance_problem": problem} if problem else {})}
+                want = {"id": rid, "revision": 1, "status": "stale", "attendance": "listener", "name": "Design review", "name_source": "title",
+                        **({"attendance_problem": problem} if problem else {})}
                 if fields.get("kind", "meeting") == "meeting" and "meeting_transcription" in self.call("GET", "/api/v1/health")[1]["features"]:
                     want["transcription"] = "device"
                 self.assertEqual(self.upload(rid, revision=1, **fields), (200, want))
