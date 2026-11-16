@@ -15,7 +15,7 @@ import { backgroundPanelOf, hasBackgroundWork, isWorkflowsCommand, latestWorkflo
 import { machineWithHub } from "../../lib/mesh";
 import { useLayout } from "../../lib/layout";
 import { hasModes, isMuted, listedModesOf, toggleMute } from "../../lib/session-actions";
-import { attachLive, flipPin } from "../../lib/agent-actions";
+import { flipPin } from "../../lib/agent-actions";
 import { isPinned } from "../../lib/pins";
 import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
@@ -2483,7 +2483,8 @@ export const Header = memo(function Header({
   const [linkTodoOpen, setLinkTodoOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
   const allowed = session ? sessionMenuActions(session) : [];
-  const attach = () => session && attachLive(session);
+  // Live link loads with the click (lib/attach-live.ts), off the first screen
+  const attach = () => session && import("../../lib/attach-live").then((m) => m.attachLive(session));
   // Resume in terminal (#5521): a stopped Agent comes back in a terminal on its computer. The same action as its stopped
   // line's Resume: the terminal shown as that line's Terminal shows it, then the Resume both share.
   const machine = useStore((s) => s.machines.find((m) => m.id === session?.machine_id));
