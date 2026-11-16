@@ -2217,6 +2217,8 @@ struct ChatView: View {
         // The height the page offers, even when what is in it is taller: the pending cards size themselves by it. A
         // frame with both bounds takes the offered size whatever the content (not a design value: no token for it).
         .frame(minHeight: .zero, maxHeight: .infinity)
+        // A floating keyboard floats over the page: the composer stays at the bottom, the list keeps its height (#2565).
+        .keepsHeightUnderUndockedKeyboard()
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
             if abs(footerRoom.height - h) >= 1 { footerRoom.height = h }
         }
@@ -2937,9 +2939,6 @@ struct ChatView: View {
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
             // Every message, timer line, tool count and answer is its own lazy row (a running turn can hold
             // hundreds of steps; one stack of them froze the page).
-            // The oldest dozen lines start loading the page before them: by the time you reach the top it is
-            // usually there (pages with screenshots run to megabytes and take seconds).
-            let prefetch = Set(lines.prefix(12).map(\.id))
             let openRecap = ChatLines.openRecap(lines, pending: viewing == nil ? pendingRecap : nil)
             ForEach(lines.reversed()) { line in
                 Group {
@@ -2953,7 +2952,6 @@ struct ChatView: View {
                     .debugLineY(line.id, scratch)
                     .landingFrame(line.id == landing, scratch)
                     .id(line.id)
-                    .onAppear { if prefetch.contains(line.id) { prefetchOlder() } }
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
                 // Upside down: drawn after the line is drawn above it, where it was written.
                 ForEach((placed.before[line.id] ?? []).reversed()) { msg in
@@ -3029,7 +3027,13 @@ struct ChatView: View {
         }
         // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
         // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
-        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+            scratch.drawnLines = ids
+            // The oldest dozen lines start loading the page before them: by the time you reach the top it is usually
+            // there (pages with screenshots run to megabytes and take seconds). Here, not an `onAppear` on every row:
+            // each row the lazy list made while scrolling then ran an action and an update of the page for nothing.
+            if lines.prefix(12).contains(where: { ids.contains($0.id) }) { prefetchOlder() }
+        }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
         // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
@@ -6466,8 +6470,8 @@ nonisolated enum QueueOrder {
 /// Input typed while Claude works and not yet taken, shown above the composer instead of in the chat.
 /// Folded to its one-line summary by default; opened, it shows about three rows and scrolls past them.
 /// Editing pulls it back (like ↑ in the terminal); the other queued messages are re-queued in order.
-/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, after a confirmation that says
-/// what happens to what it is doing), and each moves up or down.
+/// A Claude in a terminal (`Session.steersQueue`, #6088) also takes them now (Send Now, at one tap since #7169; its
+/// VoiceOver hint says what happens to what it is doing), and each moves up or down.
 struct QueueStrip: View {
     @Environment(AppModel.self) private var model
     let key: SessionKey
@@ -6489,7 +6493,6 @@ struct QueueStrip: View {
     private var agent: String { persona ?? agentName }
     @State private var busy = false
     @State private var expanded = false
-    @State private var confirmSend = false
     /// Messages from other conversations collapse into one line until the owner opens them (#6394).
     @State private var relayedExpanded = false
     /// One row's height with its spacing, as drawn (it follows the text size and the rows' line counts).
@@ -6534,15 +6537,6 @@ struct QueueStrip: View {
             .contentShape(.rect)
         }
         .tint(.secondary)
-        .confirmationDialog(String(localized: "Send the queued messages now? [Queue Strip]"), isPresented: $confirmSend, titleVisibility: .visible) {
-            Button("Send Now [Queue Strip]") { sendNow() }.accessibilityIdentifier("queue-send-now-confirm")
-        } message: {
-            if let persona {
-                Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
-            } else {
-                Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
-            }
-        }
         .padding(Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -6563,18 +6557,28 @@ struct QueueStrip: View {
     }
 
     /// Send Now when a Claude in a terminal has the user's own messages queued, or the spinner while the queue is being
-    /// handed over.
+    /// handed over. It sends at one tap, as on the web (#7169, #7154): nothing is lost, the messages only go now rather
+    /// than at the next step, and Delete and Stop act at one tap too (`docs/design/DESIGN_SYSTEM.md` 4.4).
     @ViewBuilder private var sendNowButton: some View {
         if busy {
             ProgressView().controlSize(.mini)
         } else if steers, own > 0 {
-            Button { confirmSend = true } label: {
+            Button(action: sendNow) {
                 Label("Send Now [Queue Strip]", systemImage: Theme.Icon.sendNow).lineLimit(1).fixedSize()
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.accent)
+            .accessibilityHint(sendNowHint)
             .accessibilityIdentifier("queue-send-now")
         }
+    }
+
+    /// What sending now does to the step under way, which a confirmation used to say before #7169.
+    private var sendNowHint: Text {
+        if let persona {
+            return Text("\(persona) gets them right away instead of at its next step. What it is doing now stops, or goes on in the background when it can, and it starts again with your messages. [Queue Strip]")
+        }
+        return Text("Sends the queued messages to the agent now. A command it is running keeps running in the background; a reply it is writing starts again with your message. [Queue Strip]")
     }
 
     /// A message of this phone's not yet reported queued (#1461): its words, and what became of the send.

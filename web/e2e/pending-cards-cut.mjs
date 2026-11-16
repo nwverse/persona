@@ -7,7 +7,8 @@
 // (the question alone fills the box, the approval wholly below it), light and dark: wherever the approval's Allow is in
 // view, its title and command are in view too, either in the card or on the answer row's line; "2 pending" shows on the
 // first card while the stack is cut off; where the line shows, it brings the whole approval into view with the focus on
-// it. At 1440 × 1600, where both cards fit, neither the line nor the count is drawn.
+// it. The dock shows the first card with its place ("1 / 2") until that is tapped, so the checks run with all opened.
+// At 1440 × 1600, where both cards fit, neither the line nor the count is drawn.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -69,6 +70,8 @@ try {
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
     await page.goto(new URL(`/s/${MACHINE.id}/${SID}`, base).href);
+    // the dock folds to the first waiting card ("1 / 2" on it); the count of a cut-off stack shows once all are opened
+    await page.locator("[data-chat-cards-position]").click({ timeout: 15_000 });
     await page.locator(`[data-card="${APPROVAL.id}"] [data-card-actions]`).waitFor({ timeout: 15_000 });
     await page.waitForTimeout(400);
     // what of the approval is the user's to see: an element counts when its center is its own on screen (not clipped by

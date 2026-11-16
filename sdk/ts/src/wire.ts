@@ -316,6 +316,7 @@ export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
   transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -624,7 +625,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -4769,6 +4770,8 @@ export interface KBEntry {
   extra?: string;
   /** A chat's source (lark, mail, wechat, github…). */
   source?: string;
+  /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
+  recording_kind?: string;
 }
 
 /**

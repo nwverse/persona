@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -82,12 +83,12 @@ func (n *Node) sockGone() string {
 func (n *Node) listenOnce(ctx context.Context) (net.Listener, error) {
 	path := nodeclient.SocketPath()
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return nil, err
 	}
 	// Never unlink on close: by then the path may belong to a newer node.
-	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.(*osproc.UnixListener).SetUnlinkOnClose(false)
 	_ = os.Chmod(path, 0o600)
 	if _, err := ensureLaunchKey(nodeclient.LaunchKeyPath()); err != nil { // before any personad launch reads it
 		n.logf("launch key: %v", err)
@@ -113,6 +114,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	r := bufio.NewReader(c)
 	line, err := r.ReadBytes('\n')
 	if err != nil {
+		return
+	}
+	if isHTTPRequestLine(line) { // Persona's Claude Code plugin (ccplugin.go)
+		n.serveCCPluginHTTP(ctx, c, line, r)
 		return
 	}
 	var req sockRequest
@@ -176,6 +181,8 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 			n.decided.decide(in, time.Now())
 		}
 		resp = map[string]any{"ok": true}
+	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
+		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
 		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
 	case "update.inventory":
@@ -461,7 +468,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil
 		}
-		return n.larkGate(ctx, in, ix)
+		return n.larkGateWithEdit(ctx, in, ix)
 
 	case in.HookEventName == "PostToolUse" && in.ToolName == "AskUserQuestion":
 		// A terminal answer includes answers; PermissionRequest's original input did not. Complete only the same
@@ -830,6 +837,9 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	}
 	if res.Dismiss {
 		return res, false, nil
+	}
+	if ix.EditableText != "" && res.EditedText != "" {
+		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
 }

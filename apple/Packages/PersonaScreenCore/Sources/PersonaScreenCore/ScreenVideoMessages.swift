@@ -20,9 +20,15 @@ public struct HelloMessage: Codable, Equatable, Sendable {
     /// (pixels per point) comes to. Absent from a helper before quality tiers.
     public var points: [Int]?
     public var pixels: [Int]?
+    /// What encodes the stream (#8859): "hardware" (VideoToolbox) or "x264" (the ffmpeg the user installed, on a direct
+    /// LAN route only). `fallback` says why x264, turned on for this Mac, isn't the encoder now: unavailable | route |
+    /// slow | failed | congested (`X264Plan.Off`). Absent from a helper before it.
+    public var encoder: String?
+    public var fallback: String?
 
     public init(version: Int, codec: String, display: Int, width: Int, height: Int, rect: [Int]? = nil,
-                features: [String]? = nil, points: [Int]? = nil, pixels: [Int]? = nil) {
+                features: [String]? = nil, points: [Int]? = nil, pixels: [Int]? = nil, encoder: String? = nil,
+                fallback: String? = nil) {
         self.version = version
         self.codec = codec
         self.display = display
@@ -32,6 +38,8 @@ public struct HelloMessage: Codable, Equatable, Sendable {
         self.features = features
         self.points = points
         self.pixels = pixels
+        self.encoder = encoder
+        self.fallback = fallback
     }
 }
 
@@ -41,6 +49,9 @@ public struct HelloMessage: Codable, Equatable, Sendable {
 /// `scale`, the pixels per point of the display to encode at (never above its pixels, still capped by `max_size`);
 /// `min_kbps`, the bitrate band's floor, with `max_kbps` its ceiling; and `target_kbps`, the bitrate to start at. Without
 /// them the helper encodes the display's pixels and adapts between its own floor and `max_kbps`, as before.
+///
+/// `path` is the route the stream starts on, as `update.path` says it later (#8859): x264 runs only on a direct LAN
+/// route, so the helper needs the first one too. A phone before it sends none, and gets the hardware encoder.
 public struct StartMessage: Codable, Equatable, Sendable {
     public var display: Int?
     public var maxSize: Int
@@ -50,6 +61,7 @@ public struct StartMessage: Codable, Equatable, Sendable {
     public var scale: Double?
     public var minKbps: Int?
     public var targetKbps: Int?
+    public var path: UpdateMessage.Path?
 
     enum CodingKeys: String, CodingKey {
         case display
@@ -60,10 +72,11 @@ public struct StartMessage: Codable, Equatable, Sendable {
         case scale
         case minKbps = "min_kbps"
         case targetKbps = "target_kbps"
+        case path
     }
 
     public init(display: Int?, maxSize: Int, fps: Int, maxKbps: Int, codecs: [String], scale: Double? = nil,
-                minKbps: Int? = nil, targetKbps: Int? = nil) {
+                minKbps: Int? = nil, targetKbps: Int? = nil, path: UpdateMessage.Path? = nil) {
         self.display = display
         self.maxSize = maxSize
         self.fps = fps
@@ -72,6 +85,7 @@ public struct StartMessage: Codable, Equatable, Sendable {
         self.scale = scale
         self.minKbps = minKbps
         self.targetKbps = targetKbps
+        self.path = path
     }
 
     /// The phone set a bitrate band: the helper adapts inside it the way #6396 describes (`RateController.setBand`).

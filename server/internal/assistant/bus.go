@@ -133,7 +133,7 @@ func NewBusHub(o BusOptions) *BusHub {
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
 					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
-					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
+					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, devicewire.SharingCapability}}
 		},
@@ -636,8 +636,35 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	if out, ok, err := s.transcriptionRequest(ctx, method, params); ok { // extensions' transcription (extension_transcribe.go)
 		return out, err
 	}
+	if out, ok, err := s.meetingChoiceRequest(ctx, method, params); ok { // the Volcengine extension's switch (meeting_transcription_choice.go)
+		return out, err
+	}
 	if d := b.opts.Devices; d != nil {
+		if method == devicewire.MethodCall {
+			var p devicewire.NodeCall
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			if conversationWrite(p.Method) {
+				s.conversationWrites.RLock()
+				defer s.conversationWrites.RUnlock()
+			}
+			if p.Method != "session.unwatch" {
+				if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if out, ok, err := d.Request(ctx, method, params); ok { // devices.* (devices.go)
+			if err == nil && method == devicewire.MethodCall {
+				var p devicewire.NodeCall
+				_ = json.Unmarshal(params, &p)
+				if p.Method != "session.unwatch" {
+					if err := s.conversationParamsAvailable(ctx, d.Canonical(p.MachineID), p.Params); err != nil {
+						return nil, err
+					}
+				}
+			}
 			if err == nil && method == devicewire.MethodCall {
 				s.nodeCallDone(ctx, params) // an effort set on a conversation with a model pick (model_pick.go)
 			}

@@ -25,6 +25,7 @@ cargo test --locked                                # unit tests and the shared f
 cargo run --locked -p persona-core-typegen          # regenerate the clients' codecs after changing a wire type
 cargo run --locked -p persona-core-typegen -- --check
 cargo build --locked --release -p persona-core-ffi # libpersona_core.{a,so,dylib}
+bash scripts/test-c-abi.sh                        # independent C11 client + dynamic C exports (Linux)
 python3 -I scripts/ohos-napi-defs.py --check        # napi-derive definitions and index.d.ts
 python3 -I scripts/test_ohos_napi_defs.py           # declaration parser and drift-check regressions
 ```
@@ -39,11 +40,48 @@ No NAPI library is linked or loaded. For testing the converter alone, `--records
 and `--print-records` prints the validated raw records. Keep the complete generic `ThreadsafeFunction` types on the
 `#[napi]` functions: napi-derive does not expand Rust type aliases into their TypeScript callback signatures.
 
-`scripts/ci/core.sh` runs all of these, plus formatting and clippy. Android's `:core:rustcore` tests build a host copy of
+`scripts/ci/core.sh` runs all of these, plus formatting and clippy. On Linux, `scripts/test-c-abi.sh` compiles
+`tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
+`libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
+unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
+`persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
+invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
+`{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
+applied by the client (62 complete turn objects across the 54 non-empty cases), and
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
+are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
+exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
+A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
+consume the C ABI; it is not a Swift importer, Apple ABI, NAPI/HAP, physical-device or performance test. Generated
+inputs and the executable stay under the ignored `native/app-core/target/` directory.
+
+Android's `:core:rustcore` tests build a host copy of
 the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
 turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
 Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
-lines, execute Swift or connect a production Android adapter.
+lines, execute Swift or connect a production Android adapter. The operation replay (#8815) additionally drives
+`RustCore` dispatch/drain through JNI, preserves each raw JSON item and calls the turn projection at all 10 checkpoints
+in the four existing operation cases. It compares 13 complete turn objects and exact item IDs against the same checked-in
+corpus plus overlay, and separately replays the existing replacement through the standalone `replace` branch. These
+runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
+The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
+`spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
+gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
+8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
+input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
+UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
+`TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
+checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
+projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
+real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
+optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
+full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
@@ -54,6 +92,68 @@ NDK 29.0.14206865 / direct LLVM build, ABI sizes, uncompressed 16 KB packaging a
 described in `android/core/rustcore-android/README.md`. `scripts/build-android.sh` produces both ABIs without
 `cargo-ndk`; the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
 
+## Android continuity adapter (#7448)
+
+`:core:data` routes native chat transport through `ContinuityAdapter`. Kotlin wraps the existing reducer and sync
+and remains the production default; `-PpersonaContinuity=rust` selects Rust for repository unit tests. Rust owns one
+lazy process-wide core, starts it on a worker after a frame, and applies patches and chat-owned fetch effects on
+coalesced frame drains. Only the JVM test scheduler waits with `flush`; the app returns after dispatch, not after a
+patch acknowledgement. State wakes use their chat identity.
+
+The adapter consumes #7554 without changing Rust, JNI or codecs: `ChatPatch.verified` owns verification,
+`Action::HubChanged` owns changes heard during a fill, and adjacent input/`Ack` submissions distinguish applied no-ops
+from queued work. Asynchronous fold responses carry `fold_id`, so independent folds open concurrently. Asynchronous
+older/fold calls install a single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects from expired inputs cannot satisfy
+later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
+
+Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
+finishes nor cancels it; until a response is successfully queued, its request owner reports failures or cancellation
+with `FillFailed`. Only content inputs newer than an error's input boundary can clear that error; arbitrary or older
+Acks cannot. Each reconciliation waits for its own successful fill-response receipt. Synchronous repository paths
+retain the original state-lock sections, serialized HTTP operations, downloaded fold results and error-clearing rules.
+They do not use receipt timeouts, operation slots or submitted-history generations. Only asynchronous adapters submit
+outside that lock and open concurrent folds. Ack-only frames reuse the item list, skip coverage scans and do not
+schedule cache writes.
+`Rejected` has no chat
+or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
+releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
+
+Enable the debug-only shadow with `-PpersonaContinuity=shadow` in JVM tests, or launch `DebugEntryActivity` with
+`--es debug.continuity shadow`, then force-stop and relaunch the app (use `kotlin` to turn it off). Kotlin remains
+authoritative: the shadow serially replays every input on its own background queue, waiting only for its own core,
+created after the first frame. It compares item ids/order, items, covered, history, hasMore, loadedOnce and requests.
+Kotlin's per-step gap/verified and Rust's persistent verification authority are not equivalent fields: cache restores
+and live pushes intentionally differ, covered by a separate real-JNI contract test rather than a second state machine.
+Rust-only acknowledgements and concurrent-fold capability do not change the Kotlin result returned to the repository.
+`PersonaCoreShadow` reports contain only domain, rule and input kind with counts/flags; never items, identifiers, text,
+history or sequence values. Driver-level rejection has its own `rust-rejected` rule, including rejection followed by
+an exception, and never logs the rejection reason through the shadow. Native failure disables only that chat's shadow.
+Neither accept nor close waits for Rust; close preserves queued inputs. After every 10 completed input comparisons,
+and after draining on close, each shadow logs only `compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+`compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
+Release source sets contain neither the shadow nor its preferences.
+
+## HarmonyOS Agents-list adapter (#8957)
+
+`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
+ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
+`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
+core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
+replace the native rows, and snapshot/native failures affect only diagnostics.
+
+Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
+query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
+`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
+available in this environment.
+
+The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
+native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
+both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
+`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
+membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
+`devecocli`, so a release HAP was not built.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
@@ -63,7 +163,7 @@ values and the open cells for #6871.
 
 | Evidence | Command / entry point | What still has to be supplied or measured |
 | --- | --- | --- |
-| Core tests, codec drift, HarmonyOS binding lints and notices, release FFI | `scripts/ci/core.sh` | Rustup only; no phone or platform SDK. The lane adds the `aarch64-unknown-linux-ohos` Rust target and lints `persona-core-ohos` with its `ohos` feature, which the host build never compiles. Nothing is linked, so this is not evidence of a device library. |
+| Core tests, codec drift, HarmonyOS binding lints and notices, release FFI and independent C ABI client | `scripts/ci/core.sh` | Rustup, a C compiler and binutils on Linux; no phone or platform SDK. The lane adds the `aarch64-unknown-linux-ohos` Rust target and lints `persona-core-ohos` with its `ohos` feature, which the host build never compiles. The separate C11 client links to the real release library, but this is not evidence of Swift/Apple ABI or a device library. |
 | Real host-JNI boundary | `cd android && ./gradlew :core:rustcore:test` | JDK 21; host JVM tests do not need the Android NDK or a device. |
 | Android ABIs and packaged bytes | Build the APK, then run `native/app-core/scripts/android-package-report.py` with the exact arguments in `android/core/rustcore-android/README.md`. | x86_64 Linux, JDK 21, SDK 37 and NDK 29.0.14206865. Reports raw/stripped/gzip/APK bytes and ELF/APK alignment, not store downloads. |
 | Android real packaged-JNI replay | `native/app-core/scripts/android-device-test.py --serial <owned serial> --suite replay --apk </absolute/path/to/debug androidTest.apk> --output <report directory>` | An explicitly owned emulator or device; no hub is needed. The existing host and software-emulator passes do not establish physical arm64 or a 16 KiB kernel. |
@@ -81,8 +181,21 @@ belong to the maintainer's environment if it later becomes available; none is si
 a release upload.
 
 The ArkTS host tests live outside the portable `harmony/tests/*.test.mjs` glob, because the replay needs the helper
-binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/rustcore-wire.test.mjs`
-round-trips the generated codec against itself, which cannot catch a symmetric mistake, so it is not a substitute.
+binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/core-host/sort.test.mjs`
+replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
+The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
+from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
+`harmony/tests/core-host/projections.test.mjs` (#8937) replays the unchanged 15 answer + 8 display_answer,
+21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
+conditional next-page, picks and display fields. The receipt retains its description and started call with empty
+notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
+The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
+`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
+label, while the other three take JSON documents.
+`harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
+mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
+a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
+device. No production client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
@@ -140,6 +253,22 @@ JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below);
   which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
   text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
+
+### Source-derived WebSocket Envelope projection (#8955)
+
+`persona_core::wire_envelope` is a pure diagnostic projection of the narrow current-iOS slice in
+`spec/fixtures/wire-envelope`: the shared scalar and raw-JSON envelope keys, `mesh` / `fleet` tolerance, unknown
+types, and routing requirements for `hello`, `inbox`, `items`, `fleet`, `screen` and `sessions_list`. It returns
+accepted, ignored or dropped with the documented projected fields; known event types outside that set return
+`out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
+The existing continuity transport behavior and its known differences are unchanged.
+
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
+the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
+malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`
+extreme floating-point behavior and full Item / Fleet models remain explicitly limited in the domain README.
+Neither replay executed Swift, iOS, a simulator, a production adapter or a physical device.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 

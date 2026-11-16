@@ -40,6 +40,36 @@ type AssistantClaudeMD struct {
 	// BackgroundSupervisor: the background supervisor follows up the tasks no leader supervises (#4927), so the main
 	// conversation is told it no longer reviews them itself. False keeps the text as it was.
 	BackgroundSupervisor bool
+	// UrgentCall: the owner turned urgent calls on (docs/assistant/urgent-call.md): when to call and the "what counts
+	// as urgent" rules. nil adds nothing.
+	UrgentCall *UrgentCall
+}
+
+// UrgentCall is the urgent-call section of the assistant's instructions.
+type UrgentCall struct {
+	Rules []UrgentCallRule
+}
+
+// UrgentCallRule is one "what counts as urgent" rule: its id (urgent_call's rule) and its words.
+type UrgentCallRule struct {
+	ID   string
+	Text string
+}
+
+// urgentRuleTemplates are the built-in rules' definitions, used while the owner has not reworded them.
+var urgentRuleTemplates = map[string]string{
+	"money_loss":     "assistant/urgent_rule_money_loss",
+	"harm":           "assistant/urgent_rule_harm",
+	"agent_disaster": "assistant/urgent_rule_agent_disaster",
+}
+
+// UrgentRuleBuiltin is built-in rule id's definition ("" for an id that is not one).
+func UrgentRuleBuiltin(id string) string {
+	name, ok := urgentRuleTemplates[id]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(render(name, nil))
 }
 
 func RenderAssistantClaudeMD(d AssistantClaudeMD) string { return render("assistant/claude_md", d) }
@@ -214,13 +244,22 @@ type SnapshotTask struct {
 	// Reported: what its agent last reported to the supervisor (report_to_supervisor), nil when it has not.
 	Reported *SnapshotReport
 	// Plan: its agent's own task list, nil when it keeps none or Reported is newer (a report says more).
-	Plan *SnapshotAgentPlan
+	Plan  *SnapshotAgentPlan
+	Owner SnapshotOwner
+}
+
+// SnapshotOwner is whose a task in the snapshot is, never rendered: the conversation that handed it out (its todo's
+// origin, "" for the user's own to-do) and the one that supervises it, so a conversation other than the main one gets
+// only its own tasks (assistant/context.go scopeSnapshot).
+type SnapshotOwner struct {
+	Origin, Supervisor string
 }
 
 // SnapshotOpenTodo is the compact index of one open todo. Full task details are
 // limited separately so every open todo remains discoverable in the context.
 type SnapshotOpenTodo struct {
 	ID, Title, Link string
+	Owner           SnapshotOwner
 }
 
 // SnapshotReport is a supervised task's agent's latest report: its kind (progress, question, blocked, done), the step
@@ -306,6 +345,11 @@ type Snapshot struct {
 	// Approvals: open tasks whose finished work waits for the user's nod to go live (merge, deploy, turn on, send),
 	// oldest first: told to the user as one list to approve at once (docs/assistant/todos.md "Delivery").
 	Approvals []SnapshotApproval
+	// Scoped: the snapshot of a conversation other than the main one and its stand-ins: Tasks, Unaccepted and Approvals
+	// hold only the tasks it handed out or supervises, and OpenTodos only its open ones Tasks does not show; other
+	// conversations' tasks and the user's own to-dos are left to todo_list (OpenTodosTotal still counts every open
+	// to-do; assistant/context.go scopeSnapshot).
+	Scoped bool
 	// Omit: the sections left out to keep the block within its budget (assistant/context.go fitSnapshot).
 	Omit SnapshotOmit
 }
@@ -324,6 +368,7 @@ func SnapshotCut() string { return render("assistant/snapshot_cut", nil) }
 // SnapshotApproval is a task held short of live until the user approves: what it is, how far it got, where it is held.
 type SnapshotApproval struct {
 	ID, Title, Stage, Gate, Link string
+	Owner                        SnapshotOwner
 }
 
 // SnapshotAccept is a deployed task waiting for the user to check it, or a conclusion waiting for the user: its verdict
@@ -331,6 +376,7 @@ type SnapshotApproval struct {
 type SnapshotAccept struct {
 	Title, Verdict, Changed, Link string
 	Since                         time.Time // in the user's zone
+	Owner                         SnapshotOwner
 }
 
 func (s Snapshot) Up() []SnapshotMachine   { return s.machines(true) }

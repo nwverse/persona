@@ -113,9 +113,17 @@ data class WorktreeStatus(
     val unmerged: Int = 0,
 )
 
-/** What `worktree/add` made: the checkout the agent starts in. */
+/**
+ * What `worktree/add` made: the checkout the agent starts in, and [workspaceId] the workspace a runtime engine made for
+ * it (Paseo, #8856), which the start goes into; null for a worktree a terminal host makes, or from an older node.
+ */
 @Serializable
-data class WorktreeAdded(val path: String, val branch: String = "", val root: String? = null)
+data class WorktreeAdded(
+    val path: String,
+    val branch: String = "",
+    val root: String? = null,
+    @SerialName("workspace_id") val workspaceId: String? = null,
+)
 
 /** What `worktree/remove` did. */
 @Serializable
