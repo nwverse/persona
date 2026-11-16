@@ -428,7 +428,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
-| Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery | `integrations/grok/README.md` |
+| Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
@@ -504,6 +504,13 @@ and nanosecond modification/change times, bounded to 16 files and 64 MiB of sour
 last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
 ### Shared runtime behavior
+
+Antigravity item identities include native creation time and the replacement branch's generation (#9410). Native
+step indices remain pagination sequences, not globally reusable item or tool-call IDs: after rewind a repeated input
+must not inherit the abandoned branch's pending-send binding or reply cache. Retained prefix records and same-step
+completion updates keep their identities. The history scope includes `:step-ids-v2` to discard older numeric-only
+item caches; full-item lookup resolves only the current branch's exact ID. Identity metadata is computed with parsed
+records, kept outside native JSON and reused by list, push, page and full-item reads.
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".

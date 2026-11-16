@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## ZIP preview limits must check actual bytes (#9384)
+
+A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate
+stream to inflate far beyond the limit. Count the streamed output and cancel on overflow; also bound the directory
+range before requesting it. Exercise both with forged ZIP metadata, not only normal generated archives.
+
 ## Vite module IDs use forward slashes on Windows (#9341)
 
 `fileURLToPath` returns host-native paths, while Vite's module IDs use forward slashes. Normalize config directories

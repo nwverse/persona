@@ -352,6 +352,42 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         shared.withLock { $0.running = true }
     }
 
+    /// Turns voice processing on while recording (#8731 B2: the speaker turned on mid-meeting, an experiment behind a
+    /// switch), for the rest of the recording. The engine stops, the input turns voice processing on, and the tap is made
+    /// again for the input's new format, as after a route change. The engine starts again if it was `running`; while
+    /// paused, `resume()` starts it. The file stays open, and the timeline goes on without the moment it was stopped.
+    /// Where voice processing won't turn on, or the engine won't start with it, capture is plain again. Returns whether
+    /// voice processing is on; throws when the engine won't start at all. iOS only.
+    func turnOnVoiceProcessing(running: Bool) throws -> Bool {
+        #if os(iOS)
+        guard !cancelsEcho else { return true }
+        let began = Date()
+        engine.stop()
+        removeTap()
+        enableVoiceProcessing()
+        try installTap()
+        engine.prepare()
+        guard running else { return cancelsEcho }
+        do {
+            try engine.start()
+        } catch where cancelsEcho {
+            removeTap()
+            engine.stop()
+            disableVoiceProcessing()
+            try installTap()
+            engine.prepare()
+            try engine.start()
+        }
+        shared.withLock { $0.running = true }
+        // For the measurements on a phone: how long the microphone was stopped.
+        let stopped = Int(Date().timeIntervalSince(began) * 1000)
+        Self.log.notice("recording: echo cancellation mid-recording \(self.cancelsEcho, privacy: .public), microphone stopped \(stopped, privacy: .public) ms")
+        return cancelsEcho
+        #else
+        return false
+        #endif
+    }
+
     /// Closes the segment being written now, while paused (a phone call): an app killed before the recording resumes keeps
     /// it, rather than losing up to a whole segment. The next buffer opens the next one. Nil if nothing was written since.
     /// The segment is logged too (`takeEvents`).
