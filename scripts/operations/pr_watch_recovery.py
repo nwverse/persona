@@ -50,13 +50,15 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
             try:
                 path = owned_path(state_file, name)
                 companion = Path(str(path) + "-base-check")
-                companion_lease = leases.get(str(companion), {})
+                companion_lease = leases.get(str(companion))
+                age_leases = (lease,) if companion_lease is None else (lease, companion_lease)
                 expired = all(time.time() - float(item.get("heartbeat", 0)) >= older_than
-                              for item in (lease, companion_lease))
+                              for item in age_leases)
             except (WatchError, TypeError, ValueError, OSError):
                 continue
-            if (path in keep or companion in keep or lease.get("active") or companion_lease.get("active")
-                    or repo is not None and (lease.get("repository") != repo or companion_lease.get("repository") not in (None, repo))
+            if (path in keep or companion in keep or lease.get("active")
+                    or companion_lease is not None and companion_lease.get("active")
+                    or repo is not None and (lease.get("repository") != repo or companion_lease is not None and companion_lease.get("repository") not in (None, repo))
                     or not expired):
                 continue
             candidates.append(path)
@@ -66,14 +68,16 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         for path in candidates:
             companion = Path(str(path) + "-base-check")
             lease = leases.get(str(path), {})
-            companion_lease = leases.get(str(companion), {})
+            companion_lease = leases.get(str(companion))
             try:
+                age_leases = (lease,) if companion_lease is None else (lease, companion_lease)
                 expired = all(time.time() - float(item.get("heartbeat", 0)) >= older_than
-                              for item in (lease, companion_lease))
+                              for item in age_leases)
             except (TypeError, ValueError, OSError):
                 continue
-            if (path in keep or companion in keep or lease.get("active") or companion_lease.get("active")
-                    or repo is not None and (lease.get("repository") != repo or companion_lease.get("repository") not in (None, repo))
+            if (path in keep or companion in keep or lease.get("active")
+                    or companion_lease is not None and companion_lease.get("active")
+                    or repo is not None and (lease.get("repository") != repo or companion_lease is not None and companion_lease.get("repository") not in (None, repo))
                     or not expired):
                 continue
             try:

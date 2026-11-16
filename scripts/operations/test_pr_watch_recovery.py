@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -183,6 +184,18 @@ class RecoveryIntegrationTests(unittest.TestCase):
             self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 0)
         self.assertIn(str(companion), state.data["worktree_leases"])
         self.assertTrue(companion.exists())
+
+    def test_recent_main_lease_without_companion_is_not_reclaimed(self):
+        recent = self.worktrees / "persona-7-recent"
+        recent.mkdir()
+        state = type("State", (), {"lock": __import__("threading").RLock(),
+                                   "data": {"worktree_leases": {
+                                       str(recent): {"active": False, "heartbeat": time.time()},
+                                   }}})()
+        with patch.object(pr_watch_recovery, "remove_worktree") as remove:
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 0)
+        remove.assert_not_called()
+        self.assertTrue(recent.exists())
 
     def test_reclamation_skips_leases_from_other_repositories(self):
         other = self.worktrees / "persona-extensions-7-old"

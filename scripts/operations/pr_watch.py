@@ -814,12 +814,20 @@ class Watcher:
             raise WatchError("PR has an outstanding changes request")
         return True
 
+    def stale_activity_json(self, repo, number, collection, endpoint, fields):
+        """An empty jq stream is no activity; all other API empties stay fatal."""
+        try:
+            return gh_json(["api", "repos/%s/%s/%s/%s" % (repo, collection, number, endpoint),
+                            "--paginate", "--jq", ".[] | {createdAt: " + fields + "}"], timeout=90)
+        except WatchError as error:
+            if str(error) == "gh returned an empty response":
+                return []
+            raise
+
     def stale_progress_at(self, repo, number, pr, old, ignore_notice=None):
         """Use actual GitHub activity, never aggregate timestamps or polling."""
-        comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
-                            "--paginate", "--jq", ".[] | {createdAt: .created_at, body: .body}"], timeout=90)
-        reviews = gh_json(["api", "repos/%s/pulls/%s/reviews" % (repo, number),
-                           "--paginate", "--jq", ".[] | {createdAt: .submitted_at}"], timeout=90)
+        comments = self.stale_activity_json(repo, number, "issues", "comments", ".created_at, body: .body")
+        reviews = self.stale_activity_json(repo, number, "pulls", "reviews", ".submitted_at")
         if isinstance(comments, dict):
             comments = [comments]
         if isinstance(reviews, dict):

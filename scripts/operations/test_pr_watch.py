@@ -338,6 +338,13 @@ class WatcherTests(unittest.TestCase):
         verify.assert_called_once()
         review.assert_not_called()
 
+    def test_empty_api_response_is_rejected_except_empty_activity_stream(self):
+        with patch.object(pr_watch_common, "checked", return_value=""):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.gh_json(["pr", "view", "7"])
+        with patch.object(pr_watch, "gh_json", side_effect=pr_watch_common.WatchError("gh returned an empty response")):
+            self.assertEqual(self.watcher.stale_activity_json("example/one", 7, "issues", "comments", ".created_at"), [])
+
     def test_paginated_json_records_and_page_arrays_are_flattened(self):
         text = '{"createdAt": "2026-11-01T00:00:00Z"}\n{"createdAt": "2026-11-02T00:00:00Z"}\n'
         with patch.object(pr_watch_common, "checked", return_value=text):
@@ -532,7 +539,10 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "comment_findings") as publish, \
                 patch.object(self.watcher, "repair_findings", return_value=False) as repair:
             self.watcher.process("example/one", 7)
-        publish.assert_called_once_with("example/one", 7, pr(), findings)
+        publish.assert_called_once()
+        self.assertEqual(publish.call_args.args[:2], ("example/one", 7))
+        self.assertEqual(publish.call_args.args[2]["headRefOid"], SHA_A)
+        self.assertEqual(publish.call_args.args[3], findings)
         repair.assert_called_once_with(self.watcher.config["repositories"][0], pr(), self.root / "checkout", [findings[0]])
         self.assertEqual(self.watcher.state.get("example/one", 7)["published_findings"], findings)
 

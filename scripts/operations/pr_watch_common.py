@@ -196,8 +196,7 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
 def gh_json(argv, timeout=90, environ=None, input_text=None):
     text = checked(["gh"] + argv, timeout=timeout, environ=environ, input_text=input_text)
     if not text.strip():
-        # An empty --jq stream is an empty collection, not malformed JSON.
-        return []
+        raise WatchError("gh returned an empty response")
     try:
         return json.loads(text)
     except json.JSONDecodeError:
