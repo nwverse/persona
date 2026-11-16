@@ -70,6 +70,8 @@ func (s *Service) retryAcceptance(now time.Time) {
 	}
 	slices.Sort(due)
 	st, stErr := s.feishuStatus(ctx)
+	quiet := s.quietModeOn(ctx)
+	quietHolds := func(a *acceptAsk) bool { return quiet && !decideAsk(a) } // as quietHoldsAsk, read once for the sweep
 	for _, id := range due {
 		t, ok := s.todoNow(id)
 		if f := s.acceptSweepHook; f != nil {
@@ -92,7 +94,7 @@ func (s *Service) retryAcceptance(now time.Time) {
 			continue
 		}
 		late := now.Sub(maxTime(a.AskedAt, a.PushedAt)) > acceptPostWindow // PushedAt: held for a briefing first (decision_wait.go)
-		if late || stErr == nil && !(st.Ready && st.Features.Reports) {
+		if late || stErr == nil && !(st.Ready && st.Features.Reports) || quietHolds(a) {
 			if late {
 				s.logf("task %s: acceptance: its card did not go out within %v: kept without one", id, acceptPostWindow)
 			}
@@ -167,6 +169,11 @@ func (s *Service) remindAcceptance(now time.Time) {
 	if f, ready := s.feishuFeatures(ctx); !ready || !f.Reports {
 		return
 	}
+	if s.quietModeOn(ctx) {
+		// low-distraction mode: no morning card again; the briefing lists what still waits to be verified (snapshotUnaccepted).
+		s.logf("acceptance reminders: low-distraction mode, %d left to the briefing without a card", len(due))
+		return
+	}
 	slices.Sort(due)
 	for _, id := range due {
 		t, ok := s.todoNow(id)
@@ -237,8 +244,9 @@ func (s *Service) briefingClock(ctx context.Context) (int, int) {
 	return acceptMorningHour, 0
 }
 
-// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, the oldest eight, and how many
-// there are (the snapshot's "waiting for the user to verify", which the morning briefing brings up).
+// snapshotUnaccepted are the deployed tasks still waiting for the user to check them, oldest first, and how many there
+// are (the snapshot's "waiting for the user to verify", which the morning briefing brings up; scopeSnapshot shows a
+// conversation the oldest snapshotAcceptLimit of its own).
 func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([]prompts.SnapshotAccept, int) {
 	b := &s.accept
 	b.mu.Lock()
@@ -274,10 +282,8 @@ func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([
 			continue
 		}
 		total++
-		if len(out) < 8 { // the oldest eight; the total says how many more
-			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
-				Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc)})
-		}
+		out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
+			Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc), Owner: todoOwner(t)})
 	}
 	if len(ended) > 0 {
 		b.mu.Lock()

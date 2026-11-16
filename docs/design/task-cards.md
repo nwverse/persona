@@ -1,6 +1,8 @@
 # 任务卡：iOS 与 Web 的对比和统一设计稿
 
 状态：P1–P7 已定（2026-11-12，全部按推荐，见 §5），按本稿实现（#5569）。Web 一侧已实现，逐项状态见 §7；iOS 一侧见 §7 的 iOS 行。
+
+**P3 replaced on 2026-11-15** (#8237): a task has one card in the chat, its hand-off card from when it was handed out; how it ended (done, stopped, failed, interrupted) is no longer a card but its row in In Progress (Just Finished) or Needs You. See `docs/design/DESIGN_SYSTEM.md` 4.8.0 and `docs/design/DECISIONS.md`. §3.3's conclusion cards and P3 below are kept as history.
 对比基线：`origin/main` @ `d6b446fcea`（2026-11-12）。截图在 [`task-cards/`](task-cards/)，数据来自 `scripts/mock/mock_hub.py`
 （`MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_USAGE_LIMIT=1 MOCK_TODO_ASKS=1 MOCK_TASK_DECISION=1`），iOS 是 iPhone 17 Pro 模拟器（iOS 26.0，英文），
 Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比），深浅色各一张。
@@ -218,6 +220,7 @@ Waited 2 h · 来自 Agent「…」
 | 行标题 | `secondaryMedium` | 15 medium | `text-[14.5px] font-semibold` | `text-row-title` |
 | 元信息（时间、地点） | `caption` | 13 | `text-[12px]` / `[12.5px]` / `[13px]` 混用 | `text-meta`（13）；12 / 12.5 并入 |
 | chip / 标签 / 计数 | `label` | 12 | `text-[12px]` | `text-label`（12） |
+| Secondary meta (the Inbox event page's state lines, times and section labels) | `label` / `caption` | 12 / 13 | `text-[11.5px]` | `text-submeta` (11.5; font size only, no line height) |
 | 强调的小字（按钮式链接） | `captionStrong` | 13 semibold | `font-semibold text-[12.5px]` | `text-meta font-semibold` |
 | 代码 / 路径 | `code` | 13 | `font-mono` | 沿用 |
 

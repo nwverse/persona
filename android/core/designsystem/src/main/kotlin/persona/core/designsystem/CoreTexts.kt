@@ -78,6 +78,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.ExpiresInHours -> -R.plurals.designsystem_core_expires_in_hours
     CoreText.Key.ExpiresInDays -> -R.plurals.designsystem_core_expires_in_days
     CoreText.Key.RequestFromSubagent -> R.string.designsystem_core_request_from_subagent
+    CoreText.Key.RequestFromSide -> R.string.designsystem_core_request_from_side
     CoreText.Key.RequestFromMcp -> R.string.designsystem_core_request_from_mcp
     CoreText.Key.RequestFromMcpConfigured -> R.string.designsystem_core_request_from_mcp_configured
     CoreText.Key.RequestFromTerminal -> R.string.designsystem_core_request_from_terminal
@@ -149,7 +150,6 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.DirectionPlanned -> R.string.designsystem_core_direction_planned
     CoreText.Key.DirectionSecretary -> R.string.designsystem_core_direction_secretary
     CoreText.Key.DirectionUntitled -> R.string.designsystem_core_direction_untitled
-    CoreText.Key.DirectionCountWorking -> R.string.designsystem_core_direction_count_working
     CoreText.Key.DirectionCountNeedsYou -> R.string.designsystem_core_direction_count_needs_you
     CoreText.Key.InboxAction -> R.string.designsystem_core_inbox_action
     CoreText.Key.InboxFyi -> R.string.designsystem_core_inbox_fyi

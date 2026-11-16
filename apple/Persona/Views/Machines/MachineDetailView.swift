@@ -1,5 +1,6 @@
 import BeautifulUI
 import SwiftUI
+import PersonaWire
 
 /// One machine (docs/server/machines.md「App」), most used first: how it is (the card of Machines, without its numbers), its
 /// agents (a tap opens the chat), its values now and CPU / memory / network / load over 1, 6 or 24 hours (hold a chart
@@ -31,6 +32,8 @@ struct MachineDetailView: View {
     @State private var plugins = ExtensionMachineModel()
     @State private var pluginLink: LinkTarget?
     @State private var filesOpen = Self.initialFilesOpen
+    /// Lives through the Files push / pop, so a remote POST can regain its progress row on return.
+    @State private var folderTransfers = FolderTransfers()
     /// Browser Sign-ins (#5821) and their whole list: owned here, beside Files, not by the section, which exists only
     /// while this page has its machine; a destination inside it went away with it and broke the open list (#6050).
     @State private var browserLogins: BrowserLoginsModel
@@ -51,13 +54,13 @@ struct MachineDetailView: View {
     /// nor a subtask, which the Agents list folds under the session that started it and does not count unless it needs
     /// the user (`Session.isNestedSubtask`, as Android's Machines card).
     static func agents(_ model: AppModel, _ ref: MachineRef) -> [Session] {
-        (model.sessionsByMachine[ref] ?? []).filter(isListed)
+        ChildSessions.fold(model.sessionsByMachine[ref] ?? []).filter(isListed)
     }
 
     /// Every machine's agents (`agents(_:_:)`), for a page that can be kept hidden behind another: watched only in front
     /// (`AppModel.allSessions(inFront:)`).
     static func agentsByMachine(_ model: AppModel, inFront: Bool) -> [MachineRef: [Session]] {
-        Dictionary(grouping: model.allSessions(inFront: inFront).filter(isListed), by: \.machineRef)
+        Dictionary(grouping: ChildSessions.fold(model.allSessions(inFront: inFront)).filter(isListed), by: \.machineRef)
     }
 
     private static func isListed(_ s: Session) -> Bool { s.status.isLive && !s.assistant && !s.isNestedSubtask }
@@ -165,7 +168,7 @@ struct MachineDetailView: View {
         .themedGroupedPage()
         .pluginLinks($pluginLink)
         .navigationDestination(isPresented: $filesOpen) { // a leaf: the browser walks folders and opens files in place
-            FilesPane(machineID: machineID, group: ref.group, cwd: "~")
+            FilesPane(machineID: machineID, group: ref.group, cwd: "~", transfers: folderTransfers)
                 .detailTitle(String(localized: "Files"))
                 .navigationBarTitleDisplayMode(.inline)
         }

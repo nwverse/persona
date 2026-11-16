@@ -48,6 +48,12 @@ nonisolated enum ReplyMetrics {
     static let inlineCode: CGFloat = 0.88
     static let quiet: CGFloat = 0.88
 
+    /// A list item's marker: its room, at least 1.5 em (MarkdownUI's markers, right-aligned in it), then the system
+    /// `Label`'s gap before the words, the same at every text size (34, 41 and 80 pt to the words at the default size,
+    /// xxxLarge and AX5, #6552).
+    static func markerRoom(of size: CGFloat) -> CGFloat { points(1.5, of: size) }
+    static let markerGap: CGFloat = 8
+
     /// A size in em as the chat draws it: MarkdownUI sets every run's font at a whole point (`round(size × scale)`),
     /// so inline code at 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
     static func points(_ em: CGFloat, of size: CGFloat) -> CGFloat { (em * size).rounded() }
@@ -336,6 +342,8 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         accessibilityIdentifier = "lift-text"
         addInteraction(menuInteraction)
         addGestureRecognizer(FingerFollower { [weak self] in self?.follow($0) })
+        // Reading content: not under the window's cap (`WindowTextSize`).
+        traitOverrides.preferredContentSizeCategory = WindowTextSize.readingCategory
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self]) { (v: LiftUITextView, _) in
             v.render(width: v.laidOut)
         }
@@ -595,6 +603,7 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         }
         #if DEBUG
         if LiftLines.on { LiftLines.shared.select = LiftLines.lines(of: self, layout: layout) }
+        publishPicked()
         #endif
     }
 
@@ -615,7 +624,14 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     /// A moved line can start inside the one before it (a table picture's, taller here than the chat's table), where the
     /// layout manager's lookup takes the earlier line too.
     override func closestPosition(to point: CGPoint) -> UITextPosition? {
-        guard storage.length > 0, let container = layout.textContainers.first else { return super.closestPosition(to: point) }
+        guard let place = place(nearest: point) else { return super.closestPosition(to: point) }
+        return position(from: beginningOfDocument, offset: place.offset)
+    }
+
+    /// `closestPosition(to:)`'s place, and the side of it the point is on: `before` when the point is on the character
+    /// before it (left of the place, not in front of its line's first word) or past its line's last word.
+    private func place(nearest point: CGPoint) -> (offset: Int, before: Bool)? {
+        guard storage.length > 0, let container = layout.textContainers.first else { return nil }
         let p = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
         // Not the first line holding the point: the lines are in order, but one can start above the end of the one before.
         var line: (rect: CGRect, used: CGRect, glyphs: NSRange)?
@@ -623,18 +639,18 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
             guard !self.snapper.hidden.contains(glyphs.location), line == nil || rect.minY <= p.y else { return }
             line = (rect, used, glyphs)
         }
-        guard let line else { return super.closestPosition(to: point) }
+        guard let line else { return nil }
         let text = storage.string as NSString
         let chars = layout.characterRange(forGlyphRange: line.glyphs, actualGlyphRange: nil)
         var end = NSMaxRange(chars)
         if end > chars.location, UnicodeScalar(text.character(at: end - 1)).map(CharacterSet.newlines.contains) == true { end -= 1 }
-        var best = chars.location, distance = CGFloat.infinity, at = chars.location
+        var best = chars.location, bestX = CGFloat.infinity, distance = CGFloat.infinity, at = chars.location
         while at <= end {
             let x = at < end ? line.rect.minX + layout.location(forGlyphAt: layout.glyphIndexForCharacter(at: at)).x : line.used.maxX
-            if abs(x - p.x) < distance { (best, distance) = (at, abs(x - p.x)) }
+            if abs(x - p.x) < distance { (best, bestX, distance) = (at, x, abs(x - p.x)) }
             at = at < end ? min(NSMaxRange(text.rangeOfComposedCharacterSequence(at: at)), end) : end + 1
         }
-        return position(from: beginningOfDocument, offset: best)
+        return (best, best == end ? best > chars.location : best > chars.location && bestX > p.x)
     }
 
     override func closestPosition(to point: CGPoint, within range: UITextRange) -> UITextPosition? {
@@ -732,10 +748,15 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         }
     }
 
-    /// The word under a point in the window; where there is none (a space, a mark), the character there.
+    /// The word under a point in the window; where there is none (a space, a mark), the character there. The word on
+    /// the point's side of the nearest place: a press on the right half of a word's last character found the place
+    /// after it and took the next word, which Chinese has with no space between (#6552).
     private func word(at point: CGPoint) -> UITextRange? {
-        guard let pos = closestPosition(to: convert(point, from: nil)) else { return nil }
-        for direction in [UITextStorageDirection.forward, .backward] {
+        let local = convert(point, from: nil), near = place(nearest: local)
+        guard let pos = near.flatMap({ position(from: beginningOfDocument, offset: $0.offset) }) ?? closestPosition(to: local) else {
+            return nil
+        }
+        for direction in near?.before == true ? [UITextStorageDirection.backward, .forward] : [.forward, .backward] {
             if let w = tokenizer.rangeEnclosingPosition(pos, with: .word, inDirection: UITextDirection(rawValue: direction.rawValue)) {
                 return w
             }
@@ -745,9 +766,7 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
     }
 
     private func showMenu(for range: UITextRange) {
-        let rects = selectionRects(for: range).map(\.rect).filter { !$0.isEmpty && $0.width > 0 }
-        guard let first = rects.first else { return }
-        let box = rects.dropFirst().reduce(first) { $0.union($1) }.intersection(bounds)
+        guard let box = menuTarget(range) else { return }
         menuInteraction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: box.midX, y: box.minY)))
     }
 
@@ -756,7 +775,36 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
         textView(self, editMenuForTextIn: selectedRange, suggestedActions: suggestedActions)
     }
 
+    /// The menu goes above or below the selection, never over it (#6005). Given only a point (its top's middle), the
+    /// system had put it under that point, over the selected words and their end handle.
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        selectedTextRange.flatMap(menuTarget) ?? CGRect(origin: configuration.sourcePoint, size: .zero)
+    }
+
+    /// What the menu stays off: the selected words that show, with room for their handles' knobs (the start's over
+    /// the first line, the end's under the last).
+    private func menuTarget(_ range: UITextRange) -> CGRect? {
+        let rects = selectionRects(for: range).map(\.rect).filter { !$0.isEmpty && $0.width > 0 }
+        guard let first = rects.first else { return nil }
+        let box = rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: 0, dy: -Theme.Lift.handleReach)
+        let shown = box.intersection(shownBounds)
+        return shown.isNull || shown.isEmpty ? nil : shown
+    }
+
+    /// The part of it the lifted message shows: inside its scroll view, on screen.
+    private var shownBounds: CGRect {
+        var shown = bounds
+        var v = superview
+        while let view = v, !(view is UIScrollView) { v = view.superview }
+        if let s = v { shown = shown.intersection(convert(s.bounds, from: s)) }
+        if let w = window { shown = shown.intersection(convert(w.bounds, from: w)) }
+        return shown
+    }
+
     func textViewDidChangeSelection(_ textView: UITextView) {
+        #if DEBUG
+        publishPicked()
+        #endif
         if let touched, draggedEnd == nil, selectedRange.length > 0, selectedRange != touched {
             draggedEnd = selectedRange.location != touched.location ? .start : .end
         }
@@ -868,6 +916,33 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
 }
 
 #if DEBUG
+extension LiftUITextView {
+    /// The selection's lines and its handles, in the window (`LiftLines.picked`), once they have settled.
+    func publishPicked() {
+        guard LiftLines.on else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self else { return }
+            var lines: [CGRect] = [], handles: [CGRect] = []
+            if let r = selectedTextRange, !r.isEmpty {
+                lines = selectionRects(for: r).map(\.rect).filter { !$0.isEmpty && $0.width > 0 }.map { convert($0, to: nil) }
+                func walk(_ v: UIView) {
+                    for s in v.subviews {
+                        if s is UITextSelectionHandleView, !s.isHidden, s.alpha > 0.01 { handles.append(s.convert(s.bounds, to: nil)) }
+                        walk(s)
+                    }
+                }
+                walk(window ?? self)
+            }
+            let shown = convert(shownBounds, to: nil)
+            func code(_ rs: [CGRect]) -> String {
+                rs.map { String(format: "%.1f,%.1f,%.1f,%.1f", $0.minX, $0.minY, $0.width, $0.height) }.joined(separator: ";")
+            }
+            let s = lines.isEmpty ? "" : "lines=\(code(lines))/handles=\(code(handles))/shown=\(code([shown]))"
+            if LiftLines.shared.picked != s { LiftLines.shared.picked = s }
+        }
+    }
+}
+
 extension LiftLines {
     /// The text view's lines (`LiftUITextView`), as the chat's are written: a picture counts as a glyph.
     static func lines(of v: UITextView, layout: NSLayoutManager) -> String {
@@ -1062,11 +1137,14 @@ enum ReplyText {
 
         init(_ words: LiftWords, design: UIFontDescriptor.SystemDesign = .default, traits: UITraitCollection) {
             self.design = design
-            let base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
+            var base = Self.designed(UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits), design)
             var quiet = false
             switch words {
-            case .plain(let c): color = UIColor(c)
-            case .reply(let q): quiet = q; color = q ? .secondaryLabel : .label
+            case .plain(let c): color = UIColor(c) // your bubble: the body style
+            case .reply(let q):
+                quiet = q
+                color = q ? .secondaryLabel : .label
+                base = base.withSize(Self.replySize(traits)) // MarkdownUI's size, not the body style's (#6552)
             }
             body = quiet ? base.withSize(ReplyMetrics.points(ReplyMetrics.quiet, of: base.pointSize)) : base
             code = .monospacedSystemFont(ofSize: ReplyMetrics.points(Theme.Level.code.size / Theme.Level.body.size, of: body.pointSize), weight: .regular)
@@ -1078,6 +1156,15 @@ enum ReplyText {
         }
 
         var size: CGFloat { body.pointSize }
+
+        /// The size of a reply's words in the chat at these traits: MarkdownUI scales the theme's size as `@ScaledMetric`
+        /// relative to body does (`UIFontMetrics`), and draws it at a whole point. That is not the body text style's
+        /// size past the default: 22 pt where body is 23 at xxxLarge, 48 where it is 53 at AX5. A text view in the body
+        /// style wrapped the words onto more lines than the chat, and a press near the end of a long answer picked words
+        /// lines above it (#6552).
+        static func replySize(_ traits: UITraitCollection) -> CGFloat {
+            UIFontMetrics(forTextStyle: .body).scaledValue(for: Theme.Level.body.size * Theme.Font.scale, compatibleWith: traits).rounded()
+        }
 
         /// `font` at weight `w`, in the words' design (code stays monospaced).
         func weight(_ font: UIFont, _ w: UIFont.Weight) -> UIFont {
@@ -1204,8 +1291,8 @@ enum ReplyText {
             self.parts = parts
         }
 
-        private var markerWidth: CGFloat { look.size * 1.5 }
-        private var markerGap: CGFloat { look.size * 0.5 } // the words at 2 em, as the chat's lists
+        private var markerWidth: CGFloat { ReplyMetrics.markerRoom(of: look.size) }
+        private var markerGap: CGFloat { ReplyMetrics.markerGap } // the words where the chat's lists put them (#6552)
 
         func read(_ markdown: String) {
             // Bold next to CJK punctuation is read as the chat reads it (`CJKEmphasis`, line for line); a table still

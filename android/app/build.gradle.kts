@@ -45,6 +45,7 @@ androidComponents.onVariants { variant ->
 
 android {
     namespace = "persona.android"
+    buildFeatures { buildConfig = true }
     testOptions { unitTests { isIncludeAndroidResources = true } }
     lint {
         baseline = file("lint-baseline.xml")
@@ -77,6 +78,8 @@ dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":core:domain"))
     implementation(project(":core:terminal"))
+    // Phase 1 packages the binding only; production continuity remains native and no core is created on launch.
+    implementation(project(":core:rustcore-android"))
     implementation(project(":core:navigation"))
     implementation(project(":core:hub"))
     implementation(project(":core:data"))

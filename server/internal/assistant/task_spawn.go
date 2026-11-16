@@ -53,12 +53,10 @@ func (s *Service) taskSpawn(ctx context.Context, machine, session string, args j
 				assigned = true
 			}
 		}
-		if p, err := s.loadPlan(ctx, t.PlanID); assigned && err == nil {
-			for _, task := range p.Tasks {
-				if task.TodoID == t.ID && task.Machine == machine && task.Permission != "" {
-					mode = task.Permission
-					break
-				}
+		if p, i, err := s.currentPlanAssignment(ctx, t); assigned && err == nil {
+			task := p.Tasks[i]
+			if task.Machine == machine && task.Permission != "" {
+				mode = task.Permission
 			}
 		}
 	}
@@ -69,6 +67,11 @@ func (s *Service) taskSpawn(ctx context.Context, machine, session string, args j
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
 	mid, sid, err := s.startTaskAgent(startCtx, &child, false)
+	// This path is not wrapped by runPlanTaskStart, so release the gate's claim itself once the child is linked or the
+	// start has failed for good (by then the ledger carries the linked agent, or nothing runs).
+	if child.admissionRelease != nil {
+		defer child.admissionRelease()
+	}
 	if err != nil {
 		return "", fmt.Errorf("task_spawn: %w; do not retry an uncertain start, ask your supervisor", err)
 	}

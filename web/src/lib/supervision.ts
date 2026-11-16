@@ -46,6 +46,9 @@ export interface Supervision {
   round?: number;
   reviews?: TaskReview[];
   updated_at?: string;
+  /** When the task entered `pending_review`; absent in every other state, and from an older hub. The web lists every
+   *  review alike (Persona reviewing, #8678); Android and Apple read it to tell an overdue one. */
+  pending_since?: string;
   /** What its agent last reported to Persona (report_to_supervisor); kept by the hub while it runs. */
   progress?: TaskProgress;
   /** The latest independent review of its change (#2173); absent when none ran (or on an older hub). */

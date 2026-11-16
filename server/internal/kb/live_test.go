@@ -38,6 +38,7 @@ func TestRecordingAttendanceFields(t *testing.T) {
 		{"off", RecordingMeeting, "off", &SessionRef{MachineID: "mac-1", SessionID: "s1"}, AttendanceOff, "", nil},
 		{"none", RecordingMeeting, "", nil, AttendanceOff, "", nil},
 		{"unknown role", RecordingMeeting, "speaker", nil, AttendanceOff, AttendanceUnknownRole, nil},
+		{"notes: a room's only (#8851)", RecordingMeeting, "notes", nil, AttendanceOff, AttendanceUnknownRole, nil},
 		{"a note", RecordingNote, "listener", nil, AttendanceOff, AttendanceNotMeeting, nil},
 		{"kind omitted", "", "participant", nil, AttendanceOff, AttendanceNotMeeting, nil},
 		{"one id", RecordingMeeting, "listener", &SessionRef{MachineID: "mac-1"}, AttendanceOff, AttendanceBadSession, nil},

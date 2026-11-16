@@ -2,7 +2,7 @@
 // "Hand to AI" › "New agent…" (#5933; docs/assistant/inbox.md "Item actions"): New agent opens over the dialog with the
 // item as the card over the first message (the <persona-context> an agent target gets) and the ask, or the first preset;
 // nothing is sent before its Start, and Cancel leaves the dialog as it was. Once the agent has its first message, the
-// item's source remembers that agent (never "New agent…") and the item is filed unless the user turned that off.
+// item's source remembers that agent (never "New agent…") and the item is filed only when the user asked for that.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +11,8 @@ vi.mock("../../lib/router", () => ({ navigate: vi.fn() }));
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 vi.mock("../../lib/new-agent", async (orig) => ({ ...(await orig<typeof import("../../lib/new-agent")>()), openNewAgent: vi.fn() }));
 
-import { HANDOFF_PRESETS, handOffContext, handOffMessage, reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
+import { reloadInbox, resetInboxForTests, type InboxItem } from "../../lib/inbox";
+import { HANDOFF_PRESETS, handOffContext, handOffMessage } from "../../lib/inbox-page";
 import { handOffSourceKey, recallHandOff } from "../../lib/handoff-memory";
 import { contextXML } from "../../lib/context-xml";
 import { openNewAgent, type NewAgentPreset } from "../../lib/new-agent";
@@ -107,27 +108,28 @@ describe("Hand to AI: New agent…", () => {
     expect((await open()).prompt).toBe(HANDOFF_PRESETS[0]);
   });
 
-  it("remembers the started agent for the source and files the item, as for any agent", async () => {
+  it("remembers the started agent for the source and leaves the item open by default", async () => {
     await reloadInbox();
     const onClose = vi.fn();
     act(() => root.render(<HandOffDialog item={item} onClose={onClose} />));
-    const preset = await open();
-    act(() => preset.onStarted!(started));
-    expect(recallHandOff(handOffSourceKey(item.source, item.mutes)!)).toBe("agent:laptop/s-9");
-    await vi.waitFor(() => expect(calls.some(filed)).toBe(true));
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("leaves the item open when the user turned Also mark as done off", async () => {
-    await reloadInbox();
-    act(() => root.render(<HandOffDialog item={item} onClose={() => {}} />));
     const done = document.body.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    act(() => done.click()); // on, the user's choice
-    act(() => done.click()); // and off again
+    expect(done.checked).toBe(false);
     const preset = await open();
     act(() => preset.onStarted!(started));
     expect(recallHandOff(handOffSourceKey(item.source, item.mutes)!)).toBe("agent:laptop/s-9");
     await new Promise((r) => setTimeout(r, 20));
     expect(calls.some(filed)).toBe(false);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("files the item once the agent starts when the user asks", async () => {
+    await reloadInbox();
+    act(() => root.render(<HandOffDialog item={item} onClose={() => {}} />));
+    const done = document.body.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    act(() => done.click());
+    const preset = await open();
+    act(() => preset.onStarted!(started));
+    expect(recallHandOff(handOffSourceKey(item.source, item.mutes)!)).toBe("agent:laptop/s-9");
+    await vi.waitFor(() => expect(calls.some(filed)).toBe(true));
   });
 });

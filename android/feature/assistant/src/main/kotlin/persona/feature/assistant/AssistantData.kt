@@ -127,14 +127,12 @@ internal fun conversationGroups(
     )
 }
 
-/** A leader's open tasks 「在做 1 · 等你 2」 (#4331): only the parts that are not zero, null when both are. */
-internal fun leaderCountsLabel(counts: LeaderCounts?, resources: android.content.res.Resources): String? {
-    counts ?: return null
-    return listOfNotNull(
-        counts.working.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_working, it) },
-        counts.needsYou.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_needs_you, it) },
-    ).takeIf { it.isNotEmpty() }?.joinToString(" · ")
-}
+/**
+ * What a leader's row says in words (#4331): its tasks waiting on you, 「等你 2」, null while none do. What runs under it
+ * is the row's spinner alone ([LeaderCounts.running]), never 「在做 N」 as well (#6626: one meaning, one expression).
+ */
+internal fun leaderCountsLabel(counts: LeaderCounts?, resources: android.content.res.Resources): String? =
+    counts?.needsYou?.takeIf { it > 0 }?.let { resources.getString(R.string.assistant_leader_needs_you, it) }
 
 @StringRes
 internal fun greeting(hour: Int): Int = when (hour) {
@@ -319,6 +317,8 @@ data class AssistantChatOptions(
     val showTopBar: Boolean = false,
     /** The conversation's manager is offline (docs/assistant/managers.md step 4): history only, this note where the composer was. */
     val readOnlyNote: String? = null,
+    /** Known before the live session row arrives: ordinary files still upload to Health storage. */
+    val healthChat: Boolean = false,
 )
 
 /**

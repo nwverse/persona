@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 #endif
 import UserNotifications
+import PersonaWire
 
 @main
 struct PersonaApp: App {
@@ -16,6 +17,7 @@ struct PersonaApp: App {
                 #if DEBUG && os(iOS)
                 .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
                 .overlay { HomeGalleryOverlay() } // `-showHomeWidgets YES`: every widget, every size (docs/apple/home-widgets.md)
+                .overlay { ButtonContrastOverlay() } // `-showButtonContrast YES`: secondary buttons on every surface (#6157)
                 #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
@@ -35,6 +37,7 @@ struct PersonaApp: App {
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
+                    if IPhoneSetupLink.matches(url) { model.openIPhoneSetup(); return }
                     // A computer's pairing link (「添加电脑」, Add computer) is for Persona Link on that computer, not for this device (#4198).
                     if ServerConfig.isComputerLink(url) {
                         model.toast = Toast(String(localized: "Open this link on the computer you're adding"))
@@ -102,6 +105,9 @@ struct PersonaApp: App {
                 #if os(iOS)
                 ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
                 RemindersImporter.shared.activate(model) // Reminders imported as to-dos, when that is on (#4009)
+                // Refresh the health summary snapshot while unlocked, so a locked-phone phone_health_summary
+                // call later can serve it instead of HealthKit's inaccessible-database error.
+                Task { await HealthTool.refreshSnapshot() }
                 #endif
             } else if new == .background {
                 #if os(iOS)
@@ -119,6 +125,7 @@ struct PersonaApp: App {
                 QuickAction.publish() // the home screen menu with the conversations' titles as they are now (#2191)
                 RecordingDayCatchUp.scheduleIfNeeded() // transcribe and upload the day's backlog while charging
                 #endif
+                CacheBudget.runOnce() // chat pictures, Feishu media and WebKit's cache back under their budgets (#8341)
             }
         }
         #if os(visionOS)
@@ -144,6 +151,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         MetaGlasses.shared.configure() // a no-op without the Meta Wearables SDK (docs/apple/meta-glasses.md)
         #if os(iOS)
         QuickAction.publish()
+        // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
+        // reports' small state file this early.
+        if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
@@ -181,9 +191,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
                       "agents.list.width", "agents.list.closed"] { d.removeObject(forKey: k) }
         }
-        // `-openSplitFresh YES`: the lists beside the pages at the system's width and open (SplitDividerTests, #2624).
+        // `-openSplitFresh YES`: the lists beside the pages shown (SplitListTests, #2624, #4206).
         if d.bool(forKey: "openSplitFresh") {
-            for list in ["agents.list", "assistant.list"] { d.removeObject(forKey: list + ".width"); d.removeObject(forKey: list + ".closed") }
+            for list in ["agents.list", "assistant.list", "sidebar.list"] { d.removeObject(forKey: list + ".closed") }
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }
@@ -201,6 +211,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             ScreenCredentials.forgetAll()
             ScreenUnlock.forgetAll()
         }
+        #if DEBUG
+        // `-openScreenDemo YES`: open the live-screen page on a placeholder Mac (no hub needed) for screenshots of the
+        // picture switcher and the connection-stats overlay; pair with -showScreenStatsDemo / -showScreenFallbackDemo (#3954).
+        if d.bool(forKey: "openScreenDemo") {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                AppModel.shared.screenOpen = ScreenOpen(machine: MachineRef(id: "Studio"))
+            }
+        }
+        #endif
         // `-showLarkSendFresh YES`: no Feishu draft and no outbox (unsent, failed messages) from an earlier run:
         // LarkSendTests found earlier runs' failed messages and drafts in the chat (#1627).
         if d.bool(forKey: "showLarkSendFresh") {
@@ -300,7 +320,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         RecordingDayCatchUp.register()
         #endif
         #if DEBUG
-        RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending`
+        RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending|overview`
         #if os(iOS)
         Task { await RecordingSamples.installDaySampleIfAsked() } // `-showDaySample today|paused|recap|pending|failed`
         #endif

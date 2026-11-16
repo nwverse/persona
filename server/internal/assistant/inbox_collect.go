@@ -102,6 +102,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		b.roundWrite(it)
 	}
 	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
+	changed = b.followMerged(append(changed, b.releaseMembers()...), now)
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
 	b.settleRound()
@@ -116,6 +117,7 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
 	s.triageInbox(ctx)
+	s.settleInbox(ctx) // "Needs you" events the owner answered in the source, or that were closed there (inbox_settle.go)
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
@@ -192,8 +194,9 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 	if len(src.Things) == 0 && !src.Settles {
 		return nil
 	}
-	// Batches of new messages go to the model, not the list.
-	things := s.relateBatches(ctx, src, src.Things)
+	// State reports update their existing events; batches of new messages go to the model, not the list.
+	things, changed := s.applyGroupStates(ctx, src, src.Things)
+	things = s.relateBatches(ctx, src, things)
 	var own []connector.InboxThing // a migrated connector's things that keep the inbox's own item shape
 	if src.Migrated {
 		generic := things[:0:0]
@@ -209,7 +212,6 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 	if !src.Counts {
 		things = withoutCounts(things)
 	}
-	var changed []*InboxItem
 	b.mu.Lock()
 	changed = append(changed, b.applyConnector(src.ID, src.Name, things, time.Now())...)
 	changed = append(changed, b.applyMigrated(src.ID, own, time.Now())...)

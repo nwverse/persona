@@ -19,7 +19,7 @@ import { hasFinePointer } from "../../lib/viewport";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
-import type { MentionSkill } from "../../lib/skill-mentions";
+import type { MentionSkill, SkillSource } from "../../lib/skill-mentions";
 
 export interface MentionSource {
   /** The session's folder: relative paths and the first listing start here. */
@@ -30,8 +30,8 @@ export interface MentionSource {
   files: () => string[];
   /** Offer the hub's workspaces (GET /workspaces): the Persona assistant, which works on any computer. */
   workspaces?: boolean;
-  /** Assistant-only catalog. The environment key invalidates rows when the effective launcher/profile changes. */
-  skills?: { manager: string; session?: string; launcher?: string; environment: string };
+  /** Execution catalog. Ordinary Agents use session-owned facts; environment changes invalidate visible rows. */
+  skills?: SkillSource;
 }
 
 export type MentionRow =
