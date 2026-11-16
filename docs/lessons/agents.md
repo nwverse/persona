@@ -12,6 +12,16 @@ check. This demonstrates the confirmation gap, not the cause of any particular l
 
 When replacing an Agent to fix or retry work, keep the original to-do and immutable brief. Stop/release prior Agents at Start and reopen a closed to-do in place; failed starts must not create successor tasks. For Codex edits, a plan/read-only sandbox needs a fresh process with explicit writable permission. Keep takeover and legacy-successor duplicate refusals intact.
 
+## A start-turn into a running Codex App turn is delivered twice (2026-11-17, #9416)
+
+The Codex App's bus offers a follower only `thread-follower-start-turn`. Into a running turn Codex's app-server steers it
+(`start_or_steer_turn`), and the App then runs the same request again as a new turn once the running one ends. The
+Agent answers it mid-turn, then starts over on it, while Persona's own read of the chat shows it once. Before asking the
+App for a turn, look whether one runs (rollout tail, or the history database for a chat without a rollout) and hold the
+message on the node until it ends; count a turn the node just started as running until the App writes it down, or two
+sends in a row steer the second into the first's turn. On Codex's own app-server, steer with `turn/steer` and the
+observed turn id instead; never send both a steer and a start for one message.
+
 ## Task branch reuse is not forced worktree creation (#8357)
 
 An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,
