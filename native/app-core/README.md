@@ -181,6 +181,23 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## iOS Agents-list adapter and sort shadow (#9058)
+
+`AgentSortProjectionAdapter` returns the existing Swift `AgentListProjection`; there is no Rust production-selection
+path. `-showAgentSortShadow` is opt-in in DEBUG only. The observer waits for the published structural revision, takes
+the cache's immutable input and already-computed projection, then submits at most one running and one pending comparison
+to a utility queue. Presentation folds, including `TabPanes` tabs, are not part of the production cache key and never
+rebuild or reorder its result. JSON conversion, C ABI invocation and typed output comparison happen off the main actor,
+not in a view body. Reports contain only the domain, a rule, enum values and counts/flags, including a periodic compared
+count; never titles, identifiers, paths, query text or exception messages.
+
+The shared `agents_list` fixture contract remains unchanged. `presentation_rows` is a separate opt-in for the compact By
+Project tab rows (#9292), and the adapter passes the production-prepared parent rows, nested-row counting flags and
+folded-child counts (#9136). A single frozen `now` drives both sides of `since:`; timestamps retain fractional seconds.
+Unsupported grouping, hub/source filters and extended search scopes are explicitly reported, not silently treated as
+parity. The unregistered-machine and matching-parent core discrepancy remains tracked as #9221. This is a DEBUG shadow,
+not approval to replace Swift with the core.
+
 ## Android Agents-list adapter and sort shadow (#8954)
 
 `:feature:agents` supplies its existing scoped list projection to `AgentListAdapter`. Kotlin remains authoritative; the

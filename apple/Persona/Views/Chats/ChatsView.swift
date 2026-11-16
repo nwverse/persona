@@ -908,6 +908,9 @@ private struct AgentsList: View {
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
     @State private var feed = AgentsFeed()
+    #if DEBUG
+    @State private var sortShadow = AgentSortShadowObserver()
+    #endif
 
     /// The machines and agents the rows name, as the body last saw them (`Lookup`).
     @State private var lookup = Lookup()
@@ -1010,6 +1013,34 @@ private struct AgentsList: View {
             willPublish: { feed.reader.willChange() })
     }
 
+    @discardableResult
+    private func shadowSubmit(active: [SpaceGroup], quiet: [SpaceGroup]) -> Int {
+        #if DEBUG
+        guard sortShadow.enabled else { return 0 }
+        let snapshot = shadowPresentation(active + quiet)
+        sortShadow.submit(feed: feed, settings: projectionSettings(), presentation: snapshot)
+        return 0
+        #else
+        return 0
+        #endif
+    }
+
+    #if DEBUG
+    private func shadowPresentation(_ groups: [SpaceGroup]) -> AgentSortPresentation {
+        guard sortShadow.enabled else { return .init() }
+        var result = AgentSortPresentation(folded: folded, expandedIdle: expandedIdle,
+                                           expandedQuiet: expandedQuiet, compact: compact)
+        let settings = projectionSettings()
+        for group in groups where group.bounded {
+            result.bounded.insert(group.id)
+            if let counts = model.sessionLists.aggregate(AgentListProjection.aggregateScope(group, settings: settings)) {
+                result.aggregate[group.id] = counts
+            }
+        }
+        return result
+    }
+    #endif
+
     private func withAggregate(_ group: SpaceGroup) -> SpaceGroup {
         guard group.bounded, let scope = lookup.scopes[group.id] else { return group }
         var group = group
@@ -1083,6 +1114,7 @@ private struct AgentsList: View {
         // Paging counts arrive per header: overlaid here (O(sections)), not a reason to derive the inventory again.
         let active = projection.active.map(withAggregate)
         let quiet = projection.quiet.map(withAggregate)
+        let _ = shadowSubmit(active: active, quiet: quiet)
         let pinnedAgents = projection.pinnedAgents
         // One row per session that waits for the user, its cards under it (`AgentsNeedsYou`): the section, the Needs
         // You filter and the tab's badge count these rows.
@@ -1474,6 +1506,9 @@ private struct AgentsList: View {
         #endif
         .onChange(of: machineFilter) { _, _ in kept = [] }
         .onAppear {
+            #if DEBUG
+            sortShadow.enable()
+            #endif
             feed.follow(model)
             #if os(iOS) || os(visionOS)
             // The list rests with the field folded, a band down from its top: that is still the top (`atTop`); counted
