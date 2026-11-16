@@ -622,7 +622,8 @@ func (s *Service) planExecutionHistory(ctx context.Context) ([]*TaskPlan, error)
 
 // planHistoryOnce is planExecutionHistory read at most once, when first asked: one sweep over the open tasks
 // (remedyWatch) shares it, as it lists each machine once (machineSessions), instead of reading and decoding every plan
-// ever started for each to-do with no plan id of its own (#8770). Its plans are read only.
+// ever started for each to-do with no plan id of its own (#8770). Its plans are read only. A failed first read is
+// shared too, so that pass defers every remedy expiry to the next sweep, which builds a fresh closure and tries again.
 func (s *Service) planHistoryOnce() func(context.Context) ([]*TaskPlan, error) {
 	var (
 		read  bool

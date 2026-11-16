@@ -114,6 +114,15 @@ func TestDirectionTodoFailedStartRetriesCurrentAssignment(t *testing.T) {
 						return err == nil && p.Tasks[0].Start != nil && p.Tasks[0].Start.State == remedyStarted && p.Tasks[0].Start.Attempt == 1
 					})
 				}
+				// The to-do is open again with its agent linked. Retrying an open to-do tells it to go on rather than
+				// starting a third agent: nothing is cut off, so the answer is the to-do's view and no new session.start
+				// reaches the node (#8770 removed the old empty-plan-id refusal on this branch too).
+				if w := e.do(http.MethodPost, "/api/v1/todos/"+piece.ID+"/retry", ""); w.Code != http.StatusOK {
+					t.Fatalf("HTTP retry of an open to-do: %d %s", w.Code, w.Body.String())
+				}
+				if len(e.f.started()) != 2 {
+					t.Fatalf("retrying an open to-do started another agent: %d starts", len(e.f.started()))
+				}
 			})
 		}
 	}
@@ -149,6 +158,10 @@ func TestDirectionTodoWithoutAssignmentStaysNotRetryable(t *testing.T) {
 			if cur := todoNow(e.s, piece.ID); cur.DoneAt == nil || cur.StartError == "" {
 				t.Fatalf("a refused retry reopened the to-do: %+v", cur)
 			}
+			// The HTTP 409 alone cannot tell the two sentinels apart: pin retryTask's own answer for each case.
+			if _, err := e.s.retryTask(ctx, piece.ID); !errors.Is(err, errTaskNotInPlan) {
+				t.Fatalf("retryTask with no binding: %v", err)
+			}
 
 			// A to-do no conversation opened (the user's own) is nobody's task to start again, even with a binding.
 			if _, err := runJSON(t, e.s, "m1", "todo_create", map[string]any{"title": "Buy milk"}); err != nil {
@@ -171,6 +184,45 @@ func TestDirectionTodoWithoutAssignmentStaysNotRetryable(t *testing.T) {
 			}
 			if n := len(e.f.started()); n != 1 {
 				t.Fatalf("a refused retry reached the node: %d starts", n)
+			}
+			if _, err := e.s.retryTask(ctx, own.ID); !errors.Is(err, errTaskNotRetryable) {
+				t.Fatalf("retryTask for a to-do nobody opened: %v", err)
+			}
+		})
+	}
+}
+
+// Two started plans binding the same plan-less to-do is ambiguous: every retry and remedy entry fails closed instead
+// of guessing which plan owns it, the same guarantee continuation to-dos already had (#8770).
+func TestDirectionTodoAmbiguousAssignmentStaysNotRetryable(t *testing.T) {
+	shortTaskStartReconcile(t)
+	for _, backend := range []string{"memory", "database"} {
+		t.Run(backend, func(t *testing.T) {
+			var store Store
+			if backend == "database" {
+				store = taskRecoveryDatabase(t)
+			}
+			e := newThreadEnv(t, store)
+			ctx := context.Background()
+			piece, _ := failedDirectionTodoStart(t, e, context.DeadlineExceeded)
+			second := &TaskPlan{ID: "plan_second", Conversation: piece.Origin, State: planStarted,
+				CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				Tasks: []PlanTask{{Title: "second binding", Prompt: "again", Machine: "m1", Cwd: "/code", TodoID: piece.ID}}}
+			if err := e.s.savePlan(ctx, second); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, err := e.s.remedyOf(ctx, piece.ID); !errors.Is(err, errTaskNotInPlan) {
+				t.Fatalf("ambiguous direction-todo assignment did not fail remedy closed: %v", err)
+			}
+			args, _ := json.Marshal(map[string]string{"todo_id": piece.ID, "reason": "Start it again."})
+			if _, err := e.s.runTool(ctx, "server", "m1", "task_retry", json.RawMessage(args)); !errors.Is(err, errTaskNotInPlan) {
+				t.Fatalf("ambiguous direction-todo assignment was retried: %v", err)
+			}
+			if w := e.do(http.MethodPost, "/api/v1/todos/"+piece.ID+"/retry", ""); w.Code != http.StatusConflict {
+				t.Fatalf("HTTP retry of an ambiguous assignment: %d %s", w.Code, w.Body.String())
+			}
+			if n := len(e.f.started()); n != 1 {
+				t.Fatalf("an ambiguous retry reached the node: %d starts", n)
 			}
 		})
 	}
