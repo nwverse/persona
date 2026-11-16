@@ -27,7 +27,7 @@ enum PersonaScreenMain {
             return preflight()
         case let .stream(socket, token):
             do {
-                try runStream(socketPath: socket, token: token)
+                try runStream(socketPath: socket, token: token, x264: args.x264)
                 return 0
             } catch {
                 warn("stream ended: \(error)")
@@ -62,7 +62,7 @@ enum PersonaScreenMain {
         #endif
     }
 
-    private static func runStream(socketPath: String, token: String) throws {
+    private static func runStream(socketPath: String, token: String, x264: String?) throws {
         let socket = try UnixSocketClient.connect(path: socketPath)
         defer { socket.close() }
         try socket.writeAll(Data((token + "\n").utf8))
@@ -75,7 +75,7 @@ enum PersonaScreenMain {
         defer { ProcessInfo.processInfo.endActivity(activity) }
 
         #if canImport(ScreenCaptureKit)
-        let source: ScreenSource = ScreenCaptureSource()
+        let source: ScreenSource = ScreenCaptureSource(x264: x264)
         #else
         let source: ScreenSource = UnavailableScreenSource(reason: "permission")
         #endif

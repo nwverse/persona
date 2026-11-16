@@ -385,15 +385,16 @@ func screenVideoReport(ctx context.Context, helper, stamp string) *proto.ScreenV
 	if v.Permission == "missing" {
 		v.Asked = screenAsks.asked(stamp)
 	}
+	_, v.X264 = screenX264.get(ctx) // the user's ffmpeg, tested once per file (#8859)
 	return v
 }
 
 // screenHelperWait bounds the helper's start: launched, connected and token said. A variable for tests.
 var screenHelperWait = 10 * time.Second
 
-// dialScreenHelper starts the helper on a private 0600 Unix socket and returns its connection once the helper has
-// connected and said the token. The socket file goes as soon as one connection is in.
-func dialScreenHelper(ctx context.Context, helper string) (net.Conn, error) {
+// dialScreenHelper starts the helper on a private 0600 Unix socket, with extra arguments after its own, and returns
+// its connection once the helper has connected and said the token. The socket file goes as soon as one connection is in.
+func dialScreenHelper(ctx context.Context, helper string, extra ...string) (net.Conn, error) {
 	dir, err := os.MkdirTemp("", "persona-screen-") // the user's own temporary directory, 0700
 	if err != nil {
 		return nil, err
@@ -413,7 +414,7 @@ func dialScreenHelper(ctx context.Context, helper string) (net.Conn, error) {
 		return nil, err
 	}
 	token := hex.EncodeToString(raw[:])
-	if err := screenLaunch(ctx, helper, "--socket", sock, "--token", token); err != nil {
+	if err := screenLaunch(ctx, helper, append([]string{"--socket", sock, "--token", token}, extra...)...); err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(screenHelperWait)
@@ -456,8 +457,9 @@ func readTokenLine(r io.Reader) (string, error) {
 }
 
 // startScreenHelper is screenStart on a Mac: the helper started for this stream and joined to it. The stream ends when
-// the helper does, when the phone or hub closes it, or when the paired screen-sharing stream closes.
-func (n *Node) startScreenHelper(ctx context.Context, id, pair string, keepAwake, link bool, done func()) (bool, error) {
+// the helper does, when the phone or hub closes it, or when the paired screen-sharing stream closes. With x264 (on for
+// this Mac, #8859) the helper gets `--x264 <ffmpeg>` when the user's ffmpeg passes the probe; it decides per route.
+func (n *Node) startScreenHelper(ctx context.Context, id, pair string, keepAwake, link, x264 bool, done func()) (bool, error) {
 	logf := func(string, ...any) {}
 	if n.logger != nil {
 		logf = n.logger.Printf
@@ -469,7 +471,15 @@ func (n *Node) startScreenHelper(ctx context.Context, id, pair string, keepAwake
 	if screenPermissions.get(ctx, helper) == "missing" {
 		return false, &rpc.Error{Code: "video_unavailable", Message: "Persona Screen has no Screen Recording permission on this Mac"}
 	}
-	conn, err := dialScreenHelper(ctx, helper)
+	var extra []string
+	if x264 {
+		if ffmpeg, _ := screenX264.get(ctx); ffmpeg != "" {
+			extra = []string{"--x264", ffmpeg}
+		} else {
+			logf("screen helper: x264 is on for this Mac, but no ffmpeg with libx264 passed the probe")
+		}
+	}
+	conn, err := dialScreenHelper(ctx, helper, extra...)
 	if err != nil {
 		logf("screen helper: %v", err)
 		return false, &rpc.Error{Code: "video_unavailable", Message: "Persona Screen did not start: " + err.Error()}
