@@ -739,6 +739,34 @@ iOS app.
   every notification (ongoing, needs you, finished, phone tools, lock-screen test) and tile uses it. When iOS changes its icon, these two PNGs must be re-exported (as in #1136: `magick icon.png -resize 432x432 -virtual-pixel edge -set option:distort:viewport 648x648-108-108 -distort SRT 0`).
 - Installing on a device: turn on USB debugging, connect the phone to the computer and run `./scripts/app/android.sh`, or send the APK to the phone and install it directly.
 
+## Build commit
+
+Settings › About shows the commit an APK was built from, below the version name and version code. The value is explicit build
+metadata; the app never guesses it.
+
+- **Resource**: `defaultConfig.resValue("string", "persona_build_commit", …)` in `android/app/build.gradle.kts` (with `buildFeatures.resValues`
+  on). It is not `BuildConfig` and not manifest metadata, and not localized text. `feature:settings` cannot reference the app's `R`, so
+  `AboutBuildCommit.kt` reads the merged resource by name (`getIdentifier` under the running package); a missing resource, an empty
+  value, `unknown` or anything that is not a commit counts as no metadata.
+- **Input**: the Gradle property `-PpersonaBuildCommit`, then the environment variable `PERSONA_BUILD_COMMIT`, then `unknown`. An empty value is
+  the same as not set. Any other value must be 7 to 64 hex digits (stored lowercase) or `unknown`; otherwise the build fails, so a branch
+  name, a path or a stray space never reaches the APK. Gradle does not run git and reads no private configuration for this.
+- **Who passes it**: `scripts/ci/android.sh` (`PERSONA_BUILD_COMMIT`, else the runner's public `GITHUB_SHA`, else `unknown`);
+  `scripts/release/android_release_worker.py` (the full sha of the checkout it builds, for main and version-tag builds alike);
+  `scripts/app/android.sh release` (this repository's `HEAD`, `unknown` when it cannot be read). Debug, test, lint and shots builds
+  pass nothing and show Unknown, unless the caller sets the property or variable. A working tree with uncommitted changes still shows
+  its `HEAD`; the local release does not add a dirty mark. CI passes it on its one Gradle invocation, which runs lint, tests and
+  `:app:assembleDebug` together, so it is not injected only where the APK is produced; doing that would take a second invocation per
+  lane. Whether the changing value costs build or configuration cache hits is not measured.
+- **About**: the row's title is Commit. With a commit it shows the first 12 characters in the code font on one line (no chevron);
+  tapping the row copies the whole commit through `rememberCopy()`, with a "Build commit copied" notice. Without one it shows the
+  localized Unknown and does nothing on tap. Strings: `strings_about.xml` in `values`, `values-zh`, `values-ja`.
+- **Checking an APK**: read `persona_build_commit` from the built APK's resources (`aapt2 dump resources <apk>`) and compare it with the
+  commit that was injected; an uninjected build must carry `unknown`. For a release APK `scripts/release/check_android_build_commit.py <apk> <sha>`
+  does this and exits 1 on a missing, different or unknown value (the release worker runs it).
+- **Guard test**: `scripts/ci/test_android_build_commit.py` holds only the commit's own statements to these rules (never `BuildConfig` or
+  the manifest, no git read in its block). Another change turning on `buildFeatures { buildConfig = true }` in the same file does not fail it.
+
 ## Cache size budgets
 
 `cacheBudgets = CacheBudgets(...)` in `HubDataStore` sets separate budgets, in bytes, for items, chat images and Inbox files. The defaults are 32 MiB, 128 MiB and 128 MiB respectively; these are an initial policy, **not measured**, and do not represent actual memory use or an assessment of device capacity.
@@ -1543,6 +1571,22 @@ Photo image blocks previously used `mimeType`; the hub only recognizes `mime_typ
 
 Mock hub: `GET /mock/tool_call?name=phone_device_info&args=<JSON>` calls a phone declaring that tool like the hub; `GET /mock/phone` shows registrations and responses. Unit tests passed. Verified 2026-11-02 on API 35 emulator: calendar permission prompt, confirmation dialog (three styles × light / dark), Deny returns `The user declined on the phone.`, Allow writes to local Persona calendar; background App's lock-screen confirmation Allow followed by unlock also writes (fixed, see Lessons); `phone_photos_recent` and `phone_photo_get` (image block `mime_type: image/jpeg`, `max_size` applied).
 
+**Calendar and contact write tools (2026-11-15).** `phone_calendar_update_event`, `phone_calendar_delete_event`, `phone_contacts_create` and `phone_contacts_update` join `phone_calendar_create_event` as confirmed writes, declared exactly like iOS (the fixture export no longer excludes them). Calendar writes need `READ_CALENDAR` + `WRITE_CALENDAR`, contact writes `READ_CONTACTS` + `WRITE_CONTACTS`; with only the read permission the read tools stay offered, the write tools are not registered and the settings row says "Read only".
+
+*Why a preparation hook.* An update or a delete shows before → after, so the card needs the current event or contact. `ToolDefinition.confirmation` is a synchronous pure function over `Resources` that the registry calls before it suspends in `confirm`; it must not query a provider, and `runBlocking` there would block the caller. Tools flagged `confirmationNeedsPreparation` instead go through `PhoneToolRegistry`'s `prepareConfirmation`, a suspend hook that `AndroidPhoneTools` runs on `Dispatchers.IO`. It reads the target, validates the arguments, plans the writes (a dry run, so unsupported changes fail before anyone is asked) and returns the card text together with the `execute` that owns the snapshot. Nothing is held while it runs, so reads and other writes proceed; a provider that never answers times out as a plain timeout because nothing was written. A failed preparation never shows a card.
+
+*Card order.* A card queues in the order its call arrived, not the order its preparation finished: the registry gives every confirmed call an arrival ticket on receipt and lets a call queue its card in `PhoneConfirmations` only once every earlier ticket has queued its card or given up. A preparation that times out answers a plain timeout (nothing was written) and releases the calls behind it. A later confirmed call waits for an earlier call's preparation to finish or be given up (cancelled, failed or timed out), not for the earlier card to be answered; the bound is the local 30 second timeout constant, a configured value and not a measurement, and a provider read that ignores cancellation could hold the queue longer (not tried on a device). Call-id de-duplication, cancellation, the outbox and *uncertain* are unchanged.
+
+*Stale snapshots.* After Allow the registry re-checks source, permission and connection, then `execute` re-reads the whole target (series, occurrence, existing exception, attendees, reminders, or the contact's name, company, phone and email rows) and compares it with the prepared snapshot field by field. Any difference is refused before the batch with "nothing was written", which is a definite result, not an uncertain one. Only a failure inside `applyBatch` (or the read-back after it) answers *uncertain*, and the same `call_id` replays it without re-running.
+
+*Repeating events.* `phone_calendar_events` adds `recurring=true` (RRULE or RDATE). A repeating event needs `occurrence_start` matching exactly one `Instances` row of that event (within a minute; nothing "nearest" is chosen); an already separate occurrence (an exception) is named by its own id. `span` is `this` (default) or `future`. `this` creates an exception through `Events.CONTENT_EXCEPTION_URI` (the provider copies the attendees and reminders onto it, so the batch is the exception alone, carrying its length as a DURATION and no calendar id) or cancels the occurrence with a cancelled exception; a series without a `_sync_id` (a calendar that never syncs) is refused for `this`, because the provider links an exception to its series through that id; `future` ends the old series just before the occurrence (COUNT becomes UNTIL, RDATE / EXDATE are divided, an all-day series ends on a date) (the update writes DTSTART together with the new rule, or the provider keeps the old expansion and duplicates days) and, for an update, creates the new series with the remaining COUNT, a DURATION and shifted RDATE / EXDATE in the same batch. A rule the code cannot split exactly (BYDAY on a non-weekly rule with COUNT, EXRULE, an extra date that is not on the rule, fixed-day patterns moved to another day, exceptions already inside the range for an update) is refused with a clear message; it never falls back to editing the whole series or only the first occurrence.
+
+*Contacts.* `replace` defaults to false: a different existing name, company or job title fails with a request for explicit replace; phones and emails are appended and deduplicated (digits / lower case). With `replace=true` scalars are overwritten and the passed lists replace the whole list (an empty list clears it); other data rows are never touched. Phone and email rows go to the raw contact that holds the name. There is no contact delete tool.
+
+*Recurrence details.* An all-day event moved by `start` alone keeps its number of calendar days. EXDATE / RDATE are read in the series' zone (UTC when all-day) in either the provider's `ZONE;dates` or the iCalendar `TZID=ZONE:dates` form and written back with the same prefix; a date-only UNTIL on a timed series includes that day. A clipped note on the card shows its total length.
+
+Fake-provider tests (`CalendarWriteToolsTest`, `ContactsWriteToolsTest`) prove the generated operations, their order and back references and the refusal paths; they do not prove that an OEM Calendar or Contacts provider accepts them. Real provider acceptance is checked by the instrumented `CalendarContactsProviderTest` (a throwaway local-account calendar and placeholder contacts, cleaned up afterwards; run on an emulator or a dedicated test phone with `./gradlew :platform:phonetools:connectedDebugAndroidTest` from `android/`, not by the unit test task, and run on an API 35 emulator only, 22 tests, one date-list form skipped; it also seeds a series in a zone other than the phone's with EXDATE / RDATE in several stored forms and reads back what the provider kept), whose first check is the Instances `RRULE` / `RDATE` projection of the existing event query, and is listed in `platform/phonetools/README.md`.
+
 ## Viewing and marking up images
 
 Chat images open full-screen; marked-up images become composer photos (port of old main-line App d2d484ef, 2026-11-02). Viewer/editor are design-system components (`ImageViewer.kt`, `ImageEditor.kt` in `core:designsystem`), reusable later by Inbox/files; chat assembly is in `feature:chat`'s `media/` (`ChatImageViewer`, `MediaShare`).
@@ -1996,6 +2040,7 @@ Links:
 
 - Preload first 3 links from Agent replies within 15 minutes among last 40 items, requires hostname dot, excludes native Lark links (documents preload separately, see Lark); pool max 4.
 - Renderer crash/kill drops only that page (Reload in card), third-party cookies on, memory pressure destroys off-screen pages, viewed pages prefer disk cache; ⋯ Share; selection actions added in `onPrepareActionMode`, before Copy.
+- Reopening: an ordinary link's view is destroyed on release and a fresh one preloads for its original URL, so a reopened link starts at its own URL with no page history (closing a card can request the original URL again; one-time links are an open edge, as on iOS); a forwarded port keeps `forget` / reload, never preloads and keeps hot reload. Cookies and the disk cache stay shared, only pages are not (`feature/chat/LINKS.md`, "Reopening a link").
 - Web outside chat (shell cards from Knowledge/non-Persona-home pages, Inbox web) offers only Hand to Persona for selected text: optional instruction, send main chat, switch Persona. Inbox uses shell-provided `LocalInboxWebSelection` in `feature/inbox`.
 - Chat `persona://session|tab|assistant|inbox` navigates locally (`LocalChatAppLinks` to shell); not `persona://pair` / `persona://open`. `mailto:` / `tel:` / other App links confirm before system handoff, `intent:` sanitized per legacy rules; unsafe schemes refused.
 - `<persona-context>` exactly matches iOS (body unescaped, only strips closing tag, one newline between contexts). Context-only body "参考上面的内容。" ("Refer to the content above."); AI edit without instruction "按上面选中的内容修改。" ("Edit according to the selected content above."); handoff without instruction "看看上面这段。" ("Look at the passage above.").

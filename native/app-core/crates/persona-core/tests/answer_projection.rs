@@ -41,6 +41,7 @@ fn question_and_recommended_cases_match_complete_expected_objects() {
             "recommended.json",
             [
                 "recommended_case_sensitive",
+                "recommended_corefoundation_boundary",
                 "recommended_chinese_ascii",
                 "recommended_chinese_fullwidth",
                 "recommended_suffix_only",

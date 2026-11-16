@@ -102,7 +102,7 @@ keyed! {
         kind = "kind": CacheSeen<Option<String>>,
         role = "role": CacheSeen<Option<String>>,
         tool_use_id = "tool_use_id": CacheSeen<Option<String>>,
-        fold = "fold": Raw<'a>,
+        fold = "fold": CacheSeen<CacheFold>,
         supervision_user = "supervision_user": CacheSeen<Option<bool>>,
     }
 }
@@ -111,9 +111,6 @@ keyed! {
 /// this adapter retains it and feeds the same `CacheHead`, including the same fold normalizer and defaults.
 pub(crate) struct CacheItemHead<'a> {
     pub(crate) head: CacheHead<'a>,
-    /// In positional form, fold is deserialized as a `FoldValue` (legacy behavior).
-    /// In object form, fold is read as `Raw` and parsed separately for consistent recursion depth.
-    pub(crate) positional_fold: Option<FoldValue>,
 }
 
 impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
@@ -132,10 +129,7 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
                 if matches!(head.id, CacheSeen::Missing) {
                     return Err(A::Error::missing_field("id"));
                 }
-                Ok(CacheItemHead {
-                    head,
-                    positional_fold: None,
-                })
+                Ok(CacheItemHead { head })
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
@@ -155,10 +149,9 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
                 position!(kind, Option<String>);
                 position!(role, Option<String>);
                 position!(tool_use_id, Option<String>);
-                // Positional form: read fold as FoldValue to preserve legacy error positions.
-                let positional_fold = seq.next_element::<FoldValue>()?;
+                position!(fold, CacheFold);
                 position!(supervision_user, Option<bool>);
-                Ok(CacheItemHead { head, positional_fold })
+                Ok(CacheItemHead { head })
             }
         }
 
@@ -166,10 +159,101 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
     }
 }
 
+/// The cache's historical optional fold. Value performs the initial parse, including serde's RawValue newtype and
+/// legacy recursion/error positions. Only the outer object is then normalized to the first value of each key.
+#[derive(Debug)]
+pub(crate) struct CacheFold(pub(crate) Option<serde_json::Value>);
+
+impl<'de> Deserialize<'de> for CacheFold {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct FoldVisitor;
+
+        impl<'de> Visitor<'de> for FoldVisitor {
+            type Value = CacheFold;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an optional cached fold")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(CacheFold(None))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(CacheFold(None))
+            }
+
+            fn visit_newtype_struct<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(self)
+            }
+
+            fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(self)
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut object = serde_json::Map::new();
+                while let Some(key) = map.next_key::<Key<'de>>()? {
+                    let key = key.0.into_owned();
+                    if object.contains_key(&key) {
+                        map.next_value::<IgnoredAny>()?;
+                    } else if key == "$serde_json::private::RawValue" && object.is_empty() {
+                        let raw = map.next_value::<String>()?;
+                        let value = serde_json::from_str::<Option<serde_json::Value>>(&raw).map_err(Error::custom)?;
+                        return match map.next_key::<Key<'de>>()? {
+                            Some(_) => Err(Error::custom("a raw cache fold has another key")),
+                            None => Ok(CacheFold(value)),
+                        };
+                    } else {
+                        object.insert(key, map.next_value()?);
+                    }
+                }
+                Ok(CacheFold(Some(serde_json::Value::Object(object))))
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(CacheFold(Some(value.into())))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(CacheFold(Some(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(CacheFold(Some(value.into())))
+            }
+
+            fn visit_f64<E: Error>(self, value: f64) -> Result<Self::Value, E> {
+                serde_json::Number::from_f64(value)
+                    .map(|number| CacheFold(Some(number.into())))
+                    .ok_or_else(|| E::custom("a fold number is not finite"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(CacheFold(Some(value.into())))
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element::<FoldValue>()? {
+                    match value {
+                        FoldValue::Absent => values.push(serde_json::Value::Null),
+                        FoldValue::Value(value) => values.push(value),
+                    }
+                }
+                Ok(CacheFold(Some(values.into())))
+            }
+        }
+
+        deserializer.deserialize_option(FoldVisitor)
+    }
+}
+
 /// A fold's normalized comparison value. Null means absence; other JSON values retain the cache's tolerant shape.
 /// Objects keep the first value of every key at the top level, matching the endpoints/supervision read by `ItemFold`.
 /// Nested objects use `serde_json::Value`'s default last-value-wins for duplicate keys (not recursive first-value-wins).
 /// serde_json still owns the bounded recursion and numeric/string validation of the selected tree.
+#[derive(Debug)]
 pub(crate) enum FoldValue {
     Absent,
     Value(serde_json::Value),
