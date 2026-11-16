@@ -89,6 +89,22 @@ test("Windows drive and UNC receipt paths preserve ownership without leaking pat
   assert.equal(classifyOwnedPath(String.raw`C:\receipts\owned`, String.raw`D:\receipts\owned`), "outside");
 });
 
+test("paths with spaces are redacted through structural boundaries without leaking suffixes", () => {
+  for (const { root, sibling, unknown, child } of [
+    { root: String.raw`C:\Users\Synthetic Owner\AppData\Local\Temp\owned`, sibling: String.raw`C:\Users\Synthetic Owner\AppData\Local\Temp\owned-sibling\private file`, unknown: String.raw`D:\Other Owner\private file`, child: String.raw`\child folder\file` },
+    { root: String.raw`\\sample-server\share\Synthetic Owner\owned`, sibling: String.raw`\\sample-server\share\Synthetic Owner\owned-sibling\private file`, unknown: String.raw`\\another-server\share\Other Owner\private file`, child: String.raw`\child folder\file` },
+    { root: "/tmp/Synthetic Owner/owned", sibling: "/tmp/Synthetic Owner/owned-sibling/private file", unknown: "/tmp/Other Owner/private file", child: "/child folder/file" },
+  ]) {
+    assert.equal(sanitize(`path=${root}; child=${root}${child}`, root), "path=<run>; child=<run>/child folder/file");
+    assert.equal(sanitize(`${sibling} ${unknown} ${root}`, root), "<path> <path> <run>");
+    assert.equal(sanitize(`first="${root}", second='${unknown}'\n${sibling}`, root), 'first="<run>", second=\'<path>\'\n<path>');
+    assert.deepEqual(sanitizeJSON({ root, child: root + child, sibling, unknown }, root), { root: "<run>", child: "<run>/child folder/file", sibling: "<path>", unknown: "<path>" });
+    assert.equal(classifyOwnedPath(root, sibling), "outside");
+    assert.equal(classifyOwnedPath(root, root + child), "descendant");
+    assert.throws(() => sanitizeJSON({ [root]: 1, [root + "/"]: 2 }, root), /merge or shadow/);
+  }
+});
+
 test("sanitization covers keys, collisions, punctuation and truncated credentials", async t => {
   const { root, succeed } = await temporary(t, "receipt.json");
   const file = join(root, "receipt.json");
