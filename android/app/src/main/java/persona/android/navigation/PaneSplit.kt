@@ -11,9 +11,8 @@ import persona.core.designsystem.Tokens
 internal object PaneSplits {
     /** The narrowest the list may be: still a readable list. */
     const val MinLeft = 280f
-    /** The ordinary page minimum; separating folds retain their existing two-pane fit rule. */
-    val MinRight = Tokens.Size.splitPageMin.value
-    const val HingeMinRight = 320f
+    /** The least room the detail keeps while dragging, as in the existing two-pane layout. */
+    const val MinRight = 320f
     /** Without a dragged split the list takes about this share of the width… */
     const val DefaultShare = 0.38f
     /** …held between these widths… */
@@ -46,10 +45,10 @@ internal data class PaneSplit(val left: Float, val fixed: Boolean, val snaps: Li
 
 internal fun maxLeft(width: Float): Float = (width - PaneSplits.MinRight).coerceAtLeast(PaneSplits.MinLeft)
 
-/** The list's width before the user drags: about [PaneSplits.DefaultShare], the detail at least [PaneSplits.MinRight] when it can be. */
+/** The default list width, leaving [Tokens.Size.splitPageMin] for the detail when it can be. */
 internal fun defaultLeft(width: Float): Float = (width * PaneSplits.DefaultShare)
     .coerceIn(PaneSplits.DefaultLeft, PaneSplits.DefaultMax)
-    .coerceAtMost(width - PaneSplits.MinRight)
+    .coerceAtMost(width - Tokens.Size.splitPageMin.value)
     .coerceIn(PaneSplits.MinLeft, maxLeft(width))
 
 /**
@@ -67,7 +66,7 @@ internal fun paneSplit(width: Float, hinges: List<PaneHinge>, share: Float?): Pa
 
 /** Folds with room for a pane on each side. */
 private fun fittingFolds(width: Float, hinges: List<PaneHinge>): List<PaneHinge> =
-    hinges.filter { it.left >= PaneSplits.MinLeft && width - it.right >= if (it.separating) PaneSplits.HingeMinRight else PaneSplits.MinRight }
+    hinges.filter { it.left >= PaneSplits.MinLeft && width - it.right >= PaneSplits.MinRight }
 
 /** The separating fold that fixes the split, the one nearest [usual] when there are two. */
 private fun separatingFold(width: Float, hinges: List<PaneHinge>, usual: Float): PaneHinge? =
@@ -85,7 +84,7 @@ internal enum class ColumnPlacement { Beside, Over }
  */
 internal fun columnPlacement(width: Float, hinges: List<PaneHinge>): ColumnPlacement =
     if (separatingFold(width, hinges, defaultLeft(width)) != null ||
-        width - maxOf(defaultLeft(width), PaneSplits.DefaultLeft) >= Tokens.Size.splitPageMin.value
+        width - PaneSplits.DefaultLeft >= Tokens.Size.splitPageMin.value
     ) ColumnPlacement.Beside else ColumnPlacement.Over
 
 /**

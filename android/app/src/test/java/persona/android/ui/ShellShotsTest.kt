@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
@@ -73,11 +72,9 @@ class ShellShotsTest {
         var sidebarOpened = false
         val app = ApplicationProvider.getApplicationContext<Application>()
         Shadows.shadowOf(app.packageManager).addActivityIfNotPresent(ComponentName(app, ComponentActivity::class.java))
-        rule.mainClock.autoAdvance = false
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
             scenario.onActivity { activity -> activity.setContent {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                  key(style, dark) {
                     val items = navigationItems(emptyMap())
                     Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
                         HomeNavigation(items, selected.name, { selected = AppTab.valueOf(it) }, leading = {
@@ -85,7 +82,6 @@ class ShellShotsTest {
                         })
                         UnavailablePage(unavailable, navigator)
                     }
-                  }
                 }
             } }
             for (s in AppStyle.entries) {
@@ -93,24 +89,22 @@ class ShellShotsTest {
                 for (d in listOf(false, true)) {
                     style = s; dark = d
                     Snapshot.sendApplyNotifications()
-                    repeat(12) { rule.mainClock.advanceTimeByFrame() }
                     rule.waitForIdle()
                     rule.onAllNodesWithText(assistant).assertCountEquals(1)
                     rule.onAllNodesWithText("Agents").assertCountEquals(1)
                     rule.onAllNodesWithText(inbox).assertCountEquals(0)
                     rule.onAllNodesWithText(settings).assertCountEquals(0)
-                    // Capture a fresh style before tap feedback changes the native rendering frame.
-                    val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
-                    if (!d) lightPixel = bitmap.getPixel(1, 1)
-                    else assertTrue("light and dark must differ", lightPixel != bitmap.getPixel(1, 1))
-                    File(out(), "shell-$language-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
-                        .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     rule.onNodeWithText("Agents").performClick()
                     assertEquals(AppTab.Agents, selected)
                     rule.onNodeWithText(assistant).performClick()
                     assertEquals(AppTab.Persona, selected)
                     rule.onNodeWithContentDescription(sidebar).performClick()
                     assertTrue(sidebarOpened)
+                    val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+                    if (!d) lightPixel = bitmap.getPixel(1, 1)
+                    else assertTrue("light and dark must differ", lightPixel != bitmap.getPixel(1, 1))
+                    File(out(), "shell-$language-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream()
+                        .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
                 }
             }
         }

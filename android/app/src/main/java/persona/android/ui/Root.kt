@@ -201,7 +201,7 @@ private fun PersonaRootContent(
                             // A reply's ```persona-view / ```persona-card drawn with the extensions' components (#1851).
                             persona.core.designsystem.LocalViewBlocks provides persona.feature.settings.PersonaViewBlocks.blocks,
                         ) {
-                            PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), shell)
+                            PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
                         }
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
@@ -213,7 +213,7 @@ private fun PersonaRootContent(
 }
 
 @Composable
-private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((Router) -> ResolvedRoute?)?>, shellServices: SettingsServices, shell: AppServices) {
+internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((Router) -> ResolvedRoute?)?>, shellServices: SettingsServices, shell: ShellHost) {
     // Extension page badges live on the sidebar's Settings entry, never on a third home tab.
     val extensionSlots = persona.feature.settings.rememberExtensionSlots(shellServices.extensions?.takeUnless { shellServices.demo }, session.connection.state)
     val services = remember(shellServices, extensionSlots, session.preferences) {
@@ -252,9 +252,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
     val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
-    // Transient overlays never overwrite the column's beside-the-page visibility choice.
-    val sidebarOverlayShown = rememberSaveable { mutableStateOf(false) }
-    val agentsOverlayShown = rememberSaveable { mutableStateOf(false) }
+    // A configuration change closes transient overlays; the beside-column choice above stays saved.
+    val sidebarOverlayShown = remember { mutableStateOf(false) }
+    val agentsOverlayShown = remember { mutableStateOf(false) }
     fun dismissSidebar() {
         sidebar.opened.value = false
         sidebarOverlayShown.value = false
@@ -494,6 +494,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         active = selected == AppTab.Persona && connection == ConnectionState.Online)
     // Links over the whole shell, persona:// links from conversations, "Hand to Persona" from pages (ShellLinks.kt).
     ShellLinkHost(session, navigator, shell.feedback) {
+      BoxWithConstraints(Modifier.fillMaxSize()) {
         val uriHandler = LocalUriHandler.current
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
         val style = PersonaTheme.style
@@ -551,13 +552,19 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val paneStore = remember { PaneSplitStore(context) }
         var paneAreaLeft by remember { mutableFloatStateOf(0f) }
         val paneDensity = LocalDensity.current.density
+        val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+        val sideLeft = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current)
+        val sideRight = sides.getRight(LocalDensity.current, LocalLayoutDirection.current)
+        // The same inset area measured by the pane box below, including in split-screen windows.
+        val paneWidth = maxWidth - with(LocalDensity.current) { (sideLeft + sideRight).toDp() }
         // The vertical folds across the panes' area, in dp from its left edge: snap points for the divider, or (when
         // the two sides are apart) where the split is fixed.
         val paneHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
             PaneHinge((hinge.bounds.left - paneAreaLeft) / paneDensity, (hinge.bounds.right - paneAreaLeft) / paneDensity, hinge.isSeparating)
         }
-        val columnsOver = regular && columnPlacement(windowWidth.value, paneHinges) == ColumnPlacement.Over
+        val columnsOver = regular && columnPlacement(paneWidth.value, paneHinges) == ColumnPlacement.Over
         val currentColumnsOver = rememberUpdatedState(columnsOver)
+        val currentPaneWidth = rememberUpdatedState(paneWidth)
         LaunchedEffect(columnsOver) {
             sidebarOverlayShown.value = false
             agentsOverlayShown.value = false
@@ -630,9 +637,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // opened over it, Inbox's list and detail among them, still have the whole width): the avatar hides and shows
         // it, as the open iPhone Duo's sidebar button does. Folded, it is the drawer again; the page stays as it was.
         val besideAssistant: @Composable (@Composable () -> Unit) -> Unit = { page ->
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val split = sidebarSplit(maxWidth.value, currentHinges.value)
-                val over = currentRegular.value && columnPlacement(maxWidth.value, currentHinges.value) == ColumnPlacement.Over
+            Box(Modifier.fillMaxSize()) {
+                val split = sidebarSplit(currentPaneWidth.value.value, currentHinges.value)
+                val over = currentColumnsOver.value
                 val shown = if (over) sidebarOverlayShown else sidebarColumnShown
                 JSidebarColumn(if (currentRegular.value) ({ currentSidebar.value("shared-sidebar-column") }) else null,
                     width = (if (over) PaneSplits.DefaultLeft else split.sidebar).dp, pageStart = split.page.dp,
@@ -708,7 +715,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 }
             }
             agentsEntries(agentsListNavigator, agents, machine, { machine = it },
-                terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))
+                terminalPanes = if (session.demo == null) shell.terminalPanes?.available ?: kotlinx.coroutines.flow.flowOf(false) else kotlinx.coroutines.flow.flowOf(false))
             spaceEntries(navigator, agents)
             machineSpacesEntries(navigator, agents)
             chatEntries(navigator) {
@@ -778,9 +785,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         BackHandler(selected != AppTab.Persona && stacks.getValue(selected).size <= 1) { navigator.selectTab(AppTab.Persona) }
         // Turned on its side, a phone's camera cutout or its three-button navigation bar sits on the left or right: the
         // shell keeps clear of them, while the background still runs under them (2026-11-02, the old app's shell did so).
-        val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
-        val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
-            sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
+        val sideRoom = sideLeft > 0 || sideRight > 0
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
@@ -801,8 +806,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
-                        val agentsOverlay = rememberAgentsOverlayStrategy(regular && tab == AppTab.Agents &&
-                            columnPlacement(maxWidth.value, paneHinges) == ColumnPlacement.Over &&
+                        val agentsOverlay = rememberAgentsOverlayStrategy(columnsOver && tab == AppTab.Agents &&
                             stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown)
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
@@ -883,6 +887,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
               }
           }
         }
+      }
     }
 }
 
@@ -946,7 +951,7 @@ internal fun navigationItems(badges: Map<AppTab, Int>): List<NavItem> = listOf(
 )
 
 @Composable
-private fun ShellSettings(services: SettingsServices, navigator: Navigator, shell: AppServices, page: String = "settings", onClose: (() -> Unit)? = null) {
+private fun ShellSettings(services: SettingsServices, navigator: Navigator, shell: ShellHost, page: String = "settings", onClose: (() -> Unit)? = null) {
     // Every settings page is its own destination, so a wide window shows it beside the list of settings.
     SettingsScreen(services, initialPage = page, onPhoneData = { navigator.navigate(PhoneToolsRoute) },
         onExitDemo = shell::exitDemo, onOpen = { navigator.navigate(SettingsPageRoute(it)) },

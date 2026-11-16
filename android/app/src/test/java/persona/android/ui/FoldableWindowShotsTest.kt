@@ -125,12 +125,17 @@ class FoldableWindowShotsTest {
     @Test fun landscapeInnerScreen() = windows("landscape")
     @Config(qualifiers = "en-w411dp-h797dp-mdpi")
     @Test fun foldedOuterScreen() = windows("folded")
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideWindow() = windows("wide")
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideWindowAtMaximumDivider() = windows("wide-max", dragMax = true)
 
-    private fun windows(window: String, large: Boolean = false) {
+    private fun windows(window: String, large: Boolean = false, dragMax: Boolean = false) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val app = ApplicationProvider.getApplicationContext<Application>()
         Shadows.shadowOf(app.packageManager).addActivityIfNotPresent(ComponentName(app, ComponentActivity::class.java))
         val prefs = preferences()
+        val dividerStore = if (dragMax) PaneSplitStore(app) else null
         val dependencies = object : AgentsDependencies {
             override fun sessions() = repositories
             override fun interactions() = this@FoldableWindowShotsTest.interactions
@@ -200,7 +205,7 @@ class FoldableWindowShotsTest {
                     val directive = calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(adaptive)
                     val stack = stacks.getValue(selected)
                     val listDetail = rememberShellListDetail(selected, directive, width, emptyList(), detailOf(stack) != null,
-                        store = null, collapsible = canCollapseList(stack))
+                        store = dividerStore, collapsible = canCollapseList(stack))
                     val overlay = rememberAgentsOverlayStrategy(over && selected == AppTab.Agents, agentsOverShown)
                     Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
                         JShellDrawer(drawerShown.value, onDismiss = { drawerShown.value = false }, drawer = sidebar) {
@@ -296,7 +301,21 @@ class FoldableWindowShotsTest {
                         assertTrue("the second picked detail can reopen its list", agentsOverShown.value)
                         rule.onNodeWithContentDescription("Close").performTouchInput { click(centerRight) }
                         frames()
-                    } else capture("$window-agents-detail", s, d)
+                    } else {
+                        if (dragMax) {
+                            val resize = app.getString(persona.core.designsystem.R.string.designsystem_pane_resize)
+                            repeat(3) {
+                                rule.onNodeWithContentDescription(resize).performTouchInput {
+                                    swipe(center, center + androidx.compose.ui.geometry.Offset(300f, 0f), 400)
+                                }
+                                repeat(100) { rule.mainClock.advanceTimeByFrame() }
+                            }
+                            frames()
+                            // The 400dp placement token must not shorten the old 1000 - 320dp drag limit.
+                            assertEquals(680f, dividerStore!!.share(AppTab.Agents)!! * 1000f, 0.01f)
+                        }
+                        capture("$window-agents-detail", s, d)
+                    }
                 }
             }
         }
