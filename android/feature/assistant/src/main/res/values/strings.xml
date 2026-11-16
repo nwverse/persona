@@ -88,6 +88,7 @@
     <string name="assistant_phone_tools_unavailable">Phone tools unavailable</string>
     <string name="assistant_phone_permissions_pending">Phone permissions pending</string>
     <string name="assistant_search_chats">Search chats</string>
+    <string name="assistant_hide_sidebar">Hide sidebar</string>
     <string name="assistant_search_partial">Still going through older chats; some may not show yet.</string>
     <!-- Full-window search on a regular window (#9171), as the open iPhone Duo -->
     <plurals name="assistant_full_search_chats">
