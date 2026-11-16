@@ -130,11 +130,13 @@ public struct ContinuityBindingReplay: Sendable {
     }
 
     private static func expectedInitial(_ initial: ContinuityJSON, _ requests: [ContinuityJSON]) throws -> ContinuityJSON {
-        guard !requests.isEmpty, let object = initial.object else { return initial }
+        guard let object = initial.object else { return initial }
         var expected = object
-        // OpenChat restores cached items, then a coverage gap starts a catch-up at the watermark. Those cached items
-        // stay visible while the gap clears; no first-patch item is silently dropped.
-        expected["covered"] = .number("0")
+        if !requests.isEmpty {
+            // OpenChat restores cached items, then a coverage gap starts a catch-up at the watermark. Cached items
+            // stay visible while the gap clears; no first-patch item is silently dropped.
+            expected["covered"] = .number("0")
+        }
         expected["item_ids"] = .array(initial["items"]?.array?.map { $0["id"] ?? .null } ?? [])
         expected["actions"] = .array(requests)
         return .object(expected)
