@@ -8,11 +8,6 @@ import PersonaInputKit
 
 @MainActor
 final class PhoneScreenSession {
-    /// Where windows were before they went on the display (PhoneScreenRestore), so a helper that died can put them back.
-    static var restoreFile: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".persona/phone-screen.json")
-    }
-
     private var display: PhoneDisplay?
     /// The other displays' modes and the windows' frames before the display came, to set back what macOS moves.
     private var modesBefore: [CGDirectDisplayID: ModeSnapshot] = [:]
@@ -23,7 +18,11 @@ final class PhoneScreenSession {
 
     init() {
         AX.configureTimeout()
-        restore = Self.load()
+    }
+
+    /// What a session that died left to put back, read off the main thread before the first request is taken.
+    func adopt(_ left: PhoneScreenRestore) {
+        for r in left.records { restore.add(r) }
     }
 
     func handle(_ r: PhoneScreenRequest) -> PhoneScreenReply {
@@ -192,13 +191,21 @@ final class PhoneScreenSession {
 
     // MARK: records
 
-    private static func load() -> PhoneScreenRestore {
-        guard let data = try? Data(contentsOf: restoreFile) else { return PhoneScreenRestore() }
+    private func save() -> Bool { RestoreFile.save(restore) }
+}
+
+/// Where windows were before they went on the display (PhoneScreenRestore), so a helper that died can put them back:
+/// `~/.persona/phone-screen.json`, gone while there is nothing to put back. A few hundred bytes, read once a session and
+/// written before each move (the move must not happen without it).
+nonisolated enum RestoreFile {
+    static var url: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".persona/phone-screen.json") }
+
+    static func load() -> PhoneScreenRestore {
+        guard let data = try? Data(contentsOf: url) else { return PhoneScreenRestore() }
         return (try? JSONDecoder().decode(PhoneScreenRestore.self, from: data)) ?? PhoneScreenRestore()
     }
 
-    private func save() -> Bool {
-        let url = Self.restoreFile
+    static func save(_ restore: PhoneScreenRestore) -> Bool {
         if restore.records.isEmpty {
             try? FileManager.default.removeItem(at: url)
             return true
@@ -241,7 +248,7 @@ enum PhoneScreenServer {
             source.resume()
             signals.append(source)
         }
-        Thread.detachNewThread {
+        let reader: @Sendable () -> Void = {
             var pending = [UInt8]()
             while true {
                 guard let chunk = try? socket.read(), !chunk.isEmpty else { break }
@@ -261,6 +268,14 @@ enum PhoneScreenServer {
                 }
             }
             finish()
+        }
+        // The records a session that died left, read off the main thread; requests are read only once they are adopted.
+        DispatchQueue.global().async {
+            let left = RestoreFile.load()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { session.adopt(left) }
+                Thread(block: reader).start()
+            }
         }
         RunLoop.main.run()
         exit(0)
