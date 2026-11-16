@@ -57,7 +57,8 @@ import persona.core.contracts.api.SUBSCRIPTIONS_UI
  * the hub's machine), its state, and the way to its page. Extensions are installed on the hub's machine only.
  */
 @Composable
-internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null) {
+internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null,
+    slots: LazyListScope.() -> Unit = {}) {
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
         return
@@ -92,6 +93,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     selected = detail == ExtensionMarketRoute, onClick = onMarket)
             }
         }
+        // Cards and nav pages, above the installed list, as iOS Settings › Extensions (docs/extensions/extensions.md "UI slots").
+        slots()
         if (list == null && state.loading) item("loading") { JLoading() }
         if (list != null && list.isEmpty()) item("empty") {
             JEmptyState(stringResource(R.string.settings_ext_empty_title), stringResource(R.string.settings_ext_empty_text), icon = PhIcons.PuzzlePiece)
