@@ -244,6 +244,9 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
+	// taken up (tests).
+	sendsSettleHook func()
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
 

@@ -556,8 +556,13 @@ Android don't decode video yet: they keep RFB and show no switcher.
   `--preflight` prints whether Screen Recording is granted without asking (`CGPreflightScreenCaptureAccess()`), which
   the node reports as `screen_video.permission`.
   - **Capture** (`ScreenCaptureSource`): the encoder settings gate ① measured (`RealTime`, low-latency rate control,
-    no frame reordering, `MaxFrameDelayCount` 0, capture queue depth 3, NV12 straight into the encoder; ≈5 ms p50 and
-    ≈10 ms p95 from a screen change to an encoded frame at 1080p60). The picture's long edge is at most `start.max_size`
+    no frame reordering, capture queue depth 3, NV12 straight into the encoder; ≈5 ms p50 and ≈10 ms p95 from a screen
+    change to an encoded frame at 1080p60, since ScreenCaptureKit hands a frame over about 4.5 ms before its display
+    time). The encode alone, as Connection Stats shows it, is about 7–8 ms on an M1-class media engine plus about 1 ms
+    for VideoToolbox to hand the frame back: the engine's floor at this quality. Low-latency rate control selects
+    VideoToolbox's real-time encoder, which refuses every speed setting (#8713). While a stream runs the helper holds a
+    latency-critical activity, with idle system sleep still allowed, so macOS doesn't nap it: a clamped helper reads
+    18–35 ms. The picture's long edge is at most `start.max_size`
     (never upscaled, even sides), the frame rate 1–60, and a keyframe comes at least every 10 s and whenever asked.
     A configuration change (an `update`'s frame rate or size) made before `startCapture` has completed waits and is
     applied from its completion (`CaptureConfigGate`, #7856): ScreenCaptureKit would keep the stream's first

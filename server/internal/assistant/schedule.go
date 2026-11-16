@@ -1341,6 +1341,7 @@ func (s *Service) Run(ctx context.Context) {
 	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
 		s.logf("recover interrupted task starts: %v", err)
 	}
+	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	cancel()
 	go s.taskCloseLoop(ctx)      // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)      // the tasks the main conversation follows up (supervise_signals.go)
