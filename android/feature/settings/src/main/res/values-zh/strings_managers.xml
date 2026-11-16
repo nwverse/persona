@@ -66,7 +66,7 @@
     <string name="settings_switcher_line">%1$s · %2$s</string>
     <string name="settings_switcher_switched">已切换到 %1$s</string>
     <string name="settings_switcher_manage">管理助手…</string>
-    <string name="settings_group_assistant">%1$s 的设置</string>
+    <string name="settings_group_assistant">%1$s的设置</string>
     <string name="settings_group_assistant_switch">切换</string>
     <string name="settings_group_assistant_footer">只显示「%1$s」自己的内容。要改别的助手，先切换过去。</string>
     <string name="settings_group_device">这台设备</string>

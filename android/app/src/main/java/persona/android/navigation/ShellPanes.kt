@@ -2,6 +2,7 @@ package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.*
+import persona.feature.inbox.ConnectorThreadRoute
 import persona.feature.inbox.InboxEventRoute
 import persona.feature.inbox.InboxItemDetailRoute
 import persona.feature.inbox.LarkMomentRoute
@@ -21,6 +22,13 @@ internal fun isDetailDestination(key: NavKey): Boolean = when (key) {
     ExtensionMarketRoute, is ExtensionCatalogRoute, ExtensionMarketsRoute, is LauncherRoute, is ChannelRoute, is ManagerRoute, is ConnectorRoute -> true
     // A space's page and a computer's projects open beside the Agents list too; a conversation opened from them goes on top.
     is SpaceRoute, is MachineSpacesRoute -> true
+    else -> false
+}
+
+/** The Inbox list and every detail that replaces it in the Assistant's single right-hand stack. */
+internal fun isInboxDestination(key: NavKey): Boolean = when (key) {
+    InboxRoute, is LarkRoute, is LarkMomentRoute, is MailRoute, is InboxItemRoute, is LarkChatRoute,
+    is InboxItemUiRoute, is InboxItemDetailRoute, is InboxEventRoute, is ConnectorThreadRoute -> true
     else -> false
 }
 

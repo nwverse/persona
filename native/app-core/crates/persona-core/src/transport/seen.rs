@@ -227,6 +227,15 @@ macro_rules! keyed {
             }
         }
     };
+    ($(#[$meta:meta])* pub_fields struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            $(#[$meta])* @with_pub_fields pub(crate), struct $name<$lt> {
+                $($(#[$note])* $field = $key: $slot,)+
+            }
+        }
+    };
     ($(#[$meta:meta])* struct $name:ident<$lt:lifetime> {
         $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
     }) => {
@@ -239,10 +248,35 @@ macro_rules! keyed {
     ($(#[$meta:meta])* @with_visibility $visibility:vis, struct $name:ident<$lt:lifetime> {
         $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
     }) => {
+        $crate::transport::seen::keyed! {
+            @impl $(#[$meta])* $visibility, struct $name<$lt> { $($(#[$note])* $field = $key: $slot,)+ }
+            @fields { $($(#[$note])* $field: $slot,)+ }
+        }
+    };
+    ($(#[$meta:meta])* @with_pub_fields $visibility:vis, struct $name:ident<$lt:lifetime> {
+        $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
+    }) => {
+        $crate::transport::seen::keyed! {
+            @impl $(#[$meta])* $visibility, struct $name<$lt> { $($(#[$note])* $field = $key: $slot,)+ }
+            @fields { $($(#[$note])* pub(crate) $field: $slot,)+ }
+        }
+    };
+    (@impl $(#[$meta:meta])* $visibility:vis, struct $name:ident<$lt:lifetime> { $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+ }
+     @fields { $($(#[$fmeta:meta])* $fvis:vis $ffield:ident: $fslot:ty,)+ }
+    ) => {
         $(#[$meta])*
         $visibility struct $name<$lt> {
-            $($(#[$note])* $field: $slot,)+
+            $($(#[$fmeta])* $fvis $ffield: $fslot,)+
             borrows: std::marker::PhantomData<&$lt ()>,
+        }
+
+        impl<$lt> Default for $name<$lt> {
+            fn default() -> Self {
+                Self {
+                    $($field: Default::default(),)+
+                    borrows: std::marker::PhantomData,
+                }
+            }
         }
 
         impl<$lt> $name<$lt> {

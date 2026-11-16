@@ -29,6 +29,10 @@ public enum PersonaCoreProjections {
         try project(inputJSON, using: persona_core_project_task_index)
     }
 
+    public static func viewedImages(inputJSON: String) throws -> String {
+        try project(inputJSON, using: persona_core_project_viewed_images)
+    }
+
     private static func project(
         _ input: String,
         using projection: (UnsafePointer<UInt8>?, Int) -> PersonaCoreBytes

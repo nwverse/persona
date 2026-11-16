@@ -383,8 +383,9 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	}
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
-	if m.contextTokens == 0 && prev.size > 0 && prev.size <= st.Size() {
-		m.contextTokens, m.contextWindow = prev.contextTokens, prev.contextWindow // no reply in the tail: the last read's stands
+	if m.contextTokens == 0 && !tm.ContextCompacted && prev.size > 0 && prev.size <= st.Size() {
+		// No reply in the tail: the last read's stands, unless the tail compacted it away (unknown until a reply, #9207).
+		m.contextTokens, m.contextWindow = prev.contextTokens, prev.contextWindow
 	}
 	return m
 }

@@ -517,7 +517,7 @@ Chat page:
   slim Back + "●" and the session's title fade in during latter half; dragging toward history restores it. Release never stays halfway: collapse at latest,
   otherwise snap nearest end (`.smooth`, 0.3 s). Following new content also collapses after user has touched list; tap slim bar / switch tabs expands.
   After 3 idle seconds (`ChatView.chromeIdleSeconds`: no list/header touch, info card closed, no sheet/menu), auto-collapse; header interaction (swiping Agents), expand and tab switch reset timer.
-  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed hides full layer while keeping measurement, VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
+  Invisible layer excluded from accessibility: expanded has no slim bar, collapsed swaps the full layer for a clear placeholder of its measured height (a `.hidden()` copy rebuilt the whole header at every fold and unfold, #9103), VoiceOver/tests find one Back and one ⋯ (`chat.more`; `ChatHeaderTests`, which also checks that both ⋯ list the same items).
   - Smooth because collapse lives in separate `@Observable` `ChatChrome`, redrawing only header per frame; floating above fixed-frame list (header-height margins only at oldest end),
     so messages never move a pixel. Former toggle animated system navigation plus two labels independently and changed list height, abrupt.
   - User tracking/interacting and immediately subsequent decelerating only (`onScrollPhaseChange`), not keyboard-driven offset changes.
