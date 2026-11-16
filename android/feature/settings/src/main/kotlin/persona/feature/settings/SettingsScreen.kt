@@ -200,10 +200,10 @@ private fun SettingsContent(
         catch (error: CancellationException) { throw error } catch (_: Exception) { extensionSummary }
     }
     // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): refresh when Settings or Settings › Extensions shows,
-    // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page.
+    // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page when a tap can open them.
     val slots = services.extensionSlots.takeUnless { services.demo }
     val slotsState = slots?.state?.collectAsState()?.value ?: ExtensionSlotsState()
-    val slotCards = if (page == "plugins") rememberExtensionCards(slots) { onNavigate?.invoke(it) } else emptyList()
+    val slotCards = if (page == "plugins" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
     LaunchedEffect(slots, page, connection) {
         if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }
@@ -489,9 +489,9 @@ private fun SettingsPageContent(
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
                 onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } },
                 slots = {
-                    if (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId) extensionSlotItems(slotsState, slotCards,
+                    if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
                         selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
-                        onOpen = { place -> onNavigate?.invoke(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
+                        onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
                 })
         "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
             ?: ChannelsPage(channelService, back,

@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.flowOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
@@ -109,6 +111,38 @@ class SettingsExtensionSlotsShotsTest {
 
     @Config(sdk = [35], qualifiers = "en-w840dp-h1400dp-xhdpi")
     @Test fun twoPaneEnglish() = twoPane("en", heading = "助手's settings", models = "Models")
+
+    /** Settings › Extensions draws slots only when a tap can open them (`onNavigate`), same as the old home. */
+    @Config(sdk = [35], qualifiers = "en-w400dp-h1400dp-xhdpi")
+    @Test fun slotsAreOmittedWhenOnNavigateIsNull() {
+        val api = object : ExtensionApiStub() {
+            override val slotsAvailable = flowOf(true)
+            override suspend fun listing() = ExtensionListing(listOf(
+                HubExtension("example-notes", "Example Notes", "connectors", "running", source = "installed", enabled = true),
+            ), canInstall = true)
+            override suspend fun extensions() = listing().extensions
+            override suspend fun uiPlaces(placement: String, launcher: String?, machine: String?) = slots.places
+            override suspend fun renderUi(extension: String, ui: String, context: persona.core.contracts.api.ExtensionUiContext?, state: String?) = cardView
+        }
+        val extensionSlots = ExtensionSlots(api)
+        val services = demoSettingsServices(res).copy(demo = false, managers = FakeManagers(), extensions = api, extensionSlots = extensionSlots)
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    LaunchedEffect(extensionSlots) { extensionSlots.run(flowOf(true)) }
+                    Box(Modifier.fillMaxSize()) { SettingsScreen(services, initialPage = "plugins") }
+                }
+            }
+        }
+        rule.waitUntil(5_000) {
+            extensionSlots.state.value.navPages.isNotEmpty() &&
+                rule.onAllNodesWithText("Example Notes").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.waitForIdle()
+        assertEquals(0, rule.onAllNodesWithText("GitHub").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Today").fetchSemanticsNodes().size)
+    }
 
     private fun compact(language: String, heading: String, models: String) {
         var style by mutableStateOf(AppStyle.Glass)
