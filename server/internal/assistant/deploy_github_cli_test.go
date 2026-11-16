@@ -153,7 +153,7 @@ func TestGitHubCLITimeoutAfterHeadersIsReportedAsTimeout(t *testing.T) {
 }
 
 // fakeCompareGH answers like GitHub's compare on a large main: the full payload (files and commits) takes longer than
-// the budget to arrive, while a request for a page past the end of the commits carries the status alone, at once.
+// the budget to arrive, while a request for a high page number carries the status alone, at once.
 func fakeCompareGH(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -161,7 +161,7 @@ func fakeCompareGH(t *testing.T) {
 	}
 	dir := t.TempDir()
 	script := `#!/bin/sh
-for path; do :; done
+for path; do :; done # gh's last argument is the API path
 printf 'HTTP/2.0 200 OK\nX-RateLimit-Limit: 5000\n\n'
 case "$path" in
 *'&page='*) printf '{"status":"ahead","ahead_by":159,"behind_by":0,"commits":[],"files":[]}\n' ;;
