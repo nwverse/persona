@@ -47,5 +47,7 @@ export interface CoreSortInput {
   pins: Record<string, Object>;
   mutes: Record<string, Object>;
   settings: Record<string, Object>;
+  /** Per-Hub preferences from #9027; the legacy maps belong to the default Hub. */
+  hub_preferences?: Record<string, Object>;
 }
 export type CoreProjectSort = (input: string) => string;

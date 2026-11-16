@@ -196,6 +196,8 @@ public final class Lint {
     var configNames: [[String]] = []        // per config: the targets that have it
 
     var typesByName: [String: [(file: Int, index: Int)]] = [:]
+    /// The cases of the enums of the sources, by the enum's name.
+    var enumCases: [String: Set<String>] = [:]
     var extensionsByName: [String: [(file: Int, index: Int)]] = [:]
     var functionsByName: [String: [(file: Int, frame: Int)]] = [:]
     var callsByName: [String: [(file: Int, index: Int)]] = [:]
@@ -250,6 +252,7 @@ public final class Lint {
         for (f, file) in files.enumerated() {
             for (i, type) in file.types.enumerated() {
                 typesByName[type.name, default: []].append((f, i))
+                if type.kind == .enum { enumCases[type.name, default: []].formUnion(type.cases) }
                 if type.attributes.contains("globalActor") { globalActors.insert(type.name) }
             }
             for (i, ext) in file.extensions.enumerated() {
@@ -711,7 +714,7 @@ public final class Lint {
                 let ownerType = ownerName(f, owner(f, frame))
                 let member = Member(file: f, ownerType: ownerType, local: nil, isStatic: property.isStatic || ownerType == nil,
                                     privateScope: property.modifiers.contains("private") || property.modifiers.contains("fileprivate"))
-                return reaches(receiver, file: node.file, frame: node.frame, member) != .no
+                return reaches(receiver, file: node.file, frame: node.frame, member.named(name)) != .no
             }
             return stored.isEmpty ? .stored : .memberwise(stored, "the property \(name)")
         case .argument(let callee, let receiver, let label, let trailingIndex, let argumentIndex):
@@ -824,9 +827,10 @@ public final class Lint {
         var unseen: [String] = []
         for (f, frame) in stored {
             guard case .property(let info) = files[f].frames[frame].kind else { continue }
-            let member = Member(file: f, ownerType: ownerName(f, owner(f, frame)), local: nil, isStatic: info.isStatic,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
+            let declared = Member(file: f, ownerType: ownerName(f, owner(f, frame)), local: nil, isStatic: info.isStatic,
+                                  privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
             for (at, name) in info.names.enumerated() {
+                let member = declared.named(name)
                 let arity = at < info.arities.count ? info.arities[at] : nil
                 for (file, index) in callsByName[name] ?? [] {
                     let call = files[file].calls[index]
@@ -1181,7 +1185,7 @@ public final class Lint {
                 let ownerType = ownerName(f, owner(f, declared))
                 let member = Member(file: f, ownerType: ownerType, local: localScope(f, declared), isStatic: function.isStatic || ownerType == nil,
                                     privateScope: function.modifiers.contains("private") || function.modifiers.contains("fileprivate"))
-                guard reaches(base, file: file, frame: frame, member) != .no else { continue }
+                guard reaches(base, file: file, frame: frame, member.named(name)) != .no else { continue }
                 guard let returns = function.returns else { return nil }
                 out.append(returns)
             }
@@ -1228,6 +1232,14 @@ public final class Lint {
         var isStatic: Bool
         /// `private` or `fileprivate`: used in its own file only.
         var privateScope: Bool
+        /// The name it is called or read by (nil: not checked against enum cases).
+        var name: String? = nil
+
+        func named(_ name: String) -> Member {
+            var copy = self
+            copy.name = name
+            return copy
+        }
     }
 
     /// Whether an expression with this receiver, written in `frame` of `file`, can name the member.
@@ -1262,6 +1274,9 @@ public final class Lint {
         case .type(let name):
             guard isStatic else { return .no }
             if related(name, ownerType) { return .yes }
+            // `Failure.read(errno)`: a case of an enum of the sources named so makes a value, it is not this member of
+            // another type, even where the name may also stand for any type (a generic parameter, an alias) (#8994).
+            if let called = member.name, enumCases[name]?.contains(called) == true { return .no }
             return isTypeVariable(name) ? .maybe : .no
         case .implicit, .metatype:
             return isStatic ? .maybe : .no
@@ -1342,7 +1357,8 @@ public final class Lint {
         switch frame.kind {
         case .function(let info) where info.kind == .function && !decl.asInitializerOfOwner:
             let member = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate") || local != nil)
+                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate") || local != nil,
+                                name: info.name)
             for (file, index) in callsByName[info.name] ?? [] {
                 let call = files[file].calls[index]
                 var reach = reaches(call.receiver, file: file, frame: call.frame, member)
@@ -1441,9 +1457,10 @@ public final class Lint {
                 }
             }
         case .property(let info):
-            let member = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
-                                privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
+            let declared = Member(file: decl.file, ownerType: ownerType, local: local, isStatic: info.isStatic || ownerType == nil,
+                                  privateScope: info.modifiers.contains("private") || info.modifiers.contains("fileprivate"))
             for name in info.names {
+                let member = declared.named(name)
                 for (file, index) in referencesByName[name] ?? [] {
                     let reference = files[file].references[index]
                     if reference.indirect != .no {

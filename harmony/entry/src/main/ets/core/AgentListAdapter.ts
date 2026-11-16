@@ -24,16 +24,25 @@ export function coreAgentSortInput(input: AgentListInput): CoreSortInput {
   if (!['all', 'needsYou', 'unread', 'working', 'backgroundWaiting'].includes(quick)) throw new Error('unsupported_quick_filter');
   const pinsSpaces: string[] = [], pinsSessions: string[] = [];
   const mutesSpaces: string[] = [], mutesSessions: string[] = [], mutesAllowed: string[] = [];
+  const hubPreferences: Record<string, Object> = {};
   input.rows.forEach((row) => {
-    const current = input.preferencesFor(row);
-    current.pinsSpaces.forEach((value) => { if (!pinsSpaces.includes(value)) pinsSpaces.push(value); });
-    current.pinsSessions.forEach((value) => { if (!pinsSessions.includes(value)) pinsSessions.push(value); });
-    current.mutesSpaces.forEach((value) => { if (!mutesSpaces.includes(value)) mutesSpaces.push(value); });
-    current.mutesSessions.forEach((value) => { if (!mutesSessions.includes(value)) mutesSessions.push(value); });
-    current.mutesAllowed.forEach((value) => { if (!mutesAllowed.includes(value)) mutesAllowed.push(value); });
+    const current = input.preferencesFor(row), group = Wire.text(row.raw, 'app_hub_group');
+    const preferences: Record<string, Object> = {
+      pins: {spaces: current.pinsSpaces.slice(), sessions: current.pinsSessions.slice()},
+      mutes: {spaces: current.mutesSpaces.slice(), sessions: current.mutesSessions.slice(), allowed: current.mutesAllowed.slice()}
+    };
+    if (group) hubPreferences[group] = preferences;
+    else {
+      current.pinsSpaces.forEach((value) => pinsSpaces.push(value));
+      current.pinsSessions.forEach((value) => pinsSessions.push(value));
+      current.mutesSpaces.forEach((value) => mutesSpaces.push(value));
+      current.mutesSessions.forEach((value) => mutesSessions.push(value));
+      current.mutesAllowed.forEach((value) => mutesAllowed.push(value));
+    }
   });
   return {sessions: input.rows.map((row) => row.raw), machines: input.machines,
     pins: {spaces: pinsSpaces, sessions: pinsSessions}, mutes: {spaces: mutesSpaces, sessions: mutesSessions, allowed: mutesAllowed},
+    hub_preferences: hubPreferences,
     settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: machineFilter, kept: input.kept}};
 }
 
