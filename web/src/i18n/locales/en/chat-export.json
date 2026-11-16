@@ -5,7 +5,7 @@
   "work_hint": "Tool calls with their results, thinking, and what the agent said between replies.",
   "reading": "Reading the conversation… {n} items",
   "ready": "{n} messages · {size}",
-  "partial_note": "Some earlier messages could not be read; the file starts at {from}.",
+  "partial_note": "Some messages could not be read. Earliest retained message: {from}.",
   "partial_unknown": "Some messages could not be read.",
   "changed": "The conversation changed while it was being read. Try again.",
   "retry": "Try Again",
@@ -25,5 +25,5 @@
   "error": "Error",
   "image": "Image",
   "cut": "{n} more characters not included",
-  "partial": "Starts at {from}: earlier messages were not read."
+  "partial": "Some messages could not be read. Earliest retained message: {from}."
 }
