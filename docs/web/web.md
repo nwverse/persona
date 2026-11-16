@@ -46,11 +46,11 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
-**Since #3387 there are two entries, Needs you and In progress, each thing in one only**
+**Needs you, In progress and Parked are peer entries, each thing in one only** (#9325)
 ([unified-entry.md](../assistant/unified-entry.md#needs-you-and-in-progress-each-thing-once-3387), `assistantEntries` in
 `web/src/lib/assistant-entries.ts`, checked against `spec/fixtures/entries`). Needs you holds what the Pending and To start
 entries held, plus the tasks Progress used to rank first and the hand-opened Agents that ask; In progress holds the other
-open tasks and the hand-opened working Agents, which replaces the Agents entry. Finished tasks fold nowhere: the board has
+active/open tasks and the hand-opened working Agents, which replaces the Agents entry. Parked holds explicit external waits and qualifying ready PR waits, including several PRs under one task; it is not nested in In progress. It appears while it has rows or its tray stays open. The To-dos status list and All board use the same wait classification; elapsed fallback dates stay in Parked until an actual state change. Tray holds use a neutral clock, while PR waits keep their links and blockers. Finished tasks fold nowhere: the board has
 them. A task waiting for its supervisor's review is in neither: **Persona reviewing** (#8678), an entry after In progress
 shown only while such a task waits, drawn neutral (grey `ink-3` dot, `ink-2` label) since nothing in it is the user's,
 lists it whatever the age of the review, with "Supervisor reviewing" on each row (`entries.review`;
@@ -61,8 +61,8 @@ Progress lists and counts the conversation's open tasks by **the To-dos page's r
 `web/src/lib/todo-triage.ts`, the same `countsAsOpen` as the page's "Not done"): working, waiting for the user, finished but
 unseen and stopped between rounds count; a task shelved (no activity for 48 h, nothing running, not restored on this
 browser) folds under one **Shelved N** line and is not counted; accepted (task_review accepted), deployed, done, cancelled
-and old failed starts fold under **Closed N**. The main conversation watches every task, so its Progress has a row for
-every to-do whatever its origin, and its count is the To-dos page's "Not done"; other conversations count only the tasks
+and old failed starts fold under **Closed N**. The main conversation watches every task, so its entries have a row for
+every to-do whatever its origin; counted task rows across Needs you, In progress, Parked and Persona reviewing sum to the To-dos page's "Not done". Other conversations count only the tasks
 they handed out. What needs the user sorts first (`todoRank`), each row leads with its status mark (`TaskMark`). A row
 stays visible whatever its bucket — a parked task past 48 h still reads its parked line, a shelved one unfolds from
 **Shelved N** — but the badge counts a to-do row only while `countsAsOpen` says the page counts it open; each task row
