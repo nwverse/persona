@@ -2190,9 +2190,10 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 A room meeting records in a meeting app's room: full screen and dark in both appearances (E1, as meeting apps are; the
 wrap-up after Stop takes the app's own look again). From the top: collapse (`Theme.Icon.minimizeRoom`; the meeting goes
 on, the Live Activity and the page's card lead back), the title over its time and state, the page menu; who is in it
-(`MeetingRoomPeople`: you with the microphone's level, Persona while it answers with how it answers and a green ring while
-it speaks, its menu removing it; Invite while it isn't in); then, for a meeting started with the live view, three pages that
-swipe and are named in a row of chips (`MeetingRoomTabs`): **Live** (the newest lines and the thread, as before),
+(`MeetingRoomPeople`: you, with a green ring while the room records and Persona is quiet; Persona while it answers, with how
+it answers and the green ring while it speaks; Invite while it isn't in, and the bar's Remove takes it out); then, for a
+meeting started with the live view, three pages that swipe and are named in a row of chips (`MeetingRoomTabs`): **Live**
+(the newest lines and the thread, as before),
 **Highlights** (the topics and the highlights card) and **Map** (`MeetingTopicMap`: the topics in order, the one on now
 in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
 row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
