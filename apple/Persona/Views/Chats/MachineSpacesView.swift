@@ -53,6 +53,7 @@ struct MachineSpacesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .navigationTitle(machine?.title ?? ref.id)
         .navigationBarTitleDisplayMode(.large)

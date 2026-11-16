@@ -61,7 +61,14 @@ final class DefaultLayoutTests: XCTestCase {
         XCTAssertTrue(element("sidebar-main", in: app).waitForExistence(timeout: 30))
         XCTAssertTrue(element("sidebar-inbox", in: app).exists)
         XCTAssertTrue(element("sidebar-settings", in: app).exists)
-        XCTAssertFalse(element("shell-assistant", in: app).exists)
+        // No top switch: the iPad's tabs are the system's; a phone's (the open Duo's) are the upright switch at the
+        // bottom-trailing corner instead (#4231, DuoTabSwitchTests).
+        let corner = element("shell-assistant", in: app)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertTrue(corner.exists && corner.frame.minY > app.frame.midY, "no upright switch low in the window")
+        } else {
+            XCTAssertFalse(corner.exists)
+        }
         XCTAssertFalse(app.tabBars.buttons["收件箱"].exists)
         XCTAssertFalse(app.tabBars.buttons["设置"].exists)
         element("sidebar-settings", in: app).tap()

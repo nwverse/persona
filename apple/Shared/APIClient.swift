@@ -692,6 +692,11 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var text: String }
         _ = try await request("POST", "/api/v1/machines/\(machine)/computer/clipboard", body: Body(text: text))
     }
+    /// Phone Screen (#9314, docs/protocol/protocol.md): start / windows / place / stop for the live screen whose RFB
+    /// stream carries `pair`. A refusal keeps the node's code (`APIError.code`: busy, permission, not_signed_in…).
+    func phoneScreen(machine: String, _ body: PhoneScreenRequest) async throws -> PhoneScreenReply {
+        try JSON.decoder.decode(PhoneScreenReply.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/phone-screen", body: body))
+    }
     /// The apps always allowed for the assistant on this Mac (#1507), and taking one back (asked again next time).
     func computerApps(machine: String) async throws -> [ComputerApp] {
         struct Out: Decodable { var apps: [ComputerApp] }
@@ -877,7 +882,9 @@ nonisolated struct APIClient: Sendable {
         var query = ["range": range.rawValue]
         if let model { query["model"] = model }
         if let launcher { query["launcher"] = launcher.isEmpty ? "-" : launcher }
-        return try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        var usage = try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        usage.receivedAt = Date() // the step under way has run until now (#9205)
+        return usage
     }
     func sessions() async throws -> [Session] {
         let data = try await request("GET", "/api/v1/sessions")

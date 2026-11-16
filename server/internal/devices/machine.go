@@ -289,6 +289,7 @@ func (m *Machine) snapshot() proto.Machine {
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
 		Clipboard:    m.clipboardStateLocked(clipboardOn),
 		FileTransfer: m.fileTransferState(fileTransferOn),
+		ClaudePlugin: m.info.ClaudePlugin,
 	}
 }
 
@@ -873,6 +874,15 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
+		var st proto.ClaudePlugin
+		if json.Unmarshal(params, &st) == nil && st.State != "" {
+			m.mu.Lock()
+			m.info.ClaudePlugin = &st
+			m.mu.Unlock()
+			m.d.changed()
+		}
+		return
 	case "metrics": // the monitoring is the manager's (metrics.go)
 		if !m.stopped() { // a late one from a machine let go would bring it back (forgetMachine)
 			m.d.onMetrics(m.cfg.ID, params)
@@ -936,6 +946,12 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
+		return m.d.usageBackfillStatus(ctx, m.cfg.ID, time.Now())
+	case "usage.backfill":
+		sctx, cancel := m.storeCtx()
+		defer cancel()
+		return m.d.putUsageBackfill(sctx, m.cfg.ID, params, time.Now())
 	}
 	if method == "notify" {
 		if id := spoolID(params); id != "" { // replayed by a resident node (spooldedupe.go)

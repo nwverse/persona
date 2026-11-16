@@ -116,7 +116,15 @@ fun ChatTopBar(
             }
         }
     }
-    val back: @Composable () -> Unit = { onBack?.let { JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), it) } }
+    val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)
+    val back: @Composable () -> Unit = {
+        when (leading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick)
+            is DetailLeading.Back -> JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), leading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> Unit
+        }
+    }
     when (style) {
         AppStyle.Glass -> Box(modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 60.dp.row).floatingSurface(RoundedCornerShape(30.dp.corner)).padding(horizontal = 6.dp.dense), verticalAlignment = Alignment.CenterVertically) {
@@ -582,7 +590,7 @@ fun ComposerTextField(
 ) {
     val palette = PersonaTheme.palette
     BasicTextField(
-        value, onValueChange, modifier.fillMaxWidth(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
+        value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
         textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
         decorationBox = { inner ->
             Box {

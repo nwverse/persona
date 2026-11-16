@@ -156,9 +156,10 @@ async function replayOperation(replay, operation) {
     const fold = replay.list.map((json) => JSON.parse(json)).find((item) => item.id === foldId);
     assert.ok(fold, name + ': fold exists before it opens');
     await replay.dispatch({kind: 'chat', chat, event: {kind: 'open_fold', fold_id: foldId}});
-    assert.deepEqual(await settle(replay), [{kind: 'fetch_range', from_seq: fold.seq, through_seq: fold.fold.through_seq}],
-      name + ': the runtime requests the original fold range');
-    await replay.dispatch({kind: 'chat', chat, event: {kind: 'range', fold_id: null,
+    assert.deepEqual(await settle(replay), [{kind: 'fetch_range', fold_id: foldId,
+      from_seq: fold.seq, through_seq: fold.fold.through_seq}],
+    name + ': the runtime requests the original fold identity and range');
+    await replay.dispatch({kind: 'chat', chat, event: {kind: 'range', fold_id: foldId,
       items_json: JSON.stringify(items), more: false}});
     assert.deepEqual(await settle(replay), [], name + ': supplied range needs no more fetches');
   } else if (name === 'burst_replace') {
@@ -208,8 +209,8 @@ test('ArkTS host replays all 57 static cases and the complete iOS-overlay turns 
       turnCount += actual.length;
     }
     assert.deepEqual(empty.sort(), emptyOnlyCases, 'exactly three empty-array cases');
-    assert.equal(turnCount, 62, '54 nonempty cases hold 62 complete turn objects');
-    console.log('  turns ArkTS host replay: 57 cases; 54 with 62 complete turn objects; 3 empty arrays');
+    assert.equal(turnCount, 73, '54 nonempty cases hold 73 complete turn objects');
+    console.log('  turns ArkTS host replay: 57 cases; 54 with 73 complete turn objects; 3 empty arrays');
   });
 });
 
@@ -218,6 +219,7 @@ test('ArkTS codec dispatch/drain replays all 10 existing operation checkpoints',
     const config = await host.coreConfig();
     let checkpoints = 0;
     let turnCount = 0;
+    let folds = 0;
     const observed = new Set();
     for (const c of operationCases) {
       assert.equal(c.input.operations.length, c.expected.checkpoints.length, c.name + ': one expectation per operation');
@@ -230,6 +232,7 @@ test('ArkTS codec dispatch/drain replays all 10 existing operation checkpoints',
       for (const [index, operation] of c.input.operations.entries()) {
         observed.add(operation.op);
         await replayOperation(replay, operation);
+        if (operation.op === 'unfold') folds++;
         const state = c.expected.checkpoints[index];
         const label = c.name + ' checkpoint ' + index;
         assert.deepEqual(itemIds(replay.list), state.item_ids, label + ': complete item IDs');
@@ -243,6 +246,7 @@ test('ArkTS codec dispatch/drain replays all 10 existing operation checkpoints',
       assert.deepEqual(host.takeCallbacks(handle), [], c.name + ': no callback after close');
     }
     assert.deepEqual([...observed].sort(), ['burst_replace', 'merge', 'unfold']);
+    assert.equal(folds, 1, 'the existing fold operation checks its fold ID');
     assert.equal(checkpoints, 10, 'five fold operations, three incremental merges and two one-step cases');
     assert.equal(turnCount, 13, 'one turn per checkpoint except incremental checkpoints two and three');
     console.log('  turns ArkTS operation replay: 4 cases; 10 checkpoints; 13 complete turn objects');

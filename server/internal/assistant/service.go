@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
 )
 
@@ -49,10 +50,15 @@ type Options struct {
 	// RepositoryConfig is this manager's operator configuration file. Only its
 	// explicit repository_trusted_targets can opt private destinations in.
 	RepositoryConfig string
+	// RemoteImageCache is where the remote image route keeps the pictures it fetched (remote_image.go; a cache the
+	// directory of which may be deleted at any time); "" keeps them in no file (tests).
+	RemoteImageCache string
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
+	remoteImages *remoteimage.Fetcher
 	// inboxExt is what the extensions wrote for the Inbox, read at most once a minute (extension_context.go).
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
@@ -265,6 +271,8 @@ type Service struct {
 	hubTr     hubRuns
 	sockets   sync.Once
 	socketMux *http.ServeMux
+	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
+	navMu sync.Mutex
 }
 
 var _ Handler = (*Service)(nil)
@@ -274,6 +282,7 @@ func New(o Options) *Service {
 	s := &Service{hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1)}
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
+	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf})
 	if s.store == nil {
 		s.store = func() Store { return nil }
 	}
@@ -321,6 +330,7 @@ func New(o Options) *Service {
 	s.todoRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
+	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
 	s.companionRoutes()
 	s.kbInit(o.KB)
@@ -337,6 +347,7 @@ func New(o Options) *Service {
 	s.providerCatalogRoutes()
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
+	s.remoteImageRoutes()
 	return s
 }
 
@@ -458,6 +469,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
+		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
+		// on its launcher's window (and never adopts the spare).
+		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
+			putMainCompactWindow(s.settings(ctx), p)
 		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
@@ -695,9 +714,6 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	picks, ok := s.modelPicksSet()
 	snap.Partial = snap.Partial || !ok
 	for id, p := range picks {
-		if id != cfg.Main { // only the main conversation has a per-conversation pick (#6911); older side picks stay in the book, unpublished
-			continue
-		}
 		view(id, p.MachineID).ModelPick = p.wire()
 	}
 	directions, ok := s.directionViews(ctx)
@@ -745,6 +761,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.agentDecisionSpoke(ctx, r, time.Now())
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

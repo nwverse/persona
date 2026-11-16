@@ -50,8 +50,9 @@ The View semantics both extensions and the assistant check (charts, tables, fiel
 Stage 1 of #5956 defined the contracts for **server-only TSX execution, native client rendering and WebSocket
 deltas**. Later stages add the immutable keyed-tree core, process page bridge and manager-owned lifecycle below.
 Runtime activation still requires independent sandbox, resource-isolation and egress verification. Existing
-process extensions and HTTP render/action/invalidation behavior remain compatible. The hub still advertises UI
-version 6; generated client models and transport forwarding do not alone enable client or source-runtime support.
+process extensions and HTTP render/action/invalidation behavior remain compatible. The hub's UI version (9 since
+#9337) does not turn the stream on; generated client models and transport forwarding do not alone enable client or
+source-runtime support.
 
 ### Negotiation and messages
 
@@ -284,7 +285,8 @@ The generator understands only what is below; anything else stops it with an err
   A field that is an object with `properties` must be a definition of its own, referenced.
 - Optional fields are those not in `required`. Go adds `omitempty` (`omitzero` for a time) and makes an object a
   pointer; a scalar whose absence means something other than its zero value gets `"x-go-pointer": true` (a
-  progress's `ratio`, `kb.update`'s `relevance` and `pinned`).
+  progress's `ratio`, `kb.update`'s `relevance` and `pinned`). A required number Go would otherwise read back as 0 when
+  it is missing gets it too, so the hub's check still refuses it (a gauge's `ratio`).
 - A component has `"x-since": <UI version>`: it generates tables like `ComponentSince`, by which the hub takes new
   components out for older apps (`Fit`).
 - In one union, same-named fields of several variants become one field of Go's flat struct, so their types must be
@@ -374,6 +376,13 @@ UI version 6 (#5464) was added the same way: the `image` / `grid` / `carousel` c
 `ChartPoint`) rather than in `Component`'s flat struct; `Thumbnail.url` is optional now (exactly one of it and `ref`),
 which Swift reads as `String?`. Its examples are `examples/View.v6-*.json`; the showcase's version 6 pages come from
 the extensions repository (#5477), and until then `SHOWCASE_UI` in `test_extension_schema.py` stays at 5.
+UI version 8 (#9158) adds no component, only fields: `View.layout: "columns"` and a section's `span`, `icon`,
+`icon_color`, `link` (`SectionLink`) and `columns`, each `x-since: 8`. The hub's `downgrade8`
+(`server/internal/extension/ui_v8.go`) takes them out for an older app; `UIStreamSection` lists them too, so a native
+stream's source may draw them. Its examples are `examples/View.v8-*.json`.
+UI version 9 (#9337) adds one field: a tile's `gauge` (`Gauge`: `ratio`, `unit`, `color`), `x-since: 9`, a ring with the tile's
+value in its centre. The hub's `downgrade9` (`server/internal/extension/ui_v9.go`) leaves it out for an older app and puts the unit,
+the percentage and the color on the tile instead. Its examples are `examples/View.v9-*.json`.
 
 ## Adding a call
 

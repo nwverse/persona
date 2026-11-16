@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -29,12 +30,13 @@ import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JAction
 import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JDialog
+import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.swipeToReply
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.onLongPress
-import persona.core.designsystem.onSecondaryClick
+import persona.core.designsystem.onSecondaryClickAt
 import persona.core.designsystem.rememberCopy
 import persona.core.designsystem.stableAlpha
 
@@ -52,6 +54,10 @@ internal data class MessageTarget(val id: String, val text: String, val user: Bo
 @Stable
 internal class MessageMenuState {
     var target by mutableStateOf<MessageTarget?>(null)
+        private set
+
+    /** The secondary press in window coordinates; touch and accessibility openings leave it null. */
+    var pointerAnchor by mutableStateOf<Offset?>(null)
         private set
 
     /** What a swipe to the left quotes with (iOS #1058); null where messages cannot be quoted (read-only). */
@@ -72,15 +78,23 @@ internal class MessageMenuState {
 
     fun open(target: MessageTarget) {
         this.target = target
+        pointerAnchor = null
+    }
+
+    fun openAt(target: MessageTarget, anchor: Offset) {
+        this.target = target
+        pointerAnchor = anchor
     }
 
     fun close() {
         target = null
+        pointerAnchor = null
     }
 
     /** "Select": the menu goes and the message's words are selected where they are. */
     fun select(target: MessageTarget) {
         this.target = null
+        pointerAnchor = null
         selecting = target
     }
 
@@ -101,16 +115,23 @@ internal fun Modifier.messageMenu(target: MessageTarget?): Modifier {
     val menu = LocalChatRowActions.current?.menu
     if (menu == null || target == null || target.text.isBlank() || rememberSelecting(menu, target.id)) return this
     val haptics = LocalHapticFeedback.current
+    val largeWindow = LocalLargeWindowInput.current
     val open = remember(menu, target) {
         {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             menu.open(target)
         }
     }
+    val openSecondary = remember(menu, target, largeWindow) {
+        { anchor: Offset ->
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (largeWindow) menu.openAt(target, anchor) else menu.open(target)
+        }
+    }
     val quote = menu.quote
     val label = stringResource(R.string.chat_menu_quote)
     return this.stableAlpha(if (menu.target?.id == target.id) 0.6f else 1f)
-        .onSecondaryClick(open)
+        .onSecondaryClickAt(openSecondary)
         .onLongPress(open, stringResource(R.string.chat_chrome_more), open)
         // Drag it left to quote it (iOS #1058); accessibility services get "Quote" as an action of the message.
         .then(if (quote != null && target.pending == null) Modifier.swipeToReply(label) { menu.close(); quote(target) } else Modifier)
@@ -125,8 +146,9 @@ internal fun Modifier.messageMenu(target: MessageTarget?): Modifier {
 internal data class RewindMenu(val block: String?, val code: Boolean = true, val run: (MessageTarget, RewindRestore) -> Unit)
 
 /**
- * The long-press menu as an action sheet (docs/android/android-design.md 2.3 rule 7): "Copy", "Select" (the message's words
- * selected where it is, [SelectableWords]), "Quote", "Share", "Hand to Persona", "Use as context", and "Edit" on your own messages. [writes] false (a read-only
+ * The message actions: a long-press action sheet, or a pointer menu at the secondary press in a large window. "Copy",
+ * "Select" (the message's words selected where it is, [SelectableWords]), "Quote", "Share", "Hand to Persona", "Use as context",
+ * and "Edit" on your own messages. [writes] false (a read-only
  * conversation) leaves out what would change the composer: "Quote", "Use as context", "Edit". A message not sent yet has "Copy",
  * "Select", "Share" and, with [onDelete], "Delete" ("Cancel send" while it waits) last (#4645, as iOS and the web in #4626).
  */
@@ -157,7 +179,7 @@ internal fun MessageMenuSheet(
     val resources = LocalResources.current
     val extras = MessageExtras(fork = onFork != null, rewind = rewind != null, rewindBlock = rewind?.block, delete = onDelete != null,
         dontSend = PersonaTheme.style == AppStyle.Glass)
-    if (target != null) JActionSheet(messageMenuActions(target, writes, onHandToPersona != null, resources, extras) { action ->
+    if (target != null) MessageMenuOverlay(menu.pointerAnchor, messageMenuActions(target, writes, onHandToPersona != null, resources, extras) { action ->
         when (action) {
             MessageAction.Copy -> { copy(target.text, null) }
             MessageAction.Select -> menu.select(target)

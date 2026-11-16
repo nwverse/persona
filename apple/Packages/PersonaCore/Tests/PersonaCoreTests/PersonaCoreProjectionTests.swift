@@ -5,14 +5,14 @@ import PersonaCoreTestSupport
 final class PersonaCoreProjectionTests: XCTestCase {
     func testEveryAgentsListFixtureThroughTheRealCBinding() throws {
         let count = try ProjectionBindingReplay.sort()
-        XCTAssertEqual(count, 30)
+        XCTAssertEqual(count, 33)
         print("PersonaCore Swift/C sort: \(count) agents_list cases, complete expected equality")
     }
 
     func testEveryAnswerFixtureThroughTheRealCBinding() throws {
         let counts = try ProjectionBindingReplay.answers()
         XCTAssertEqual(counts.questions, 15)
-        XCTAssertEqual(counts.recommendations, 8)
+        XCTAssertEqual(counts.recommendations, 9)
         print("PersonaCore Swift/C answer: \(counts.questions) question + \(counts.recommendations) recommendation cases")
     }
 
@@ -25,7 +25,7 @@ final class PersonaCoreProjectionTests: XCTestCase {
     func testEveryStaticTurnFixtureThroughTheRealCBindingAndIOSOverlay() throws {
         let result = try ProjectionBindingReplay.turns()
         XCTAssertEqual(result.cases, 57)
-        XCTAssertEqual(result.turnObjects, 62)
+        XCTAssertEqual(result.turnObjects, 73)
         print("PersonaCore Swift/C turns: \(result.cases) static cases, \(result.turnObjects) complete turn objects")
     }
 
@@ -33,6 +33,13 @@ final class PersonaCoreProjectionTests: XCTestCase {
         let count = try ProjectionBindingReplay.taskIndex()
         XCTAssertEqual(count, 5)
         print("PersonaCore Swift/C task_index: \(count) complete objects plus the background receipt")
+    }
+
+    func testEveryViewedImageProjectionThroughTheRealCBinding() throws {
+        let result = try ProjectionBindingReplay.viewedImages()
+        XCTAssertEqual(result.completeObjects, 28)
+        XCTAssertEqual(result.noLineBoundaries, 8)
+        print("PersonaCore Swift/C viewed_images: \(result.completeObjects) complete objects, \(result.noLineBoundaries) no-line boundaries")
     }
 
     func testJSONComparisonKeepsLargeIntegersAndScalarFailuresExact() throws {
@@ -69,6 +76,7 @@ final class PersonaCoreProjectionTests: XCTestCase {
             PersonaCoreProjections.streamChunks,
             PersonaCoreProjections.turns,
             PersonaCoreProjections.taskIndex,
+            PersonaCoreProjections.viewedImages,
         ] {
             XCTAssertThrowsError(try projection("")) { error in
                 XCTAssertEqual(error as? PersonaCoreProjectionError, .emptyResult)
