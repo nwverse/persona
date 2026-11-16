@@ -278,7 +278,7 @@ What never crosses the boundary:
 | 1 | Workspace, toolchain, runtime thread, codec generator, the three bindings, CI lane, and `continuity` (decision 3) end to end on all three clients | Every client replays the continuity fixtures through its binding; the go / no-go table is filled in |
 | 2 | The chat's item list driven by `continuity` patches, raw transport bytes decoded in Rust, then `sync`; iOS's native adapter and shadow run come first | Patches drive the real chat list on each client within the performance budgets, with the same iOS behavior and measured reference on each |
 | 3 | The domains with the most drift, one issue each: `needs-you` / `attention` / `entries` once #5974 settles the definition, `lines` and `answer` (turn folding, the answer across wakes), `sort` / `recents`, `wire` (tolerant decoding, D5), streaming assembly (#4044) | Each domain: shadow run, then old code deleted |
-| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4) | Cold launch draws from the snapshot before any sync |
+| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4). Design: `docs/plans/plan-rust-core-phase4-storage.md` (#9085) | Cold launch draws from the snapshot before any sync |
 
 Every phase after 0 opens its own issue under #6793. Markdown parsing is not on the list: iOS renders markdown text with
 MarkdownUI, and moving a syntax tree across FFI for every streamed chunk is a cost to measure before proposing it.
@@ -360,7 +360,7 @@ Phase 1 (#6871) lands in several PRs.
     All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
     `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
     reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
-    x86_64 emulator A/B data was not collected on this run (no KVM on the devbox; the owned software-emulator boot
+    x86_64 emulator A/B data was not collected on this run (no KVM on the build machine; the owned software-emulator boot
     stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
@@ -445,6 +445,18 @@ Phase 2 lands in several PRs.
   - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
 Phase 3 lands in several PRs.
+
+- **Production shared-envelope scalar checks (#8995).**
+  - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
+    raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
+    event types remain `Frame::Other`, and accepted items keep their original JSON and exact `bad_item` locations.
+  - The unchanged #8955 source-derived fixture drives the production replay. Full Item, Machine, Session, interaction
+    and Fleet nested models, number-spelling / encoding migration and non-items event routing are outside this slice.
+  - The 17 accepted wire cases and the continuity corpus's 38 cases / 94 steps pass unchanged. Real host Kotlin/JNI,
+    ArkTS and an independently compiled C11 client replay shared-scalar refusals and Other routing through the real
+    production decoder / runtime. This is host evidence only, not Swift, device or production-client migration proof.
+  - Android's current #7448 adapter maps its existing inputs to `Action.Chat`; it does not dispatch raw `WirePayload`
+    frames in production, so this decoder change does not alter its default inputs or the debug shadow's comparison.
 
 - **Source-derived WebSocket envelope tolerance (#8955).**
   - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
@@ -656,13 +668,14 @@ and D1 stays. Filling in this table does not itself close #6871 or approve produ
    Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
    All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
    Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
-2. **[Retained iOS evidence readme, PR #7639 head](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/README.md)** —
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in docs/archive/apple/reference-measurements-6871/ at the head commit
+   [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
    exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
    uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
-   [Dispatch raw report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-boundary.json)
+   Dispatch raw report (`raw/core-boundary.json`)
    includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
-   [100-item drain report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-large-page.json)
-   covers drain/bincode decode/string-list apply, not a presented frame. [Lifecycle report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-lifecycle.json)
+   100-item drain report (`raw/core-large-page.json`)
+   covers drain/bincode decode/string-list apply, not a presented frame. Lifecycle report (`raw/core-lifecycle.json`)
    has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
    `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
    are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`

@@ -52,6 +52,8 @@ export type Route =
   | { name: "agent-list" }
   // the agents archived from the Agents list (lib/agent-archives.ts), to find and restore
   | { name: "agent-archives" }
+  // the runs of one New agent start side by side (#8916, lib/compare-runs.ts)
+  | { name: "compare"; id: string }
   // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
   | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
@@ -107,6 +109,7 @@ export function parse(path: string, search = ""): Route {
   }
   if (p[0] === "a") return { name: "agents", id: p[1] };
   if (p[0] === "agents") return p[1] === "archived" ? { name: "agent-archives" } : { name: "agent-list" };
+  if (p[0] === "compare" && p[1] && !p[2]) return { name: "compare", id: p[1] };
   if (p[0] === "settings") return { name: "settings" };
   if (p[0] === "subscriptions") return { name: "subscriptions" };
   // /plugin/<id>/<ui>: the same page under its name before #1845 (bookmarks)
@@ -199,6 +202,8 @@ export function routePath(r: Route): string {
       return "/agents";
     case "agent-archives":
       return "/agents/archived";
+    case "compare":
+      return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
       if (r.view === "calendar") {

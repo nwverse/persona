@@ -77124,6 +77124,72 @@
         }
       }
     },
+    "It's in use, as the default or with a computer, so it can't be hidden now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's in use, as the default or with a computer, so it can't be hidden now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中（デフォルト、またはコンピュータあり）のため、今は非表示にできません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它正在使用（是默认助手或有电脑），现在不能隐藏"
+          }
+        }
+      }
+    },
+    "It's listed for now because it has a computer. It's hidden again once it has none." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's listed for now because it has a computer. It's hidden again once it has none."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピュータがあるため、今は表示されています。コンピュータがなくなると、再び非表示になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它有电脑，所以暂时仍会列出；没有电脑后会再次隐藏。"
+          }
+        }
+      }
+    },
+    "It's listed for now because it's the default. It's hidden again once another one is." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's listed for now because it's the default. It's hidden again once another one is."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトのため、今は表示されています。別のアシスタントがデフォルトになると、再び非表示になります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它是默认助手，所以暂时仍会列出；别的助手成为默认后会再次隐藏。"
+          }
+        }
+      }
+    },
     "It's Mine" : {
       "localizations" : {
         "en" : {
@@ -81372,6 +81438,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Let “%@” Start These by Itself" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let “%1$@” start these by itself"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」が次回からこの種類を自動で開始する"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让「%1$@」以后自己开始这类任务"
+          }
+        }
+      }
     },
     "Let's wrap this up: write the final summary and reply back to this Inbox item." : {
       "extractionState" : "manual",
@@ -107135,6 +107223,28 @@
         }
       }
     },
+    "Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスク自身の実行でのみ有効で、メール・受信箱・Web ページを読んだ回は自動で開始しません。タスクのページで取り消せます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只在这个定时任务自己的运行里生效；读过邮件、收件箱或网页的那次不会自动开始。可以在它的页面上取消。"
+          }
+        }
+      }
+    },
     "Only its file mode changed" : {
       "localizations" : {
         "en" : {
@@ -121337,6 +121447,28 @@
       },
       "extractionState" : "manual"
     },
+    "Read-only [Start Grant]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read-only"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み取り専用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读"
+          }
+        }
+      }
+    },
     "Readable" : {
       "localizations" : {
         "en" : {
@@ -125172,6 +125304,28 @@
     },
     "Remove [Handoff Rule]" : {
       "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
+    "Remove [Start Grant]" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -131205,6 +131359,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Show in Switcher" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show in Switcher"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切り替えリストに表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在切换列表中显示"
+          }
+        }
+      }
     },
     "SMS" : {
       "localizations" : {
@@ -145257,6 +145433,28 @@
         }
       }
     },
+    "Starts without asking" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts Without Asking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認なしで開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无需确认即可开始"
+          }
+        }
+      }
+    },
     "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -146853,6 +147051,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Stopped · Open Persona to see the recording" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped · Open Persona to see the recording"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止しました · Personaを開いて録音を確認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止 · 打开 Persona 查看录音"
+          }
+        }
+      }
     },
     "Stopped — tap Continue on your Apple Watch" : {
       "extractionState" : "manual",
@@ -151368,6 +151589,28 @@
       },
       "extractionState" : "manual"
     },
+    "Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスクが出すこれらの種類のタスクは確認なしで開始します。ただし、その回でメール・受信箱・Web ページを読んだ場合は除きます。指示や実行場所を変更するとこの一覧はクリアされます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个定时任务派出的这几类任务会直接开始，不再等你确认；但那次运行读过邮件、收件箱或网页时除外。修改它的指令或运行位置会清空这个列表。"
+          }
+        }
+      }
+    },
     "Tasks started from the main chat stay out of the Dynamic Island, notifications, and badges. Persona tells you in the main chat when they finish, need your answer, or fail. Only affects tasks started from now on." : {
       "localizations" : {
         "en" : {
@@ -153015,6 +153258,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电脑的防火墙挡住了直连"
+          }
+        }
+      }
+    },
+    "The default assistant is always listed. To hide this one, make another one the default first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The default assistant is always listed. To hide this one, make another one the default first."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デフォルトのアシスタントは常に表示されます。このアシスタントを非表示にするには、先に別のアシスタントをデフォルトにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认助手总会列出。要隐藏这个助手，先把别的助手设为默认。"
           }
         }
       }
@@ -162256,6 +162521,28 @@
       },
       "extractionState" : "manual"
     },
+    "This hub's version can't hide it yet. Update the hub and try again" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub's version can't hide it yet. Update the hub and try again"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブのバージョンではまだ非表示にできません。ハブをアップデートしてからもう一度お試しください"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 的版本还不能隐藏它，升级 hub 后再试"
+          }
+        }
+      }
+    },
     "This iPhone can take urgent calls." : {
       "localizations" : {
         "en" : {
@@ -162710,6 +162997,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Scheduled Task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "this scheduled task"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスク"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个定时任务"
+          }
+        }
+      }
     },
     "This Week" : {
       "extractionState" : "manual",
@@ -183226,6 +183535,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "When off, it isn't listed where you switch assistants while it isn't used. It's listed again by itself once it becomes the default or has a computer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When off, it isn't listed where you switch assistants while it isn't used. It's listed again by itself once it becomes the default or has a computer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフにすると、使っていない間はアシスタントの切り替えリストに表示されません。デフォルトになるかコンピュータを持つと、自動的にまた表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关掉后，它没在用时不出现在切换助手的列表里。成为默认助手或有了电脑后，它会自动重新出现。"
+          }
+        }
+      }
     },
     "When Persona or an agent you drive from Lark needs an answer or approval, you get a card in Lark. One tap does it" : {
       "localizations" : {

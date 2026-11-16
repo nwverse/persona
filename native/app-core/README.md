@@ -301,9 +301,12 @@ Neither replay executed Swift, iOS, a simulator, a production adapter or a physi
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 
-- **Keys only other events use.** iOS's `Envelope` is one struct for every event type, so iOS also drops an `items`
-  frame when such a key (`rows`, `features`, `fleet`, …) has the wrong type. The core checks the keys an `items`
-  frame carries and ignores the rest, so it does not follow every unrelated addition to the Swift struct.
+- **Shared scalar / raw-JSON Envelope keys are checked before routing (#8995).** iOS decodes its shared `Envelope`
+  before choosing an event. `decode_frame` now rejects a wrong-typed known scalar, list shape or raw `JSONValue`
+  number even when another event owns the key (`rows`, `features`, `state`, `backlog`, `args`, …). An unknown event
+  type remains `Frame::Other`; it is not treated as a continuity event. The #8955 source-derived fixture replays this
+  production gate, and the real host Kotlin/JNI, ArkTS and independently compiled C ABI paths check the same rules.
+  The production Item JSON and exact `bad_item` locations are unchanged; `dispatch` still only queues bytes.
 - **Nested structs the core does not read.** iOS refuses a payload when an item's `image`, `task`, `compact`,
   `injected` or `model_refusal`, or a fold's `images` or `tasks`, fails to decode. The core accepts it.
 - **Number spellings the hub never writes.** The core takes integer literals only and refuses `8.0` or `8e0`, which

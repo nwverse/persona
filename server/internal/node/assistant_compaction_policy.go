@@ -265,11 +265,17 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 			s = map[string]any{}
 		}
 	}
+	// The launcher's own --settings goes under ours. A launcher that writes it to a temporary file for each start and
+	// removes it when claude exits left the probe a path that is gone by now: there is nothing of its own to merge,
+	// the start goes on with ours, and the launcher writes its file again when it runs claude.
+	var theirs map[string]any
 	if c.ownSettings != "" {
-		theirs, err := readLauncherSettings(c.ownSettings, cwd, n.home)
-		if err != nil {
+		var err error
+		if theirs, err = readLauncherSettings(c.ownSettings, cwd, n.home); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
+	}
+	if theirs != nil {
 		mergedEnv := map[string]any{}
 		if env, ok := theirs["env"].(map[string]any); ok {
 			for k, v := range env {
