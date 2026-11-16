@@ -92,6 +92,10 @@ func (u *updater) routes(api *http.ServeMux) {
 			writeBodyErr(w, err, err)
 			return
 		}
+		if body.Source != nil && *body.Source != "release" && *body.Source != "web-dev" {
+			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+			return
+		}
 		u.mu.Lock()
 		if err := u.loadLocked(r.Context()); err != nil {
 			u.mu.Unlock()
@@ -110,7 +114,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		if body.Source != nil && *body.Source != u.settings.Source {
-			if (*body.Source != "release" && *body.Source != "web-dev") || u.updateActiveLocked() || u.checking {
+			if u.updateActiveLocked() || u.checking {
 				u.mu.Unlock()
 				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
 				return

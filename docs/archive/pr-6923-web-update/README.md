@@ -3,7 +3,7 @@
 This archive records the visual and recovery evidence delivered at `87d0ca342764ffbe2d7b95703e397c735213d58f`.
 Later review findings and repairs are recorded in [the recovery follow-up](../operations/2026-11-16-web-update-review-6923.md).
 The gallery remains evidence for Web source tree `bc453ef2d738f54b53af919951c4f3b95eceb656`;
-the later fixes change the backend helper and package confirmation, not this renderer.
+the later fixes change backend update/recovery paths, not this renderer.
 
 This change serves operators of the Web development UI in Settings > Hub and its
 Hub/Node backend update chain. It retains the shared installer and three owned,

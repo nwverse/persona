@@ -1,8 +1,9 @@
 # Recovery review follow-ups
 
-This follows three reviews of `87d0ca342764ffbe2d7b95703e397c735213d58f`.
-Each original finding was read and reproduced. This is author verification, not reviewer
-approval or thread resolution. Scope remains Web development and its Hub/Node backend
+This records reviews of `87d0ca342764ffbe2d7b95703e397c735213d58f` and the later
+`e93b21c520f66194f14b2b1728d870703fc98d6c` follow-up. Original findings were read
+and traced; the precise reachable reproductions and limits are recorded below.
+This is author verification, not reviewer approval or thread resolution. Scope remains Web development and its Hub/Node backend
 update chain, with three verified snapshots and program-only Apply backup. No native
 client adaptation, deployment or production-data restoration is included.
 
@@ -12,8 +13,34 @@ client adaptation, deployment or production-data restoration is included.
 | [URI via PGDATABASE](https://github.com/nwverse/persona/pull/6923#discussion_r4580152350) | Actual pg_dump 16.15 / libpq 160015 treated the full URI as a database name. Both URI and keyword backups failed using the immutable original helper in a private test cluster. The finding is applicable on this tested toolchain. | Use libpq `PQconninfoParse`, preserve its URI/query/keyword parsing and map explicit options to their documented environment variables; reject unsafe/unavailable bindings before writer pause. Full DSNs and passwords stay out of argv. The opt-in real PostgreSQL test verifies escaped credentials, query options/application name, actual pg_dump argv, successful custom dump/restore into a fresh synthetic database and unchanged source rows. |
 | [Recovery metadata](https://github.com/nwverse/persona/pull/6923#discussion_r4580512578) | Scalar/list metadata could raise TypeError; a personad entry mapped to a valid Node archive could pass verification and select the wrong program. | One shared schema check for listing/verify/prepare validates required fields, primitive/container types, timestamps, original absolute paths, inventory, program/platform allowlists, exact expected artifact names and lowercase hashes. Payload verification checks actual files and decompressed hashes; preparation independently checks staged native bytes after the compressed checksum. Malformed entries raise ValueError, remain retained and are excluded from listings/rotation. |
 | [Archive members/links](https://github.com/nwverse/persona/pull/6923#discussion_r4580512581) | Backslash/drive/UNC forms, hard links, duplicate paths and symlink-parent graphs could pass the previous archive checks. | Shared canonical POSIX member/link validation rejects those forms, absolute/traversal/noncanonical names and dangling/chained links. Only direct relative links to archived files/directories are allowed. The operator-only `extract-history` command uses this same validator and an empty destination, plus Python's data filter. Apply backup never calls extraction. Malicious archives are rejected before destination creation; legal synthetic history and its relative link restore successfully. |
-
 | [Failed boot recovery](https://github.com/nwverse/persona/pull/6923#discussion_r4581680631) | A later review arrived during final verification. With no pending marker, both a missing preimage and failed exec made boot return true; the failed exec also removed the adoption journal. | Boot now returns recovery errors to both standalone and edge-slot entry points before config/database startup. Rollback propagates restoration/exec failures and retains development journal/staging until the restored executable runs. `TestDevelopmentCrashRecoveryFailureBlocksAttemptedBuild` covers both failures, retained material through pruning and successful retry after repair. Earlier cutpoints and release boot tests remain covered. |
+
+## Admission and Edge follow-up
+
+The review of `e93b21c520f66194f14b2b1728d870703fc98d6c` added three P1 findings:
+
+| Finding | Precise reproduction and disposition |
+| --- | --- |
+| [Concurrent admission](https://github.com/nwverse/persona/pull/6923#discussion_r4581908321) | Channels hold the first `now=true` request in service discovery while a later ordinary request reserves its own attempt. Releasing discovery made the first request set the second attempt's `now=true`. The ordinary request does not itself set that flag; the bug is transferred consent across accepted operations. Reject a request overtaken during discovery with `errUpdateBusy`, without changing `now`. `TestUpdateDelayedProbeCannotForceAnotherAttempt` proves this ordering; `TestUpdateNowConfirmsAcceptedWaitingAttempt` keeps explicit confirmation of an already accepted idle-waiting attempt working. |
+| [Edge recovery](https://github.com/nwverse/persona/pull/6923#discussion_r4581908325) | Real missing Hub/companion preimages and a conflicting Web directory all returned a restart path after RestoreAll failed. Keep both journals and staging and return an explicit callback error. Distinguish failure from no matching update, so activation cannot fall through to the old binary path. Both slot/control activation and confirmation-timeout consumers stop the Edge and surface the error. `TestRestoreUpdateFailureRetainsRecovery` checks actual file failures, partial restoration, pruning and repaired retry; `TestUpdateRestoreFailureStopsEdge` runs real synthetic child slots through all three consumer paths. Existing release restoration and boot error propagation remain covered. |
+| [Invalid source](https://github.com/nwverse/persona/pull/6923#discussion_r4581908329) | A nonempty invalid source different from the stored value was already rejected; arbitrary overwrite of the release choice was not reproduced as stated. The actual gap is an invalid value equal to stored state, including the default empty source: it returned 200 and changed other preferences in the same request, idle or active. Validate every provided source as exactly release/web-dev before comparison or mutation. `TestUpdateSourceRejectsEveryInvalidValueWithoutSideEffects` covers both states, default/valid/invalid stored values and rejects without changing memory, persistence or selected candidate. |
+
+The two backup endpoints administer this Hub's local installation and recovery
+transaction, under the same owner as its existing update/history/settings endpoints.
+The previously disclosed route-inventory failure is addressed by registering those
+two exact Hub administration routes with their ownership rationale. The architecture
+contract explicitly requires this declaration for Hub-owned administration. No guard
+logic, wildcard, count/budget or manager-business exemption changes.
+
+The full App renderer remains Web source tree `bc453ef2d738f54b53af919951c4f3b95eceb656`.
+The public gallery and the successful 29-capture browser run on `e93b21c52` are reused;
+the new final head is bound in the PR and has the same renderer. Captures are not
+relabeled as freshly generated. Normal Web/Linux builds and focused Go/race/Edge,
+Python, docs and privacy checks are recorded against the final candidate in the PR.
+The real-child Edge fixture needs a short Unix socket path: in long temporary-directory
+environments, use an owned short symlink into that temporary directory, set the test
+child's TMPDIR to it and remove only that alias after completion. All test data remains
+in the owned temporary root; no existing services are used.
 
 ## Real PostgreSQL evidence
 
@@ -59,17 +86,12 @@ build gate; targeted fault/real-database tests address these findings. The origi
 crash, cancellation and partial-replacement regressions are rerun and preserved.
 Web source tree `bc453ef2d738f54b53af919951c4f3b95eceb656` is unchanged, so the public
 29-image [gallery](../pr-6923-web-update/README.md) and its image/source checksums still describe this UI.
-The checked-in browser matrix is rerun on the final delivery head.
+The successful browser matrix on `e93b21c52` is reused for the unchanged renderer,
+with the new final head/source binding recorded in the PR.
 
-
-An additional architecture check fails because the pre-existing backup list/apply
-routes are absent from the explicit Hub-owned route inventory. The route file,
-guard and inventory are unchanged from `87d0ca342764ffbe2d7b95703e397c735213d58f`.
-The requester explicitly disallowed raising guard baselines to remove failures;
-no allowlist, guard logic, dependency/store limit or business-route exemption is
-changed here. This failure remains disclosed separately from the passing focused
-update regressions and normal compilation. A maintainer must settle the route
-ownership declaration before treating the broader server guard as passing.
+The earlier route-inventory failure at `e93b21c52` is preserved above as historical
+evidence and is repaired by the scoped ownership declarations in this follow-up.
+The final PR reports the new guard result separately from other focused checks.
 
 Retained snapshots are local recovery material, not authenticated artifacts against
 an account able to replace both data and hashes. Old/corrupt journals and snapshots,

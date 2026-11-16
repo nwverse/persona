@@ -12,6 +12,14 @@ renames and pending publication, not only returned installation errors.
 Propagate restoration and exec failures through both Hub startup entry points: a boolean
 "update pending" cannot block a failed recovery when no pending marker exists. Keep the
 adoption journal and staging until the restored executable runs, so a failed exec can retry.
+The Edge callback must distinguish no matching update from failed restoration: returning only
+"not restored" can make activation fall back to the partially restored binary path. Propagate
+an error through slot/control activation and confirmation timeout, stop the Edge, and keep
+both journals/staging for repair. Test actual file failures and every callback consumer.
+
+Interruption consent belongs to the accepted operation. A manual request delayed in service
+discovery must not set `now` on a later attempt that overtook it; reject it after discovery,
+while preserving explicit confirmation of the currently accepted waiting attempt.
 
 Cancellation cleanup needs its own time budget: first signal the whole child group with SIGINT,
 escalate within bounded waits, and defer repeated cancellation while resuming paused writers.

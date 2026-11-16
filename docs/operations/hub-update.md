@@ -85,12 +85,22 @@ Only snapshots with complete program version/build/commit/platform metadata are 
 Startup recovery errors stop both standalone and edge-slot startup before configuration/database
 initialization. Failed program restoration or exec retains the development journal and staging
 for operator repair; the attempted build cannot continue as an ordinary startup.
+Edge restoration also stops on a failed program/Web restore, retaining both pending and
+adoption journals and required staging. The callback distinguishes a failed restore from no
+matching update; activation and confirmation-timeout paths never restart a fallback executable
+after partial restoration. Repair the retained preimage/conflict before retrying. The backup
+list/apply endpoints are Hub installation administration, declared with the other owned routes.
 Listing validates the full manifest schema, typed hashes and exact artifact mappings, without
 rehashing payloads. Verification and preparation additionally check the physical inventory,
 compressed and native program hashes and history members. Staged programs get an independent
 native-hash check after copying. Malformed metadata is rejected as `ValueError`; unknown or
 damaged snapshots stay on disk for manual inspection and are not pruned as verified material.
 Invalid schemas are omitted from listings; payload damage is checked before application.
+
+Source settings accept only the exact values `release` and `web-dev`; invalid supplied values
+are rejected before changing any preference or selection. A manual request overtaken while
+probing services is rejected without transferring its interruption consent to the accepted
+operation. Explicit Update now for an already accepted waiting attempt still requires confirmation.
 
 Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
 working turns, conversations awaiting blocking user input, and active redeploys can hold the update.

@@ -56,11 +56,10 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 			return errUpdateBusy
 		}
 		if u.updateActiveLocked() {
-			if now {
-				u.now = true
-			}
 			u.mu.Unlock()
-			return nil
+			// Discovery began before this attempt existed. Its interruption
+			// consent cannot be transferred to the newly accepted operation.
+			return errUpdateBusy
 		}
 		if err != nil {
 			u.mu.Unlock()
