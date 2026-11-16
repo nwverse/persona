@@ -37,6 +37,10 @@ Persist reuse separately from creation and keep its machine/path on retry; do no
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- A native terminal Codex start must preserve a user's same-name `codex()` function (#4876), not just find the executable. `codex-start` used to bypass it, losing launcher environment while a normal terminal command worked; the assistant app-server fix (#3707) did not cover this path. Pass the launcher and prompt as positional arguments to the interactive shell, never interpolate them as shell code, and keep the shell inside the agent sandbox.
+  Fake-launcher tests must isolate rc paths such as `ZDOTDIR`, not just `HOME`: an inherited rc directory can otherwise load the user's real startup file and change the fake executable or flags.
+  A native launcher must prefer the user's supported login shell even when another shell's rc file exists; test with both rc files present, not just one.
+
 ## A saved task name can disappear without another model failure (#7337)
 
 Automatic naming had already succeeded for several instruction-titled sessions, but a terminal spinner's
@@ -572,6 +576,10 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   dash, ksh and busybox say `not found` of a missing path; fish follows an error inside a function with a backtrace that repeats the function's arguments, the session id with them.
 - Don't read a shell's lines by their English words alone (#6122): bash translates them through gettext (about 40 catalogs) and glibc translates `strerror`, and Homebrew's bash on a Mac follows the system language even without `LANG` (`bash: nosuch: 未找到命令`), so the start waited out its timeout on any non-English machine. Read the line's shape instead (a shell's name first, then colon or full-width colon parts, one of them the start's own command), and only for the command the start itself typed, so rc noise in any language still never ends a start.
 - Don't compare a node's timestamps with the manager's clock: a node whose clock ran behind made a first failed start look counted already. Keep what was counted instead (with the health records, across restarts).
+
+## A subscription reset time is not proof that quota is still exhausted (#9386)
+
+Quota can recover before the reported reset. Skipping every on-demand probe until `resets_at` made a stale usage-limit record refuse starts even while the launcher worked. Reuse the machine × launcher single-flight probe and throttle; only a passing model request clears the record. A successful terminal start alone does not prove quota recovered. Keep periodic probes waiting for the reset so an idle, genuinely exhausted subscription spends no extra requests.
 
 ## Don't default to bare claude when resuming externally created sessions (2026-11-05, #411)
 
