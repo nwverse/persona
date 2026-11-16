@@ -146,12 +146,14 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
             else:
                 if not cwd:
                     raise WatchError("FETCH_HEAD recovery requires the actual checkout path")
+                git_dir_text = checked(["git", "rev-parse", "--git-dir"], cwd=cwd).strip()
+                git_dir = (Path(cwd).resolve() / git_dir_text).resolve() if not Path(git_dir_text).is_absolute() else Path(git_dir_text).resolve()
                 common_text = checked(["git", "rev-parse", "--git-path", "FETCH_HEAD"], cwd=cwd).strip()
-                common = (Path(cwd).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
-                destination = common
-                if destination.name != "FETCH_HEAD" or not destination.parent.is_dir():
-                    raise WatchError("fetch recovery requires a valid worktree FETCH_HEAD path")
-                temporary = destination.parent / "FETCH_HEAD.pr-watch-tmp"
+                destination = (Path(cwd).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
+                if (destination.name != "FETCH_HEAD" or destination.parent != git_dir
+                        or git_dir.is_symlink() or destination.is_symlink() or not git_dir.is_dir()):
+                    raise WatchError("fetch recovery requires a path inside the checkout's Git directory")
+                temporary = destination.parent / ("FETCH_HEAD.pr-watch-" + entries[0][0] + ".tmp")
                 temporary.write_text(entries[0][0] + "\t\tbranch '" + entries[0][1] + "' of " + remote_name + "\n",
                                      encoding="utf-8")
                 os.chmod(temporary, 0o600)

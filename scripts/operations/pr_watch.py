@@ -74,7 +74,10 @@ def load_config(path):
     webhook = raw.get("webhook", {})
     if not isinstance(webhook, dict):
         raise WatchError("webhook config must be an object")
+    repository_policy = [{key: value for key, value in item.items() if key != "reviewer"}
+                         for item in raw["repositories"]]
     return {"repositories": repos, "reviewer": reviewer, "webhook": webhook,
+            "repository_policy": repository_policy,
             "poll_seconds": int(raw.get("poll_seconds", 60)), "workers": int(raw.get("workers", 2)),
             "state": raw.get("state", str(Path(path).parent / "state.json"))}
 
@@ -202,10 +205,18 @@ class Watcher:
         if allow_config_migration and not self.allow_config_migration:
             raise WatchError("configuration migration requires the explicit offline command")
         migration = "review-policy-v2:" + digest
+        policy_fingerprint = fingerprint("repository-policy", 0, "0" * 40, "config", self.config.get("repository_policy", self.config["repositories"]))
         with self.state.lock:
-            if self.state.data.get("policy_migration") == migration:
+            if self.state.data.get("policy_migration") == migration and self.state.data.get("repository_policy") == policy_fingerprint:
                 return
+            policy_changed = self.state.data.get("repository_policy") not in (None, policy_fingerprint)
             for item in self.state.data["prs"].values():
+                if policy_changed:
+                    for field in ("semantic", "verification", "checks", "review_posted", "success_posted",
+                                  "review_fingerprint", "published_fingerprint", "published_findings"):
+                        item.pop(field, None)
+                    item["outcome"] = "retry"
+                    item["retry_after"] = 0
                 if item.get("head") and not item.get("base"):
                     evidence_key = item.get("evidence_key", "")
                     if "@" in evidence_key and ".." in evidence_key.split("@", 1)[1]:
@@ -220,8 +231,9 @@ class Watcher:
                     continue
                 item["review_policy"] = REVIEW_POLICY_VERSION
                 item["policy_migration"] = migration
-                item.setdefault("success_posted", bool(item.get("review_posted") and item.get("outcome") in
-                                                       ("passed", "passed_with_base_failures", "merged")))
+                item.setdefault("success_posted", bool(item.get("review_posted") and item.get("semantic") == "passed"
+                                                       and item.get("format") == FORMAT_VERSION
+                                                       and item.get("outcome") in ("passed", "passed_with_base_failures", "merged")))
                 if item.get("outcome") in ("merged", "continuation"):
                     continue
                 if item.get("repair_exhausted") and not item.get("failure"):
@@ -253,6 +265,7 @@ class Watcher:
                         item["outcome"] = "repair_comment_pending"
                         item["retry_after"] = 0
             self.state.data["policy_migration"] = migration
+            self.state.data["repository_policy"] = policy_fingerprint
             self.state.data["config_fingerprint"] = digest
             atomic_json(self.state.path, self.state.data)
 
@@ -814,9 +827,11 @@ class Watcher:
                                repair_exhausted=True)
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing") \
+        if old.get("head") == head and old.get("format") == FORMAT_VERSION \
+                and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing") \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
-                     or old.get("verification") in ("passed", "base_failure")):
+                     or old.get("verification") in ("passed", "base_failure")) \
+                and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])):
             if old.get("outcome") == "merged":
                 return
             if self.dry_run:
@@ -826,11 +841,14 @@ class Watcher:
                     and not (old.get("outcome") in ("passed_with_findings", "passed") and not old.get("success_posted")) \
                     and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
                     and old.get("outcome") != "repairing" \
-                    and not (old.get("outcome") == "passed_with_findings" and old.get("verification") in ("passed", "base_failure")) \
+                    and not (old.get("outcome") == "passed_with_findings" and old.get("verification") in ("passed", "base_failure")
+                             and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", []))) \
                     and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0
                              and not old.get("success_posted")):
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
+                    and old.get("format") == FORMAT_VERSION and old.get("semantic") == "passed" \
+                    and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])) \
                     and old.get("verification") in ("passed", "base_failure") and old.get("success_posted") and config["merge"]:
                 if old.get("merge_attempts", 0) > 0 and old.get("retry_after", 0) > time.time():
                     return
@@ -844,6 +862,8 @@ class Watcher:
                     self.finish_merge(config, current_pr, old)
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
+                    and old.get("format") == FORMAT_VERSION and old.get("semantic") == "passed" \
+                    and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])) \
                     and old.get("verification") in ("passed", "base_failure") and not old.get("success_posted") and config["merge"]:
                 if old.get("findings") and not old.get("review_posted"):
                     published = old.get("published_findings", [])
@@ -1014,7 +1034,7 @@ class Watcher:
                         attempt_number = review_attempts + attempt + 1
                         current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                                  outcome="retry", review_attempts=attempt_number,
-                                                 retry_after=0, failure=str(error),
+                                                 retry_after=time.time() + 3600 if attempt_number >= INFRASTRUCTURE_ATTEMPT_LIMIT else 0,
                                                  retry_reason="semantic_review")
                         if attempt_number >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                             raise

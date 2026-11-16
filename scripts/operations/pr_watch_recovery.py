@@ -59,9 +59,13 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         removed = 0
         for path in candidates:
             lease = leases.get(str(path), {})
+            try:
+                expired = time.time() - float(lease.get("heartbeat", 0)) >= older_than
+            except (TypeError, ValueError, OSError):
+                continue
             if (path in keep or lease.get("active")
                     or repo is not None and lease.get("repository") != repo
-                    or time.time() - float(lease.get("heartbeat", 0)) < older_than):
+                    or not expired):
                 continue
             try:
                 existed = path.exists()

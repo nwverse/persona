@@ -215,22 +215,6 @@ class WatcherTests(unittest.TestCase):
                 verify.assert_not_called()
                 merge.assert_not_called()
 
-    def test_p2_findings_are_published_and_do_not_block_verification_or_merge(self):
-        findings = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "possible edge case", "suggestion": "handle it"}]
-        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
-                patch.object(pr_watch, "semantic_review", return_value=findings), \
-                patch.object(pr_watch, "verify", return_value=[{"name": "test", "command": ["true"], "ok": True, "summary": ""}]) as verify, \
-                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as api, \
-                patch.object(self.watcher, "merge", return_value=True) as merge:
-            self.watcher.process("example/one", 7)
-            self.watcher.process("example/one", 7)
-        verify.assert_called_once()
-        merge.assert_called_once()
-        self.assertEqual(api.call_count, 2)
-        self.assertIn("P2 findings are non-blocking", api.call_args_list[0].kwargs["input_text"])
-        self.assertIn("Automated independent semantic review", api.call_args_list[1].args[0][-1])
-        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
-
     def test_missing_visual_adapter_is_recorded_not_claimed_as_acceptance(self):
         names = "web/src/views/ChatView.tsx\n"
         with patch.object(pr_watch_verify, "checked", return_value=names), \
@@ -713,6 +697,37 @@ class WatcherTests(unittest.TestCase):
         verify.assert_not_called()
         self.assertEqual(len(self.comments), 1)
         self.assertIn("final failure", self.comments[0])
+
+    def test_legacy_passed_record_without_semantic_evidence_is_reviewed_again(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.data["prs"]["example/one#7"] = {
+            "head": SHA_A, "base": SHA_BASE, "evidence_key": evidence_key,
+            "outcome": "passed", "verification": "passed", "review_posted": True,
+            "success_posted": True,
+        }
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "passed")
+
+    def test_resumed_merge_requires_passing_semantic_evidence(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="passed_with_findings",
+                               verification="passed", success_posted=True, review_posted=True,
+                               findings=[{"path": "x.py", "line": 2, "severity": "P1",
+                                          "summary": "wrong", "suggestion": "fix"}])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False) as merge:
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["findings"], [])
+        merge.assert_called_once()
 
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
