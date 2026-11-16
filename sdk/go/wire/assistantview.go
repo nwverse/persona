@@ -307,6 +307,10 @@ func StripAssistantFields(v *View) []string {
 			drop("assistant_action")
 			s.More = nil
 		}
+		if s.Link != nil && AssistantOnlyAction(&s.Link.Action) {
+			drop("assistant_action")
+			s.Link = nil
+		}
 		items := make([]Component, 0, len(s.Items))
 		for _, e := range s.Items {
 			if e.Type == "html" {

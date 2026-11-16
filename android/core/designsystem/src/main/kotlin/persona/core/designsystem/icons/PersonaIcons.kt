@@ -268,6 +268,8 @@ object PersonaIcons {
     val quietHours: PhIcon get() = PhIcons.MoonStars
     /** SF Symbol `text.quote`. */
     val quote: PhIcon get() = PhIcons.Quotes
+    /** SF Symbol `clock.arrow.circlepath`. */
+    val recent: PhIcon get() = PhIcons.ArrowCounterClockwise
     /** SF Symbol `waveform.circle`. */
     val recording: PhIcon get() = PhIcons.Waveform
     /** SF Symbol `bell.circle`. */
