@@ -49,9 +49,9 @@ func (d *DB) ConversationDeletedID(ctx context.Context, session string) (bool, e
 	return deleted, err
 }
 
-// This shared row lock lasts through the index transaction. Deletion's UPDATE
-// waits for earlier writes, then drops them; later writes observe the marker.
-func searchConversationAvailableTx(ctx context.Context, tx pgx.Tx, machine, session string) error {
+// This shared row lock lasts through a conversation-derived write. Deletion's
+// UPDATE waits for earlier commits; later writes observe the marker.
+func conversationAvailableTx(ctx context.Context, tx pgx.Tx, machine, session string) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO settings (key,value,updated_at) VALUES ($1,'{}',now()) ON CONFLICT (key) DO NOTHING`, ConversationDeletionsKey); err != nil {
 		return err
 	}

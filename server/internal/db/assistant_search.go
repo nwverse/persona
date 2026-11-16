@@ -66,7 +66,7 @@ func (d *DB) SearchCursors(ctx context.Context) ([]SearchCursorRow, error) {
 // reset drops the conversation's rows first: its transcript was rewritten, so the page starts it over.
 func (d *DB) PutSearchItems(ctx context.Context, machine, session, history string, afterSeq int, items []SearchItemRow, reset bool) error {
 	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		if err := searchConversationAvailableTx(ctx, tx, machine, session); err != nil {
+		if err := conversationAvailableTx(ctx, tx, machine, session); err != nil {
 			return err
 		}
 		b := &pgx.Batch{}

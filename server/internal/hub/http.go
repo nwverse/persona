@@ -1630,11 +1630,10 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			more = false
 		}
 		if b, err := marshalItems(out); err == nil {
-			if m.conversationDeleted(sid) {
+			if !m.queueConversationBacklog(sid, func() { c.queue(b) }) {
 				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
 				return
 			}
-			c.queue(b)
 		}
 		if !more {
 			h.sendLiveText(c, m.cfg.ID, sid)

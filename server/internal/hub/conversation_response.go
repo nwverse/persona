@@ -13,6 +13,18 @@ type conversationResponseFence struct {
 	users int
 }
 
+// queueConversationBacklog commits one already-read transcript frame. The
+// callback only enqueues locally; no network/body write holds this fence.
+func (m *Machine) queueConversationBacklog(id string, queue func()) bool {
+	unlock := m.lockConversationResponse(id)
+	defer unlock()
+	if m.conversationDeleted(id) {
+		return false
+	}
+	queue()
+	return true
+}
+
 // Fences exist only while a header commit or a deletion uses them, not for
 // every id ever requested. RPC reads and response bodies hold no fence.
 func (m *Machine) lockConversationResponse(id string) func() {
