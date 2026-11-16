@@ -4,7 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
 import { reset } from "../../lib/store";
+import { assistantEntries } from "../../lib/assistant-entries";
 import type { Todo } from "../../lib/todos";
+import { ParkedTaskRows } from "./ParkedTaskRow";
 import { TaskWaitInfo } from "./TaskWaitInfo";
 
 vi.hoisted(() => {
@@ -42,6 +44,19 @@ afterEach(async () => {
 });
 
 describe("task wait information", () => {
+  it("orders an explicitly unsorted lazy waiting list by first request", async () => {
+    const older = { ...makeTodo({ kind: "person_reply", target: "Design team", wake: "They reply", contact }), id: "older", origin: "conversation-1" };
+    const newer = { ...makeTodo({ kind: "person_reply", target: "Design team", wake: "They reply",
+      contact: { ...contact, sent_at: "2026-11-17T08:00:00Z" } }), id: "newer", origin: "conversation-1" };
+    const entries = assistantEntries({ conversation: "conversation-1", main: "conversation-1", todos: [newer, older],
+      sessions: [], interactions: [], plans: {}, feed: [], now: NOW }).parked;
+    const items = ["newer", "older"].map((id) => entries.find((item) => item.kind === "task" && item.todo.id === id)!);
+    expect(items).not.toContain(undefined);
+    await act(async () => root.render(<ParkedTaskRows items={items} />));
+    expect([...host.querySelectorAll("[data-parked-task-row]")].map((row) => row.getAttribute("data-parked-task-row")))
+      .toEqual(["older", "newer"]);
+  });
+
   it("shows the recorded person request, sender, age, wake and source without substituting the recorder", async () => {
     const todo = makeTodo({ kind: "person_reply", target: "Design team", wake: "They confirm a date", contact, recorded_by: "recorder-not-sender", url: "https://example.test/evidence/7" });
     await render(todo);
