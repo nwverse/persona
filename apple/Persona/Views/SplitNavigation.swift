@@ -51,6 +51,9 @@ struct SplitNavigation<Sidebar: View, Empty: View, Destinations: ViewModifier>: 
     /// bars, the list's does not). Read under side bars only, where `topPad` uses them (`readsSafeTop`).
     @State private var listSafeTop: CGFloat = 0
     @State private var pageSafeTop: CGFloat = 0
+    #else
+    /// No system bars down the side off iOS (#9310): visionOS's split passes `SplitDetail` none, as the Mac's does.
+    private var sideBars: Bool { false }
     #endif
 
     init(path: Binding<NavigationPath>, listKey: String? = nil, destinations: Destinations, columnColor: Color? = nil,

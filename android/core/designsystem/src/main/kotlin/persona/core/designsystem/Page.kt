@@ -136,6 +136,8 @@ private fun PageFrame(
     topScrollEdgeStyle: ScrollEdgeStyle,
     bottomScrollEdgeStyle: ScrollEdgeStyle,
     probePage: String? = null,
+    /** No reading inset: the content takes the pane's whole width ([JListPage]'s `fullWidth`). */
+    fullWidth: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -155,7 +157,7 @@ private fun PageFrame(
             // side is usable; an onSizeChanged correction would first draw a frame across the hinge.
             SubcomposeLayout(modifier.fillMaxSize().onConsumedWindowInsetsChanged { consumedInsets = it }) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
                 val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
                 val navigationBottom = unconsumedNavigation.getBottom(this)
                 val navigation = navigationBottom.toDp()
@@ -255,7 +257,7 @@ private fun PageFrame(
                 modifier.fillMaxSize().background(palette.background).onConsumedWindowInsetsChanged { consumedInsets = it },
             ) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
                 val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
                 val navigationBottom = unconsumedNavigation.getBottom(this)
                 val navigation = navigationBottom.toDp()
@@ -375,7 +377,7 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        CompositionLocalProvider(LocalPaneListToggle provides null) {
+        CompositionLocalProvider(LocalSplitDetail provides null) {
             Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
         }
     }
@@ -423,12 +425,13 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
-    val listToggle = LocalPaneListToggle.current
+    val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when {
-            listToggle != null -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), listToggle)
-            onBack != null -> JBackButton(onClick = onBack)
-            else -> LocalRootLeading.current?.invoke()
+        when (splitLeading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
+            is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> LocalRootLeading.current?.invoke()
         }
     }
     val titleBlock: @Composable RowScope.() -> Unit = {
@@ -515,6 +518,8 @@ fun JListPage(
     /** False when the list should stop above the bottom inset instead of drawing a scroll edge over it. */
     scrollUnderBottom: Boolean = true,
     scrollEdgeStyle: ScrollEdgeStyle = ScrollEdgeStyle.Blurred,
+    /** The content takes the pane's whole width rather than [ReadingWidth]: a grid of cards (an extension's dashboard page). */
+    fullWidth: Boolean = false,
     content: LazyListScope.() -> Unit,
 ) {
     val style = PersonaTheme.style
@@ -530,6 +535,7 @@ fun JListPage(
         underBottom = { scrollUnderBottom && state.canScrollForward },
         topScrollEdgeStyle = scrollEdgeStyle,
         bottomScrollEdgeStyle = scrollEdgeStyle,
+        fullWidth = fullWidth,
     ) { padding ->
         val pad = pagePadding
         val bottom = padding.calculateBottomPadding()

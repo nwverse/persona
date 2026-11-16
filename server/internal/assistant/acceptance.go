@@ -60,6 +60,9 @@ type acceptAsk struct {
 	Reversible bool      `json:"reversible,omitempty"`
 	DueAt      time.Time `json:"due_at,omitzero"`
 	ByDefault  bool      `json:"by_default,omitempty"`
+	// AgentReply pauses the default while the supervisor checks an owner message in the task's Agent chat.
+	// It is not an option selection; only an explicit answer ends the decision.
+	AgentReply *decisionAgentReply `json:"agent_reply,omitempty"`
 	// ByAssistant: a deployed task the supervising assistant accepted itself, not a big feature (ownerVerifies, #3205).
 	ByAssistant bool `json:"by_assistant,omitempty"`
 	// A decision's own (#3804, decision.go). WhyOwner: why only the owner can decide; Options: what they choose from, the

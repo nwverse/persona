@@ -75,7 +75,7 @@ internal fun SettingsSheetPanes(
         CompositionLocalProvider(LocalDetailKey provides detail) {
             NavDisplay(backStack = stack, onBack = onBack,
                 entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
-                sceneStrategies = listOf(listDetail),
+                sceneStrategies = listOf(listDetail.strategy),
                 entryProvider = { key ->
                     val entry = entries(key)
                     NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key)) { entry.Content() }

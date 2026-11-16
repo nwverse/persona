@@ -117,7 +117,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
-| `ui` (version 8) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
+| `ui` (version 9) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
@@ -236,7 +236,7 @@ would make the extension uninstallable on older hubs, while files they do not re
   marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
   description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
   permission digest and the official-provenance check do not change with the language. `ui.<contribution id>` (#8712) translates a page's
-  title (and the extension's name beside it) in `GET /api/v1/extensions/-/ui` and the details' `ui`; other contribution titles (navigation
+  title (and the extension's name beside it) in `GET /api/v1/extensions/-/ui` and the details' `ui`, and `groups.<group id>` a `nav_page`'s sidebar group's title (#9071); other contribution titles (navigation
   entries' badges, shortcuts, themes) have one language for now. A built-in extension written in English carries its translations itself
   (`Registry.AddBuiltinTranslated`: the iPhone and Volcengine speech extensions).
 - **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
@@ -2041,7 +2041,7 @@ Where each client puts them:
 
 | placement | Web | Mac | iOS | Android |
 | --- | --- | --- | --- | --- |
-| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
+| `nav_page` | In the sidebar's **Overview / Machines / Settings** group, before Settings, one row per page (icon, title, badge); at most 3 in the sidebar, later ones go first under **More** at the end of the group, and the user can reorder, show or put away pages in settings (web.md "The sidebar's pages") and choose one as the page the app opens on (web.md "Start page", #9071); a page that names a `group` comes in under that group's heading, a foldable section of its own after **Pages** (web.md "The sidebar's pages"); after a reload the entries and an open page's last view are drawn from this browser's cache until the hub answers (web.md "Extension pages on reload") | The left section column, same group and position as the web | In the new shell's drawer (iPhone) and iPad sidebar, after the **Machines** group, one row per page (icon, title, badge), opening directly when tapped (#2961); also above the installed list on **Settings › Extensions**; the Settings tab badge adds these badges (numbers summed; a dot when there are only text badges), and when the drawer already lists these entries, the Settings button at the bottom of the drawer does not add them again | Same as iOS: in the drawer after Machines, and above the list on **Settings › Extensions**; the Settings tab badge adds these badges |
 | `overview_card` | On the Overview page (`/overview`), a row of cards below the Agent summary | No Overview page: above the list in **Settings › Extensions** | No Overview page: above the list in **Settings › Extensions** | Same as iOS |
 | `machine_section` | Machine detail page | Machine detail page | Machine detail page | Machine detail page |
 | `inbox_item` | The Inbox detail pane: the header (title, source, **Done**, ✦ summary, **AI draft reply** / **Hand to AI**) stays, and the conversation / body below is replaced by what the extension draws | When an item from this connector's source is opened in the Inbox, the right column (✦ summary and buttons, **Done**) stays, and the conversation / body on the left is replaced by the extension's View | When an item from this connector's source is opened in the Inbox, the action bar under the navigation bar (✦ summary, **AI Draft Reply** / **Hand to AI**) and **Done** stay, and the conversation / body below is replaced by the extension's View | Same as web (Android's own PR) |
@@ -2056,6 +2056,7 @@ In the manifest:
 ]}
 ```
 
+- Only `nav_page` can name a `group` (#9071): `{"id": "workbench", "title": "工作台"}`, the id `^[a-z][a-z0-9-]{0,31}$` and the title 1–40 characters in the manifest's language, translated in `l10n/<language>.json` under `groups` (`{"groups": {"workbench": "Workbench"}}`). Pages of any extension naming the same id share the group (the first one listed names it). It is only where the page goes by default: the user can move any page to another group, rename, reorder or remove groups, and a removed group's pages go back to **Pages**. `GET …/-/ui` lists it as the place's `group`, its title in the request's language. A hub from before reads manifests strictly and refuses one with `group`; iOS and Android ignore the field until their own PRs.
 - Only `nav_page` can set `icon`, picked from a fixed few: `plugin` (default), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`; each client maps them to the icon with the same meaning in its own design system,
   and draws unknown ones as `plugin`. Extensions cannot supply images, SF Symbol names or colors.
 - Only `overview_card` can set `opens`: the id of a `nav_page` or `plugin_page` of the same extension; without it the card is not tappable (buttons and rows inside the card still are).
@@ -2077,7 +2078,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `8`; the web sends `8`, iOS and Android send `6` (their native stream `7`) until they draw all of UI version 8; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `9`; the web sends `9` (its native stream `7`), Android and iOS send `8` (their native streams too) until they draw all of UI version 9; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2220,7 +2221,7 @@ If you do not want to see an extension's entries and cards: disable the extensio
 
 ### Compatibility
 
-**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 8).
+**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8"; for 9 see "UI version 9". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 9).
 
 - **Older app, new slot**: the app only queries the slots it knows by `placement`; it does not see new slots and does not error. `nav_page` also appears in the extension details' `ui`, so older apps (web) can still open it under **Settings › Extensions** › this extension;
   important content can therefore just go in `nav_page`, without a `plugin_page`.
@@ -2619,7 +2620,7 @@ is lost but the arrangement:
 
 The view the extension drew is checked first, whatever the app's version; then what the app gets is checked again (as for every version).
 Extensions may still draw an older app differently (`ui_version`). `UIStreamSection` takes the new section fields, so a native stream's source
-may draw them; the stream's clients send 7 and get the table above.
+may draw them; the web's stream client sends 7 and gets the table above, Android's and iOS's send 8 and get them as they are.
 
 **The web** (#9158) draws all of it and sends `8` (`web/src/views/extensions/ViewBody8.tsx`, a chunk loaded with the first view that has
 version 8 in it; the rows side by side in `ViewBody.tsx`'s `Run`). A columns view takes the page's whole width, as a split view does. The
@@ -2629,8 +2630,86 @@ by side they have no hairline between them. The card's head is an overview card'
 color, the link in the accent with ›, a spinner in its place while its action is on its way. The web's native stream still sends 7.
 `web/e2e/extension-columns.mjs` checks the grid in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`).
 
-**iOS and Android** have the fields in their generated types and still send 6 (their native stream 7): the hub draws them a stack until
-they draw version 8 (their own changes, after #9158).
+**Android** (#9158) draws all of it and sends `8`, its native stream too, which draws through the same renderer (a section's link
+is pressed as the section's own node; `ExtensionColumns.kt` in `android/feature/settings`). The page measures the pane it fills and
+follows the native card grid's rule (`docs/design/DESIGN_SYSTEM.md` "Adaptive card grids"): `floor((width + Space.m) / (cardColumn + Space.m))`
+columns, at most three, so a phone is one column and is drawn as the stack (each section's head with its icon and link, the stack's
+groups), a foldable or a portrait tablet two, a landscape tablet three. With two or more a columns view takes the pane's whole width
+(`JListPage` `fullWidth`) and is a grid of cards inserted into the page's list a row at a time: each card is the section's group panel
+with its head inside (the icon in its named color, the `headline` title, the link as the design system's text button, 48 dp to touch,
+read out as its words), every card in a row as tall as the tallest. A section's rows go side by side where each keeps `cardColumn`, with
+a hairline between lines and none between the rows of a line. Cards (`compact`), sections on a machine's or a launcher's page and an inbox
+item's body are drawn as the stack, with icons, links and rows side by side.
+
+**iOS** draws all of it and sends `8`: whole pages, the native stream and the app's own cards and sections (`ExtensionUIContext.pageVersion`,
+`ExtensionPageStream.uiVersion`, `ExtensionUIContext.cardVersion`); widgets, the watch and the system extensions keep 3. The drawing is
+`apple/Persona/Views/Settings/ExtensionColumns.swift`. A columns view on a page (`ExtensionPageView`, `ExtensionWidthPage`) is the page's
+list, exactly a stack, until the page's own width (never the kind of device) holds two columns of `Theme.Size.cardColumn` (330 pt at the
+default text size, larger with the text, as every `Theme.Size`) with `Space.m` between them inside the page's margins; then its sections
+are cards in lines of two, or three when three fit (`ExtensionColumnsGrid`): an iPhone upright and an iPad's narrow window are one column,
+an iPad's detail column on its side two, a 13-inch iPad's whole width three; with larger text a column needs more (about 446 pt at the
+interface's largest size, xxxLarge), so a window that just holds two at the default size holds one. Each
+line is one row of a lazy stack and as tall as its tallest card (`ExtensionColumnsLayout` offers every card the line's height); a section
+that spans takes a line of its own. A card is a `.card()` with its head inside: the icon in its named color, the title in the card grids'
+`Theme.Font.heading`, the link at the end. Elsewhere (a list's section header, a card's or a machine page's section title) the icon and the
+link sit where the title is; a section with neither keeps the title it always had. The link is the accent's words and ›, a spinner in place
+of › while its action runs, pressed through `ExtensionActionButton` as a row is, at least 44 × 44 pt and spoken as its words.
+`Section.columns` lays a section's runs of rows side by side, as many as keep `cardColumn` each in the width the run is given, and stacks
+them below that; in a page's list a run side by side is one list row (no hairline between its rows, each row's own button, their swipe
+actions only in their menu), measured from the page's width; a launcher's page and an Inbox item, whose width nobody measures, keep a row to
+a line. In the native stream a link press goes back as its section's key, as the section's other controls do. Unit tests
+`ExtensionColumnsTests`, UI test `ExtensionColumnsUITests` against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`).
+
+
+## UI version 9 (#9337)
+
+A quota or usage card: rings side by side, each filled to how much of a limit is left (or used), with the amount in its centre, a small
+unit under it and the limit's name below ("5 hours", "This week", "Fable this week"), green while there is enough and amber once it runs
+low; the card's footer says when each limit resets. The app sends `9` in `context.ui_version`; `hub.extension_points.ui` is `9`; there is
+no new `features` entry (an older hub holds the app's version to its own, and the extension sees that). No new component: one field on a
+tile, authoritative in `schema/extension/view.schema.json` (`Tile.gauge`, `x-since: 9`); examples are
+`schema/extension/examples/View.v9-*.json`. **An app sends 9 only when it draws all of the below** (and all of 8).
+
+| Where | Field | What it does |
+| --- | --- | --- |
+| `Tile.gauge` (a `grid`'s or a `carousel`'s tile) | `{ratio, unit?, color?}` (`Gauge`) | The tile is drawn as a ring instead of its icon: filled to `ratio` (0–1, required) from the top, clockwise; the tile's `value` in its centre with `unit` (at most 8 characters, as a control's unit) under it, or the percentage when the tile has no value; the tile's `title` and `subtitle` below. `color` is a named color (`Color`), never a hex; without it the tile's `color`, else the app's accent. The tile's badge, action, extra actions and switch stay as on any tile |
+
+A tile with a gauge has no `image` and no `spark` (the hub's check refuses them: the ring takes their place); its `icon` is drawn only by an
+older app. The status tiles above such a card are ordinary `grid` tiles, and the reset times are the section's `footer`. The apps read a
+gauge out as "title: value unit, N%" (a meter; a button when the tile has an action).
+
+```json
+{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+  {"key": "five_hours", "title": "5 hours", "value": "4.69", "gauge": {"ratio": 0.94, "unit": "USD", "color": "green"}},
+  {"key": "fable_week", "title": "Fable this week", "value": "0.62", "badge": {"text": "Low", "color": "amber"},
+   "gauge": {"ratio": 0.12, "unit": "USD", "color": "amber"}}
+]}
+```
+
+### Compatibility
+
+The hub draws version 9 for an older app (`downgrade9`, `server/internal/extension/ui_v9.go`, before the older downgrades), so nothing
+the ring says is lost:
+
+| Version 9 | Version 6–8 |
+| --- | --- |
+| `Tile.gauge` | left out; the tile stays, with what the ring said on it |
+| `gauge.unit` | after the tile's value (`4.69 USD`), when that fits the value's 40 characters |
+| `gauge.ratio` | the percentage (`94%`) in the tile's subtitle, after it with ` · ` when it has one and it fits 80 characters; the tile's value when it has none |
+| `gauge.color` | the tile's `color` when the tile has none of its own, so a low quota still shows in its color |
+
+Below version 6 the tile becomes a row as any other (see "UI version 6"), with that value and subtitle. A native stream's client of 8
+gets the same. Extensions may still draw an older app differently (`ui_version`).
+
+**The web** (#9337) draws all of it and sends `9` (`web/src/views/extensions/ViewBody9.tsx`, a chunk loaded with the first tile that has
+a gauge; the tile keeps the ring's space meanwhile and is already read out as it will be). The ring is 96 px across on a page and 80 px in a card, its track the
+color's tint, its arc with round ends; the value is in `text-xl` (`text-lg` in a card) with tabular figures, the unit and subtitle in
+`text-submeta`, the title in `text-meta`. The arc eases to a new ratio when the view is drawn again, and snaps with Reduce Motion. The
+tiles keep the grid's columns (`max_columns`, at least 150 px each), so a phone has two a line. The web's native stream still sends 7.
+`web/e2e/extension-gauge.mjs` checks it in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1`).
+
+**iOS and Android** have the field in their generated types and still send 8: the hub draws them the tile without its ring until
+they draw version 9 (their own changes, after #9337).
 
 ## System-level placements (#1858)
 
@@ -2666,7 +2745,8 @@ The returned View is checked as usual (`Fit`), then `FitWidget` trims it to what
 | family | Allowed content |
 | --- | --- |
 | `small` / `medium` / `large` | `metric`, `stat_grid` (at most 2 stats for `small`, 4 otherwise), `progress`, `chart`, `text` (at most 3 lines, 200 characters), `row` (at most 4, not tappable); at most 2 sections, 4 items for `small`, 6 for `medium`, 12 for `large`. `markdown` becomes text, `empty` / `loading` one line of secondary text; `button`, `link`, `field`, `segmented`, `table`, `divider`, `search`, `filter`, `more`, actions, avatars and thumbnails are removed; `refresh_after` unused |
-| `accessory_circular` / `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines for `rectangular`, 1 for `circular`) |
+| `accessory_circular` | First `metric`, `progress` or `text` (1 text line); progress is a circular capacity ring with its label in the center (percentage when the label is empty). The center text is capped at the interface's largest non-accessibility text size and shrinks as needed to fit the ring |
+| `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines); progress uses the default progress view |
 | `accessory_inline` | First `metric` or one line of `text` (no progress) |
 
 Returns 502 if nothing drawable remains. Prefer drawing directly for `size`: a `metric` plus `stat_grid` for small, add a compact `chart` for medium, one `progress` or sentence for watch faces.
@@ -3031,7 +3111,7 @@ UI placements `extension` / `extension_name` and `plugin` / `plugin_name`, marke
 Features accept new and old names (`hasExtensionFeature("ui_slots")` means `extension_ui_slots` or `plugin_ui_slots`, likewise `"manager"`); both `extension_ui` and `plugin_ui` events
 are accepted (new hubs send both; badges are set values, so receiving twice is harmless); channel `settings_url` accepts `settings/extensions/<id>` and `settings/plugins/<id>`.
 Views, components, actions, responses, placements and context all use schema-generated types (`apple/Packages/PersonaWire/Sources/PersonaWire/ExtensionWire.swift`, #1860); the app only adds decoding helpers alongside them
-(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`, the Shared version widgets and the watch send; every page or card the app draws sends 6, #827).
+(`ExtensionUIModel.swift`: `ExtensionUIPlace.owner` accepts both key forms, `ExtensionUIContext.here(…)` includes time zone, language, platform and `ui_version: 3`, the Shared version widgets and the watch send; every page or card the app draws sends 8, #827, #9158).
 
 - List: each extension's name and status (**On** / **Starting** / **Needs Setup** / **Off** / **Not available on this hub** / **Something Went Wrong**; both `running` and `stopped` are **On**), opening details on tap; footer explains installation via the hub's admin UI (`/admin`) or on the hub machine (`personad extension`).
 - Details: status, version, source, description, small running-state text ("Running" / "Not running; starts when needed"), "Missing: …" and errors; **Enabled** switch; **Settings** form drawn from `form.fields` (text, numbers, toggles, choices, text lists / multiselect,
@@ -3134,6 +3214,10 @@ Views, components, actions, responses, placements and context all use schema-gen
   value with the error as a toast, a redraw meanwhile keeps the user's value, a spinner after a second. A disabled control, or one on a card without a model, is dimmed. Mock: `showcase › controls`
   (`-openExtension showcase -openExtensionPage controls`) keeps what its controls are changed to, answers with the row (`items`), fails `fails` with 502, and asks first for two switches
   (`GET /mock/controls/reset` forgets); unit tests `ExtensionControlsTests`, UI test `ExtensionControlsUITests`.
+- UI version 8 (#9158, "UI version 8"): pages, the native stream and the app's cards and sections send 8. A columns view is the page's list
+  until the page's width holds two columns of cards, then a grid of them, each line as tall as its tallest card; a section's icon and link
+  beside its title; its rows side by side where there is room (`ExtensionColumns.swift`). Mock: `MOCK_EXTENSION_COLUMNS=1`'s Today page
+  (the navigation's Today); unit tests `ExtensionColumnsTests`, UI test `ExtensionColumnsUITests`.
 - Inbox-item body (#1682, `inbox_item`, see "Inbox items" above): when the hub has `extension_ui_slots` (also query immediately after app startup before hello arrives: an item opened at launch must not be permanently assigned the original body because of that;
   hubs not knowing this slot simply return an empty list), query each hub once via `GET /api/v1/extensions/-/ui?placement=inbox_item` (again on pairing / hub switch or opening Inbox),
   recording connectors with extension rendering (`InboxItemSlots`, `connector` matched to item `source`). Opening such items calls `POST …/-/ui/{ui}` with the item id in `context.item`,
@@ -3633,7 +3717,7 @@ except the maximum backoff rises from 60 seconds to 5 minutes.
 
 Full duplex: the phone continuously sends microphone audio (including silence); the model decides when to speak. The app does no VAD and no push-to-talk.
 
-This section is protocol 1. Voice-mode protocol 2 (spoken by the built-in voice extension from #3502; `start` includes `protocol: 2` and `target` binding the current chat, adding `run` / `link` frames, `resend` and target in `ready`; #3504 adds `ask`; from #3503 the extension also sends `clear` when the user interrupts; from #3505 it pauses the upstream while the bound conversation works, and `link` frames gain `paused` / `waking`) is in `docs/assistant/voice.md` section 3. Frames remain unchanged for clients not opting in; iOS only shows entry points for voice extensions whose `GET /info` reports `protocol` ≥2.
+This section is protocol 1. Voice-mode protocol 2 (spoken by the built-in voice extension from #3502; `start` includes `protocol: 2` and `target` binding the current chat, adding `run` / `link` frames, `resend` and target in `ready`; #3504 adds `ask`; from #3503 the extension also sends `clear` when the user interrupts; from #3505 it pauses the upstream while the bound conversation works, and `link` frames gain `paused` / `waking`; from #9290, feature `hold`, the app's `hold` frame pauses it at once while a system call is on hold, and `start` may say `surface: "call"`, which only the call's log uses) is in `docs/assistant/voice.md` section 3. Frames remain unchanged for clients not opting in; iOS only shows entry points for voice extensions whose `GET /info` reports `protocol` ≥2.
 Both protocols may include `error.code`: `upstream_forbidden` (service rejected the key), `upstream_unavailable`, `upstream_failed` (disconnected, reconnect failed); the app treats unknown codes as absent.
 
 ### `GET /models`
@@ -3806,7 +3890,7 @@ The form's upstream has no `tools` switch, so it is auto: it declares the functi
   - **Prefer deletion on failure**: delete whether or not key-presence can be read (idempotent); unreadable presence still returns `secrets_cleared`. If deletion fails, save nothing, return 500 `secret_not_cleared`;
     if config save fails after deletion (database write failure, 409), the error also includes `secrets_cleared` and the old address remains. Invalid form config (400) changes nothing and keeps the key.
 - **Model fallback**: if the selected model's upstream disappears (address cleared, manager.json changed), no error/disconnect: use default model and voice, then send nonfatal `error{code: "model_unavailable"}` after connecting.
-- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "meeting"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
+- **`GET /info`**: `{"protocol": 2, "features": ["target", "runs", "asks", "resume", "suspend", "speak", "speech_gate", "meeting", "hold"], "setup"?: "…", "warnings"?: ["…"]}`, without keys or upstream list. `protocol` is the highest voice-frame version this extension speaks (2 since #3502; clients not sending `protocol: 2` in `start` still use protocol 1 from this section); `features` lists only implemented capabilities (`docs/assistant/voice.md` ("Version negotiation")).
 - **`POST /speak`** (#5004, feature `speak`): `{"text", "model"?, "voice"?, "lang"?}` read aloud in its own upstream session (no tools, instructions to say the text exactly as written); answers `200` `audio/pcm` with `X-Persona-Audio-Rate` and the reply's PCM16 as it comes, or, before any audio, `{"error", "code"}` with `400 bad_request`, `403 forbidden` (not a full device), `503 no_upstream`, `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed` or `504 no_audio`. The iPhone says meeting answers with it outside a call; details in `docs/assistant/voice.md` ("Reading a text aloud").
 - **Meeting calls** (#3862 phase 4, feature `meeting`): a protocol 2 `start` with `mode: "meeting"` and `recording_id`, bound to a recorded meeting's room, that hears only what the owner says while holding Talk (`talk` frames) and hands every question to the room; a room takes no other call (`meeting_room`). Details in `docs/assistant/voice.md` ("Meeting calls").
 - **Meeting transcription** (#3862 phase 5): the manifest also contributes `transcription: [{"id": "gpt-live", "name": "GPT-Live"}]` beside its voice (its kind stays `voice`), with the same upstreams and key.

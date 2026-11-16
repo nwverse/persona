@@ -8,7 +8,7 @@ unchanged. Nothing constructs `RustCore` or loads the native library on the App'
 ## Toolchain and cached build
 
 Install rustup, the Rust 1.98.0 targets and NDK **29.0.14206865**. The build uses the NDK's LLVM clang/ar directly;
-`cargo-ndk` is not required. It supports an x86_64 Linux build host and the App's `minSdk 30`.
+`cargo-ndk` is not required. It supports macOS and x86_64 Linux build hosts (NDK prebuilt `darwin-x86_64` or `linux-x86_64`; Apple silicon still uses `darwin-x86_64`) and the App's `minSdk 30`.
 
 ```sh
 rustup target add --toolchain 1.98.0 aarch64-linux-android x86_64-linux-android

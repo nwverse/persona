@@ -721,6 +721,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -1088,6 +1101,8 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
 }
 
 export interface UIPlaces {
@@ -2049,6 +2064,22 @@ export interface Tile {
   control?: RowControl;
   actions?: RowAction[];
   action?: Action;
+  /** Draws the tile as a ring (UI version 9): never with an image or a spark. */
+  gauge?: Gauge;
+}
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+export interface Gauge {
+  /** How full the ring is, 0 to 1. */
+  ratio: number;
+  /** A short word under the value (USD, GB, h), as a control's unit. */
+  unit?: string;
+  color?: Color;
 }
 
 /**

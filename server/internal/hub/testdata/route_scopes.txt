@@ -287,6 +287,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/model-config/purposes/{id}
 -                    GET /api/v1/model-profiles
 -                    GET /api/v1/mutes
+-                    GET /api/v1/navigation
 -                    GET /api/v1/ops/{id}
 -                    GET /api/v1/personas
 -                    GET /api/v1/personas/{id}/{file...}
@@ -499,6 +500,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/cleanup
 -                    POST /api/v1/machines/{mid}/codex/{sid}/takeover
 -                    POST /api/v1/machines/{mid}/computer/clipboard
+-                    POST /api/v1/machines/{mid}/computer/phone-screen
 -                    POST /api/v1/machines/{mid}/computer/{action}
 -                    POST /api/v1/machines/{mid}/deploy
 -                    POST /api/v1/machines/{mid}/doctor/fix
@@ -685,6 +687,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}
 -                    PUT /api/v1/mutes
+-                    PUT /api/v1/navigation
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/push/ln-mode
 -                    PUT /api/v1/push/web/{device}

@@ -1132,6 +1132,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	ctx = withLauncherPurpose(ctx, "assistant")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
+	putMainCompactWindow(cfg, p)
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
 		p["interject_background"] = true
 	}

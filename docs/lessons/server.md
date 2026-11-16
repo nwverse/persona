@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
 ## A transport made for one request opens a connection for one request (2026-11-16, #9202)
 
 The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
@@ -682,6 +686,24 @@ namespace; resolve the fallback into the ids of the table being written (the dev
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
+
+## A backup's runtime-file filter is not for the owner's files (2026-11-14, #5951)
+
+The whole-install backup skipped `*.log`, `*.lock`, `*.pid`, `*.sock` and `.tmp-` names in every directory it copied,
+the knowledge base included: a `meeting.log` or `yarn.lock` there was left out, the manifest listed only what was
+copied, so verification passed, and a restore replaced the directory with one missing them. Skip runtime artifacts
+only in directories the product itself writes (and sockets, by type, anywhere); copy the knowledge base, skills and
+extensions in full, and never filter on the restore side. The same review found two more gaps where a missing value
+read as "anything goes": a `password=` query parameter dropped before `pg_dump` (take the password from
+`pgx.ParseConfig`, as the connection does), and a manager database with no `sealing_key` row accepting any key
+(prove the bundled key opens its sealed values). A relative path from a manifest is checked against its root
+(`../victim` is clean but outside).
+
+libpq expands a connection URI only when it is the explicit `dbname` argument, never from `PGDATABASE`: the backup's
+`PGDATABASE=postgres://…` made `pg_dump` ignore host, port and user and try the default socket, and PostgreSQL 18's
+`pg_restore` without `-d` refuses to run at all. Fake clients in unit tests accepted both, so only a real server
+showed it. Pass `PGHOST`/`PGPORT`/`PGUSER`/`PGDATABASE=<name>` and the ssl* variables, the password in `PGPASSWORD`,
+and `--dbname=<plain name>` to `pg_restore`.
 
 ## A failed swap must not look like a new install
 
@@ -1429,7 +1451,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
@@ -1912,6 +1934,8 @@ Compare the original CSV decimal with the exact decimal written by the 15-signif
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
 
+Cached spreadsheet formula ranges can expand millions of absent cells from a tiny input. Bound both each range and the aggregate work across a workbook, check coordinates before arithmetic, and leave the formula uncached for Excel to recalculate when the budget is exceeded. Test the generated file and normal aggregate results as well as the bound.
+
 ## Decimal rounding scales can overflow before the result does (#1335)
 
 `ROUND` can have a finite result even when its power of ten or scaled intermediate overflows. Bound places by the float64 range, split large positive scales for tiny inputs, and retain numbers whose rounding place is already below their precision. Only a genuinely overflowing rounded result becomes `#NUM!`. Test emitted XLSX caches, including subnormal values, large finite results, 15-digit ties and `IFERROR`.
@@ -2018,6 +2042,7 @@ A connector that folds several notifications into one thread (GitHub CI failures
 - A list decorated again on every publish re-read every row's question (`transcript.AskOf` on the last words of each of 8,200 sessions). Keep the answer per machine and session with the text it was read from, and read again only when the text differs (`asksMemo`); a complete list drops the rows it no longer carries, a subset keeps them. Prove it with a table of lists that change between calls, each decorated warm and fresh.
 - To find out whether a list changed since it was last sent, do not keep a copy of each list sent: keep its length and digest and encode into one reused buffer (`sentList`; #3197, "A digest instead of the last bytes, a mirror without the lists" below).
 - An allocation bound read from `runtime.ReadMemStats` counts every goroutine in the process: in a full package run, work other tests left behind pushed the smallest bounds over. Run such a test in a process of its own (`isolated` in `assistant/profile_bench_test.go`, `isolatedSessionAllocation` in `hub/sessions_push_test.go`, #2050). Repeated garbage collection clears pools but does not stop unrelated goroutines; a synchronized allocation in another goroutine is still included in the measured callback's `TotalAlloc` delta. Rerun the whole test in the child, preserving its fixtures, functional assertions, collection cadence and allocation ceilings. Bound and reap the child, propagate its failures, and verify a child receipt rather than treating an early return as isolation. Check the source revision before attributing two failures to the same missing guard: a newer revision may already isolate one of them.
+- The race detector's instrumentation allocates too: under `-race` a decorated copy of 8,200 sessions measured about 89 MB against its 13.7 MB bound. Every such test starts with `if raceEnabled { t.Skip("race instrumentation allocates") }`, before `isolated`, so the parent skips without starting a child (`raceEnabled` comes from `assistant/race_test.go`). Two budgets written without it kept `go test -race ./internal/assistant/` red, and no CI lane runs `-race` to notice (#4582).
 - A literal gate still checks every template of a catalog on a text that matches none (265 for `InboxText`): index the templates by the first byte of their first literal, and try the ones that start with a placeholder for every text (`i18n.templateIndex`).
 - Background tasks, subagents and a subagent's latest tool are written by hand too, each type under its own layout hash (`backgroundWireLayout`, `subagentWireLayout`, `workflowToolWireLayout`). A field added to one needs its line in `session_wire.go` and that hash; until then that type goes back to reflection.
 - The paged index rebuilt every row's item (a summary marshalled, the full row and search text joined) on each list update and `sessions.revs`, for one changed row: 2.65 MB for 150 rows. The index's own item is the memo: when its stored full row is the row's new encoding with the same suffix, its summary is the row's too, since the summary is cut from the fields that encoding holds (`indexedRow`, 0.10 MB). Text read from the row itself is still compared, because the encoding folds every invalid UTF-8 byte into the same escape. The keys must line up: a list with two rows under one id pairs one row's summary with the other's bytes, so after such a list, and for the list after it, compute every row. Prove it with the full computation run beside it on changing lists, step for step (`TestIndexRowReuseMatchesFullPath`), and let `Replace` keep a payload that is the stored slice itself without walking it by reflection (`sessionlist.sameItem`).
@@ -2260,7 +2285,7 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
 
 On TestFlight 224 an extension's **Review** spun for two minutes and then failed. The operations list (`GET /api/v1/extensions/-/operations`) told the story the access log could not: the settings page's synchronous `catalog/preview` was downloading a 13 MB package at about 33 KB/s from the hub machine; the app's 120 s request timeout closed the request, the hub's relay to the manager closed with it, and the preview's context (the request's) took the download down at 4.5 MB (`context canceled`). Tapping again on the reopened page started a second download of the same package beside the first, which got nothing for 30 s (`download_stalled`, `400 invalid_plugin`). A read-only preview with no client timeout then showed the deeper problem: the download kept moving and was cut at 10.1 MB by `Download`'s fixed five-minute budget, so on that link it could never succeed, synchronous or not.
-- A long download must not belong to one request. The manager now has one download per package at a time (by cache and sha256, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for.
+- A long download must not belong to one request. The manager now has one download per package at a time (by cache, sha256 and declared size, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for. Keep size in the sharing key: equal digests with conflicting declared sizes must be validated independently, regardless of which request arrived first (#9400).
 - Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
 - When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
 - Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.
