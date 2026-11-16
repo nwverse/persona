@@ -674,7 +674,6 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
-            self.record_review_publication(repo, number, pr, old.get("findings", []), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,
@@ -784,7 +783,6 @@ class Watcher:
             published_head = published["headRefOid"]
             if published_head == pr["headRefOid"]:
                 raise WatchError("the repair push returned without advancing the PR head")
-            self.record_review_publication(repo, number, pr, old.get("findings", []), posted=True)
             published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
             self.state.put(repo, number, published_head, evidence_key=published_key,
                            base=published["baseRefOid"], repair_rounds=rounds + 1,

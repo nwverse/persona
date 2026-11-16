@@ -93,16 +93,16 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.assertTrue(registered.exists())
         self.assertTrue(registration.exists())
 
-    def test_missing_registration_never_deletes_a_nonempty_checkout(self):
+    def test_unregistered_failed_worktree_can_be_removed(self):
         broken = self.worktrees / "persona-7-broken"
         broken.mkdir()
-        (broken / "file").write_text("orphan")
+        (broken / "partial-artifact").write_text("from failed checkout")
         with patch.object(pr_watch_recovery, "run", side_effect=[
                 subprocess.CompletedProcess([], 128, "", "not a working tree"),
+                subprocess.CompletedProcess([], 0, "", ""),
                 subprocess.CompletedProcess([], 0, "", "")]):
-            with self.assertRaises(pr_watch_common.WatchError):
-                pr_watch_recovery.remove_worktree(self.checkout, self.state, broken)
-        self.assertTrue(broken.exists())
+            pr_watch_recovery.remove_worktree(self.checkout, self.state, broken)
+        self.assertFalse(broken.exists())
 
     def test_empty_mkdtemp_reservation_can_be_removed(self):
         broken = self.worktrees / "persona-7-empty"

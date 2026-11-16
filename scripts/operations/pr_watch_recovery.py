@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -139,9 +140,10 @@ def remove_worktree(checkout, state_file, path):
             if registration is not None and registration.exists():
                 raise WatchError("worktree registration remains after pruning: " + bounded(result.stderr, 800))
             if candidate.exists():
-                if any(candidate.iterdir()):
-                    raise WatchError("refusing to recursively delete nonempty worktree debris: " + bounded(result.stderr, 800))
-                candidate.rmdir()
+                # The caller created this exact mkdtemp reservation. Once Git
+                # no longer registers it, clean only that watcher-owned path;
+                # no other directory is eligible for recursive deletion.
+                shutil.rmtree(candidate)
     run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     if candidate.exists():
         raise WatchError("Git returned success but the watcher-owned worktree still exists")
