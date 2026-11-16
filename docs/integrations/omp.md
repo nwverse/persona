@@ -82,7 +82,7 @@ Without the extension a running omp is still listed, with its terminal only. The
 - **Its own runtime identity and slot.** The runtime is `omp-<pid>`, the apps' name and agent are `omp`, and card ids start with
   `omp`. The extension keeps its host in `__personaOmp` (`integrations/pi` uses `__personaPi`), so an omp and a pi loaded in the
   same process do not collide.
-- **Its own resume command.** `omp --resume <session file>`, where pi uses `pi --session`.
+- **Its own resume command.** `omp --resume <session file>`, where pi uses `pi --approve --session`.
 
 Everything else is pi's code under omp's identity: the extension API, the conversation mapping, approval and question handling,
 live text, and the host's record of where a session last ran (`integrations/pi/lib/pi.js`).
