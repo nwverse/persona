@@ -154,7 +154,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
     }
 
     /// Picks `group` in Jump To's menu: its item reads "<title>, <count>" (a plain prefix would also take the shell's
-    /// Back, "今天要处理的事", for 今天).
+    /// Back, 「今天要处理的事」, for 「今天」).
     @MainActor private func jump(to group: String) {
         pick(NSPredicate(format: "label BEGINSWITH %@ AND identifier != %@", group + ", ", "inbox.groupTitle"), "\(group) in Jump To")
     }
@@ -193,7 +193,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
         shownDoneGroups().first.map { Self.title($0.label) }
     }
 
-    /// Done's groups' titles on screen, top first. Needs You and FYI group by time too (a 今天 of their own): a title
+    /// Done's groups' titles on screen, top first. Needs You and FYI group by time too (a 「今天」 of their own): a title
     /// above Done's, while Done's is in the list, is theirs.
     @MainActor private func shownDoneGroups() -> [(frame: CGRect, label: String)] {
         guard let root = try? app.windows.firstMatch.snapshot() else { return [] }
@@ -208,7 +208,7 @@ final class InboxJumpToRaceUITests: XCTestCase {
         return shown.filter { done == nil || $0.frame.minY >= done!.maxY - 1 }.sorted { $0.frame.minY < $1.frame.minY }
     }
 
-    /// A group title's label is its title and count ("1 个月前、8", "1+ Month Ago, 8").
+    /// A group title's label is its title and count (「1 个月前、8」, "1+ Month Ago, 8").
     private static func title(_ label: String) -> String {
         String(label.split(whereSeparator: { $0 == "、" || $0 == "," }).first ?? Substring(label))
     }
