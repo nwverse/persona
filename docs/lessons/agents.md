@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+- Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
+  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
+  `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
+  `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt
