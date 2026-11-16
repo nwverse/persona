@@ -1606,6 +1606,9 @@ final class AppModel {
 
     /// Forgets a chat held in memory (its group went away).
     func dropChat(_ key: SessionKey) {
+        #if DEBUG
+        if let store = chats[key] { ProductionContinuityShadow.shared.close(store) }
+        #endif
         chats[key] = nil
         chatUse[key] = nil
         subscribers[key] = nil
@@ -1620,6 +1623,9 @@ final class AppModel {
         }
         guard idle.count > Self.keptChats else { return }
         for k in idle.sorted(by: { chatUse[$0, default: 0] < chatUse[$1, default: 0] }).prefix(idle.count - Self.keptChats) {
+            #if DEBUG
+            if let store = chats[k] { ProductionContinuityShadow.shared.close(store) }
+            #endif
             chats[k] = nil
             chatUse[k] = nil
         }
@@ -2046,11 +2052,63 @@ final class AppModel {
     /// The chat's store if one is in memory (never creates one: background sync writes to the disk cache instead).
     func existingChat(_ key: SessionKey) -> ChatStore? { chats[key] }
 
+    /// Native continuity through its adapter. DEBUG instrumentation is isolated here; Release executes the same
+    /// ChatStore methods directly and never carries the shadow's types or launch switches.
+    private func applyBatch(_ store: ChatStore, kind: NativeContinuityInput.Kind, items: [Item], span: ItemSpan,
+                            backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> ChatStore.Gap {
+        #if DEBUG
+        return store.apply(.batch(kind, items: items, span: span, backlog: backlog,
+                                  hasMore: hasMore, moreAfter: moreAfter)) ?? .none
+        #else
+        return store.apply(items, span: span, backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
+        #endif
+    }
+
+    private func replaceBatch(_ store: ChatStore, items: [Item], hasMore: Bool, span: ItemSpan) {
+        #if DEBUG
+        // Rust's reload retains strictly newer pushes of the same history, matching ChatStore.replace.
+        _ = store.apply(.batch(.reloaded, items: items, span: span, hasMore: hasMore))
+        #else
+        store.replace(with: items, hasMore: hasMore, span: span)
+        #endif
+    }
+
+    private func prependBatch(_ store: ChatStore, items: [Item], hasMore: Bool) {
+        #if DEBUG
+        _ = store.apply(.batch(.older, items: items, span: ItemSpan(), hasMore: hasMore))
+        #else
+        store.prepend(items, hasMore: hasMore)
+        #endif
+    }
+
+    private func unfoldBatch(_ store: ChatStore, fold: Item, items: [Item]) {
+        #if DEBUG
+        _ = store.apply(.range(items, fold: fold, more: false))
+        #else
+        store.unfold(fold, into: items)
+        #endif
+    }
+
+    /// Applies a background catch-up through the same production adapter as a push; this is an after page, not a
+    /// duplicate core fill (the core already requested that page when the push exposed its gap).
+    func applyPrefetch(_ store: ChatStore, items: [Item], span: ItemSpan, moreAfter: Bool) -> ChatStore.Gap {
+        #if DEBUG
+        let retained = store.items.filter { item in
+            let to = span.to ?? Int.max
+            return item.seq > to && (span.history == nil || span.history == store.history)
+        }
+        _ = store.apply(.batch(.reloaded, items: items + retained, span: span, hasMore: store.hasMore))
+        return applyBatch(store, kind: .after, items: items, span: span, moreAfter: moreAfter)
+        #else
+        return store.apply(items, span: span, moreAfter: moreAfter)
+        #endif
+    }
+
     func loadInitial(_ key: SessionKey) async {
         guard let api = api(key.group) else { return }
         do {
             let res = try await api.items(key, beforeSeq: nil)
-            settle(key, chat(key).apply(res.items, span: res.span, backlog: true, hasMore: res.hasMore))
+            settle(key, applyBatch(chat(key), kind: .latest, items: res.items, span: res.span, backlog: true, hasMore: res.hasMore))
         } catch {
             chat(key).error = error.shown
         }
@@ -2073,16 +2131,23 @@ final class AppModel {
 
     /// Fetches what comes after the chat's `covered`, page by page, until it is whole; past 8 pages it starts over from
     /// the latest page instead.
-    func fill(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
+    func fill(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil, isPrefetch: Bool = false) async {
         guard shouldApply?() ?? true, let api = api(key.group), !filling.contains(key) else { return }
         filling.insert(key)
-        defer { filling.remove(key) }
         let store = chat(key)
+        var received = isPrefetch
+        defer {
+            filling.remove(key)
+            #if DEBUG
+            if !received { ProductionContinuityShadow.shared.failed(.fillFailed, in: store) }
+            #endif
+        }
         for _ in 0..<8 {
             guard shouldApply?() ?? true else { return }
             guard let r = try? await api.items(key, afterSeq: store.covered) else { return }
+            received = true
             guard shouldApply?() ?? true else { return }
-            switch store.apply(r.items, span: r.span, moreAfter: r.moreAfter == true) {
+            switch applyBatch(store, kind: .after, items: r.items, span: r.span, moreAfter: r.moreAfter == true) {
             case .none: return
             case .fill: continue
             case .reload: await reload(key, shouldApply: shouldApply); return
@@ -2093,10 +2158,17 @@ final class AppModel {
 
     /// Starts the chat over from the latest page (the hole was too big, or the transcript was replaced).
     func reload(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
-        guard shouldApply?() ?? true, let api = api(key.group), let page = try? await api.items(key, beforeSeq: nil) else { return }
-        guard shouldApply?() ?? true else { return }
-        chat(key).replace(with: page.items, hasMore: page.hasMore, span: page.span)
-        ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
+        guard shouldApply?() ?? true, let api = api(key.group) else { return }
+        do {
+            let page = try await api.items(key, beforeSeq: nil)
+            guard shouldApply?() ?? true else { return }
+            replaceBatch(chat(key), items: page.items, hasMore: page.hasMore, span: page.span)
+            ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
+        } catch {
+            #if DEBUG
+            ProductionContinuityShadow.shared.failed(.fillFailed, in: chat(key))
+            #endif
+        }
     }
 
     /// Fetches the work a fold stands for into the chat, once at a time per fold (several rows of one open work line
@@ -2109,9 +2181,21 @@ final class AppModel {
             return
         }
         let task = Task { try await api.foldedWork(key, fold) }
+        // The transport helper returns the concatenated pages. One range event applies the same complete work to
+        // both implementations, so a final empty page cannot erase the previous page in the mirror.
+        #if DEBUG
+        _ = chat(key).apply(.event(.openFold, fold: fold))
+        #endif
         unfolding[id] = task
         defer { unfolding[id] = nil }
-        chat(key).unfold(fold, into: try await task.value)
+        do {
+            unfoldBatch(chat(key), fold: fold, items: try await task.value)
+        } catch {
+            #if DEBUG
+            ProductionContinuityShadow.shared.failed(.rangeFailed, in: chat(key), fold: fold)
+            #endif
+            throw error
+        }
     }
     @ObservationIgnored private var unfolding: [String: Task<[Item], Error>] = [:]
 
@@ -2122,12 +2206,18 @@ final class AppModel {
         let store = chat(key)
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
         store.isLoadingOlder = true
+        #if DEBUG
+        ProductionContinuityShadow.shared.loadOlder(store)
+        #endif
         defer { store.isLoadingOlder = false }
         do {
             let res = try await api.items(key, beforeSeq: first.seq, turns: turns)
-            store.prepend(res.items, hasMore: res.hasMore)
+            prependBatch(store, items: res.items, hasMore: res.hasMore)
             return true
         } catch {
+            #if DEBUG
+            ProductionContinuityShadow.shared.failed(.olderFailed, in: store)
+            #endif
             if !error.isOffline { show(error) } // scrolling up while offline: the title says why nothing comes
             return false
         }
@@ -2655,7 +2745,8 @@ final class AppModel {
         case .items(let key, let items, let backlog, let hasMore, let span, let moreAfter):
             if backlog { connection.caughtUp(Self.catchUpPart(key)) }
             let store = chat(key)
-            let gap = store.apply(items, span: span, backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
+            let gap = applyBatch(store, kind: backlog && span.from == nil ? .latest : .pushed, items: items, span: span,
+                                 backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
             ChatTrace.shared.note(key, ChatTrace.batch(items, span: span, backlog: backlog, gap: gap, resets: store.resets, covered: store.covered))
             settle(key, gap)
             // The streamed message landed in the transcript: stop drawing its live copy (and the newer one kept back).

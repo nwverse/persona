@@ -163,10 +163,9 @@ impl Runtime {
                 if let Some(diagnostics) = self.shared.diagnostics.get() {
                     diagnostics::add(&diagnostics.counters.patch_encode, started);
                 }
-                if let Some(patch) = patches.chats.get_mut(chat) {
-                    patch.ops.clear();
+                if patches.woken.remove(chat) {
+                    patches.chats.remove(chat);
                 }
-                patches.woken.remove(chat);
                 encoded
             })
         }

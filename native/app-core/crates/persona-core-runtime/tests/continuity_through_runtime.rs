@@ -195,7 +195,7 @@ fn continuity_fixtures_through_runtime() {
             }
         }
     }
-    assert_eq!((cases, steps), (38, 94), "every continuity case and step replays");
+    assert_eq!((cases, steps), (39, 95), "every continuity case and step replays");
 }
 
 #[test]
@@ -233,6 +233,42 @@ fn one_chats_drain_does_not_consume_another_chats_wakeup() {
     );
     let patch: ChatPatch = wire::decode(&runtime.drain("b")).unwrap();
     assert_eq!(patch.ops.len(), 1);
+}
+
+#[test]
+fn drain_commits_one_complete_patch_instead_of_mixing_state_with_old_ops() {
+    let host = Arc::new(Recorder::default());
+    let runtime = Runtime::new(host);
+    assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
+        chat: "a".into(),
+        snapshot: ChatSnapshot::default(),
+    })));
+    assert!(runtime.flush(Duration::from_secs(5)));
+    let _ = runtime.drain("a");
+    for seq in 1..=2 {
+        let batch = WireBatch {
+            items_json: format!(r#"[{{"id":"{seq}#0","seq":{seq},"role":"assistant","kind":"text","text":"new"}}]"#),
+            history: Some("h".into()),
+            from_seq: Some(seq - 1),
+            to_seq: Some(seq),
+            ..WireBatch::default()
+        };
+        assert!(runtime.dispatch(&wire::encode(&Action::Chat {
+            chat: "a".into(),
+            event: ChatEvent::Pushed { batch },
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+        assert_eq!(patch.ops.len(), 1);
+        assert_eq!(patch.covered, seq);
+        assert_eq!(patch.loaded_once, false);
+        let idle: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+        assert!(idle.ops.is_empty());
+        assert_eq!(idle.version, patch.version);
+        assert_eq!(idle.covered, patch.covered);
+        assert_eq!(idle.history, patch.history);
+        assert_eq!(idle.loaded_once, patch.loaded_once);
+    }
 }
 
 #[test]

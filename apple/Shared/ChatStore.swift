@@ -437,6 +437,9 @@ nonisolated extension Item {
 final class ChatStore {
     let key: SessionKey
     @ObservationIgnored private let cacheFolder: URL?
+    @ObservationIgnored var initialContinuitySnapshot = NativeContinuitySnapshot(
+        items: [], covered: 0, history: nil, hasMore: false, loadedOnce: false)
+    @ObservationIgnored var continuityShadowEnabled = true
     private(set) var items: [Item] = []
     private(set) var rows: [ChatRow] = []
     private(set) var blocks: [ChatBlock] = []
@@ -565,6 +568,8 @@ final class ChatStore {
             blocks = ChatBlock.build(rows)
             tasks = TaskIndex.build(items)
             version += 1
+            initialContinuitySnapshot = NativeContinuitySnapshot(items: items, covered: covered, history: history,
+                                                                 hasMore: hasMore, loadedOnce: loadedOnce)
         }
     }
 
@@ -586,6 +591,12 @@ final class ChatStore {
     /// cache, several exchanges behind). Without a span (an older hub) batches are trusted, as before.
     @discardableResult
     func apply(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
+        apply(.batch(backlog && span.from == nil ? .latest : .pushed, items: new, span: span,
+                     backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)) ?? .none
+    }
+
+    /// The native implementation behind the shared adapter. Its result is the only production result.
+    func applyNative(_ new: [Item], span: ItemSpan, backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> Gap {
         let new = new.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
@@ -614,7 +625,7 @@ final class ChatStore {
         // A page from the end.
         if let first = new.first { newestFrom = (first.seq, first.part) }
         if covered > 0, let first = new.first?.seq, first > covered + 1 {
-            replace(with: new, hasMore: hasMore ?? true, span: span)
+            replaceNative(with: new, hasMore: hasMore ?? true, span: span)
             if backlog { loadedOnce = true }
             return .none
         }
@@ -774,6 +785,10 @@ final class ChatStore {
 
     /// The work a fold stood for, fetched (`AppModel.unfold`): it takes the fold's place.
     func unfold(_ fold: Item, into work: [Item]) {
+        apply(.range(work, fold: fold, more: false))
+    }
+
+    func unfoldNative(_ fold: Item, into work: [Item]) {
         guard let i = items.firstIndex(where: { $0.id == fold.id }) else { return }
         let retained = items.remove(at: i)
         ids.remove(fold.id)
@@ -1071,6 +1086,10 @@ final class ChatStore {
 
     /// Starts over from the latest page: what came in between was too much to fetch, and a hole would never fill.
     func replace(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
+        apply(.batch(.reloaded, items: latest, span: span, hasMore: hasMore))
+    }
+
+    func replaceNative(with latest: [Item], hasMore: Bool, span: ItemSpan = ItemSpan()) {
         let latest = latest.publicRefusals()
         arrivedAt = .now
         defer { newestArrived() }
@@ -1113,6 +1132,10 @@ final class ChatStore {
     }
 
     func prepend(_ older: [Item], hasMore: Bool) {
+        _ = apply(.batch(.older, items: older, span: ItemSpan(), hasMore: hasMore))
+    }
+
+    func prependNative(_ older: [Item], hasMore: Bool) {
         self.hasMore = hasMore
         merge(older)
     }

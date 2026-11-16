@@ -289,15 +289,15 @@ impl Reducer {
             !(old.kind != "fold" && old.is_work() && folds.iter().any(|fold| fold.folds(old))
                 || old.kind == "fold" && batch_work.iter().any(|work| old.folds(work)))
         });
-        self.ids = self.items.iter().map(|i| i.id.clone()).collect();
-        let existing_first = self.first_seq();
+        self.ids.extend(fresh.iter().map(|item| item.id.clone()));
+        let incoming_ids: HashSet<&str> = fresh.iter().map(|item| item.id.as_str()).collect();
+        self.items.retain(|item| !incoming_ids.contains(item.id.as_str()));
+        self.items.extend(fresh.iter().cloned());
         for item in fresh {
             self.insert_shared(item);
         }
-        let reaches_start = match (new_min, existing_first.or_else(|| self.items.first().map(|i| i.seq))) {
-            (Some(min), Some(first)) => min <= first,
-            _ => false,
-        };
+        self.items.sort_by_key(|item| item.key());
+        let reaches_start = new_min.is_some_and(|min| min <= self.items.first().map_or(i64::MAX, |item| item.seq));
         if let Some(more) = has_more
             && backlog
             && (!self.loaded_once || self.items.len() <= new_len)
