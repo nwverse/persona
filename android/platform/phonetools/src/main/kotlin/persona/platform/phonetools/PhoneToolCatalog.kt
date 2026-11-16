@@ -172,7 +172,13 @@ internal object PhoneToolCatalog {
                 "the user asks something that needs their location.",
             PhoneSource.Location, foreground = true),
         tool("phone_health_summary",
-            "Summarize the user's health data per day. Metrics: steps, distance (meters), active_energy, resting_energy, dietary_energy (kcal, daily totals), protein, carbs, fat (grams, daily totals), heart_rate (bpm, average/min/max over the day), resting_heart_rate (bpm), sleep (hours asleep), weight (kg). Defaults to steps over the last 7 days. Only the requested metrics are read. Days run from local midnight to midnight; today's numbers are partial. Returns one row per day with only the days that have data. Read access is never reported to apps, so an empty result can also mean the user denied read access. When the iPhone is locked the app cannot read HealthKit: it returns the last snapshot saved while the device was unlocked (\"source\": \"snapshot\" with \"as_of\"), or a device_locked error when no snapshot exists yet.",
+            "Summarize the user's health data per day. Metrics: steps, distance (meters), " +
+                "active_energy, resting_energy, dietary_energy (kcal, daily totals), " +
+                "protein, carbs, fat (grams, daily totals), heart_rate (bpm, average/min/max over the day), " +
+                "resting_heart_rate (bpm), sleep (hours asleep), weight (kg). " +
+                "Defaults to steps over the last 7 days. Only the requested metrics are read. Days run from local midnight to " +
+                "midnight; today's numbers are partial. Returns one row per day with only the days that have data. Read access is " +
+                "never reported to apps, so an empty result can also mean the user denied read access.",
             PhoneSource.Health, mapOf(
                 "metrics" to array("Metrics to summarize. Default [\"steps\"].", string("One metric.", Health.metricNames)),
                 "days" to integer("How many days back from today, default 7, max 90.", 1, 90),
