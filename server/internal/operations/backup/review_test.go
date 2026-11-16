@@ -25,11 +25,11 @@ func TestClientEnvironmentUsesQueryStringPassword(t *testing.T) {
 		environment := clientEnvironment(target, "persona", docker)
 		values := environmentMap(t, environment)
 		if values["PGPASSWORD"] != "query-secret" {
-			t.Fatalf("docker=%v client environment = %#v", docker, environment)
+			fatalf(t, "docker=%v client environment = %s", docker, shownEnvironment(environment))
 		}
 		for _, variable := range environment {
 			if strings.Contains(variable, "query-secret") && !strings.HasPrefix(variable, "PGPASSWORD=") {
-				t.Fatalf("password outside PGPASSWORD: %q", variable)
+				fatalf(t, "password outside PGPASSWORD: %q", variable)
 			}
 		}
 	}
@@ -56,35 +56,35 @@ func TestUserFilesWithRuntimeLookingNamesAreBackedUp(t *testing.T) {
 		t.Chdir(filepath.Join(fixture.home, "extensions", "example"))
 		listener, err := net.Listen("unix", "run.sock")
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		defer listener.Close()
 	}
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	for _, entry := range manifest.Files {
 		if strings.HasSuffix(entry.Path, "manager.lock") || strings.HasSuffix(entry.Path, "run.sock") {
-			t.Errorf("runtime artifact %s was backed up", entry.Path)
+			errorf(t, "runtime artifact %s was backed up", entry.Path)
 		}
 	}
 	for _, name := range userFiles {
 		if err := os.Remove(filepath.Join(fixture.home, name)); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	}
 	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	for _, name := range userFiles {
 		raw, err := os.ReadFile(filepath.Join(fixture.home, name))
 		if err != nil || string(raw) != "user content "+name {
-			t.Errorf("%s after restore = %q, %v", name, raw, err)
+			errorf(t, "%s after restore = %q, %v", name, raw, err)
 		}
 	}
 }
@@ -95,25 +95,25 @@ func rewriteManifest(t *testing.T, bundle string, change func(*Manifest)) string
 	t.Helper()
 	manifest, _, err := readBundleManifest(bundle)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	staging := t.TempDir()
 	if err := extractBundle(bundle, staging, manifest); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	change(manifest)
 	raw, err := json.Marshal(manifest)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if err := os.WriteFile(filepath.Join(staging, manifestPath), raw, 0o600); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	// Written by hand: publishBundle would refuse an invalid manifest.
 	output := filepath.Join(t.TempDir(), "tampered.backup")
 	file, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	defer file.Close()
 	writer := tar.NewWriter(file)
@@ -123,11 +123,11 @@ func rewriteManifest(t *testing.T, bundle string, change func(*Manifest)) string
 	}
 	for _, member := range members {
 		if err := appendTarMember(context.Background(), writer, staging, member); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	}
 	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	return output
 }
@@ -136,23 +136,23 @@ func TestRelativeKnowledgeBaseCannotEscapeHome(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	victim := filepath.Join(filepath.Dir(fixture.home), "victim")
 	writeFixtureFile(t, filepath.Join(victim, "keep.txt"), []byte("outside the runtime directory"))
 	tampered := rewriteManifest(t, fixture.output, func(m *Manifest) { m.KnowledgeBase.Relative = "../victim" })
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: tampered, WritesQuiesced: true})
 	if err == nil {
-		t.Fatal("a relative knowledge-base path outside the runtime directory was restored without --allow-external-kb")
+		fatal(t, "a relative knowledge-base path outside the runtime directory was restored without --allow-external-kb")
 	}
 	raw, readErr := os.ReadFile(filepath.Join(victim, "keep.txt"))
 	if readErr != nil || string(raw) != "outside the runtime directory" {
-		t.Fatalf("directory outside the runtime was replaced: %q, %v", raw, readErr)
+		fatalf(t, "directory outside the runtime was replaced: %q, %v", raw, readErr)
 	}
 	for _, relative := range []string{"..", "../victim", "../../etc", "data/../../victim"} {
 		manifest := &Manifest{KnowledgeBase: KnowledgeBaseLocator{Relative: relative, Present: true}}
 		if _, err := restoreItems(fixture.home, t.TempDir(), manifest, true); err == nil {
-			t.Errorf("restoreItems accepted relative knowledge base %q", relative)
+			errorf(t, "restoreItems accepted relative knowledge base %q", relative)
 		}
 	}
 }
@@ -165,7 +165,7 @@ func TestUnrecordedManagerKeyIsCheckedAgainstSealedValues(t *testing.T) {
 		t.Helper()
 		sealed, err := secretkey.SealWith(key, "provider token")
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		return sealed
 	}
@@ -182,10 +182,10 @@ func TestUnrecordedManagerKeyIsCheckedAgainstSealedValues(t *testing.T) {
 		unrecorded(fixture, sealWith(t, bytes.Repeat([]byte{9}, secretkey.Size)))
 		_, err := fixture.operator().Create(context.Background(), fixture.options())
 		if err == nil || !strings.Contains(err.Error(), "secret.key") {
-			t.Fatalf("create with a key that opens no sealed value = %v", err)
+			fatalf(t, "create with a key that opens no sealed value = %v", err)
 		}
 		if _, statErr := os.Stat(fixture.output); statErr == nil {
-			t.Fatal("an unverifiable bundle was published")
+			fatal(t, "an unverifiable bundle was published")
 		}
 		assertNoTemporaryDatabases(t, fixture.backend)
 	})
@@ -197,13 +197,13 @@ func TestUnrecordedManagerKeyIsCheckedAgainstSealedValues(t *testing.T) {
 		unrecorded(fixture, sealWith(t, fixture.managerKey), sealWith(t, previous))
 		operator := fixture.operator()
 		if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		if _, err := operator.Verify(context.Background(), Options{Home: fixture.home, Bundle: fixture.output}); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	})
 
@@ -211,7 +211,7 @@ func TestUnrecordedManagerKeyIsCheckedAgainstSealedValues(t *testing.T) {
 		fixture := newBackupFixture(t, "persona_manager")
 		unrecorded(fixture)
 		if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	})
 }

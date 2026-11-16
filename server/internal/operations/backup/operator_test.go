@@ -275,7 +275,7 @@ func newBackupFixture(t *testing.T, managerName string) *backupFixture {
 	hubURL := "postgres://persona:hub-secret@db.example:5432/persona?sslmode=disable"
 	managerURL, err := withDatabase(hubURL, managerName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	writeFixtureFile(t, filepath.Join(home, "hub.json"), []byte(`{"database_url":"`+hubURL+`","token":"hub-token-secret"}`))
 	writeFixtureFile(t, filepath.Join(home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"`+managerName+`","usage":{"sources":[{"key":"usage-secret"}]}}`))
@@ -288,7 +288,7 @@ func newBackupFixture(t *testing.T, managerName string) *backupFixture {
 	writeFixtureFile(t, filepath.Join(home, "extensions", "example", "manifest.json"), []byte("{}"))
 	writeFixtureFile(t, filepath.Join(home, "extensions", "example", "run"), []byte("extension executable"))
 	if err := os.Chmod(filepath.Join(home, "extensions", "example", "run"), 0o700); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	writeFixtureFile(t, filepath.Join(home, "managers", "m-abcdef", "manager.json"), []byte("independent manager"))
 
@@ -307,10 +307,10 @@ func newBackupFixture(t *testing.T, managerName string) *backupFixture {
 func writeFixtureFile(t *testing.T, name string, content []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if err := os.WriteFile(name, content, 0o600); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 }
 
@@ -336,7 +336,7 @@ func assertNoTemporaryDatabases(t *testing.T, backend *fakeBackend) {
 	for _, server := range backend.servers {
 		for name := range server {
 			if strings.HasPrefix(name, "persona_verify_") || strings.HasPrefix(name, "persona_staged_") {
-				t.Errorf("temporary database %s remains", name)
+				errorf(t, "temporary database %s remains", name)
 			}
 		}
 	}
@@ -347,61 +347,61 @@ func TestWholeInstallCreateVerifyRestore(t *testing.T) {
 	operator := fixture.operator()
 	created, err := operator.Create(context.Background(), fixture.options())
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if !created.Verified {
-		t.Fatal("create returned before temporary-database verification")
+		fatal(t, "create returned before temporary-database verification")
 	}
 	info, err := os.Stat(fixture.output)
 	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("bundle mode = %v, %v", info.Mode(), err)
+		fatalf(t, "bundle mode = %v, %v", info.Mode(), err)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if manifest.Manager.SealingKey != secretkey.Fingerprint(fixture.managerKey) || len(manifest.Files) < 8 {
-		t.Fatalf("incomplete manifest: %+v", manifest)
+		fatalf(t, "incomplete manifest: %+v", manifest)
 	}
 	if _, err := operator.Verify(context.Background(), Options{Home: fixture.home, Bundle: fixture.output}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 
 	fixture.mutate(t)
 	restored, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if !restored.Restored || restored.PreviousHubDB == "" || restored.PreviousManagerDB == "" || restored.PreviousFiles == "" {
-		t.Fatalf("restore did not preserve predecessors: %+v", restored)
+		fatalf(t, "restore did not preserve predecessors: %+v", restored)
 	}
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-one" {
-		t.Fatalf("hub dump after restore = %q", got)
+		fatalf(t, "hub dump after restore = %q", got)
 	}
 	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database].dump; got != "manager-one" {
-		t.Fatalf("manager dump after restore = %q", got)
+		fatalf(t, "manager dump after restore = %q", got)
 	}
 	if got := fixture.backend.server(fixture.hub)[restored.PreviousHubDB].dump; got != "hub-two" {
-		t.Fatalf("previous hub dump = %q", got)
+		fatalf(t, "previous hub dump = %q", got)
 	}
 	if got := fixture.backend.server(fixture.manager)[restored.PreviousManagerDB].dump; got != "manager-two" {
-		t.Fatalf("previous manager dump = %q", got)
+		fatalf(t, "previous manager dump = %q", got)
 	}
 	raw, err := os.ReadFile(filepath.Join(fixture.home, "hub.json"))
 	if err != nil || !bytes.Contains(raw, []byte("hub-token-secret")) {
-		t.Fatalf("hub.json was not restored: %q, %v", raw, err)
+		fatalf(t, "hub.json was not restored: %q, %v", raw, err)
 	}
 	raw, _ = os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 	if string(raw) != "original knowledge" {
-		t.Fatalf("knowledge after restore = %q", raw)
+		fatalf(t, "knowledge after restore = %q", raw)
 	}
 	raw, _ = os.ReadFile(filepath.Join(fixture.home, "managers", "m-abcdef", "manager.json"))
 	if string(raw) != "independent manager changed" {
-		t.Fatalf("independent manager was touched: %q", raw)
+		fatalf(t, "independent manager was touched: %q", raw)
 	}
 	if info, err := os.Stat(filepath.Join(fixture.home, "extensions", "example", "run")); err != nil || info.Mode().Perm() != 0o700 {
-		t.Errorf("extension executable mode = %v, %v", info.Mode(), err)
+		errorf(t, "extension executable mode = %v, %v", info.Mode(), err)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 }
@@ -410,33 +410,33 @@ func TestRestoreFailureRollsBackFilesAndBothDatabases(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.failInstallPart = "manager"
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "injected") {
-		t.Fatalf("restore error = %v", err)
+		fatalf(t, "restore error = %v", err)
 	}
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-two" {
-		t.Fatalf("hub was not rolled back: %q", got)
+		fatalf(t, "hub was not rolled back: %q", got)
 	}
 	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database].dump; got != "manager-two" {
-		t.Fatalf("manager was not rolled back: %q", got)
+		fatalf(t, "manager was not rolled back: %q", got)
 	}
 	raw, _ := os.ReadFile(filepath.Join(fixture.home, "hub.json"))
 	if !bytes.Contains(raw, []byte("changed-token")) {
-		t.Fatalf("files were not rolled back: %q", raw)
+		fatalf(t, "files were not rolled back: %q", raw)
 	}
 	raw, _ = os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 	if string(raw) != "changed knowledge" {
-		t.Fatalf("knowledge was not rolled back: %q", raw)
+		fatalf(t, "knowledge was not rolled back: %q", raw)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 	for _, server := range fixture.backend.servers {
 		for name := range server {
 			if strings.HasPrefix(name, "persona_previous_") {
-				t.Errorf("previous database %s was not renamed back", name)
+				errorf(t, "previous database %s was not renamed back", name)
 			}
 		}
 	}
@@ -447,10 +447,10 @@ func TestCreateRejectsMissingManagerDatabase(t *testing.T) {
 	delete(fixture.backend.server(fixture.manager), fixture.manager.Database)
 	_, err := fixture.operator().Create(context.Background(), fixture.options())
 	if err == nil || !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("missing manager error = %v", err)
+		fatalf(t, "missing manager error = %v", err)
 	}
 	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("bundle exists after failure: %v", statErr)
+		fatalf(t, "bundle exists after failure: %v", statErr)
 	}
 }
 
@@ -459,17 +459,17 @@ func TestCreateRejectsMismatchedCurrentKey(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "secret.key"), bytes.Repeat([]byte{9}, secretkey.Size))
 	_, err := fixture.operator().Create(context.Background(), fixture.options())
 	if err == nil || !strings.Contains(err.Error(), "different secret.key") {
-		t.Fatalf("mismatched key error = %v", err)
+		fatalf(t, "mismatched key error = %v", err)
 	}
 	// The operator needs to know what to do: the rotation resumes when the
 	// manager starts, and cannot be rolled back once committed.
 	for _, wanted := range []string{"start the built-in manager once", "resumes at startup", "stop it and retry", "cannot be rolled back"} {
 		if !strings.Contains(err.Error(), wanted) {
-			t.Errorf("mismatched key error lacks %q: %v", wanted, err)
+			errorf(t, "mismatched key error lacks %q: %v", wanted, err)
 		}
 	}
 	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("bundle exists after key failure: %v", statErr)
+		fatalf(t, "bundle exists after key failure: %v", statErr)
 	}
 }
 
@@ -478,15 +478,15 @@ func TestInterruptedVerificationPublishesNothingAndCleansDatabases(t *testing.T)
 	fixture.backend.restoreErr = context.Canceled
 	_, err := fixture.operator().Create(context.Background(), fixture.options())
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("interruption error = %v", err)
+		fatalf(t, "interruption error = %v", err)
 	}
 	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("bundle exists after interruption: %v", statErr)
+		fatalf(t, "bundle exists after interruption: %v", statErr)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(fixture.output), ".persona-backup-*"))
 	if len(matches) != 0 {
-		t.Fatalf("staging remains after interruption: %v", matches)
+		fatalf(t, "staging remains after interruption: %v", matches)
 	}
 }
 
@@ -494,15 +494,15 @@ func TestLongManagerDatabaseNameDoesNotGrowTemporaryIdentifiers(t *testing.T) {
 	longName := strings.Repeat("manager_with_a_very_long_name_", 8)
 	fixture := newBackupFixture(t, longName)
 	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil || manifest.ManagerDatabase != longName {
-		t.Fatalf("long manager identity was not retained: %v", err)
+		fatalf(t, "long manager identity was not retained: %v", err)
 	}
 	for _, name := range fixture.backend.created {
 		if len(name) > 63 {
-			t.Errorf("temporary identifier is %d bytes: %q", len(name), name)
+			errorf(t, "temporary identifier is %d bytes: %q", len(name), name)
 		}
 	}
 }
@@ -511,16 +511,16 @@ func TestRestoreCanReplaceMissingExistingDatabases(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	delete(fixture.backend.server(fixture.hub), fixture.hub.Database)
 	delete(fixture.backend.server(fixture.manager), fixture.manager.Database)
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if result.PreviousHubDB != "" || result.PreviousManagerDB != "" {
-		t.Fatalf("missing predecessors were reported: %+v", result)
+		fatalf(t, "missing predecessors were reported: %+v", result)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 }

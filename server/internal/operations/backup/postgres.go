@@ -432,8 +432,9 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 		values["PGHOST"], values["PGPORT"], values["PGSSLMODE"] = "127.0.0.1", "5432", "disable"
 	} else {
 		for key, list := range u.Query() {
+			// pgx takes the first of repeated values; so do the clients.
 			if name, ok := libpqQueryEnvironment[key]; ok && len(list) > 0 {
-				values[name] = list[len(list)-1]
+				values[name] = list[0]
 			}
 		}
 	}
@@ -455,11 +456,13 @@ func clientEnvironment(target Target, database string, docker bool) []string {
 // the environment as before.
 func clientServiceFile(target Target) (environment []string, cleanup func(), err error) {
 	cleanup = func() {}
+	// The first value, as pgx takes it (an empty one is no password for pgx
+	// either).
 	passwords := tlsKeyPasswords(target.URL)
-	if len(passwords) == 0 || passwords[len(passwords)-1] == "" {
+	if len(passwords) == 0 || passwords[0] == "" {
 		return nil, cleanup, nil
 	}
-	password := passwords[len(passwords)-1]
+	password := passwords[0]
 	// A service file holds one value per line, trailing white space dropped.
 	if strings.ContainsAny(password, "\r\n\x00") || strings.TrimRight(password, " \t\v\f") != password {
 		return nil, cleanup, errors.New("the database URL's sslpassword has a line break or trailing white space, which the PostgreSQL client tools cannot be given")

@@ -121,4 +121,10 @@ type Result struct {
 	// PreviousExternalKB: where an approved external knowledge base's previous
 	// copy was kept (its own directory, beside the knowledge base).
 	PreviousExternalKB string
+	// MovedAside: what the bundle records as absent or empty (no knowledge
+	// base, an empty runtime directory) and restore therefore moved into the
+	// previous files with nothing (or an empty directory) in its place,
+	// relative to the runtime directory or, for an external knowledge base,
+	// absolute.
+	MovedAside []string
 }

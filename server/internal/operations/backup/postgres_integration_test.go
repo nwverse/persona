@@ -31,33 +31,33 @@ func newPostgresIntegration(t *testing.T) *postgresIntegration {
 	base := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	container := os.Getenv("PERSONA_TEST_POSTGRES_CONTAINER")
 	if base == "" {
-		t.Skip("set PERSONA_TEST_DATABASE_URL and optionally PERSONA_TEST_POSTGRES_CONTAINER for disposable PostgreSQL verification")
+		skip(t, "set PERSONA_TEST_DATABASE_URL and optionally PERSONA_TEST_POSTGRES_CONTAINER for disposable PostgreSQL verification")
 	}
 	if container == "" {
 		if _, err := exec.LookPath("pg_dump"); err != nil {
-			t.Skip("pg_dump is unavailable; set PERSONA_TEST_POSTGRES_CONTAINER")
+			skip(t, "pg_dump is unavailable; set PERSONA_TEST_POSTGRES_CONTAINER")
 		}
 		if _, err := exec.LookPath("pg_restore"); err != nil {
-			t.Skip("pg_restore is unavailable; set PERSONA_TEST_POSTGRES_CONTAINER")
+			skip(t, "pg_restore is unavailable; set PERSONA_TEST_POSTGRES_CONTAINER")
 		}
 	}
 	random := make([]byte, 6)
 	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	id := hex.EncodeToString(random)
 	hubName := "pb_it_hub_" + id
 	managerName := "pb_it_manager_" + id + "_" + strings.Repeat("m", 35)
 	if len(managerName) > 63 {
-		t.Fatal("test manager database name exceeds PostgreSQL's limit")
+		fatal(t, "test manager database name exceeds PostgreSQL's limit")
 	}
 	hubURL, err := withDatabase(base, hubName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	managerURL, err := withDatabase(base, managerName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -68,7 +68,7 @@ func newPostgresIntegration(t *testing.T) *postgresIntegration {
 	}
 	for _, target := range []Target{it.hub, it.manager} {
 		if err := it.backend.Create(ctx, target, target.Database); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	}
 	t.Cleanup(func() {
@@ -88,11 +88,11 @@ func (it *postgresIntegration) exec(t *testing.T, target Target, statement strin
 	t.Helper()
 	conn, err := it.backend.connect(it.ctx, target, target.Database)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	defer closeConn(it.ctx, conn)
 	if _, err := conn.Exec(it.ctx, statement, args...); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 	} {
 		conn, err := backend.connect(ctx, item.target, item.target.Database)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		statements := []string{
 			`CREATE TABLE schema_migrations (version integer, name text, part text)`,
@@ -139,7 +139,7 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 		for index, statement := range statements {
 			if _, err := conn.Exec(ctx, statement, params[index]...); err != nil {
 				closeConn(ctx, conn)
-				t.Fatal(err)
+				fatal(t, err)
 			}
 		}
 		closeConn(ctx, conn)
@@ -148,23 +148,23 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 	home, output := it.home(t, managerKey)
 	operator := &Operator{backend: backend, now: time.Now, random: rand.Reader}
 	if _, err := operator.Create(ctx, Options{Home: home, Output: output, WritesQuiesced: true}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if _, err := operator.Verify(ctx, Options{Home: home, Bundle: output}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	conn, err := backend.connect(ctx, hub, hub.Database)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if _, err := conn.Exec(ctx, `UPDATE backup_sample SET value = 'changed' WHERE id = 1`); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	closeConn(ctx, conn)
 	writeFixtureFile(t, filepath.Join(home, "data", "fact.md"), []byte("changed knowledge"))
 	result, err := operator.Restore(ctx, Options{Home: home, Bundle: output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	previousNames[hub] = append(previousNames[hub], result.PreviousHubDB)
 	previousNames[manager] = append(previousNames[manager], result.PreviousManagerDB)
@@ -174,21 +174,21 @@ func TestPostgresWholeInstallRoundTrip(t *testing.T) {
 	}{{hub, "original"}, {Target{Part: "hub", URL: hubURL, Database: result.PreviousHubDB, Container: container, DefaultContainer: container}, "changed"}} {
 		conn, err := backend.connect(ctx, item.target, item.target.Database)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		var got string
 		if err := conn.QueryRow(ctx, `SELECT value FROM backup_sample WHERE id = 1`).Scan(&got); err != nil {
 			closeConn(ctx, conn)
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		closeConn(ctx, conn)
 		if got != item.want {
-			t.Errorf("database %s value = %q, want %q", item.target.Database, got, item.want)
+			errorf(t, "database %s value = %q, want %q", item.target.Database, got, item.want)
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(home, "data", "fact.md"))
 	if err != nil || string(raw) != "disposable knowledge" {
-		t.Errorf("restored knowledge = %q, %v", raw, err)
+		errorf(t, "restored knowledge = %q, %v", raw, err)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestPostgresUnrecordedManagerKey(t *testing.T) {
 	seal := func(plain string) string {
 		sealed, err := secretkey.SealWith(managerKey, plain)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		return sealed
 	}
@@ -213,7 +213,7 @@ func TestPostgresUnrecordedManagerKey(t *testing.T) {
 	}{{it.hub, db.HubSet}, {it.manager, db.ManagerSet}} {
 		migrated, err := db.Open(it.ctx, item.target.URL, item.sets)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		migrated.Close()
 	}
@@ -225,23 +225,23 @@ func TestPostgresUnrecordedManagerKey(t *testing.T) {
 
 	identity, err := it.backend.Identity(it.ctx, it.manager, "manager", it.manager.Database)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if identity.SealingKey != "" || len(identity.SealedValues) != 3 {
-		t.Fatalf("unrecorded identity: key %q, %d sealed values, want 3", identity.SealingKey, len(identity.SealedValues))
+		fatalf(t, "unrecorded identity: key %q, %d sealed values, want 3", identity.SealingKey, len(identity.SealedValues))
 	}
 
 	home, output := it.home(t, managerKey)
 	operator := &Operator{backend: it.backend, now: time.Now, random: rand.Reader}
 	if _, err := operator.Create(it.ctx, Options{Home: home, Output: output, WritesQuiesced: true}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if _, err := operator.Verify(it.ctx, Options{Home: home, Bundle: output}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	result, err := operator.Restore(it.ctx, Options{Home: home, Bundle: output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	it.previousNames[it.hub] = append(it.previousNames[it.hub], result.PreviousHubDB)
 	it.previousNames[it.manager] = append(it.previousNames[it.manager], result.PreviousManagerDB)
@@ -250,9 +250,9 @@ func TestPostgresUnrecordedManagerKey(t *testing.T) {
 	wrong := filepath.Join(filepath.Dir(output), "wrong-key.backup")
 	_, err = operator.Create(it.ctx, Options{Home: home, Output: wrong, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "none of its 3 sealed secret(s)") {
-		t.Fatalf("create with a key that opens no sealed value = %v", err)
+		fatalf(t, "create with a key that opens no sealed value = %v", err)
 	}
 	if _, statErr := os.Stat(wrong); statErr == nil {
-		t.Fatal("an unverifiable bundle was published")
+		fatal(t, "an unverifiable bundle was published")
 	}
 }

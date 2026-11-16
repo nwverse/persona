@@ -126,6 +126,11 @@ func runWithOperator(ctx context.Context, operator operatorRunner, args []string
 	if err != nil {
 		return errors.New(redact(err.Error(), operationSecrets(opts)...))
 	}
+	printResult(stdout, command, result)
+	return nil
+}
+
+func printResult(stdout io.Writer, command string, result Result) {
 	switch {
 	case result.Restored:
 		fmt.Fprintf(stdout, "restored and verified %s\n", result.Bundle)
@@ -141,6 +146,9 @@ func runWithOperator(ctx context.Context, operator operatorRunner, args []string
 		if result.PreviousExternalKB != "" {
 			fmt.Fprintf(stdout, "previous external knowledge base preserved in %s\n", result.PreviousExternalKB)
 		}
+		if len(result.MovedAside) > 0 {
+			fmt.Fprintf(stdout, "the bundle records no %s (or an empty one); this install's was moved into the previous files named above, with nothing (or an empty directory) in its place\n", strings.Join(result.MovedAside, ", "))
+		}
 		if result.KeptDockerPassword {
 			fmt.Fprintln(stdout, "kept this install's docker/db-password: the bundle's copy belongs to the database cluster it was taken from, not to this one")
 		}
@@ -149,5 +157,4 @@ func runWithOperator(ctx context.Context, operator operatorRunner, args []string
 	default:
 		fmt.Fprintf(stdout, "verified %s\n", result.Bundle)
 	}
-	return nil
 }

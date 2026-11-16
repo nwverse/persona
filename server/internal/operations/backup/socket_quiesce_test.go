@@ -24,25 +24,25 @@ func TestSocketDatabaseURLsAreAccepted(t *testing.T) {
 	} {
 		target, err := makeTarget("hub", raw, "", "persona-postgres")
 		if err != nil {
-			t.Fatalf("makeTarget(%q): %v", raw, err)
+			fatalf(t, "makeTarget(%q): %v", raw, err)
 		}
 		if target.Database != "persona" {
-			t.Errorf("makeTarget(%q) database = %q", raw, target.Database)
+			errorf(t, "makeTarget(%q) database = %q", raw, target.Database)
 		}
 		if target.DefaultContainer != "" {
-			t.Errorf("makeTarget(%q) guessed Docker container %q for a socket URL", raw, target.DefaultContainer)
+			errorf(t, "makeTarget(%q) guessed Docker container %q for a socket URL", raw, target.DefaultContainer)
 		}
 		derived, err := withDatabase(raw, "persona_manager")
 		if err != nil {
-			t.Fatalf("withDatabase(%q): %v", raw, err)
+			fatalf(t, "withDatabase(%q): %v", raw, err)
 		}
 		again, err := makeTarget("manager", derived, "", "")
 		if err != nil || again.Database != "persona_manager" {
-			t.Fatalf("derived manager URL %q: %v (database %q)", derived, err, again.Database)
+			fatalf(t, "derived manager URL %q: %v (database %q)", derived, err, again.Database)
 		}
 		if u, _ := url.Parse(raw); u.Query().Get("host") != "" {
 			if got, _ := url.Parse(derived); got.Query().Get("host") != u.Query().Get("host") {
-				t.Errorf("derived URL %q lost the socket host", derived)
+				errorf(t, "derived URL %q lost the socket host", derived)
 			}
 		}
 	}
@@ -52,11 +52,11 @@ func TestNonPostgresDatabaseURLsAreStillRejected(t *testing.T) {
 	isolateLibpqEnvironment(t) // PGDATABASE would otherwise name the database
 	for _, raw := range []string{"", "mysql://u@h/db", "http://h/db", "/var/lib/db", "postgres://h:5432"} {
 		if _, err := makeTarget("hub", raw, "", ""); err == nil {
-			t.Errorf("makeTarget(%q) was accepted", raw)
+			errorf(t, "makeTarget(%q) was accepted", raw)
 		}
 	}
 	if _, err := withDatabase("mysql://u@h/db", "x"); err == nil {
-		t.Error("withDatabase accepted a non-postgres URL")
+		errorT(t, "withDatabase accepted a non-postgres URL")
 	}
 }
 
@@ -65,26 +65,26 @@ func TestNonPostgresDatabaseURLsAreStillRejected(t *testing.T) {
 func TestPostgresBackendOverUnixSocket(t *testing.T) {
 	base := os.Getenv("PERSONA_TEST_SOCKET_URL")
 	if base == "" {
-		t.Skip("set PERSONA_TEST_SOCKET_URL to a disposable server's unix-socket URL")
+		skip(t, "set PERSONA_TEST_SOCKET_URL to a disposable server's unix-socket URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	name := "pb_it_sock_" + randomSuffix(t)
 	raw, err := withDatabase(base, name)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	target, err := makeTarget("hub", raw, "", "")
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	backend := newPostgresBackend()
 	if err := backend.Create(ctx, target, name); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	t.Cleanup(func() { _ = backend.Drop(context.Background(), target, name) })
 	if err := backend.Quiesced(ctx, target, name, false); err != nil {
-		t.Fatalf("idle database over a unix socket: %v", err)
+		fatalf(t, "idle database over a unix socket: %v", err)
 	}
 }
 
@@ -92,7 +92,7 @@ func randomSuffix(t *testing.T) string {
 	t.Helper()
 	random := make([]byte, 6)
 	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	return hex.EncodeToString(random)
 }
@@ -102,7 +102,7 @@ func randomSuffix(t *testing.T) string {
 func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	base := os.Getenv("PERSONA_TEST_DATABASE_URL")
 	if base == "" {
-		t.Skip("set PERSONA_TEST_DATABASE_URL to a disposable superuser connection (wal_level=logical)")
+		skip(t, "set PERSONA_TEST_DATABASE_URL to a disposable superuser connection (wal_level=logical)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -110,11 +110,11 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	pubName, subName := "pb_it_pub_"+id, "pb_it_sub_"+id
 	pubURL, err := withDatabase(base, pubName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	subURL, err := withDatabase(base, subName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	backend := newPostgresBackend()
 	pub := Target{Part: "hub", URL: pubURL, Database: pubName}
@@ -123,7 +123,7 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	subscription := "pb_it_subscription_" + id
 	for _, target := range []Target{pub, sub} {
 		if err := backend.Create(ctx, target, target.Database); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 	}
 	t.Cleanup(func() {
@@ -146,12 +146,12 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 		t.Helper()
 		conn, err := backend.connect(ctx, target, target.Database)
 		if err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		defer closeConn(ctx, conn)
 		for _, statement := range statements {
 			if _, err := conn.Exec(ctx, statement); err != nil {
-				t.Fatalf("%s: %v", statement, err)
+				fatalf(t, "%s: %v", statement, err)
 			}
 		}
 	}
@@ -160,7 +160,7 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	run(sub, `CREATE TABLE t (id int PRIMARY KEY)`)
 	cfg, err := pgx.ParseConfig(pubURL)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	connection := "host=" + cfg.Host + " port=" + strconv.Itoa(int(cfg.Port)) + " user=" + cfg.User + " dbname=" + pubName
 	if cfg.Password != "" {
@@ -171,7 +171,7 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 
 	monitor, err := backend.connect(ctx, sub, "postgres")
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	defer closeConn(ctx, monitor)
 	poll := time.NewTicker(200 * time.Millisecond)
@@ -180,7 +180,7 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	for {
 		var workers int
 		if err := monitor.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND backend_type <> 'client backend'`, subName).Scan(&workers); err != nil {
-			t.Fatal(err)
+			fatal(t, err)
 		}
 		if workers > 0 {
 			break
@@ -188,22 +188,22 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 		select {
 		case <-poll.C:
 		case <-timeout:
-			t.Fatal("the logical replication apply worker never started")
+			fatal(t, "the logical replication apply worker never started")
 		}
 	}
 
 	if err := backend.Quiesced(ctx, sub, subName, false); err != nil {
-		t.Fatalf("a replication worker was counted as a writer: %v", err)
+		fatalf(t, "a replication worker was counted as a writer: %v", err)
 	}
 
 	// A real client session must still block the check.
 	client, err := backend.connect(ctx, sub, subName)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	defer closeConn(ctx, client)
 	err = backend.Quiesced(ctx, sub, subName, false)
 	if err == nil || !strings.Contains(err.Error(), "1 other connection") {
-		t.Fatalf("an open client session must block the check, got %v", err)
+		fatalf(t, "an open client session must block the check, got %v", err)
 	}
 }

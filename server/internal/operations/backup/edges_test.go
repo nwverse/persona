@@ -19,10 +19,10 @@ func TestCreateRefusesActiveDatabaseConnections(t *testing.T) {
 	fixture.backend.active["manager:"+fixture.manager.Database] = 1
 	_, err := fixture.operator().Create(context.Background(), fixture.options())
 	if err == nil || !strings.Contains(err.Error(), "active") {
-		t.Fatalf("active-connection error = %v", err)
+		fatalf(t, "active-connection error = %v", err)
 	}
 	if _, statErr := os.Stat(fixture.output); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("bundle exists with active writers: %v", statErr)
+		fatalf(t, "bundle exists with active writers: %v", statErr)
 	}
 }
 
@@ -30,24 +30,24 @@ func TestInterruptedRestoreRollsBack(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.failInstallPart = "manager"
 	fixture.backend.installErr = context.Canceled
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("restore interruption = %v", err)
+		fatalf(t, "restore interruption = %v", err)
 	}
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-two" {
-		t.Fatalf("hub was not rolled back after interruption: %q", got)
+		fatalf(t, "hub was not rolled back after interruption: %q", got)
 	}
 	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database].dump; got != "manager-two" {
-		t.Fatalf("manager was not rolled back after interruption: %q", got)
+		fatalf(t, "manager was not rolled back after interruption: %q", got)
 	}
 	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 	if string(raw) != "changed knowledge" {
-		t.Fatalf("files were not rolled back after interruption: %q", raw)
+		fatalf(t, "files were not rolled back after interruption: %q", raw)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 }
@@ -60,26 +60,26 @@ func TestExternalKnowledgeBaseNeedsExplicitRestoreApproval(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "manager.json"), []byte(managerConfig))
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	writeFixtureFile(t, filepath.Join(external, "fact.md"), []byte("external changed"))
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "--allow-external-kb") {
-		t.Fatalf("external restore without approval = %v", err)
+		fatalf(t, "external restore without approval = %v", err)
 	}
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database].dump; got != "hub-one" {
-		t.Fatalf("database changed without external approval: %q", got)
+		fatalf(t, "database changed without external approval: %q", got)
 	}
 	raw, _ := os.ReadFile(filepath.Join(external, "fact.md"))
 	if string(raw) != "external changed" {
-		t.Fatalf("external files changed without approval: %q", raw)
+		fatalf(t, "external files changed without approval: %q", raw)
 	}
 	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true, AllowExternalKB: true}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	raw, _ = os.ReadFile(filepath.Join(external, "fact.md"))
 	if string(raw) != "external original" {
-		t.Fatalf("external files were not restored: %q", raw)
+		fatalf(t, "external files were not restored: %q", raw)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 }
@@ -89,7 +89,7 @@ func TestExternallyHostedBuiltinIsOutOfScope(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(fixture.home, "hub.json"), []byte(`{"database_url":"`+fixture.hub.URL+`","assistant":{"external":true}}`))
 	_, _, err := Discover(Options{Home: fixture.home})
 	if err == nil || !strings.Contains(err.Error(), "outside this backup's scope") {
-		t.Fatalf("external built-in discovery = %v", err)
+		fatalf(t, "external built-in discovery = %v", err)
 	}
 }
 
@@ -97,22 +97,22 @@ func TestVerifyAndRestoreCanDiscoverFromBundleAlone(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	emptyHome := filepath.Join(t.TempDir(), "new-runtime")
 	if _, err := operator.Verify(context.Background(), Options{Home: emptyHome, Bundle: fixture.output}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	result, err := operator.Restore(context.Background(), Options{Home: emptyHome, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if !result.Restored {
-		t.Fatal("bare restore did not complete")
+		fatal(t, "bare restore did not complete")
 	}
 	raw, err := os.ReadFile(filepath.Join(emptyHome, "hub.json"))
 	if err != nil || !bytes.Contains(raw, []byte("hub-token-secret")) {
-		t.Fatalf("bare restored hub.json = %q, %v", raw, err)
+		fatalf(t, "bare restored hub.json = %q, %v", raw, err)
 	}
 	assertNoTemporaryDatabases(t, fixture.backend)
 }
@@ -120,32 +120,32 @@ func TestVerifyAndRestoreCanDiscoverFromBundleAlone(t *testing.T) {
 func TestManifestRejectsMismatchedBundledKey(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest.ManagerKeyFingerprint = strings.Repeat("0", 32)
 	if err := manifest.validate(); err == nil || !strings.Contains(err.Error(), "do not match") {
-		t.Fatalf("mismatched manifest key = %v", err)
+		fatalf(t, "mismatched manifest key = %v", err)
 	}
 }
 
 func TestManifestContainsFingerprintsNotKeyMaterial(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if bytes.Contains(manifestJSON(t, fixture.output), fixture.managerKey) {
-		t.Fatal("manifest contains manager key bytes")
+		fatal(t, "manifest contains manager key bytes")
 	}
 	if manifest.ManagerKeyFingerprint == string(fixture.managerKey) {
-		t.Fatal("manifest stores the key rather than its fingerprint")
+		fatal(t, "manifest stores the key rather than its fingerprint")
 	}
 }
 
@@ -153,15 +153,15 @@ func manifestJSON(t *testing.T, bundle string) []byte {
 	t.Helper()
 	manifest, _, err := readBundleManifest(bundle)
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	staging := t.TempDir()
 	if err := extractBundle(bundle, staging, manifest); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	raw, err := os.ReadFile(filepath.Join(staging, manifestPath))
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	return raw
 }
@@ -180,32 +180,32 @@ func TestUncertainRenameResultRollsBackToTheRealState(t *testing.T) {
 			fixture := newBackupFixture(t, "persona_manager")
 			operator := fixture.operator()
 			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 			fixture.mutate(t)
 			fixture.backend.commitThenFail = fault
 			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 			if err == nil || !strings.Contains(err.Error(), "injected connection loss") {
-				t.Fatalf("restore error = %v", err)
+				fatalf(t, "restore error = %v", err)
 			}
 			if !fixture.backend.commitThenFired {
-				t.Fatal("the fault was never injected")
+				fatal(t, "the fault was never injected")
 			}
 			if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != "hub-two" {
-				t.Fatalf("hub database after rollback = %+v", got)
+				fatalf(t, "hub database after rollback = %+v", got)
 			}
 			if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
-				t.Fatalf("manager database after rollback = %+v", got)
+				fatalf(t, "manager database after rollback = %+v", got)
 			}
 			raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 			if string(raw) != "changed knowledge" {
-				t.Fatalf("files were not rolled back: %q", raw)
+				fatalf(t, "files were not rolled back: %q", raw)
 			}
 			assertNoTemporaryDatabases(t, fixture.backend)
 			for _, server := range fixture.backend.servers {
 				for name := range server {
 					if strings.HasPrefix(name, "persona_previous_") {
-						t.Errorf("previous database %s was not renamed back", name)
+						errorf(t, "previous database %s was not renamed back", name)
 					}
 				}
 			}
@@ -219,31 +219,31 @@ func TestUnsupportedClientsFailBeforeAnyWork(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.clientErr = errors.New("compose is not supported")
 	fixture.backend.created, fixture.backend.renamed = nil, nil
 	if _, err := operator.Verify(context.Background(), Options{Home: fixture.home, Bundle: fixture.output}); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
-		t.Errorf("verify = %v", err)
+		errorf(t, "verify = %v", err)
 	}
 	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
-		t.Errorf("restore = %v", err)
+		errorf(t, "restore = %v", err)
 	}
 	other := fixture.options()
 	other.Output = filepath.Join(filepath.Dir(fixture.output), "second.backup")
 	if _, err := operator.Create(context.Background(), other); err == nil || !strings.Contains(err.Error(), "compose is not supported") {
-		t.Errorf("create = %v", err)
+		errorf(t, "create = %v", err)
 	}
 	if len(fixture.backend.created) != 0 || len(fixture.backend.renamed) != 0 {
-		t.Errorf("databases were touched: created %v renamed %v", fixture.backend.created, fixture.backend.renamed)
+		errorf(t, "databases were touched: created %v renamed %v", fixture.backend.created, fixture.backend.renamed)
 	}
 	if _, err := os.Stat(other.Output); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("bundle published: %v", err)
+		errorf(t, "bundle published: %v", err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 	if string(raw) != "changed knowledge" {
-		t.Errorf("files touched: %q", raw)
+		errorf(t, "files touched: %q", raw)
 	}
 }
 
@@ -254,16 +254,16 @@ func TestRestoreKeepsDockerPasswordFileAbsentFromBundle(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	password := filepath.Join(fixture.home, "docker", "db-password")
 	writeFixtureFile(t, password, []byte("compose-password"))
 	if _, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	raw, err := os.ReadFile(password)
 	if err != nil || string(raw) != "compose-password" {
-		t.Fatalf("docker/db-password after restore = %q, %v", raw, err)
+		fatalf(t, "docker/db-password after restore = %q, %v", raw, err)
 	}
 }
 
@@ -271,14 +271,14 @@ func restoreWithFault(t *testing.T, fixture *backupFixture, fault string) (Resul
 	t.Helper()
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.dropped = nil // only what the restore drops counts
 	fixture.backend.commitThenFail = fault
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if !fixture.backend.commitThenFired {
-		t.Fatal("the fault was never injected")
+		fatal(t, "the fault was never injected")
 	}
 	return result, err
 }
@@ -291,7 +291,7 @@ func assertNothingDropped(t *testing.T, fixture *backupFixture, tolerated ...str
 			ok = ok || strings.HasPrefix(name, prefix)
 		}
 		if !ok {
-			t.Errorf("database %s was dropped after an uncertain rename", name)
+			errorf(t, "database %s was dropped after an uncertain rename", name)
 		}
 	}
 }
@@ -303,13 +303,13 @@ func TestRenameCheckFailureIsNotTakenForNotCommitted(t *testing.T) {
 	fixture.backend.existsErr = true
 	_, err := restoreWithFault(t, fixture, "manager:install")
 	if err == nil {
-		t.Fatal("restore succeeded")
+		fatal(t, "restore succeeded")
 	}
 	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
-		t.Fatalf("manager after rollback = %+v", got)
+		fatalf(t, "manager after rollback = %+v", got)
 	}
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != "hub-two" {
-		t.Fatalf("hub after rollback = %+v", got)
+		fatalf(t, "hub after rollback = %+v", got)
 	}
 	assertNothingDropped(t, fixture, "persona_staged_") // undone, so the staged copies are the ones to discard
 }
@@ -324,7 +324,7 @@ func TestAmbiguousRenameStateDropsNothing(t *testing.T) {
 			fixture.backend.faultShape = shape
 			_, err := restoreWithFault(t, fixture, "manager:install")
 			if err == nil {
-				t.Fatal("restore succeeded")
+				fatal(t, "restore succeeded")
 			}
 			assertNothingDropped(t, fixture, "persona_staged_h_")
 			found := false
@@ -333,14 +333,14 @@ func TestAmbiguousRenameStateDropsNothing(t *testing.T) {
 					found = true
 				}
 				if database.dump == "manager-two" && !strings.HasPrefix(name, "persona_previous_m_") && name != fixture.manager.Database {
-					t.Errorf("unexpected copy of the previous database under %s", name)
+					errorf(t, "unexpected copy of the previous database under %s", name)
 				}
 			}
 			if shape == "both" && !strings.Contains(err.Error(), "persona_staged_m_") {
-				t.Errorf("the error does not name the staged database that may remain: %v", err)
+				errorf(t, "the error does not name the staged database that may remain: %v", err)
 			}
 			if !found && fixture.backend.server(fixture.manager)[fixture.manager.Database] == nil {
-				t.Errorf("the previous manager database is gone: %v", fixture.backend.server(fixture.manager))
+				errorf(t, "the previous manager database is gone: %v", fixture.backend.server(fixture.manager))
 			}
 		})
 	}
@@ -354,22 +354,22 @@ func TestUnreachableServerAfterCommitKeepsFilesAndNamesThePreviousState(t *testi
 	fixture.backend.down = true
 	_, err := restoreWithFault(t, fixture, "manager:install")
 	if err == nil {
-		t.Fatal("restore succeeded")
+		fatal(t, "restore succeeded")
 	}
 	raw, _ := os.ReadFile(filepath.Join(fixture.home, "data", "facts", "note.md"))
 	if string(raw) != "original knowledge" {
-		t.Errorf("files were rolled back under databases that stayed restored: %q", raw)
+		errorf(t, "files were rolled back under databases that stayed restored: %q", raw)
 	}
 	for _, part := range []Target{fixture.hub, fixture.manager} {
 		for name, database := range fixture.backend.server(part) {
 			if strings.HasPrefix(name, "persona_previous_") && !strings.Contains(err.Error(), name) {
-				t.Errorf("the error does not name the previous database %s (%s): %v", name, database.dump, err)
+				errorf(t, "the error does not name the previous database %s (%s): %v", name, database.dump, err)
 			}
 		}
 	}
 	for _, wanted := range []string{"persona_previous_h_", "persona_previous_m_", "previous runtime files", "restore"} {
 		if !strings.Contains(err.Error(), wanted) {
-			t.Errorf("the error lacks %q: %v", wanted, err)
+			errorf(t, "the error lacks %q: %v", wanted, err)
 		}
 	}
 	assertNothingDropped(t, fixture, "persona_staged_h_")
@@ -385,14 +385,14 @@ func TestCreateRefusesAnOutputInsideACollectedTree(t *testing.T) {
 			opts.Output = filepath.Join(fixture.home, filepath.FromSlash(inside), "install.backup")
 			_, err := fixture.operator().Create(context.Background(), opts)
 			if err == nil || !strings.Contains(err.Error(), "inside") {
-				t.Fatalf("create = %v", err)
+				fatalf(t, "create = %v", err)
 			}
 			if _, statErr := os.Stat(filepath.Dir(opts.Output)); statErr == nil && inside != "data" && inside != "managers/assistant/out" && inside != "skills" && inside != "data/backups" {
-				t.Errorf("the output directory was created: %v", statErr)
+				errorf(t, "the output directory was created: %v", statErr)
 			}
 			entries, _ := filepath.Glob(filepath.Join(fixture.home, filepath.FromSlash(inside), ".persona-backup-*"))
 			if len(entries) != 0 {
-				t.Errorf("staging left behind: %v", entries)
+				errorf(t, "staging left behind: %v", entries)
 			}
 		})
 	}
@@ -406,7 +406,7 @@ func TestCreateAllowsAnOutputBesideTheCollectedTrees(t *testing.T) {
 		opts := fixture.options()
 		opts.Output = filepath.Join(fixture.home, dir, "install.backup")
 		if _, err := fixture.operator().Create(context.Background(), opts); err != nil {
-			t.Errorf("create into %s: %v", dir, err)
+			errorf(t, "create into %s: %v", dir, err)
 		}
 	}
 }
@@ -420,34 +420,34 @@ func TestRestoreKeepsTheExistingDockerPasswordFile(t *testing.T) {
 	writeFixtureFile(t, password, []byte("old-cluster-password"))
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	writeFixtureFile(t, password, []byte("new-cluster-password"))
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	raw, _ := os.ReadFile(password)
 	if string(raw) != "new-cluster-password" {
-		t.Fatalf("docker/db-password after restore = %q", raw)
+		fatalf(t, "docker/db-password after restore = %q", raw)
 	}
 	if !result.KeptDockerPassword {
-		t.Error("the result does not report the kept password file")
+		errorT(t, "the result does not report the kept password file")
 	}
 	if err := os.Remove(password); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	result, err = operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	raw, _ = os.ReadFile(password)
 	if string(raw) != "old-cluster-password" {
-		t.Fatalf("an absent docker/db-password was not restored from the bundle: %q", raw)
+		fatalf(t, "an absent docker/db-password was not restored from the bundle: %q", raw)
 	}
 	if result.KeptDockerPassword {
-		t.Error("the result reports a kept password file, but the bundle's copy was installed")
+		errorT(t, "the result reports a kept password file, but the bundle's copy was installed")
 	}
 }
 
@@ -456,17 +456,17 @@ func TestRestoreWithoutAnyDockerPasswordFileReportsNothingKept(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if result.KeptDockerPassword {
-		t.Error("the result reports a kept password file")
+		errorT(t, "the result reports a kept password file")
 	}
 	if _, err := os.Stat(filepath.Join(fixture.home, "docker", "db-password")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a password file appeared: %v", err)
+		errorf(t, "a password file appeared: %v", err)
 	}
 }
 
@@ -479,10 +479,10 @@ func readNote(t *testing.T, fixture *backupFixture) string {
 func assertDatabases(t *testing.T, fixture *backupFixture, hub, manager string) {
 	t.Helper()
 	if got := fixture.backend.server(fixture.hub)[fixture.hub.Database]; got == nil || got.dump != hub {
-		t.Errorf("hub database = %+v, want %s", got, hub)
+		errorf(t, "hub database = %+v, want %s", got, hub)
 	}
 	if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != manager {
-		t.Errorf("manager database = %+v, want %s", got, manager)
+		errorf(t, "manager database = %+v, want %s", got, manager)
 	}
 }
 
@@ -493,19 +493,19 @@ func TestServerDownBeforeTheFirstRenameRollsFilesBack(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.preCommit, fixture.backend.preCommitDown = "hub:previous", true
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "injected failure before") {
-		t.Fatalf("restore error = %v", err)
+		fatalf(t, "restore error = %v", err)
 	}
 	if got := readNote(t, fixture); got != "changed knowledge" {
-		t.Errorf("files were kept under databases that are the install's own: %q", got)
+		errorf(t, "files were kept under databases that are the install's own: %q", got)
 	}
 	if strings.Contains(err.Error(), "left as restored") || strings.Contains(err.Error(), "by hand") {
-		t.Errorf("the error claims bundle databases may be live: %v", err)
+		errorf(t, "the error claims bundle databases may be live: %v", err)
 	}
 	assertDatabases(t, fixture, "hub-two", "manager-two")
 }
@@ -518,7 +518,7 @@ func TestBriefExistenceFailureDoesNotKeepBundleFiles(t *testing.T) {
 			fixture.backend.armExistsFailures = 1
 			operator := fixture.operator()
 			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 			fixture.mutate(t)
 			fixture.backend.dropped = nil
@@ -529,16 +529,16 @@ func TestBriefExistenceFailureDoesNotKeepBundleFiles(t *testing.T) {
 			}
 			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 			if err == nil || !strings.Contains(err.Error(), "injected") {
-				t.Fatalf("restore error = %v", err)
+				fatalf(t, "restore error = %v", err)
 			}
 			if got := readNote(t, fixture); got != "changed knowledge" {
-				t.Errorf("files were kept although no bundle database is live: %q", got)
+				errorf(t, "files were kept although no bundle database is live: %q", got)
 			}
 			if strings.Contains(err.Error(), "left as restored") {
-				t.Errorf("the error claims bundle databases may be live: %v", err)
+				errorf(t, "the error claims bundle databases may be live: %v", err)
 			}
 			if fault == "previous" && strings.Contains(err.Error(), "persona_previous_") {
-				t.Errorf("the error names a previous database that was never made: %v", err)
+				errorf(t, "the error names a previous database that was never made: %v", err)
 			}
 			assertDatabases(t, fixture, "hub-two", "manager-two")
 			assertNothingDropped(t, fixture, "persona_staged_")
@@ -555,10 +555,10 @@ func TestPartialUndoKeepsFilesAndNamesOnlyWhatIsStillParked(t *testing.T) {
 	fixture.backend.failUndoPart = "hub"
 	_, err := restoreWithFault(t, fixture, "manager:install")
 	if err == nil {
-		t.Fatal("restore succeeded")
+		fatal(t, "restore succeeded")
 	}
 	if got := readNote(t, fixture); got != "original knowledge" {
-		t.Errorf("files were rolled back under a live bundle database: %q", got)
+		errorf(t, "files were rolled back under a live bundle database: %q", got)
 	}
 	assertDatabases(t, fixture, "hub-one", "manager-two") // the hub is the bundle's; the manager was put back
 	var hubPrevious, managerPrevious string
@@ -573,13 +573,13 @@ func TestPartialUndoKeepsFilesAndNamesOnlyWhatIsStillParked(t *testing.T) {
 		}
 	}
 	if hubPrevious == "" || !strings.Contains(err.Error(), "Previous hub database: "+hubPrevious) {
-		t.Errorf("the error does not name the hub's previous database %q: %v", hubPrevious, err)
+		errorf(t, "the error does not name the hub's previous database %q: %v", hubPrevious, err)
 	}
 	if managerPrevious != "" {
-		t.Errorf("the manager's previous database was not renamed back: %s", managerPrevious)
+		errorf(t, "the manager's previous database was not renamed back: %s", managerPrevious)
 	}
 	if !strings.Contains(err.Error(), "previous built-in manager database: (none)") {
-		t.Errorf("the error names a manager database that was already put back: %v", err)
+		errorf(t, "the error names a manager database that was already put back: %v", err)
 	}
 }
 
@@ -590,11 +590,11 @@ func TestDestinationCheckFailureIsNotTakenForNotCommitted(t *testing.T) {
 	fixture.backend.existsErrName = fixture.manager.Database
 	_, err := restoreWithFault(t, fixture, "manager:install")
 	if err == nil {
-		t.Fatal("restore succeeded")
+		fatal(t, "restore succeeded")
 	}
 	assertDatabases(t, fixture, "hub-two", "manager-two")
 	if got := readNote(t, fixture); got != "changed knowledge" {
-		t.Errorf("files = %q", got)
+		errorf(t, "files = %q", got)
 	}
 }
 
@@ -606,18 +606,18 @@ func TestRestoreReportsThePreviousExternalKnowledgeBase(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"persona_manager","kb_dir":`+strconvQuote(external)+`}`))
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	writeFixtureFile(t, filepath.Join(external, "fact.md"), []byte("external changed"))
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true, AllowExternalKB: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if result.PreviousExternalKB == "" {
-		t.Fatal("the result does not name the previous external knowledge base")
+		fatal(t, "the result does not name the previous external knowledge base")
 	}
 	if info, err := os.Stat(result.PreviousExternalKB); err != nil || !info.IsDir() {
-		t.Fatalf("the named directory does not exist: %v", err)
+		fatalf(t, "the named directory does not exist: %v", err)
 	}
 }
 
@@ -634,20 +634,20 @@ func TestOutputRefusalResolvesSymlinks(t *testing.T) {
 			case "link-to-kb":
 				link := filepath.Join(t.TempDir(), "link")
 				if err := os.Symlink(filepath.Join(fixture.home, "data"), link); err != nil {
-					t.Skip("symlinks unavailable: ", err)
+					skip(t, "symlinks unavailable: ", err)
 				}
 				output = filepath.Join(link, "x.backup")
 			case "kb-is-link":
 				if err := os.RemoveAll(filepath.Join(fixture.home, "data")); err != nil {
-					t.Fatal(err)
+					fatal(t, err)
 				}
 				if err := os.Symlink(outside, filepath.Join(fixture.home, "data")); err != nil {
-					t.Skip("symlinks unavailable: ", err)
+					skip(t, "symlinks unavailable: ", err)
 				}
 				output = filepath.Join(outside, "x.backup")
 			case "collected-dir-is-link":
 				if err := os.Symlink(outside, filepath.Join(fixture.home, "skills")); err != nil {
-					t.Skip("symlinks unavailable: ", err)
+					skip(t, "symlinks unavailable: ", err)
 				}
 				output = filepath.Join(outside, "x.backup")
 			}
@@ -655,10 +655,10 @@ func TestOutputRefusalResolvesSymlinks(t *testing.T) {
 			opts.Output = output
 			_, err := fixture.operator().Create(context.Background(), opts)
 			if err == nil || !strings.Contains(err.Error(), "inside") {
-				t.Fatalf("create = %v", err)
+				fatalf(t, "create = %v", err)
 			}
 			if entries, _ := filepath.Glob(filepath.Join(filepath.Dir(output), ".persona-backup-*")); len(entries) != 0 {
-				t.Errorf("staging left behind: %v", entries)
+				errorf(t, "staging left behind: %v", entries)
 			}
 		})
 	}
@@ -672,20 +672,20 @@ func TestSuccessfulPreviousUndoProvesNoBundleDatabaseIsLive(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.failInstallPart = "manager"
 	fixture.backend.armExistsFailures = 2 // the commit check and the re-check
 	_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "injected") {
-		t.Fatalf("restore error = %v", err)
+		fatalf(t, "restore error = %v", err)
 	}
 	if got := readNote(t, fixture); got != "changed knowledge" {
-		t.Errorf("files were kept although both live databases are the install's own: %q", got)
+		errorf(t, "files were kept although both live databases are the install's own: %q", got)
 	}
 	if strings.Contains(err.Error(), "may be live") {
-		t.Errorf("the error claims a bundle database may be live: %v", err)
+		errorf(t, "the error claims a bundle database may be live: %v", err)
 	}
 	assertDatabases(t, fixture, "hub-two", "manager-two")
 	assertNoTemporaryDatabases(t, fixture.backend) // and the stage is not left behind
@@ -700,7 +700,7 @@ func TestUndoneInstallIsNotCountedAsLive(t *testing.T) {
 			fixture := newBackupFixture(t, "persona_manager")
 			operator := fixture.operator()
 			if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 			fixture.mutate(t)
 			if !hubExisted {
@@ -711,15 +711,15 @@ func TestUndoneInstallIsNotCountedAsLive(t *testing.T) {
 			fixture.backend.preCommit, fixture.backend.armExistsFailures = "manager:previous", 2
 			_, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 			if err == nil || !strings.Contains(err.Error(), "injected") {
-				t.Fatalf("restore error = %v", err)
+				fatalf(t, "restore error = %v", err)
 			}
 			if got := readNote(t, fixture); got != "changed knowledge" {
-				t.Errorf("files were kept although no bundle database is live: %q", got)
+				errorf(t, "files were kept although no bundle database is live: %q", got)
 			}
 			if hubExisted {
 				assertDatabases(t, fixture, "hub-two", "manager-two")
 			} else if got := fixture.backend.server(fixture.manager)[fixture.manager.Database]; got == nil || got.dump != "manager-two" {
-				t.Errorf("manager database = %+v", got)
+				errorf(t, "manager database = %+v", got)
 			}
 		})
 	}
@@ -733,7 +733,7 @@ func TestParkedDatabaseWhoseCheckFailsStaysNamed(t *testing.T) {
 	fixture.backend.existsErrPrefix = "persona_previous_m_"
 	_, err := restoreWithFault(t, fixture, "manager:install")
 	if err == nil {
-		t.Fatal("restore succeeded")
+		fatal(t, "restore succeeded")
 	}
 	parked := ""
 	for name := range fixture.backend.server(fixture.manager) {
@@ -742,10 +742,10 @@ func TestParkedDatabaseWhoseCheckFailsStaysNamed(t *testing.T) {
 		}
 	}
 	if parked == "" {
-		t.Fatal("no previous manager database is parked")
+		fatal(t, "no previous manager database is parked")
 	}
 	if !strings.Contains(err.Error(), "previous built-in manager database: "+parked) {
-		t.Errorf("the parked database %s is not named: %v", parked, err)
+		errorf(t, "the parked database %s is not named: %v", parked, err)
 	}
 }
 
@@ -756,27 +756,27 @@ func TestSwapKnowledgeNarrowsOnlyOnEstablishedFacts(t *testing.T) {
 	installing := knowing(func(l layout) bool { return l == layout{atAside, atStage} })
 	unknown := installing.renamed(atStage, atTarget, errors.New("connection lost"))
 	if unknown != installing|knowing(func(l layout) bool { return l == layout{atAside, atTarget} }) {
-		t.Fatalf("an install rename that reports an error leaves %b", unknown)
+		fatalf(t, "an install rename that reports an error leaves %b", unknown)
 	}
 	if got := installing.renamed(atStage, atTarget, nil); !got.surely(bundleAt(atTarget)) {
-		t.Errorf("an install rename that works leaves %b", got)
+		errorf(t, "an install rename that works leaves %b", got)
 	}
 	// Putting the previous database back works only if the name was free: no
 	// bundle database can be installed under it.
 	if got := unknown.renamed(atAside, atTarget, nil); !got.surely(back) {
-		t.Errorf("a previous database renamed back leaves %b", got)
+		errorf(t, "a previous database renamed back leaves %b", got)
 	}
 	// Renamed back with an error: then the staged copy existing proves the
 	// install never happened, and the target existing that the original is back.
 	maybe := unknown.renamed(atAside, atTarget, errors.New("connection lost"))
 	if !maybe.may(bundleAt(atTarget)) || !maybe.may(back) {
-		t.Fatalf("a rename back that reports an error leaves %b", maybe)
+		fatalf(t, "a rename back that reports an error leaves %b", maybe)
 	}
 	if got := maybe.observed(atStage, true).observed(atTarget, true); !got.surely(back) {
-		t.Errorf("staged copy and target present leave %b", got)
+		errorf(t, "staged copy and target present leave %b", got)
 	}
 	if got := maybe.observed(atStage, true); !got.surely(bundleAt(atStage)) || !got.unsure(originalAt(atAside)) {
-		t.Errorf("the staged copy present leaves %b", got)
+		errorf(t, "the staged copy present leaves %b", got)
 	}
 	// A failed check is not an observation: probe leaves the knowledge alone.
 	fixture := newBackupFixture(t, "persona_manager")
@@ -784,12 +784,12 @@ func TestSwapKnowledgeNarrowsOnlyOnEstablishedFacts(t *testing.T) {
 	fixture.backend.existsFailures = 3
 	fixture.operator().probe(part, false)
 	if part.known != maybe || part.confused {
-		t.Errorf("failed checks changed the knowledge to %b", part.known)
+		errorf(t, "failed checks changed the knowledge to %b", part.known)
 	}
 	// A result no layout explains is not trusted either.
 	part.learn(maybe.observed(atStage, false).observed(atTarget, false).observed(atAside, false))
 	if !part.confused || !part.known.may(bundleAt(atTarget)) || !part.known.may(originalAt(atAside)) {
-		t.Errorf("a contradiction leaves %b (confused %v)", part.known, part.confused)
+		errorf(t, "a contradiction leaves %b (confused %v)", part.known, part.confused)
 	}
 }
 
@@ -803,23 +803,23 @@ func TestRestoreLeavesNoEmptyPreviousExternalKnowledgeBase(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(fixture.home, "managers", "assistant", "manager.json"), []byte(`{"database_name":"persona_manager","kb_dir":`+strconvQuote(external)+`}`))
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if err := os.RemoveAll(external); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true, AllowExternalKB: true})
 	if err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	if result.PreviousExternalKB != "" {
-		t.Errorf("an empty previous external knowledge base is reported: %s", result.PreviousExternalKB)
+		errorf(t, "an empty previous external knowledge base is reported: %s", result.PreviousExternalKB)
 	}
 	if left, _ := filepath.Glob(filepath.Join(parent, ".*persona-backup-previous-*")); len(left) != 0 {
-		t.Errorf("an empty previous-copy directory is left: %v", left)
+		errorf(t, "an empty previous-copy directory is left: %v", left)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(external, "fact.md")); string(raw) != "external original" {
-		t.Errorf("the knowledge base was not restored: %q", raw)
+		errorf(t, "the knowledge base was not restored: %q", raw)
 	}
 }
 
@@ -838,7 +838,7 @@ func TestUncertainPreviousUndoIsSettledForEitherPart(t *testing.T) {
 				fixture := newBackupFixture(t, "persona_manager")
 				operator := fixture.operator()
 				if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-					t.Fatal(err)
+					fatal(t, err)
 				}
 				fixture.mutate(t)
 				target, role := fixture.hub, "h"
@@ -870,21 +870,21 @@ func TestUncertainPreviousUndoIsSettledForEitherPart(t *testing.T) {
 				}
 				_, err := (&Operator{backend: backend, now: time.Now, random: rand.Reader}).Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 				if err == nil || !strings.Contains(err.Error(), "scripted") {
-					t.Fatalf("restore error = %v", err)
+					fatalf(t, "restore error = %v", err)
 				}
 				assertDatabases(t, fixture, "hub-two", "manager-two")
 				if mode != "checks-keep-failing" {
 					if got := readNote(t, fixture); got != "changed knowledge" {
-						t.Errorf("files were kept although both live databases are the install's own: %q", got)
+						errorf(t, "files were kept although both live databases are the install's own: %q", got)
 					}
 					if strings.Contains(err.Error(), "may be") || strings.Contains(err.Error(), "left as restored") {
-						t.Errorf("the error claims a bundle database may be live: %v", err)
+						errorf(t, "the error claims a bundle database may be live: %v", err)
 					}
 					assertNoTemporaryDatabases(t, fixture.backend)
 					return
 				}
 				if got := readNote(t, fixture); got != "original knowledge" {
-					t.Errorf("files were rolled back although it cannot be told whether the bundle's %s database is live: %q", part, got)
+					errorf(t, "files were rolled back although it cannot be told whether the bundle's %s database is live: %q", part, got)
 				}
 				previousFiles, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
 				wanted := append([]string{"the " + map[string]string{"hub": "hub", "manager": "built-in manager"}[part] + " database " + target.Database + " may be the bundle's"}, previousFiles...)
@@ -894,11 +894,11 @@ func TestUncertainPreviousUndoIsSettledForEitherPart(t *testing.T) {
 					}
 				}
 				if len(wanted) != 3 {
-					t.Fatalf("expected the previous files and the staged copy, have %v", wanted)
+					fatalf(t, "expected the previous files and the staged copy, have %v", wanted)
 				}
 				for _, want := range wanted {
 					if !strings.Contains(err.Error(), want) {
-						t.Errorf("the error does not name %q: %v", want, err)
+						errorf(t, "the error does not name %q: %v", want, err)
 					}
 				}
 			})
@@ -918,7 +918,7 @@ func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
 	// again, without the previous run's leftovers.
 	fixture := newBackupFixture(t, "persona_manager")
 	if _, err := fixture.operator().Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	for run := 0; run < 120; run++ {
 		script := make([]int, 24)
@@ -939,7 +939,7 @@ func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
 		leftovers, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
 		for _, leftover := range leftovers {
 			if err := os.RemoveAll(leftover); err != nil {
-				t.Fatal(err)
+				fatal(t, err)
 			}
 		}
 		fixture.mutate(t)
@@ -962,27 +962,27 @@ func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
 		filesKept := readNote(t, fixture) == "original knowledge"
 		if err == nil {
 			if !filesKept || hubLive == nil || hubLive.dump != "hub-one" || managerLive == nil || managerLive.dump != "manager-one" {
-				t.Fatalf("script %s: success with files kept %v and %+v, %+v", label, filesKept, hubLive, managerLive)
+				fatalf(t, "script %s: success with files kept %v and %+v, %+v", label, filesKept, hubLive, managerLive)
 			}
 			continue
 		}
 		message := err.Error()
 		if live && !filesKept {
-			t.Fatalf("script %s: a bundle database is live and the files were rolled back: %v", label, err)
+			fatalf(t, "script %s: a bundle database is live and the files were rolled back: %v", label, err)
 		}
 		if filesKept != strings.Contains(message, "left as restored") {
-			t.Fatalf("script %s: files kept %v, but the error says otherwise: %v", label, filesKept, err)
+			fatalf(t, "script %s: files kept %v, but the error says otherwise: %v", label, filesKept, err)
 		}
 		if filesKept {
 			kept++
 			previousFiles, _ := filepath.Glob(filepath.Join(fixture.home, ".persona-backup-previous-*"))
 			if len(previousFiles) != 1 || !strings.Contains(message, previousFiles[0]) {
-				t.Fatalf("script %s: the previous files %v are not named: %v", label, previousFiles, err)
+				fatalf(t, "script %s: the previous files %v are not named: %v", label, previousFiles, err)
 			}
 			if !live {
 				unknowable++
 				if !strings.Contains(message, " may be the bundle's") {
-					t.Fatalf("script %s: files kept, no bundle database live, and no possibly-live one named: %v", label, err)
+					fatalf(t, "script %s: files kept, no bundle database live, and no possibly-live one named: %v", label, err)
 				}
 			}
 		}
@@ -990,12 +990,12 @@ func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
 			for name, database := range fixture.backend.server(part) {
 				parked := strings.HasSuffix(database.dump, "-two") && name != fixture.hub.Database && name != fixture.manager.Database
 				if (parked || strings.HasPrefix(name, "persona_staged_")) && !strings.Contains(message, name) {
-					t.Fatalf("script %s: %s (%s) is left and not named: %v", label, name, database.dump, err)
+					fatalf(t, "script %s: %s (%s) is left and not named: %v", label, name, database.dump, err)
 				}
 			}
 		}
 		if _, err := fixture.operator().Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true}); err != nil {
-			t.Fatalf("script %s: a second restore does not converge: %v", label, err)
+			fatalf(t, "script %s: a second restore does not converge: %v", label, err)
 		}
 		assertDatabases(t, fixture, "hub-one", "manager-one")
 		for _, dump := range []string{"hub-two", "manager-two"} {
@@ -1006,14 +1006,14 @@ func TestRestoreFaultScriptsKeepFilesOnlyWithTheBundle(t *testing.T) {
 				}
 			}
 			if !found {
-				t.Fatalf("script %s: the original %s is lost", label, dump)
+				fatalf(t, "script %s: the original %s is lost", label, dump)
 			}
 		}
 	}
 	if kept < 5 || unknowable == 0 {
-		t.Fatalf("scripts too tame: %d runs, %d kept the files, %d unknowable", runs, kept, unknowable)
+		fatalf(t, "scripts too tame: %d runs, %d kept the files, %d unknowable", runs, kept, unknowable)
 	}
-	t.Logf("%d restores, %d kept the files, %d of them while no bundle database was live (unknowable)", runs, kept, unknowable)
+	logf(t, "%d restores, %d kept the files, %d of them while no bundle database was live (unknowable)", runs, kept, unknowable)
 }
 
 // A staged copy that cannot be dropped when the restore fails before the swap
@@ -1022,7 +1022,7 @@ func TestStagedCopyLeftBeforeTheSwapIsNamed(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	fixture.backend.restoreErr, fixture.backend.restorePart = errors.New("injected manager restore failure"), "manager"
@@ -1035,22 +1035,22 @@ func TestStagedCopyLeftBeforeTheSwapIsNamed(t *testing.T) {
 	}
 	_, err := (&Operator{backend: backend, now: time.Now, random: rand.Reader}).Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err == nil || !strings.Contains(err.Error(), "injected manager restore failure") {
-		t.Fatalf("restore error = %v", err)
+		fatalf(t, "restore error = %v", err)
 	}
 	left := 0
 	for name := range fixture.backend.server(fixture.hub) {
 		if strings.HasPrefix(name, "persona_staged_") {
 			left++
 			if !strings.Contains(err.Error(), name) {
-				t.Errorf("the staged copy %s is left and not named: %v", name, err)
+				errorf(t, "the staged copy %s is left and not named: %v", name, err)
 			}
 		}
 	}
 	if left != 1 {
-		t.Errorf("%d staged copies are left, want the hub's only", left)
+		errorf(t, "%d staged copies are left, want the hub's only", left)
 	}
 	assertDatabases(t, fixture, "hub-two", "manager-two")
 	if got := readNote(t, fixture); got != "changed knowledge" {
-		t.Errorf("files = %q", got)
+		errorf(t, "files = %q", got)
 	}
 }

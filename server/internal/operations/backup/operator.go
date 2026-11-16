@@ -180,6 +180,13 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err err
 	if err := verifyPayloadKeyFiles(staging, manifest); err != nil {
 		return Result{}, err
 	}
+	// The file layout is checked before any database is staged; applyFiles
+	// checks it again before it changes anything.
+	if home, err := filepath.Abs(opts.Home); err != nil {
+		return Result{}, err
+	} else if _, err := restoreItems(home, staging, manifest, opts.AllowExternalKB); err != nil {
+		return Result{}, err
+	}
 	managerKeys, err := bundledManagerKeys(staging)
 	if err != nil {
 		return Result{}, err
@@ -211,7 +218,7 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err err
 		return Result{}, err
 	}
 	keptPassword := dockerPasswordKept(opts.Home, manifest) // before applyFiles installs the bundle's copy
-	previousFiles, previousKB, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
+	previousFiles, previousKB, movedAside, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
 	if err != nil {
 		return Result{}, err
 	}
@@ -237,7 +244,7 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err err
 		return Result{}, errors.Join(err, rollbackFiles())
 	}
 	previous := outcome.previous()
-	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB}, nil
+	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB, MovedAside: movedAside}, nil
 }
 
 func nameOrNone(name string) string {

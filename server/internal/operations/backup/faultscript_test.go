@@ -233,11 +233,11 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 		found = found || w.key() == truth.key()
 	}
 	if !found {
-		t.Fatalf("script %s: the oracle lost the real state %v among %v", label, truth, worlds)
+		fatalf(t, "script %s: the oracle lost the real state %v among %v", label, truth, worlds)
 	}
 	for _, drop := range backend.dropped {
 		if !strings.Contains(drop, "=bundle-") || !strings.Contains(drop, "persona_staged_") {
-			t.Fatalf("script %s: a Drop removed %s, which is not a staged copy of the bundle", label, drop)
+			fatalf(t, "script %s: a Drop removed %s, which is not a staged copy of the bundle", label, drop)
 		}
 	}
 	// Whatever a run tells about a name must agree with what the calls allow.
@@ -260,28 +260,28 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 			}
 		}
 		if originals[i] && len(homes) == 0 {
-			t.Fatalf("script %s: the original %s is lost (err %v)", label, part.original, err)
+			fatalf(t, "script %s: the original %s is lost (err %v)", label, part.original, err)
 		}
 		// Every original that may be parked is named, and nothing else is.
 		for _, name := range homes {
 			if name != part.target.Database && previous[i] != name {
-				t.Fatalf("script %s: the original %s is parked as %s, which is not named (previous %v, err %v)", label, part.original, name, previous, err)
+				fatalf(t, "script %s: the original %s is parked as %s, which is not named (previous %v, err %v)", label, part.original, name, previous, err)
 			}
 		}
 		if previous[i] != "" && !mayHold(previous[i], part.original) {
-			t.Fatalf("script %s: %s is named as the previous %s database, but the calls rule that out (err %v)", label, previous[i], part.label, err)
+			fatalf(t, "script %s: %s is named as the previous %s database, but the calls rule that out (err %v)", label, previous[i], part.label, err)
 		}
 		// Every staged copy that may remain is named, and nothing else is.
 		// No script changes the databases behind the restore's back, so no
 		// result contradicts every layout.
 		if got.unconfirmed != "" {
-			t.Fatalf("script %s: the %s outcome is confused without outside interference (err %v)", label, part.label, err)
+			fatalf(t, "script %s: the %s outcome is confused without outside interference (err %v)", label, part.label, err)
 		}
 		if truth[part.stage] != "" && got.stage != part.stage {
-			t.Fatalf("script %s: the staged copy %s remains and is not named (err %v)", label, part.stage, err)
+			fatalf(t, "script %s: the staged copy %s remains and is not named (err %v)", label, part.stage, err)
 		}
 		if got.stage != "" && !mayHold(part.stage, part.bundle) {
-			t.Fatalf("script %s: %s is named as a staged copy that may remain, but the calls rule that out (err %v)", label, part.stage, err)
+			fatalf(t, "script %s: %s is named as a staged copy that may remain, but the calls rule that out (err %v)", label, part.stage, err)
 		}
 		// A part is said to be possibly live exactly when the calls allow it,
 		// and surely live exactly when they establish it.
@@ -290,7 +290,7 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 			surelyLive = surelyLive && w[part.target.Database] == part.bundle
 		}
 		if got.bundleMayBeLive != mayBeLive || got.bundleLive != surelyLive {
-			t.Fatalf("script %s: %s bundle may be live %v, surely %v; the calls allow %v, establish %v (err %v)", label, part.label, got.bundleMayBeLive, got.bundleLive, mayBeLive, surelyLive, err)
+			fatalf(t, "script %s: %s bundle may be live %v, surely %v; the calls allow %v, establish %v (err %v)", label, part.label, got.bundleMayBeLive, got.bundleLive, mayBeLive, surelyLive, err)
 		}
 		// Unknowable: the bundle's copy is always under the staged name or the
 		// part's own name, so one working check of the staged name after the
@@ -308,23 +308,23 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 			for _, call := range backend.calls[last+1:] {
 				if call.op == "exists" && call.from == part.stage {
 					if call.ok {
-						t.Fatalf("script %s: the %s staged copy was checked after the last rename, yet it is undecided whether the bundle's copy is live (calls %+v)", label, part.label, backend.calls)
+						fatalf(t, "script %s: the %s staged copy was checked after the last rename, yet it is undecided whether the bundle's copy is live (calls %+v)", label, part.label, backend.calls)
 					}
 					checks++
 				}
 			}
 			if checks < 2 {
-				t.Fatalf("script %s: the %s is left undecided after %d check(s) of its staged copy (calls %+v)", label, part.label, checks, backend.calls)
+				fatalf(t, "script %s: the %s is left undecided after %d check(s) of its staged copy (calls %+v)", label, part.label, checks, backend.calls)
 			}
 		}
 	}
 	if err == nil {
 		for i, part := range parts {
 			if truth[part.target.Database] != part.bundle {
-				t.Fatalf("script %s: success, but %s is %q", label, part.target.Database, truth[part.target.Database])
+				fatalf(t, "script %s: success, but %s is %q", label, part.target.Database, truth[part.target.Database])
 			}
 			if originals[i] != (previous[i] != "") || (previous[i] != "" && truth[previous[i]] != part.original) {
-				t.Fatalf("script %s: success with the previous databases %v in %v", label, previous, truth)
+				fatalf(t, "script %s: success with the previous databases %v in %v", label, previous, truth)
 			}
 		}
 		return
@@ -338,7 +338,7 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 	}
 	// Never: a bundle database is live and the files are rolled back.
 	if live && !kept {
-		t.Fatalf("script %s: a bundle database is live and the files would be rolled back (truth %v, err %v)", label, truth, err)
+		fatalf(t, "script %s: a bundle database is live and the files would be rolled back (truth %v, err %v)", label, truth, err)
 	}
 	if kept {
 		stats.kept++
@@ -353,16 +353,16 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 		}
 		for i, part := range parts {
 			if outcome[i].bundleMayBeLive && !strings.Contains(message, "the "+part.label+" database "+part.target.Database+" ") {
-				t.Fatalf("script %s: the possibly-live %s database is not named: %v", label, part.label, err)
+				fatalf(t, "script %s: the possibly-live %s database is not named: %v", label, part.label, err)
 			}
 		}
 	}
 	for i, part := range parts {
 		if previous[i] != "" && !strings.Contains(message, previous[i]) {
-			t.Fatalf("script %s: the error does not name the parked %s: %v", label, previous[i], err)
+			fatalf(t, "script %s: the error does not name the parked %s: %v", label, previous[i], err)
 		}
 		if outcome[i].stage != "" && !strings.Contains(message, part.stage) {
-			t.Fatalf("script %s: the error does not name the staged copy %s: %v", label, part.stage, err)
+			fatalf(t, "script %s: the error does not name the staged copy %s: %v", label, part.stage, err)
 		}
 	}
 	// Re-running converges: with the server healthy, staging again and
@@ -372,18 +372,18 @@ func runFaultScript(t *testing.T, script []int, originals [2]bool, stats *faultS
 		fake.add(part.target, part.rerun, part.bundle)
 	}
 	if _, rerunErr := operator.swapDatabases(context.Background(), hub, manager, parts[0].rerun, parts[1].rerun); rerunErr != nil {
-		t.Fatalf("script %s: re-running does not converge: %v", label, rerunErr)
+		fatalf(t, "script %s: re-running does not converge: %v", label, rerunErr)
 	}
 	for i, part := range parts {
 		if server[part.target.Database] == nil || server[part.target.Database].dump != part.bundle {
-			t.Fatalf("script %s: after re-running %s is %+v", label, part.target.Database, server[part.target.Database])
+			fatalf(t, "script %s: after re-running %s is %+v", label, part.target.Database, server[part.target.Database])
 		}
 		have := false
 		for _, database := range server {
 			have = have || database.dump == part.original
 		}
 		if originals[i] && !have {
-			t.Fatalf("script %s: re-running lost the original %s", label, part.original)
+			fatalf(t, "script %s: re-running lost the original %s", label, part.original)
 		}
 	}
 }
@@ -424,8 +424,8 @@ func TestSwapSurvivesEveryFaultScript(t *testing.T) {
 	// The scripts must really exercise the failure, keep-the-files and
 	// cannot-tell paths.
 	if stats.failures < 10000 || stats.kept < 1000 || stats.unknowable == 0 {
-		t.Fatalf("scripts too tame: %+v", *stats)
+		fatalf(t, "scripts too tame: %+v", *stats)
 	}
-	t.Logf("%d scripts, %d failed swaps, %d kept the files, %d of them while no bundle database was live (unknowable: every check of the staged copy failed; %d with the server down for good)",
+	logf(t, "%d scripts, %d failed swaps, %d kept the files, %d of them while no bundle database was live (unknowable: every check of the staged copy failed; %d with the server down for good)",
 		stats.runs, stats.failures, stats.kept, stats.unknowable, stats.unknowableDown)
 }

@@ -79,6 +79,9 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 	if err != nil {
 		return err
 	}
+	if err := refuseKnowledgeBaseOverlap(home, kbDir); err != nil {
+		return err
+	}
 	manifest.KnowledgeBase = locator
 	if info, err := os.Lstat(kbDir); errors.Is(err, os.ErrNotExist) {
 		manifest.KnowledgeBase.Present = false
@@ -114,6 +117,56 @@ func collectPayload(home, staging string, manifest *Manifest) error {
 	if manifest.Manager.SealingKey != "" && manifest.Manager.SealingKey != manifest.ManagerKeyFingerprint {
 		return errors.New("the built-in manager database names a different secret.key than the one on disk, usually because its key rotation is unfinished (a secret.key.next-* file is pending). " +
 			"If so, start the built-in manager once so it finishes the rotation (it resumes at startup), then stop it and retry; the rotation cannot be rolled back after its commit")
+	}
+	return nil
+}
+
+// runtimeTargets are the paths under home that restore replaces, other than
+// the knowledge base.
+func runtimeTargets(home string) []string {
+	targets := []string{filepath.Join(home, "hub.json"), filepath.Join(home, "secret.key"), filepath.Join(home, "managers", "assistant")}
+	for _, name := range append(append([]string(nil), optionalRootFiles...), optionalRuntimeDirectories...) {
+		targets = append(targets, filepath.Join(home, filepath.FromSlash(name)))
+	}
+	return targets
+}
+
+// pathWithin reports whether child is parent or lies under it.
+func pathWithin(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// refuseKnowledgeBaseOverlap refuses a knowledge base that would hold the
+// runtime directory (home, its parent or any ancestor, /): replacing it would
+// move the whole install, the previous-files directory with it, into the
+// knowledge base's previous copy. It also refuses one that is, holds, or lies
+// inside a runtime file or directory restore replaces as well (hub.json,
+// managers/assistant, extensions...), which would push the item just restored
+// into the previous files, and one inside a previous-files directory. Paths
+// are compared as given and with their symbolic links resolved.
+func refuseKnowledgeBaseOverlap(home, kb string) error {
+	forms := func(name string) []string {
+		return []string{filepath.Clean(name), resolveExisting(name)}
+	}
+	for _, kbForm := range forms(kb) {
+		for _, homeForm := range forms(home) {
+			if pathWithin(kbForm, homeForm) {
+				return fmt.Errorf("refusing the knowledge base %s: it holds the runtime directory %s, so restoring it would move the whole install into its previous copy. "+
+					"Nothing was changed; restore into a runtime directory outside it, or set kb_dir to a directory of its own", kb, home)
+			}
+			if rel, err := filepath.Rel(homeForm, kbForm); err == nil && strings.HasPrefix(strings.Split(filepath.ToSlash(rel), "/")[0], ".persona-backup-previous-") {
+				return fmt.Errorf("refusing the knowledge base %s: it lies inside a previous-files directory of an earlier restore. Nothing was changed", kb)
+			}
+		}
+		for _, target := range runtimeTargets(home) {
+			for _, targetForm := range forms(target) {
+				if pathWithin(targetForm, kbForm) || pathWithin(kbForm, targetForm) {
+					return fmt.Errorf("refusing the knowledge base %s: it overlaps %s, which the backup holds and restore replaces as well. "+
+						"Nothing was changed; set kb_dir to a directory of its own, outside managers/assistant, extensions, skills and hub.machines_kept (the default is data)", kb, target)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -232,10 +285,27 @@ func copyFile(source, destination string) error {
 	return copyErr
 }
 
+// renameFile and removeAll are os.Rename and os.RemoveAll; tests replace them
+// to make the file transaction's steps fail.
+var (
+	renameFile = os.Rename
+	removeAll  = os.RemoveAll
+)
+
 type restoreItem struct {
 	source  string
 	target  string
 	runtime bool
+	// absent: the manifest records that the bundle's install had none of this
+	// (a knowledge base with Present false). With no staged source, the
+	// install's copy is moved aside into the previous files with nothing in
+	// its place. Without the record, an item with no staged source is left
+	// untouched: the bundle cannot tell an absent file from one never
+	// collected.
+	absent bool
+	// empty: a runtime directory the manifest lists whose staged copy holds
+	// nothing; it is installed as an empty directory.
+	empty bool
 }
 
 type restoreRecord struct {
@@ -248,27 +318,30 @@ type restoreRecord struct {
 
 type fileTransaction struct {
 	id           string
+	home         string
 	backupRoot   string
 	externalRoot string
 	records      []*restoreRecord
 }
 
 // applyFiles installs what the bundle has, each copy staged beside its target
-// before the target is renamed aside; what the bundle has no copy of stays as it
+// before the target is renamed aside. What the manifest records as absent or
+// empty is moved aside with nothing (or an empty directory) in its place, and
+// listed in movedAside; what the bundle has no copy or record of stays as it
 // is. The replaced files remain in mode-0700 transaction directories after
 // success.
-func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, allowExternal bool, id string) (previous, previousExternal string, rollback func() error, returnErr error) {
+func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, allowExternal bool, id string) (previous, previousExternal string, movedAside []string, rollback func() error, returnErr error) {
 	home, err := filepath.Abs(home)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
 	items, err := restoreItems(home, staging, manifest, allowExternal)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
-	transaction := &fileTransaction{id: id, backupRoot: filepath.Join(home, ".persona-backup-previous-"+id)}
+	transaction := &fileTransaction{id: id, home: home, backupRoot: filepath.Join(home, ".persona-backup-previous-"+id)}
 	if err := os.MkdirAll(transaction.backupRoot, 0o700); err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
 	committed := false
 	defer func() {
@@ -278,10 +351,10 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 	}()
 	for _, item := range items {
 		if err := ctx.Err(); err != nil {
-			return "", "", nil, err
+			return "", "", nil, nil, err
 		}
 		if err := transaction.apply(item); err != nil {
-			return "", "", nil, err
+			return "", "", nil, nil, err
 		}
 	}
 	committed = true
@@ -293,7 +366,24 @@ func applyFiles(ctx context.Context, home, staging string, manifest *Manifest, a
 		_ = os.Remove(transaction.externalRoot)
 		transaction.externalRoot = ""
 	}
-	return transaction.backupRoot, transaction.externalRoot, transaction.rollback, nil
+	return transaction.backupRoot, transaction.externalRoot, transaction.movedAside(), transaction.rollback, nil
+}
+
+// movedAside names what was moved into the previous files with nothing (or an
+// empty directory) in its place.
+func (t *fileTransaction) movedAside() []string {
+	var names []string
+	for _, record := range t.records {
+		if !record.previousMoved || !(record.item.absent || record.item.empty) {
+			continue
+		}
+		name := record.item.target
+		if rel, err := filepath.Rel(t.home, name); err == nil && record.item.runtime {
+			name = filepath.ToSlash(rel)
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // dockerPasswordKept reports whether restore leaves the install's own
@@ -343,8 +433,28 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 		}
 		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", rel), target: target, runtime: true})
 	}
+	listed := map[string]bool{}
+	for _, name := range manifest.RuntimeDirectories {
+		listed[name] = true
+	}
 	for _, name := range append([]string{"managers/assistant"}, optionalRuntimeDirectories...) {
-		items = append(items, restoreItem{source: filepath.Join(staging, "runtime", filepath.FromSlash(name)), target: filepath.Join(home, filepath.FromSlash(name)), runtime: true})
+		item := restoreItem{source: filepath.Join(staging, "runtime", filepath.FromSlash(name)), target: filepath.Join(home, filepath.FromSlash(name)), runtime: true}
+		// A directory the manifest lists existed in the bundle's install; with
+		// no file staged it was empty there (a bundle holds files only), and is
+		// restored empty rather than left as this install has it.
+		// (restoreItems may run more than once on one staging directory, so an
+		// empty staged directory counts as none.)
+		if listed[name] {
+			if _, err := os.Lstat(item.source); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			} else if err != nil || emptyDirectory(item.source) {
+				item.empty = true
+				if err := os.MkdirAll(item.source, 0o700); err != nil {
+					return nil, err
+				}
+			}
+		}
+		items = append(items, item)
 	}
 	kbTarget := ""
 	if manifest.KnowledgeBase.External != "" {
@@ -363,8 +473,8 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 			return nil, errors.New("the knowledge-base relative path leaves the runtime directory")
 		}
 	}
-	if samePath(kbTarget, home) || samePath(kbTarget, filepath.Dir(home)) || filepath.Clean(kbTarget) == string(filepath.Separator) {
-		return nil, errors.New("refusing an unsafe knowledge-base restore target")
+	if err := refuseKnowledgeBaseOverlap(home, kbTarget); err != nil {
+		return nil, err
 	}
 	kbSource := filepath.Join(staging, "kb")
 	if manifest.KnowledgeBase.Present {
@@ -372,17 +482,26 @@ func restoreItems(home, staging string, manifest *Manifest, allowExternal bool) 
 			return nil, err
 		}
 	}
-	items = append(items, restoreItem{source: kbSource, target: kbTarget, runtime: manifest.KnowledgeBase.External == ""})
+	// Present false records that the bundle's install had no knowledge base.
+	items = append(items, restoreItem{source: kbSource, target: kbTarget, runtime: manifest.KnowledgeBase.External == "", absent: !manifest.KnowledgeBase.Present})
 	return items, nil
 }
 
 func (t *fileTransaction) apply(item restoreItem) error {
-	// What the bundle has no copy of is not the bundle's to replace: it stays
-	// in the live install, untouched (never moved aside with nothing in its
-	// place).
+	staged := true
 	if _, err := os.Lstat(item.source); errors.Is(err, os.ErrNotExist) {
-		return nil
+		// What the bundle has no copy and no record of is not the bundle's to
+		// replace: it stays in the live install, untouched.
+		if !item.absent {
+			return nil
+		}
+		staged = false
 	} else if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(item.target); errors.Is(err, os.ErrNotExist) && !staged {
+		return nil // recorded absent, and absent here too
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	record := &restoreRecord{item: item}
@@ -391,9 +510,11 @@ func (t *fileTransaction) apply(item restoreItem) error {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	record.temporary = filepath.Join(parent, fmt.Sprintf(".%s.persona-new-%s-%d", filepath.Base(item.target), t.id, len(t.records)))
-	if err := copyRecursive(item.source, record.temporary); err != nil {
-		return err
+	if staged {
+		record.temporary = filepath.Join(parent, fmt.Sprintf(".%s.persona-new-%s-%d", filepath.Base(item.target), t.id, len(t.records)))
+		if err := copyRecursive(item.source, record.temporary); err != nil {
+			return err
+		}
 	}
 	backupRoot := t.backupRoot
 	if !item.runtime {
@@ -410,43 +531,63 @@ func (t *fileTransaction) apply(item restoreItem) error {
 		if err := os.MkdirAll(filepath.Dir(record.backup), 0o700); err != nil {
 			return err
 		}
-		if err := os.Rename(item.target, record.backup); err != nil {
+		if err := renameFile(item.target, record.backup); err != nil {
 			return fmt.Errorf("preserve %s before restore: %w", filepath.Base(item.target), err)
 		}
 		record.previousMoved = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(record.temporary, item.target); err != nil {
-		return fmt.Errorf("install staged %s: %w", filepath.Base(item.target), err)
+	if staged {
+		if err := renameFile(record.temporary, item.target); err != nil {
+			return fmt.Errorf("install staged %s: %w", filepath.Base(item.target), err)
+		}
+		record.installed = true
 	}
-	record.installed = true
 	return secretkey.SyncDir(filepath.Dir(item.target))
 }
 
+// rollback puts every original back. The previous-files directories are
+// removed only once empty: an original that could not be put back stays in
+// them, and the error names it, its directory, and what to do.
 func (t *fileTransaction) rollback() error {
 	var errs []error
 	for i := len(t.records) - 1; i >= 0; i-- {
 		record := t.records[i]
 		if record.installed {
-			if err := os.RemoveAll(record.item.target); err != nil {
-				errs = append(errs, err)
+			if err := removeAll(record.item.target); err != nil {
+				if record.previousMoved {
+					errs = append(errs, fmt.Errorf("remove the restored %s so that its original can go back: %w", record.item.target, err))
+				} else {
+					errs = append(errs, fmt.Errorf("remove %s, which the restore installed and this install did not have: %w; remove it by hand", record.item.target, err))
+				}
+			} else {
+				record.installed = false
 			}
 		}
 		if record.previousMoved {
-			if err := os.Rename(record.backup, record.item.target); err != nil {
-				errs = append(errs, err)
+			if err := renameFile(record.backup, record.item.target); err != nil {
+				errs = append(errs, fmt.Errorf("put the original %s back from %s: %w", record.item.target, record.backup, err))
+			} else {
+				record.previousMoved = false
 			}
 		}
 		if record.temporary != "" {
 			_ = os.RemoveAll(record.temporary)
 		}
 	}
-	if len(errs) == 0 {
-		_ = os.RemoveAll(t.backupRoot)
-		if t.externalRoot != "" {
-			_ = os.RemoveAll(t.externalRoot)
+	var kept []string
+	for _, root := range []string{t.backupRoot, t.externalRoot} {
+		if root == "" {
+			continue
 		}
+		if err := os.Remove(root); err != nil && !errors.Is(err, os.ErrNotExist) {
+			kept = append(kept, root)
+		}
+	}
+	if len(kept) > 0 {
+		errs = append(errs, fmt.Errorf("the file rollback is incomplete; the originals it could not put back are preserved in %s, each as NNN-<name> (NNN is the order restore replaced them in). "+
+			"Move each back to its place by hand (removing what the restore installed there first), then delete the emptied directory", strings.Join(kept, " and ")))
 	}
 	return errors.Join(errs...)
 }

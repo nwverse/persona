@@ -18,7 +18,7 @@ func TestConfusedSwapDoesNotCallAnUnconfirmedNameSafeToDrop(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	operator := fixture.operator()
 	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
-		t.Fatal(err)
+		fatal(t, err)
 	}
 	fixture.mutate(t)
 	backend := &scriptedBackend{fakeBackend: fixture.backend}
@@ -33,26 +33,26 @@ func TestConfusedSwapDoesNotCallAnUnconfirmedNameSafeToDrop(t *testing.T) {
 	}
 	_, err := (&Operator{backend: backend, now: time.Now, random: rand.Reader}).Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if !interfered {
-		t.Fatal("the interference never happened")
+		fatal(t, "the interference never happened")
 	}
 	var swap *swapError
 	if !errors.As(err, &swap) {
-		t.Fatalf("restore error = %v, want a swap error", err)
+		fatalf(t, "restore error = %v, want a swap error", err)
 	}
 	message := err.Error()
 	stage := swap.outcome[0].unconfirmed
 	if stage == "" || swap.outcome[0].stage != "" || !strings.Contains(message, stage) {
-		t.Fatalf("the unconfirmed staged name is not named: %v", err)
+		fatalf(t, "the unconfirmed staged name is not named: %v", err)
 	}
 	if strings.Contains(message, "safe to drop") {
-		t.Errorf("a name whose contents are unconfirmed is called safe to drop: %v", err)
+		errorf(t, "a name whose contents are unconfirmed is called safe to drop: %v", err)
 	}
 	if !strings.Contains(message, "check what") || !strings.Contains(message, "before dropping") {
-		t.Errorf("the error does not say to check before dropping: %v", err)
+		errorf(t, "the error does not say to check before dropping: %v", err)
 	}
 	for _, name := range backend.dropped {
 		if !strings.HasPrefix(name, "persona_staged_m_") { // the manager's was known to be its staged copy
-			t.Errorf("%s was dropped", name)
+			errorf(t, "%s was dropped", name)
 		}
 	}
 }
@@ -68,12 +68,12 @@ func TestSwapErrorWordingSeparatesConfirmedAndUnconfirmedStages(t *testing.T) {
 	_, list, found := strings.Cut(message, "safe to drop: ")
 	list, _, _ = strings.Cut(list, ";")
 	if !found || !strings.Contains(list, "persona_staged_m_1") || strings.Contains(list, "persona_staged_h_1") {
-		t.Errorf("the safe-to-drop list is %q, want the manager's staged copy only: %s", list, message)
+		errorf(t, "the safe-to-drop list is %q, want the manager's staged copy only: %s", list, message)
 	}
 	if !strings.Contains(message, "could not be confirmed") || !strings.Contains(message, "persona_staged_h_1") {
-		t.Errorf("the confused part's staged name is not reported as unconfirmed: %s", message)
+		errorf(t, "the confused part's staged name is not reported as unconfirmed: %s", message)
 	}
 	if got := known.outcome(); got.unconfirmed != "" || got.stage != "persona_staged_m_1" {
-		t.Errorf("a known staged copy has outcome %+v", got)
+		errorf(t, "a known staged copy has outcome %+v", got)
 	}
 }

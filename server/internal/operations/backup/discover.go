@@ -8,8 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 )
@@ -149,10 +151,43 @@ func withDatabase(rawURL, name string) (string, error) {
 	return u.String(), nil
 }
 
+// sameDatabase reports whether a and b may be one database: the same name on
+// any server both can reach. pgx tries every host of a multi-host URL in turn,
+// so one host:port in common (in any position) is enough.
 func sameDatabase(a, b Target) bool {
+	if a.Database != b.Database {
+		return false
+	}
 	ac, aerr := parseAddressing(a.URL)
 	bc, berr := parseAddressing(b.URL)
-	return aerr == nil && berr == nil && a.Database == b.Database && ac.Host == bc.Host && ac.Port == bc.Port
+	if aerr != nil || berr != nil {
+		return false
+	}
+	servers := map[string]bool{}
+	for _, server := range databaseServers(ac) {
+		servers[server] = true
+	}
+	for _, server := range databaseServers(bc) {
+		if servers[server] {
+			return true
+		}
+	}
+	return false
+}
+
+// databaseServers is every host:port pgx would try, in its order.
+func databaseServers(cfg *pgx.ConnConfig) []string {
+	key := func(host string, port uint16) string {
+		if !strings.HasPrefix(host, "/") { // a host name, not a socket directory
+			host = strings.ToLower(host)
+		}
+		return host + "\x00" + strconv.Itoa(int(port))
+	}
+	servers := []string{key(cfg.Host, cfg.Port)}
+	for _, fallback := range cfg.Fallbacks {
+		servers = append(servers, key(fallback.Host, fallback.Port))
+	}
+	return servers
 }
 
 // knowledgeBaseLocator resolves kb_dir without ever consulting another
