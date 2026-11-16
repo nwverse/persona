@@ -1,0 +1,151 @@
+{
+  "head": "842e648de66979d714cc362254f3b71081d27231",
+  "web_tree": "a34846ab21d81d5099ea50c134632a59be576456",
+  "browser": "149.0.7827.55",
+  "platform": "linux",
+  "node": "v24.20.0",
+  "screenshots": [
+    {
+      "file": "1440-light-standard-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "1440-light-standard-options.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "390-dark-large-source.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "390-dark-large-options.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "automatic-enabled.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "release-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-waiting.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "interrupt-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm-narrow-dark-large.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    }
+  ],
+  "interactions": [
+    "auto opt-in; source change disables auto and hides backups; program-only backup cancel/confirm; wait controls disabled; Update now cancel/confirm",
+    [
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto_update_nodes": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "release"
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "web-dev"
+        }
+      },
+      {
+        "path": "/hub/update/backups/snapshot-20261112000100000000-cccccccccccc/apply",
+        "method": "POST",
+        "input": {}
+      },
+      {
+        "path": "/hub/update",
+        "method": "POST",
+        "input": {
+          "now": true
+        }
+      }
+    ]
+  ],
+  "pinned_main": "293b31e844ddc5d256ca4a6cd2d922736b2f8e7a",
+  "source_tree": "97a1cf2a6f586378abdc0d7a26c276da0bd002cb",
+  "result": "PASS",
+  "author_visual_inspection": "All ten PNGs inspected; no clipped labels, dialog controls or page-width overflow in the exercised update flow.",
+  "limits": "Synthetic local API in the real App. No live update, writer hook, deployment, restoration, native host or maintainer acceptance is established.",
+  "sha256": {
+    "1440-light-standard-options.png": "6f20ee3aaccc2adc93413e72183da2ccef78e1c9e650cf3a594c0dd306e75267",
+    "1440-light-standard-source.png": "0274d8b37d13d9d46644329ffa6ea75685f37c43095af79478ed6e7379869be7",
+    "390-dark-large-options.png": "5744966ea0309adb0841e31867297d95ab96807af10d9d855c1a31cf50eea5cb",
+    "390-dark-large-source.png": "d0598af88daaab1a4e289dfb6024b65b619852081b824bf8e5d79fb294c7acdc",
+    "automatic-enabled.png": "562a6698f34636ab13b04d34d4b7f93bdcc199b796ca94ed2d819a63a4739300",
+    "backup-confirm-narrow-dark-large.png": "a1fb6c9dec20dfb2c5d226d5ea09de9f99edf1409092bb88aa09055ca99aec1e",
+    "backup-confirm.png": "e427a225b5facd56014c208226e142fc07260bb443433e3e939b58ab093103e3",
+    "backup-waiting.png": "e0223ec95886795bef39545ea33940f32b16384f5dbe246288f885235870c8f3",
+    "interrupt-confirm.png": "ca6cbcfc96e56ab18dbaca8a8bf4983c56ef0f2c04d1323ede13d7ebcc0c726d",
+    "release-source.png": "7125612291a6d4af7ac634957bbed22e5b83a3ffb798c45a2d8f50f6ea129ce6"
+  }
+}
