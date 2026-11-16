@@ -306,6 +306,32 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state.data["prs"]["example/one#7"]["outcome"], "retry")
         self.assertIn("config_fingerprint", state.data)
 
+    def test_success_clears_an_old_failure_without_losing_the_new_result(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", failure="old error")
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               outcome="merged", failure=None)
+        self.assertNotIn("failure", self.watcher.state.get("example/one", 7))
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               outcome="retry", failure="current error")
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               outcome="repair_published", failure=None)
+        self.assertNotIn("failure", self.watcher.state.get("example/one", 7))
+
+    def test_old_head_backoff_does_not_reset_the_new_head_budget(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", review_attempts=3,
+                               retry_reason="semantic_review", retry_after=time.time() + 3600)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(head=SHA_B)), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
+
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])

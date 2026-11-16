@@ -1,4 +1,6 @@
 """Bounded recovery of watcher-owned worktrees and Git fetch debris."""
+import json
+import os
 import re
 import shutil
 import time
@@ -24,19 +26,27 @@ def owned_path(state_file, path):
     return resolved
 
 
+def atomic_leases(state_file, data):
+    """Store private lease state with the same atomic replacement as PR evidence."""
+    path = Path(state_file)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
 def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400):
-    """Reclaim only inactive, old temporary worktrees, never another checkout."""
-    root = owned_root(state_file)
-    if not root.is_dir() or root.is_symlink():
-        return 0
+    """Reclaim only registered expired leases, never unregistered directories."""
+    state = json.loads(Path(state_file).read_text(encoding="utf-8"))
+    leases = state.get("worktree_leases", {})
     keep = {Path(path).resolve(strict=False) for path in protected}
     candidates = []
-    for candidate in root.iterdir():
-        if not candidate.is_dir() or candidate.is_symlink():
+    for name, lease in leases.items():
+        path = owned_path(state_file, name)
+        if (path in keep or lease.get("active") or not path.exists()
+                or time.time() - float(lease.get("heartbeat", 0)) < older_than):
             continue
-        path = owned_path(state_file, candidate)
-        if path not in keep and time.time() - candidate.stat().st_mtime >= older_than:
-            candidates.append(path)
+        candidates.append(path)
     if not candidates:
         return 0
     result = run(["git", "worktree", "remove", "--force", *map(str, candidates)],
@@ -46,9 +56,15 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400):
         # private temporary directory. Prune only Git's stale metadata next.
         run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     removed = 0
+    run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
+    latest = json.loads(Path(state_file).read_text(encoding="utf-8")).get("worktree_leases", {})
     for path in candidates:
-        if path in keep or not path.exists():
-            removed += int(not path.exists())
+        lease = latest.get(str(path), {})
+        if (path in keep or lease.get("active")
+                or time.time() - float(lease.get("heartbeat", 0)) < older_than):
+            continue
+        if not path.exists():
+            removed += 1
             continue
         path = owned_path(state_file, path)
         if path.is_dir() and not path.is_symlink():
@@ -109,7 +125,7 @@ def recover_worktree_failure(checkout, state_file, error, protected=()):
     if STORAGE_ERROR.search(str(error)):
         removed = reclaim_worktrees(checkout, state_file, protected)
         if not removed:
-            raise WatchError("storage is full and no inactive watcher worktree can be reclaimed: " + bounded(error, 1000))
+            return False
         return True
     if OBJECT_ERROR.search(str(error)):
         recover_object_debris(checkout)

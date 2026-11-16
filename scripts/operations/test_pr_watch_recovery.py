@@ -1,5 +1,6 @@
 """Real-Git recovery tests using only temporary watcher-owned directories."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -23,6 +24,7 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.state = self.root / "state.json"
         self.worktrees = pr_watch_recovery.owned_root(self.state)
         self.worktrees.mkdir()
+        pr_watch_recovery.atomic_leases(self.state, {"version": 1, "prs": {}, "worktree_leases": {}})
         env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
         subprocess.run(["git", "init", "-q"], cwd=self.checkout, env=env, check=True, capture_output=True)
 
@@ -52,15 +54,29 @@ class RecoveryIntegrationTests(unittest.TestCase):
         active.mkdir()
         outside = self.root / "outside"
         outside.mkdir()
-        with patch.object(pr_watch_recovery, "run", side_effect=[
-                subprocess.CompletedProcess([], 1, "", "missing administrative entry"),
-                subprocess.CompletedProcess([], 0, "", ""),
-                subprocess.CompletedProcess([], 0, "", "")]):
+        pr_watch_recovery.atomic_leases(self.state, {"version": 1, "prs": {}, "worktree_leases": {
+            str(stale): {"active": False, "heartbeat": 1},
+            str(active): {"active": True, "heartbeat": 1},
+        }})
+        with patch.object(pr_watch_recovery, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
             self.assertTrue(pr_watch_recovery.recover_worktree_failure(
                 self.checkout, self.state, "fatal: Out of diskspace", protected=[active]))
         self.assertFalse(stale.exists())
         self.assertTrue(active.exists())
         self.assertTrue(outside.exists())
+
+    def test_unregistered_and_active_worktrees_are_never_bulk_deleted(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        os.utime(stale, (1, 1))
+        active = self.worktrees / "persona-8-active"
+        active.mkdir()
+        pr_watch_recovery.atomic_leases(self.state, {"worktree_leases": {
+            str(active): {"active": True, "heartbeat": 1}}})
+        self.assertFalse(pr_watch_recovery.recover_worktree_failure(
+            self.checkout, self.state, "fatal: no space left", protected=[active]))
+        self.assertTrue(stale.exists())
+        self.assertTrue(active.exists())
 
     def test_missing_worktree_registration_is_pruned_before_fallback_cleanup(self):
         broken = self.worktrees / "persona-7-broken"

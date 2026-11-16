@@ -110,10 +110,10 @@ class State:
             if item.get("head") != head or (evidence_key and item.get("evidence_key") != evidence_key):
                 item.clear()
                 item["head"] = head
-            # Incomplete infrastructure outcomes must not suppress the last
-            # completed review failure or finding evidence on a later retry.
-            if not fields.get("failure"):
+            # Omitted diagnostics retain prior evidence; None explicitly clears it.
+            if fields.get("failure") is None:
                 fields.pop("failure", None)
+                item.pop("failure", None)
             item.update(fields)
             item["updated_at"] = int(time.time())
             atomic_json(self.path, self.data)
@@ -340,6 +340,7 @@ class Watcher:
         state_root = pr_watch_recovery.owned_root(self.config["state"])
         state_root.mkdir(parents=True, exist_ok=True)
         worktree = Path(tempfile.mkdtemp(prefix="%s-%s-" % (repo.split("/")[1], number), dir=state_root))
+        self.lease_worktree(worktree, repo, number, pr["headRefOid"])
         try:
             with self.git_lock:
                 identity = checked(["gh", "repo", "view", repo, "--json", "nameWithOwner", "--jq", ".nameWithOwner"], cwd=root)
@@ -360,6 +361,7 @@ class Watcher:
         except BaseException:
             with self.git_lock:
                 pr_watch_recovery.remove_worktree(root, self.config["state"], worktree)
+            self.release_worktree(worktree)
             raise
 
     def remove_worktree(self, repo, worktree):
@@ -370,17 +372,36 @@ class Watcher:
                 pr_watch_recovery.remove_worktree(self.repositories[repo]["checkout"], self.config["state"], worktree)
             except (OSError, WatchError) as error:
                 self.log("temporary worktree cleanup failed: " + bounded(error, 300))
+            finally:
+                self.release_worktree(worktree)
+
+    def lease_worktree(self, path, repo, number, head):
+        """Persist ownership before any process can use or reclaim the checkout."""
+        path = pr_watch_recovery.owned_path(self.config["state"], path)
+        with self.state.lock:
+            leases = self.state.data.setdefault("worktree_leases", {})
+            leases[str(path)] = {"repository": repo, "number": number, "head": head,
+                                 "created_at": int(time.time()), "heartbeat": time.time(),
+                                 "active": True}
+            for suffix in ("-base-check",):
+                leases[str(path) + suffix] = dict(leases[str(path)])
+            pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
+
+    def release_worktree(self, path):
+        path = pr_watch_recovery.owned_path(self.config["state"], path)
+        with self.state.lock:
+            leases = self.state.data.setdefault("worktree_leases", {})
+            lease = leases.get(str(path))
+            if lease:
+                lease["active"] = False
+                lease["released_at"] = time.time()
+                pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
 
     def active_worktrees(self):
-        with self.queue_lock:
-            active = []
-            for (repo, number), item in self.active.items():
-                if item["phase"] != "queued":
-                    prefix = repo.split("/", 1)[1] + "-" + str(number) + "-"
-                    for candidate in pr_watch_recovery.owned_root(self.config["state"]).glob(prefix + "*"):
-                        if candidate.is_dir() and not candidate.is_symlink():
-                            active.append(str(candidate))
-            return active
+        with self.state.lock:
+            now = time.time()
+            return [path for path, lease in self.state.data.get("worktree_leases", {}).items()
+                    if lease.get("active") or now - float(lease.get("heartbeat", 0)) < 86400]
 
     def recover_infrastructure(self, repo, worktree, error):
         with self.git_lock:
@@ -504,7 +525,7 @@ class Watcher:
         new_number, checks = pr_watch_repair.commit_and_push_repair(
             repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
         self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
-                       repair_rounds=rounds + 1, outcome="repair_published", failure=reason,
+                       repair_rounds=rounds + 1, outcome="repair_published", failure=None,
                        checks=checks)
         self.comment(repo, number, "The watcher pushed an automated repair for the P0/P1 semantic findings. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
@@ -639,9 +660,11 @@ class Watcher:
                                  review_fingerprint=old.get("review_fingerprint"),
                                  review_posted=old.get("review_posted", False),
                                  base=pr["baseRefOid"], format=FORMAT_VERSION)
-        if old.get("head") == head and old.get("retry_after", 0) > time.time():
+        if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("retry_after", 0) > time.time():
             return
-        if old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+        if old.get("head") == head and old.get("evidence_key") == evidence_key \
+                and old.get("retry_reason") == "semantic_review" \
+                and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT:
             # The completed backoff permits a fresh independent review budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, retry_after=0)
@@ -939,7 +962,7 @@ class Watcher:
             merged = self.merge(config, pr)
             outcome = "merged" if merged else "passed"
             self.state.put(repo, number, head, evidence_key=current.get("evidence_key"),
-                           outcome=outcome, merged=merged)
+                           outcome=outcome, merged=merged, failure=None)
             if not self.dry_run:
                 self.notify(config, number, head, outcome)
         except WatchError as error:
