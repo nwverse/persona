@@ -366,11 +366,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // its ratio is a finite number (lib/extension-ui-v6.ts readTile), as the assistant's cards read views on the first screen
 // too; the ratio's bounds, its unit and the label are checked where the ring is drawn, a chunk loaded on intent
 // (ViewBody9.tsx). The budget stays.
-// #9071: the start page adds 419 B in each language, measured in one environment against main 1ddb1e326 (ja 480,827 B
-// to 481,246 B; en 477,709 B to 478,128 B, zh-Hans 478,522 B to 478,941 B): an opening at the root address goes to the
+// #9071: the start page adds 348 B in each language, measured in one environment against main c11cdb8e3 (ja 480,926 B
+// to 481,274 B; en 477,808 B to 478,156 B, zh-Hans 478,621 B to 478,969 B): an opening at the root address goes to the
 // chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
 // when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk. Main's room is kept on top.
-export const FIRST_SCREEN_BUDGET = 9_999_999; // TEMP-MEASURE
+export const FIRST_SCREEN_BUDGET = 481_512;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
