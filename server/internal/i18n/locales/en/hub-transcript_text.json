@@ -121,5 +121,17 @@
   "card_progress": "Progress",
   "card_of_goal": "{done} {value} / Goal {goal}",
   "card_over": "Over",
-  "card_other": "Other"
+  "card_other": "Other",
+  "paseo_ui_card": "Card",
+  "paseo_ui_columns_cut": "Showing {shown} of {total} columns",
+  "paseo_ui_rows_cut": "Showing the first {shown} of {total} rows",
+  "paseo_ui_series_cut": "Showing {shown} of {total} series",
+  "paseo_ui_points_cut": "Showing the first {shown} of {total} points",
+  "paseo_ui_series": "Series {n}",
+  "paseo_ui_state_done": "Done",
+  "paseo_ui_state_doing": "In progress",
+  "paseo_ui_state_todo": "To do",
+  "paseo_ui_state_blocked": "Blocked",
+  "paseo_ui_state_skipped": "Skipped",
+  "paseo_ui_reply_with": "Reply with one of these:"
 }

@@ -3873,7 +3873,7 @@ def day_publish(rid, repair=False, regenerate=True):
     name = rec.get("title") or "Day · " + rec["day"]
     summary = recap["summary"] if recap else ""
     entry = {"kind": "recordings", "id": rid, "name": name, "relevance": 0, "tags": [], "one_line": summary,
-             "updated": rec["started_at"]}
+             "updated": rec["started_at"], "recording_kind": "day"}  # #8870
     KB["recordings"] = [e for e in KB.get("recordings", []) if e["id"] != rid] + [entry]
     meta = {k: v for k, v in rec.items() if k != "segments"}
     meta.update(name=name, chars=sum(len(s["text"]) for s in rec["segments"]))
@@ -7321,7 +7321,8 @@ def recordings_route_locked(h, method, p):
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
-             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
+             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
+             "recording_kind": kind}  # #8870
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -25039,6 +25040,17 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         LOG.write("%s %s\n" % (self.command, self.path)); LOG.flush()
 
+    def send_share_page(self):
+        """GET /mock/share-page: a plain page with a title, for Share › Persona from Safari (#2282, ShareFromAppsTests)."""
+        page = (b'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                b'<title>A Page Worth Reading</title></head><body><h1>A Page Worth Reading</h1>'
+                b'<p>Made-up text for sharing from Safari.</p></body></html>')
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
+
     def send_json(self, obj, status=200, headers=None, add_error_code=True):
         global LOST_RECEIPT
         if self.command == "GET" and 200 <= status < 300:
@@ -25438,6 +25450,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
         if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
+        if p == "/mock/share-page": return self.send_share_page()
         if p == "/mock/sent_to": return self.send_json({"sent": SENT_TO})
         if p == "/mock/lark_reads": return self.send_json({"reads": LARK_READS})
         if p == "/mock/mail_sent": return self.send_json({"sent": MAIL_SENT})
