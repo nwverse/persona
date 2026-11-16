@@ -337,7 +337,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
 // Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
 // en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
-export const FIRST_SCREEN_BUDGET = 480_666;
+// A page someone asks for is read before the sessions list's next refresh, and a hint that lands while a read is out
+// waits for its window too (lib/session-list.ts): the code is smaller as built, its brotli 5 B larger in every
+// language (ja 480,671 B), and the budget takes those 5 B.
+export const FIRST_SCREEN_BUDGET = 480_671;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

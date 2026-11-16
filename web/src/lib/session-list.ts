@@ -200,31 +200,30 @@ export class SessionList<T> {
   }
 
   /** A hint burst from a busy fleet (every working agent's update broadcasts a sessions_list notice) must not become
-   *  a read per hint: the hints of one 2 s window share its read; one that lands while a read is out shares that
-   *  read's trailing one (docs/design/PRINCIPLES.md, fast and local-first). */
+   *  a read per hint: the hints of one 2 s window share its read, also while a read is out (docs/design/PRINCIPLES.md,
+   *  fast and local-first). A hint read at once whenever a read was out kept a busy fleet's list reading back to back:
+   *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. */
   invalidate(): void {
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
     const generation = this.generation;
     queueMicrotask(() => {
       if (!this.current(generation) || !this.invalidationQueued) return;
-      // A read is out: it takes the hints in, and one trailing read follows it (the work loop's), without a wait.
-      if (!this.work.promise && this.invalidatedAt !== 0) {
-        const wait = this.invalidatedAt + 2_000 - Date.now();
-        if (wait > 0) {
-          // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
-          // first, or its own invalidate would return at once too and no hint would ever read again.
-          this.invalidationTimer = setTimeout(() => {
-            this.invalidationTimer = undefined;
-            this.invalidationQueued = false;
-            this.invalidate();
-          }, wait);
-          return;
-        }
+      // inside the last read's window (none yet: invalidatedAt 0 is long past)
+      const wait = this.invalidatedAt + 2_000 - Date.now();
+      if (wait > 0) {
+        // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
+        // first, or its own invalidate would return at once too and no hint would ever read again.
+        this.invalidationTimer = setTimeout(() => {
+          this.invalidationTimer = undefined;
+          this.invalidationQueued = false;
+          this.invalidate();
+        }, wait);
+        return;
       }
       this.invalidationQueued = false;
       this.invalidatedAt = Date.now();
-      if (this.work.promise) this.work.load = true; // a hint during a read: one trailing read after it
+      if (this.work.promise) this.work.load = true; // a window that ends during a read: one trailing read after it
       else this.load().catch(() => {});
     });
   }
@@ -276,7 +275,8 @@ export class SessionList<T> {
       this.publish({ loading: true, error: null });
       try {
         while (this.current(work.generation) && (work.load || work.more)) {
-          const next = work.load ? "load" : "more";
+          // a page someone asked for goes before a refresh: the frozen cursor does not depend on the checkpoint
+          const next = work.more ? "more" : "load";
           work[next] = false;
           work.kind = next;
           if (next === "load") await this.refresh(work.generation);

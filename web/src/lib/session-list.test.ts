@@ -954,21 +954,60 @@ describe("generation isolation and inflight coalescing", () => {
     expect(pages).toHaveBeenCalledTimes(2);
   });
 
-  it("coalesces invalidation bursts and schedules one trailing delta during an inflight read", async () => {
-    const list = make();
-    await list.load();
-    const pending = deferred<ListPage<Row>>();
-    pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
-    list.invalidate(); list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    pending.resolve(page([], { revision: "intermediate" }));
-    await list.load();
-    expect(pages).toHaveBeenCalledTimes(3);
-    expect(requestParams().at(-1)?.since).toBe("intermediate");
+  it("coalesces invalidation bursts and schedules one trailing delta, at the window's end, during an inflight read", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const pending = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
+      list.invalidate(); list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      pending.resolve(page([], { revision: "intermediate" }));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      expect(requestParams().at(-1)?.since).toBe("intermediate");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes idle between a busy fleet's hints and reads a requested page before the next refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const delta = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(delta.promise);
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      list.invalidate(); // the next agent's update lands while that read is out
+      await vi.advanceTimersByTimeAsync(0);
+      delta.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      // idle until the window ends, so Load more (drawn only while the list is not loading) is on screen
+      expect(list.getSnapshot()).toMatchObject({ loading: false, hasMore: true });
+      expect(pages).toHaveBeenCalledTimes(2);
+      // the window ends during a refresh that has Load more's page queued behind it: the page goes first
+      const refresh = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(refresh.promise)
+        .mockImplementation(async (path) => params(path).has("since") ? page([], { revision: "delta" }) : page(rows(50, 50)));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      list.invalidate();
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(2_000); // another window ends while the refresh is still out
+      refresh.resolve(page([], { revision: "delta" }));
+      await paging;
+      expect(requestParams().slice(3).map((p) => p.cursor ? "page" : "refresh")).toEqual(["page", "refresh"]);
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throttles a hint storm into one read per window, with the changes of the whole window in it", async () => {
