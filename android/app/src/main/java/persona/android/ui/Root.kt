@@ -449,9 +449,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
     val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
     // A landing is for the Inbox list under the item that set it: once its stack holds no Inbox list, nothing will take
-    // it, and it must not move a list entered later (#9053).
+    // it, and it must not move a list entered later; a page that moved the list beside it closing puts its choice back (#9053).
     LaunchedEffect(inboxLandings) {
-        snapshotFlow { stacks.mapValues { (_, stack) -> stack.toList() } }.collect { held -> dropUntakenLandings(held, inboxLandings) }
+        snapshotFlow { stacks.mapValues { (_, stack) -> stack.toList() } }.collect { held -> settleLandings(held, inboxLandings) }
     }
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect

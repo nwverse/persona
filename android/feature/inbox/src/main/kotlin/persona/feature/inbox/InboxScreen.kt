@@ -86,17 +86,23 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     // The landing taken: the list shows the item's choice, All with Collapsed open (a fold kept with the others, read from
-    // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. An
-    // entry ([InboxLanding.enter]) puts the list back as it opens.
+    // the stored ones so an early landing never writes the defaults over them); Back from the item returns here. A list
+    // already showing the item stays. One moved beside the item it opened goes back when that page closes. An entry
+    // ([InboxLanding.enter]) puts the list back as it opens.
     LaunchedEffect(landing?.pending) {
+        val page = landing?.pendingPage
         val to = landing?.take() ?: return@LaunchedEffect
         if (to == InboxLanding.ENTERED) { barChosen = ""; barSaved = ""; return@LaunchedEffect }
-        moveBar(InboxBar.landed(bar, to))
+        val moved = InboxBar.landed(bar, to)
+        if (page != null && moved != bar) landing?.moved(page, bar)
+        moveBar(moved)
         if (to.openCollapsed) {
             val stored = filters ?: repository.preferences.first()
             if (InboxBar.NOISE !in stored.expanded) filter(stored.copy(expanded = stored.expanded + InboxBar.NOISE))
         }
     }
+    // The page that moved this list beside it closed: the choice it had comes back.
+    LaunchedEffect(landing?.restore) { landing?.takeRestore()?.let(::moveBar) }
     // Drawn: an item opened from another item beside this list moves it ([InboxLanding.landBeside]).
     DisposableEffect(landing) {
         landing?.let { it.drawn++ }
@@ -453,7 +459,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 // A search or a link can choose All or Done past the edge of a narrow bar: it scrolls them into sight, while
                 // Needs you stays at the start so its count is in sight from every choice (DESIGN_SYSTEM 3.4).
                 QuickFilterBar(bays, selected = barView.choices.indexOfFirst { it.id == chosen },
-                    onSelect = { moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true)
+                    onSelect = { landing?.picked(); moveBar(InboxBar.picked(bar, barView.choices[it].id)) }, revealSelected = true, pinFirst = true)
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
             }

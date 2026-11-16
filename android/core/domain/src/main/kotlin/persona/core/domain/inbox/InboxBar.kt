@@ -107,6 +107,10 @@ object InboxBar {
     /** A choice tapped: it shows, and during a search it narrows the matches; what the search set aside stays. */
     fun picked(state: State, choice: String): State = state.copy(chosen = choice(choice))
 
-    /** An item opened from outside the list: the list moves to where it is ([landing]). */
-    fun landed(state: State, landing: Landing): State = state.copy(chosen = landing.choice)
+    /**
+     * An item opened from outside the list: the list moves to where it is ([landing]). A list that already shows it (All,
+     * or the item's own choice) stays; Collapsed opening under All is the caller's ([Landing.openCollapsed]).
+     */
+    fun landed(state: State, landing: Landing): State =
+        if (state.chosen == ALL || state.chosen == landing.choice) state else state.copy(chosen = landing.choice)
 }

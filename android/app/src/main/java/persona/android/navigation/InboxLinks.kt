@@ -59,10 +59,11 @@ internal sealed interface InboxDestination {
 }
 
 /**
- * A stack that no longer holds an Inbox list drops its landing (#9053): the list under the item that set it was closed
- * without showing (the drawer, a tab's root, a link that went home), so nothing will take it, and a list entered later
- * must open on Needs you, not where that item was.
+ * Keeps each stack's landing in step with what the stack holds (#9053). A stack that no longer holds an Inbox list drops
+ * its landing: the list under the item that set it was closed without showing (the drawer, a tab's root, a link that
+ * went home), so nothing will take it, and a list entered later must open on Needs you, not where that item was. A
+ * stack that still holds it puts back the choice of a list moved beside a page that has now closed.
  */
-internal fun dropUntakenLandings(stacks: Map<AppTab, List<NavKey>>, landings: Map<AppTab, InboxLanding>) {
-    stacks.forEach { (tab, stack) -> if (InboxRoute !in stack) landings[tab]?.clear() }
+internal fun settleLandings(stacks: Map<AppTab, List<NavKey>>, landings: Map<AppTab, InboxLanding>) {
+    stacks.forEach { (tab, stack) -> landings[tab]?.let { if (InboxRoute in stack) it.closed(stack) else it.clear() } }
 }

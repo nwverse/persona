@@ -99,13 +99,14 @@ class InboxHistoryLinksTest {
 
     /**
      * #9053: a stack that let go of its Inbox list (the drawer, a link home) drops the landing nobody took, so a list
-     * entered later opens on Needs you; a stack still holding the list under the item keeps it for Back.
+     * entered later opens on Needs you; a stack still holding the list under the item keeps it for Back. (Putting a
+     * choice back when a page opened beside the list closes: InboxSectionBarTest.)
      */
     @Test fun aLandingNobodyTookIsDropped() {
         val done = InboxRecord(InboxItem("history", kind = "dm", title = "Historical event", doneAt = "2026-11-01T10:00:00Z"),
             feedId = "room", source = "lark")
         val landings = persona.core.navigation.AppTab.entries.associateWith { persona.feature.inbox.InboxLanding().apply { land(done) } }
-        dropUntakenLandings(mapOf(
+        settleLandings(mapOf(
             persona.core.navigation.AppTab.Persona to listOf(persona.core.navigation.AssistantRoute),
             persona.core.navigation.AppTab.Agents to listOf(persona.core.navigation.AgentsRoute, persona.core.navigation.InboxRoute, InboxItemRoute("history")),
         ), landings)

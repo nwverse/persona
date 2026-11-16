@@ -65,6 +65,8 @@ import persona.core.domain.inbox.InboxGroups
 import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
+import persona.core.navigation.InboxItemRoute
+import persona.core.navigation.InboxRoute
 import persona.core.navigation.Navigator
 
 /**
@@ -264,6 +266,15 @@ class InboxSectionBarTest {
         choice("All").assertIsSelected()
         see("Newsletter")
         assertTrue(InboxBar.NOISE in inbox.prefs.value.expanded)
+        // A list that already shows the item does not move: All shows every section.
+        rule.runOnIdle { landing.land(drafting) }
+        rule.waitForIdle()
+        choice("All").assertIsSelected()
+        pick("FYI")
+        rule.runOnIdle { landing.land(drafting) }
+        rule.waitForIdle()
+        choice("In progress").assertIsSelected()
+        // Nor does the item's own choice.
         rule.runOnIdle { landing.land(drafting) }
         rule.waitForIdle()
         choice("In progress").assertIsSelected()
@@ -289,14 +300,33 @@ class InboxSectionBarTest {
 
     @Test fun anItemOpenedBesideTheListMovesItOnlyWhileTheListIsDrawn() {
         val landing = InboxLanding()
+        val digestPage = InboxItemRoute(digest.item.id)
+        val invoicePage = InboxItemRoute(invoice.item.id)
         // On a phone the list is not drawn under the item: another item's chain leaves it as the user left it.
-        landing.landBeside(invoice)
+        landing.landBeside(invoice, invoicePage)
         assertNull(landing.pending)
         show(BarInbox(all), landing)
         assertEquals("the list counts itself drawn", 1, landing.drawn)
-        rule.runOnIdle { landing.landBeside(invoice) }
+        pick("FYI")
+        rule.runOnIdle { landing.landBeside(invoice, invoicePage) }
         rule.waitForIdle()
         choice("Done").assertIsSelected()
+        // Back from that item: the list goes back to the choice it had; the item it was opened from stays open.
+        rule.runOnIdle { landing.closed(listOf(InboxRoute, digestPage, invoicePage)) }
+        rule.waitForIdle()
+        choice("Done").assertIsSelected()
+        rule.runOnIdle { landing.closed(listOf(InboxRoute, digestPage)) }
+        rule.waitForIdle()
+        choice("FYI").assertIsSelected()
+        assertNull("put back once", landing.restore)
+        // A choice made after the move is the user's: closing the page later leaves it.
+        rule.runOnIdle { landing.landBeside(invoice, invoicePage) }
+        rule.waitForIdle()
+        choice("Done").assertIsSelected()
+        pick("All")
+        rule.runOnIdle { landing.closed(listOf(InboxRoute, digestPage)) }
+        rule.waitForIdle()
+        choice("All").assertIsSelected()
     }
 
     @Test fun needsYouStaysInSightFromEveryChoice() {
@@ -330,6 +360,16 @@ class InboxSectionBarTest {
         rule.onAllNodesWithContentDescription("More").onFirst().performClick()
         rule.waitForIdle()
         gone("Group by", "By time")
+    }
+
+    @Test fun groupingIsNotOfferedInProgress() {
+        // In progress is grouped by neither source nor time (docs/assistant/inbox.md "Section bar"), as Done.
+        show(BarInbox(all))
+        pick("In progress")
+        rule.onAllNodesWithContentDescription("More").onFirst().performClick()
+        rule.waitForIdle()
+        see("Clean up all · 6 items")
+        gone("Group by", "By source", "By time")
     }
 
     @Test fun doneOnTheHubsCountsAlone() {

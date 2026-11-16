@@ -122,7 +122,7 @@ fun InboxEventScreen(repository: InboxRepository, route: InboxEventRoute, naviga
             is ChainTarget.Url -> open?.invoke(target.url, inbox.contentSource)
             // Another item's chain opens it from outside the list: a list beside it moves to it (#9053).
             is ChainTarget.Item -> navigator.navigate(inbox.records.firstOrNull { it.item.id == target.id }
-                ?.let { landing?.landBeside(it); inboxRowPage(it, pages) } ?: InboxEventRoute(target.id))
+                ?.let { inboxRowPage(it, pages).also { page -> landing?.landBeside(it, page) } } ?: InboxEventRoute(target.id))
             ChainTarget.Inline, ChainTarget.None -> Unit
         }
     }

@@ -53,7 +53,7 @@ internal fun InboxLineSection(repository: InboxRepository, record: InboxRecord, 
 
     fun open(row: InboxLineRow): (() -> Unit)? {
         // An item of the thread opens from outside the list: a list beside it moves to it (#9053).
-        row.item?.let { return { landing?.landBeside(it); navigator.navigate(inboxRowPage(it, pages)) } }
+        row.item?.let { return { val page = inboxRowPage(it, pages); landing?.landBeside(it, page); navigator.navigate(page) } }
         return when (row.parent.kind) {
             "todo" -> ({ navigator.navigate(TodoDetailRoute(row.parent.id)) })
             "session" -> row.parent.id.split('/', limit = 2).takeIf { it.size == 2 && it.all(String::isNotBlank) }?.let { (machine, session) ->
