@@ -115,10 +115,31 @@ func TestRoutineCheckShellInitBoundary(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(home, "."+shell+"rc"), []byte("printf 'startup failed\\n' >&2; exit 4\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
-				raw, _ := json.Marshal(proto.RoutineCheckParams{Command: "printf 'must not run\\n'", Timeout: 1})
+				notRun := filepath.Join(home, "must-not-run")
+				command := "printf 'must not run\\n' > " + shellQuote(notRun)
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				control := loginShell(ctx, command)
+				control.Dir = home
+				killGroupOnCancel(control)
+				output, controlErr := control.CombinedOutput()
+				var exit *exec.ExitError
+				if !errors.As(controlErr, &exit) || exit.ExitCode() != 4 {
+					t.Fatalf("raw startup control: %q, %v", output, controlErr)
+				}
+				if _, err := os.Stat(notRun); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("raw startup control ran the command: %v", err)
+				}
+				// Bash can emit a platform-specific terminal diagnostic before the rc's own error.
+				first, _, _ := strings.Cut(string(output), "\n")
+				want := strings.TrimSpace(strings.ToValidUTF8(first[:min(512, len(first))], ""))
+				raw, _ := json.Marshal(proto.RoutineCheckParams{Command: command, Timeout: 1})
 				got, err := routineCheck(t.Context(), raw)
-				if err != nil || got.ExitCode != 4 || got.Reason != "startup failed" {
-					t.Fatalf("startup error lost: %+v, %v", got, err)
+				if err != nil || got.ExitCode != 4 || got.Reason != want {
+					t.Fatalf("startup error lost: %+v, %v; want reason %q", got, err, want)
+				}
+				if _, err := os.Stat(notRun); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("routine check ran the command after startup failed: %v", err)
 				}
 			})
 		})
