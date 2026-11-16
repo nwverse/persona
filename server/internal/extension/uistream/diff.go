@@ -24,7 +24,7 @@ func Diff(from, to *Tree) (*Delta, bool, error) {
 	if from.Session() != to.Session() || from.Epoch() != to.Epoch() || from.RootKey() != to.RootKey() {
 		return nil, false, errors.New("diff identity mismatch: open a fresh snapshot")
 	}
-	same := bytes.Equal(from.ViewJSON(), to.ViewJSON())
+	same := bytes.Equal(from.viewJSON(), to.viewJSON())
 	want := from.Version()
 	if !same || to.Version() != want {
 		if want == VersionMost {
@@ -41,7 +41,7 @@ func Diff(from, to *Tree) (*Delta, bool, error) {
 		return d, false, nil
 	}
 	rootReplacement := func() *Delta {
-		return &Delta{frame: header, ops: []map[string]json.RawMessage{operation("replace", "key", from.RootKey(), "view", to.ViewJSON())}}
+		return &Delta{frame: header, ops: []map[string]json.RawMessage{operation("replace", "key", from.RootKey(), "view", to.viewJSON())}}
 	}
 	fallback := false
 	if !equalProps(from.root, to.root) {
@@ -61,7 +61,7 @@ func Diff(from, to *Tree) (*Delta, bool, error) {
 			}
 			return nil
 		}
-		if err := diffChildren(staged, to.root, emit); err != nil || !bytes.Equal(staged.json(), to.ViewJSON()) {
+		if err := diffChildren(staged, to.root, emit); err != nil || !bytes.Equal(staged.json(), to.viewJSON()) {
 			d = rootReplacement()
 			fallback = true
 		}
@@ -90,7 +90,7 @@ func Diff(from, to *Tree) (*Delta, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if !bytes.Equal(result.ViewJSON(), to.ViewJSON()) {
+	if !bytes.Equal(result.viewJSON(), to.viewJSON()) {
 		return nil, false, errors.New("diff did not reproduce target")
 	}
 	snapshot, _ := to.MarshalJSON()

@@ -309,6 +309,10 @@ body {
 @keyframes nudge-x{0%,to{transform:none}20%{transform:translateX(-3px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(1px)}}
 [data-search-hit] { outline: 2px solid transparent; outline-offset: -2px; border-radius: var(--radius-control); animation: search-hit 3s ease-out both; }
 @media (prefers-reduced-motion: reduce) { [data-search-hit] { animation: none; outline-color: var(--accent); } }
+/* a reply rings at its own width, on the left, as a bubble rings at its own (#6426); one holding a code block, a table or a
+   card keeps the column's, so nothing in it moves while the ring shows */
+[data-answer][data-search-hit] { outline-offset: 6px; } /* text has no padding of its own: the ring sits just outside it */
+[data-answer][data-search-hit]:not(:has(pre, table, .card-ui)) { width: fit-content; max-width: 100%; }
 
 html, body, #root { height: 100%; }
 /* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */

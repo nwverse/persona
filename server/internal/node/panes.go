@@ -166,7 +166,8 @@ func (n *Node) hasLayout() bool {
 // computer's own view does not jump). It starts in the workspace's directory as the host reported it, or in dir when the
 // file page asks for its folder (#5832: a folder the read guard lets the page see, given to the host as the tab's
 // starting directory, never typed into the shell), and is named shell, shell-2…. With dir and no ws, the first workspace
-// of a host that opens tabs. Only a user's explicit action calls this.
+// of a host that opens tabs; when that host has none yet, a new workspace in dir (newShellSpace). Only a user's explicit
+// action calls this.
 func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShellResult, error) {
 	start := ""
 	if strings.TrimSpace(dir) != "" {
@@ -180,7 +181,9 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 		start = real
 	}
 	if ws == "" && start != "" {
-		ws = n.firstLaunchSpace(kind)
+		if ws = n.firstLaunchSpace(kind); ws == "" {
+			return n.newShellSpace(ctx, kind, start)
+		}
 	}
 	if ws == "" {
 		return proto.NewShellResult{}, errors.New("no workspace")
@@ -206,11 +209,41 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 	if err != nil {
 		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
+	return n.shellCreated(ctx, launch, created)
+}
+
+// newShellSpace opens the shell as the first tab of a new workspace in dir, named after it, on the first host (of kind,
+// when given) that opens tabs: a computer whose engine is running with no workspace yet still gets a terminal, the way
+// an Agent start does (newTab).
+func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewShellResult, error) {
+	for _, h := range n.hosts.All() {
+		launch, ok := h.(host.Launcher)
+		if !ok || (kind != "" && h.Kind() != kind) {
+			continue
+		}
+		created, err := launch.CreateSpace(ctx, dir, filepath.Base(dir))
+		if err != nil {
+			return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+		}
+		if created != nil && created.SlotID != "" {
+			var taken map[string]bool
+			if _, ok := launch.(*herdrCoreHost); ok {
+				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder
+			}
+			_ = renameSlot(ctx, launch, created.SlotID, tabLabel("shell", taken))
+		}
+		return n.shellCreated(ctx, launch, created)
+	}
+	return proto.NewShellResult{}, errors.New("no workspace")
+}
+
+// shellCreated answers with the new shell's pane once it is in the layout the terminal call checks.
+func (n *Node) shellCreated(ctx context.Context, launch host.Launcher, created *host.Created) (proto.NewShellResult, error) {
 	if created == nil || created.Pane.ID == "" {
 		return proto.NewShellResult{}, errors.New("创建终端标签页失败：宿主没有返回窗格")
 	}
 	pane := created.Pane.String()
-	_ = n.refreshHosts(ctx, launch.(host.Host)) // the new pane is in the layout the terminal call checks
+	_ = n.refreshHosts(ctx, launch.(host.Host))
 	return proto.NewShellResult{Pane: pane, Terminal: panePrefix + pane, TabID: created.SlotID}, nil
 }
 

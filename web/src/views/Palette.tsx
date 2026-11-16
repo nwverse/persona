@@ -1,8 +1,10 @@
+import { conversationDeleted, conversationDeletionRevision, conversationDeletionScope } from "../lib/conversation-deleted";
+import { shownManager, useShownManager } from "../lib/manager-choice";
 // ⌘K: Beautiful UI's Search, over every agent and Persona conversation — and the terminal panes of the computers
 // (lib/terminals.ts, the /terminal page's data). `>` first (or ⌘⇧P) is command mode: the registered commands with their
 // shortcuts, and whatever other modules add through registerContextCommands (lib/palette.ts). docs/web/web.md"Keyboard shortcuts".
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { enc, api } from "../lib/api";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { credentialOwner, subscribeCredentialOwner, enc, api } from "../lib/api";
 import { machineWithHub } from "../lib/mesh";
 import { createPortal } from "react-dom";
 import { ago, sessionTitle, shortPath, stateOf, tabLabel } from "../lib/format";
@@ -27,6 +29,7 @@ import { copyFileMention, FilesHeading, FilesNotice, FileResultRow, openFileHit,
 import { t } from "../i18n";
 import { byTime } from "../lib/times";
 import { STATE_LABEL } from "../lib/state-labels";
+import type { AssistantSearchAnswer, AssistantSearchHit } from "../lib/assistant-search";
 
 interface Hit {
   key: string;
@@ -34,6 +37,8 @@ interface Hit {
   to: Route;
   assistant?: boolean;
   score: number;
+  /** A Persona chat found by what was said in it (lib/assistant-search.ts): the message, shown as the row's second line. */
+  said?: AssistantSearchHit;
 }
 
 /** One selectable row of the list: a conversation, a terminal pane, an inbox item, a page ("Go to"), a file
@@ -86,9 +91,16 @@ export function placeWords(key: string): string {
   return [PLACE_WORDS[key], own[key]].filter(Boolean).join(" ");
 }
 
+// A result row's title, the line under it, and what its end says (a time, "Terminal"), as the Inbox, pane and
+// conversation rows write them.
+const ROW_TITLE = "block truncate text-[13px] font-medium text-ink";
+const ROW_DETAIL = "block truncate text-[11.5px] text-ink-3";
+const ROW_END = "shrink-0 text-[11px] text-ink-3";
+
 /** A group's heading above its first row ("Inbox", "Go to"). */
+const groupHeadingClass = "px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase";
 function GroupHeading({ children }: { children: React.ReactNode }) {
-  return <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{children}</div>;
+  return <div className={groupHeadingClass}>{children}</div>;
 }
 
 /** One row of the list as drawn: the option, and the heading above it when a group starts there. */
@@ -146,6 +158,14 @@ function previousChat(recent: { entries: string[]; current: string }, sessions: 
 
 export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { open: boolean; onClose: () => void; onNewAgent: () => void; pane?: { mid: string; sid: string }; route?: Route }) {
   // what is typed lives in the store (lib/palette.ts): the shortcuts open it in a mode (`>` for commands) and read it
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = useShownManager();
+  const epoch = useStore(conversationDeletionScope);
+  const revision = useStore(conversationDeletionRevision);
+  const scope = JSON.stringify([owner, epoch, manager]);
+  const account = JSON.stringify([owner, epoch]);
+  const priorAccount = useRef(account);
+  const currentScope = useCallback(() => owner === credentialOwner() && epoch === conversationDeletionScope() && manager === shownManager(), [owner, epoch, manager]);
   const q = usePalette().query;
   const setQ = setPaletteQuery;
   const { mode, text } = parseQuery(q);
@@ -158,6 +178,8 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
   const machines = useStore((s) => s.machines);
   const bySession = useStore((s) => s.sessions);
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
+  // Persona chats found by what was said in them too (#6283): the manager's search, merged into the local matches
+  const searchOn = useStore((s) => s.features.includes("assistant_search"));
   const bindings = useBindings();
   // "Inbox" and "Go to" (the Mac's quick open): the open inbox items, and the sidebar's pages with Persona and "All chats"
   const inboxItems = useInbox((s) => s.items);
@@ -210,6 +232,34 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     [machines, trees, bySession],
   );
 
+  // loaded on intent (the palette is idle-tier, src/startup-preload.ts IDLE_TIER_BUDGET): the first query typed loads
+  // lib/assistant-search.ts; asked 200 ms after the last key, each query cancelling the one before
+  const [found, setFound] = useState<{ q: string; scope?: string; answer?: AssistantSearchAnswer; marks?: typeof import("../lib/assistant-search").markParts }>({ q: "" });
+  const asked = open && mode === "jump" && searchOn && Boolean(assistant) ? text.trim() : "";
+  useLayoutEffect(() => {
+    if (priorAccount.current !== account) { priorAccount.current = account; setQ(""); onClose(); }
+  }, [account, onClose, setQ]);
+  useEffect(() => {
+    setFound({ q: "", scope });
+    if (!asked) return;
+    const ctrl = new AbortController();
+    const id = window.setTimeout(() => {
+      void import("../lib/assistant-search")
+        .then((m) => {
+          if (ctrl.signal.aborted || !currentScope()) return;
+          return m.searchAssistantChats(asked, ctrl.signal).then((answer) => {
+            if (!ctrl.signal.aborted && currentScope()) setFound({ q: asked, scope, answer: answer ?? undefined, marks: m.markParts });
+          });
+        })
+        .catch(() => {}); // a failed search leaves the local matches
+    }, 200);
+    return () => {
+      clearTimeout(id);
+      ctrl.abort();
+    };
+  }, [asked, scope, currentScope]);
+  useEffect(() => { setFound((f) => f.answer ? { ...f, answer: { ...f.answer, results: f.answer.results.filter((r) => !conversationDeleted(r.machine_id, r.session_id)) } } : f); }, [revision]);
+  const said = { answer: asked && found.q === asked && found.scope === scope ? found.answer : undefined };
   const hits = useMemo((): Row[] => {
     if (mode !== "jump") return [];
     const query = text.toLowerCase();
@@ -222,6 +272,23 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     for (const s of assistant?.conversations ?? []) {
       const sc = score(s, query, "persona");
       if (sc) out.push({ key: `j:${s.session_id}`, s, to: conversationPage(s.session_id, s.machine_id, s.manager), assistant: true, score: sc });
+    }
+    // what the manager found: a chat found by a message opens at it (not one found by its title); one not listed here
+    // (archived) is the result's own row
+    for (const r of said.answer?.results ?? []) {
+      if (conversationDeleted(r.machine_id, r.session_id)) continue;
+      const key = `j:${r.session_id}`;
+      const hit = r.hits[0];
+      const at = r.title_match ? undefined : hit?.item_id;
+      const known = out.find((h) => h.key === key);
+      if (known) {
+        known.said = hit;
+        known.to = conversationPage(r.session_id, known.s.machine_id, known.s.manager, at);
+        continue;
+      }
+      const s = (assistant?.conversations ?? []).find((c) => c.session_id === r.session_id)
+        ?? ({ machine_id: r.machine_id, session_id: r.session_id, title: r.title, cwd: "", status: "idle", assistant: true, archived: r.archived, updated_at: r.updated_at } as Session);
+      out.push({ key, s, to: conversationPage(r.session_id, s.machine_id, s.manager, at), assistant: true, score: r.title_match ? 80 : 40, said: hit });
     }
     // nothing typed: the conversations opened here come first, newest first, without the one on the page (#2191); the
     // first is the one before it, picked already, so ⌘K ⏎ goes back to it
@@ -236,7 +303,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     const mail = inboxHits(inboxItems.filter((it) => !isDone(it)), text).map((h) => ({ kind: "inbox" as const, key: h.key, hit: h, score: h.score }));
     const go = placeHits(places, text).map((h) => ({ kind: "place" as const, key: h.key, hit: h, score: h.score }));
     return [...recentRows, ...orderGroups<Row & { score: number }>([all.slice(0, 40), mail, go]).flat()];
-  }, [mode, text, sessions, assistant, machines, machinePanes, inboxItems, places, recentChats]);
+  }, [mode, text, sessions, assistant, machines, machinePanes, inboxItems, places, recentChats, said.answer, revision]);
 
   // command mode: what other modules offer for here, then the registered commands with their shortcuts
   const commands = useMemo((): Row[] => {
@@ -271,6 +338,9 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
   const card = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const kept = useRef<ReactNode>(null);
+  const keptScope = useRef({ scope, revision });
+  if (keptScope.current.scope !== scope || keptScope.current.revision !== revision) kept.current = null;
+  keptScope.current = { scope, revision };
   const exit = useExit(open, EXIT_MS.card, () => [
     backdrop.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: EXIT_MS.card, easing: "ease-out", fill: "forwards" }),
     card.current?.animate(CARD_OUT, { duration: EXIT_MS.card, easing: EASE, fill: "forwards" }),
@@ -285,6 +355,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
 
   if (!exit.mounted) return null;
   const pick = (r: Row) => {
+    if (!currentScope() || (r.kind === "session" && conversationDeleted(r.hit.s.machine_id, r.hit.s.session_id))) return;
     onClose();
     if (r.kind === "command") r.cmd.run();
     else if (r.kind === "file") openFileHit(r);
@@ -349,7 +420,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
               const heading = c.section && c.section !== (shown[i - 1] as Extract<Row, { kind: "command" }> | undefined)?.cmd.section;
               return {
                 key: r.key,
-                heading: heading ? <div className="px-2.5 pt-2 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{c.section}</div> : null,
+                heading: heading ? <GroupHeading>{c.section}</GroupHeading> : null,
                 row: (
                   <button ref={ref} type="button" {...option} onMouseMove={() => setActive(i)} onClick={() => pick(r)} className={rowClass}>
                     <span className="flex size-5 shrink-0 items-center justify-center">{c.icon && <Icon name={c.icon} size={13} className={c.danger ? "text-red" : "text-ink-3"} />}</span>
@@ -379,10 +450,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                   <>
                     <span className="flex size-5 shrink-0 items-center justify-center"><Icon name="inbox" size={13} className="text-ink-3" /></span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium text-ink">{r.hit.item.title}</span>
-                      <span className="block truncate text-[11.5px] text-ink-3">{[r.hit.item.sender, r.hit.item.preview].filter(Boolean).join(t("palette.sender_separator"))}</span>
+                      <span className={ROW_TITLE}>{r.hit.item.title}</span>
+                      <span className={ROW_DETAIL}>{[r.hit.item.sender, r.hit.item.preview].filter(Boolean).join(t("palette.sender_separator"))}</span>
                     </span>
-                    <span className="shrink-0 text-[11px] text-ink-3">{ago(r.hit.item.updated_at)}</span>
+                    <span className={ROW_END}>{ago(r.hit.item.updated_at)}</span>
                   </>
                 ) : (
                   <>
@@ -419,10 +490,10 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                   {h.state !== "shell" && h.agent && <AgentMark agent={h.agent} surface={h.surface} size={14} />}
                   <span className="flex size-5 shrink-0 items-center justify-center">{h.state === "shell" ? <Icon name="terminal" size={13} className="text-ink-3" /> : <StatusMark state={h.state} />}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{h.title}</span>
-                    <span className="block truncate text-[11.5px] text-ink-3">{[h.trail, h.detail].filter(Boolean).join(" · ")}</span>
+                    <span className={ROW_TITLE}>{h.title}</span>
+                    <span className={ROW_DETAIL}>{[h.trail, h.detail].filter(Boolean).join(" · ")}</span>
                   </span>
-                  <span className="shrink-0 text-[11px] text-ink-3">{t("palette.terminal")}</span>
+                  <span className={ROW_END}>{t("palette.terminal")}</span>
                 </button>
                 ),
               };
@@ -442,9 +513,15 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
                     <span className="truncate text-[13px] font-medium text-ink">{sessionTitle(h.s)}</span>
                     {r.previous && <span className="shrink-0 rounded-[5px] bg-field px-1.5 text-[10.5px] text-ink-3 shadow-hairline">{t("palette.previous")}</span>}
                   </span>
-                  <span className="block truncate text-[11.5px] text-ink-3">{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                  {h.said ? (
+                    <span className={ROW_DETAIL} data-said>
+                      {(found.marks?.(h.said.snippet, h.said.ranges) ?? [[h.said.snippet, false] as [string, boolean]]).map(([words, match], k) => (match ? <mark key={k} className="rounded-[3px] bg-accent-tint text-ink">{words}</mark> : <span key={k}>{words}</span>))}
+                    </span>
+                  ) : (
+                    <span className={ROW_DETAIL}>{[meta, shortPath(h.s.cwd)].filter(Boolean).join(" · ")}</span>
+                  )}
                 </span>
-                <span className="shrink-0 text-[11px] text-ink-3">{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>
+                <span className={ROW_END}>{st === "offline" || h.assistant ? ago(h.s.updated_at) : STATE_LABEL[st]}</span>
               </button>
               ),
             };

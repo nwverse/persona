@@ -230,6 +230,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
 		}
+		if in.InboxPost != nil {
+			v.InboxPost = in.InboxPost
+		}
 		if in.NextSuggestions != nil {
 			v.NextSuggestions = in.NextSuggestions
 		}

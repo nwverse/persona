@@ -372,7 +372,7 @@ func (m *Machine) setSessionList(list []proto.Session) { m.setSessionListRaws(li
 func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 	var newDeletions []string
 	for _, row := range list {
-		if row.Deleted && !m.conversationDeleted(row.SessionID) {
+		if row.IsDeleted() && !m.conversationDeleted(row.SessionID) {
 			newDeletions = append(newDeletions, row.SessionID)
 		}
 	}
@@ -383,7 +383,7 @@ func (m *Machine) setSessionListRaws(list []proto.Session, raws []string) {
 	}
 	m.mu.Lock()
 	for _, row := range list {
-		if row.Deleted {
+		if row.IsDeleted() {
 			if m.deletedConversations == nil {
 				m.deletedConversations = map[string]proto.Session{}
 			}

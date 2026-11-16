@@ -92,4 +92,32 @@ func TestAssistantSearchIndex(t *testing.T) {
 	if cursors, _ := d.SearchCursors(ctx); len(cursors) != 0 {
 		t.Fatalf("after purging: %+v", cursors)
 	}
+
+	// a reset (search-reindex, #6340): emptied like a purge, and counted, so a running manager lets go of its cursors
+	if n, err := d.SearchReset(ctx); err != nil || n != 0 {
+		t.Fatalf("resets before the first: %d, %v", n, err)
+	}
+	if err := d.PutSearchItems(ctx, "server", "trip", "h2", 1, []SearchItemRow{row(1, "user", "bluelane once more")}, false); err != nil {
+		t.Fatal(err)
+	}
+	for want := int64(1); want <= 2; want++ {
+		if err := d.ResetSearch(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := d.SearchReset(ctx); err != nil || n != want {
+			t.Fatalf("resets %d (%v), want %d", n, err, want)
+		}
+	}
+	if got := search([]string{"bluelane"}, "trip"); got != nil {
+		t.Fatalf("after a reset: %v", got)
+	}
+	if cursors, _ := d.SearchCursors(ctx); len(cursors) != 0 {
+		t.Fatalf("cursors after a reset: %+v", cursors)
+	}
+	if err := d.PurgeSearch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := d.SearchReset(ctx); n != 2 {
+		t.Fatalf("a purge counted as a reset: %d", n)
+	}
 }

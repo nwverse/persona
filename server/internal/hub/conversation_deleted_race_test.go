@@ -133,7 +133,7 @@ func TestPersonaDeleteReplyFencesBeforeFleetNotification(t *testing.T) {
 	reportSessions(h, n.m, stale...)
 	assertGone()
 	row, ok := n.m.session(id)
-	if !ok || !row.Deleted || row.LastText != "" || row.Cwd != "" {
+	if !ok || !row.IsDeleted() || row.LastText != "" || row.Cwd != "" {
 		t.Fatalf("stale fleet revived content: %+v", row)
 	}
 	if err := n.m.deletedCall("session.items", map[string]any{"session_id": "main-0001"}); err != nil {

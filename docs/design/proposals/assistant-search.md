@@ -3,7 +3,7 @@
 Status: approved by the owner on 2026-11-13 (#6280), decisions in section 9. Building in order: the shared rule and web
 search in chat (#6281, merged), the manager's index and endpoint (#6282), web (#6283), iOS (#6284); Android is #6285.
 As built in #6282: no `ts` index (every search scans the text anyway), and the rebuild / empty command of section 5 is
-#6340.
+#6340: `search-reindex` without `--purge` (emptying and rebuilding are one act, since the manager fills the index again).
 Audience: everyday Assistant users (super rules 0 and 4). Agents' own history is out of scope (#757).
 
 ## 1. Problem
@@ -127,7 +127,8 @@ without injected prompts or tools) is a few tens of MB at most: a scan of 10 to 
   make it resume after a restart. Until it is done the answer has `partial: true` and `indexed`, and the apps say
   "Still going through older chats…".
 - **Offline and gone**: an offline computer's chats wait for its next `sessions.changed`. A transcript the node says is
-  gone, or a deleted chat, drops its rows. A command to rebuild or empty it is #6340.
+  gone, or a deleted chat, drops its rows. `personad assistant search-reindex` (`personad manager search-reindex` for a
+  manager made in the app) empties it, and the manager reads its chats again from the start (#6340).
 - **Several assistants**: each manager indexes its own chats in its own database.
 
 ## 6. Speed
@@ -146,8 +147,8 @@ without injected prompts or tools) is a few tens of MB at most: a scan of 10 to 
 - **Who**: the hub's device tokens, the owner's devices. Not in the extensions' scopes, and not a tool the model can call.
 - **Logs**: never the query; counts and durations only. No query history is kept.
 - **Snippets**: about 40 characters before the match and 80 after, from the cleaned text.
-- **Removal**: with the chat (a chat gone from the list for a day); dropping the manager's database removes it; a
-  command to empty it is #6340.
+- **Removal**: with the chat (a chat gone from the list for a day); dropping the manager's database removes it;
+  `search-reindex` empties it, and it fills again from the transcripts (#6340).
 
 ## 8. The apps
 

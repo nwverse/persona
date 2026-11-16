@@ -289,8 +289,8 @@ import Testing
     private func live(_ library: RecordingLibrary, open: RecordingSpan? = nil,
                       post: @escaping (UUID, Int, [RecordingSentence]) async throws -> MeetingLive.Answer = { _, from, s in .init(next: from + s.count) },
                       settled: Bool = true) -> MeetingLive {
-        MeetingLive(deps: MeetingLive.Deps(post: post, settled: { _ in settled }, upload: { _ in }, openSpan: { _ in open },
-                                           wait: { _ in }), library: library)
+        MeetingLive(deps: MeetingLive.Deps(post: post, settled: { _ in settled }, upload: { _ in },
+                                           openSpans: { _ in open.map { [$0] } ?? [] }, wait: { _ in }), library: library)
     }
 
     private func library() throws -> RecordingLibrary {

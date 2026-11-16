@@ -35,6 +35,8 @@ struct NewChatView: View {
     /// A message forwarded to a new Agent (#3807), or several together (#3838): its card over the first message, which
     /// carries it as `contextBlock`, and the pictures it had, attached.
     var forwarded: [ContextRef] = []
+    /// One card's icon: a forward's, or an Inbox item's when Hand to AI starts the Agent with it (#5933).
+    var forwardedIcon = Theme.Icon.forwardMessage
     var forwardedImages: [UIImage] = []
     var nameHint: String? = nil
     var onlyGroup: String? = nil
@@ -416,7 +418,7 @@ struct NewChatView: View {
 
                 Section {
                     if forwarded.count == 1, let one = forwarded.first {
-                        QuoteCard(heading: one.quoteHeading, icon: Theme.Icon.forwardMessage, meta: ForwardMessage.meta(one),
+                        QuoteCard(heading: one.quoteHeading, icon: forwardedIcon, meta: ForwardMessage.meta(one),
                                   summary: one.forwardSummary, lines: QuoteBlock.forwardLines, tint: Theme.accent, ink: .secondary) {}
                             .accessibilityIdentifier("newChat.forward")
                     } else if !forwarded.isEmpty {

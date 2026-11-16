@@ -57,6 +57,10 @@ type InboxSource struct {
 	Connector  string
 	SourceName string
 	Chats      map[string]string
+	// Switched: it is a built-in's Inbox feed now (MigratedFrom), under the built-in's id (#6265), which the manager
+	// gives the built-in's abilities in the round (#6381). ConnectorRows: its rows are the connector's own (a things
+	// recipe), whose counts are the connector's; otherwise the subscription makes them, with its counts (#5671).
+	Switched, ConnectorRows bool
 }
 
 // InboxSources are the subscriptions as Inbox sources: one's items while its Inbox is on, its read error while it is
@@ -73,8 +77,9 @@ func (s *Service) InboxSources(ctx context.Context) ([]InboxSource, error) {
 		src := InboxSource{ID: sub.ID, Name: sub.Label, Kinds: kindsOf(sub.Label), Things: []connector.InboxThing{}}
 		builtin, migrated := MigratedFrom(sub)
 		if migrated {
-			src.ID = builtin // the built-in's Inbox feed now: under its own source id (#6265)
+			src.ID, src.Switched = builtin, true // the built-in's Inbox feed now: under its own source id (#6265)
 		}
+		src.ConnectorRows = sub.Recipe.Mode == wire.ConnectorSubscriptionModeThings
 		catchup, live, err := s.inboxHeld(ctx, sub, now)
 		if err != nil {
 			return nil, err

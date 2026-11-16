@@ -18,7 +18,7 @@ import (
 // it receives through fleet.sessions at its transport boundaries.
 func (m *Machine) conversationDeleted(id string) bool {
 	row, ok := m.session(id)
-	return ok && row.Deleted
+	return ok && row.IsDeleted()
 }
 
 func (m *Machine) deletedCall(method string, params any) error {
@@ -27,7 +27,7 @@ func (m *Machine) deletedCall(method string, params any) error {
 	}
 	marked := false
 	for _, row := range m.keptSessions() {
-		if row.Deleted {
+		if row.IsDeleted() {
 			marked = true
 			break
 		}
@@ -185,7 +185,8 @@ func (h *Hub) acceptConversationDeletionReply(manager string, r *http.Request, r
 	if m == nil || h.machineOwner(m.cfg.ID) != manager {
 		return errors.New("conversation deletion acknowledgement belongs to another manager")
 	}
-	row := proto.Session{MachineID: m.cfg.ID, SessionID: id, Assistant: true, Deleted: true, Status: proto.StatusOffline, Title: i18n.T(h.requestLang(r), "assistant-conversation_delete.deleted")}
+	row := proto.Session{MachineID: m.cfg.ID, SessionID: id, Assistant: true, Status: proto.StatusOffline, Title: i18n.T(h.requestLang(r), "assistant-conversation_delete.deleted")}
+	row.SetDeleted(true)
 	m.rememberConversationDeleted(row)
 	h.conversationDeletedPush(m, id)
 	h.broadcastSessions(m, m.keptSessions())

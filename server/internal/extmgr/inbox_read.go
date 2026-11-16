@@ -186,21 +186,28 @@ func (h *Manager) readConnectors(ctx context.Context) []assistantwire.InboxSourc
 		h.inboxReads.note(c.ID(), time.Now(), "")
 		h.vetThings(c, things)
 		src.Things = things
-		_, src.Group = connector.As[connector.Grouper](c)
-		_, src.Meta = connector.As[connector.EventWriter](c)
-		src.MetaDescription = strings.TrimSpace(c.Manifest().MetaDescription)
-		_, src.Settles = connector.As[connector.InboxSettler](c)
-		for _, kind := range c.Manifest().Kinds {
-			if d, ok := extensionKinds.Load(c.ID() + "/" + kind); ok {
-				if src.Kinds == nil {
-					src.Kinds = map[string]string{}
-				}
-				src.Kinds[kind] = d.(string)
-			}
-		}
+		withAbilities(&src, c)
 		out = append(out, src)
 	}
 	return out
+}
+
+// withAbilities gives a connector's round entry what the Inbox does with its things besides taking them: grouping
+// (group, meta), settling, and its kinds as it describes them. A built-in read through its default subscription
+// gets the same (#6381), so nothing it does is lost at the switch.
+func withAbilities(src *assistantwire.InboxSource, c connector.Connector) {
+	_, src.Group = connector.As[connector.Grouper](c)
+	_, src.Meta = connector.As[connector.EventWriter](c)
+	src.MetaDescription = strings.TrimSpace(c.Manifest().MetaDescription)
+	_, src.Settles = connector.As[connector.InboxSettler](c)
+	for _, kind := range c.Manifest().Kinds {
+		if d, ok := extensionKinds.Load(c.ID() + "/" + kind); ok {
+			if src.Kinds == nil {
+				src.Kinds = map[string]string{}
+			}
+			src.Kinds[kind] = d.(string)
+		}
+	}
 }
 
 // readErrorOf is a failed Collect as a short code: its text may hold an address or a token, the code does not.

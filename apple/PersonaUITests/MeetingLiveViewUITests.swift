@@ -17,6 +17,9 @@ final class MeetingLiveViewUITests: XCTestCase {
         try post(hub, "/mock/meeting_conversation", ["on": true, "room": "ok", "end_seconds": 180])
         try post(hub, "/mock/meeting_attendance", ["on": true, "default": "participant", "answer": "ok", "kb_read_only": false])
         try post(hub, "/mock/meeting_live_view", ["on": true])
+        // A voice extension from before phase 4 (on a MOCK_VOICE=1 mock): these questions go through `…/ask`, not a
+        // meeting call's `text` frames (MeetingTalkUITests covers those). A mock without MOCK_VOICE has no such route.
+        _ = try? Data(contentsOf: URL(string: hub + "/mock/voice_meeting?meeting=off")!)
     }
 
     override func tearDownWithError() throws {

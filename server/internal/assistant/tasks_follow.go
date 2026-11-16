@@ -245,6 +245,7 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	if !reached || !taskAgentsSettled(t, agents) {
 		return
 	}
+	agents = currentTaskAgents(agents, supersededAgents(t, agents)) // not an agent it was handed over from (#6483)
 	var last, cut proto.Session
 	for _, c := range agents {
 		if c.State == proto.StateWorking || c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {

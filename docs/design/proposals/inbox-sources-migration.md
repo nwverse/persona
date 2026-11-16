@@ -103,12 +103,16 @@ knowledge-base chat (`chatOf`). The twin's escalation rules don't change.
 
 ### 3e. Real time
 
-- A connector's `changed` event also starts a run of that connector's subscriptions, within `callGap` and the hourly
-  cap, so a migrated source is as fast as its built-in (at most a few seconds behind a kick instead of 5 minutes).
-- Sources that push rather than poll (Lark's events) use a push source owned by an extension. The extension's program
-  sends items with the push source's fields plus the new identity and reply fields, under the same 20-a-push and
-  300-an-hour limits. Only the extension that owns a push source may push to it. That replaces "only a paired device
-  over HTTP" for this case, and the device path stays as it is.
+- A connector's `changed` event also starts a run of that connector's subscriptions (P4a, #6247): people's at most
+  once a minute, within `callGap` and the hourly cap.
+- A switched built-in's default subscription runs 3 seconds after `changed`, as the Inbox's own kick of the built-in
+  does (`inboxDebounce`), a burst of events once. Its runs replace the built-in's `Collect` calls one for one, so they
+  are outside the subscriptions' hourly budget and call gap; a pause the connector asked for still holds (P4b, #6381).
+- Its rows come from a generic `inbox_things` that the subscriptions add to every connector with an Inbox, answering
+  the connector's `Collect` (or the connector's own `inbox_things`, as iMessage's). Lark's events reach the Inbox as
+  fast as today with no new protocol: the Lark extension already sends `changed` and answers `Collect`.
+- The round's entry for a switched source carries its built-in's abilities (settle, group, meta, kinds, migrated), as
+  `readConnectors` gives them, so nothing it does is lost at the switch.
 
 ### 3f. The knowledge base stays on the built-in path at first
 
@@ -149,10 +153,10 @@ Smallest gap first, so each step proves part of the design before the harder sou
 | P1 | Recipe fields: P1a `sender_id`, `chat`, `chat_name` (#6165); P1b `seen` (#6176); P1c a failing pull shows as the source's read error at once (#6189) | 3b |
 | P2 | The `reply_to` field; reply through the subscription's connector (#6198). The apps already offer Draft only with `CanReply` | 3b, 3c |
 | P3 | The twin's source info and knowledge-base chat for subscription items (#6222) | 3d |
-| P4 | P4a `changed` starts runs (#6247); P4b extension-owned push sources | 3e |
-| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 | 3a, 3g |
+| P4 | P4a `changed` starts runs (#6247); P4b a generic `inbox_things` over `Collect`, a switched source 3 seconds after `changed`, its built-in's abilities in the round (#6381) | 3e |
+| P5 | P5a the default subscription's fixed id and `migrated` mark, delivery under the built-in's id, catch-up as rows, rollback (#6265); P5b the switch on the Inbox Sources pages, with M1 (#6345) | 3a, 3g |
 | M1 | **iMessage**: a `things` recipe over its `inbox_things` tool (#6296, #6317), the `changed` kick, the switch on the pages (P5b) | P4a, P5, things |
-| M2 | **GitHub**: comments as replies, inferred read, repo mutes. Its read tools first need a notifications tool | P1–P5 |
+| M2 | **GitHub**: a `things` recipe over the generic `inbox_things` (P4b), so comments as replies, inferred read and repo mutes stay its `Collect`'s; a comparison test; the switch held back from the pages until M1's week is over (#6404) | P4b, P5 |
 | M3 | **Lark**: JSON read tools for `larkcli` first, then its events through a push source, replies | P1–P5 |
 | M4 | **Mail**, one subscription per account: replies with threading, seen flags and off-page settling, read errors per account, translations | P1–P5 |
 | K1… | Each source's knowledge-base feed, once the subscription path has what it uses (3f) | per source |
@@ -168,8 +172,17 @@ only after it has run switched on, on the owner's hub, for a week without a diff
    for the source. Its default subscription doesn't ask again as a new subscription would.
 3. **Knowledge base (3f)**: the Inbox feed moves first. Each source's archive is a later step, once the subscription
    path has what the source uses.
-4. **Real time (3e)**: Lark's events come through a push source owned by an extension. Lark keeps no built-in event
-   path.
+4. **Real time (3e)**, changed on 2026-11-13 (P4b, #6381): no push sources owned by extensions. A switched source's
+   default subscription reads a generic `inbox_things` that answers the connector's `Collect`, and runs 3 seconds after
+   its `changed` event. It was first decided that Lark's events would come through a push source owned by an
+   extension. The owner chose this instead because:
+   - it adds no extension protocol (no new method in the schema, two SDKs and the docs);
+   - the private Lark extension needs no change: it already sends `changed` and answers `Collect`;
+   - the rows are the built-in's by construction (the same `Collect`), where pushed items would have to be proven equal
+     to the connector's state;
+   - it is as fast as the built-in today (its kick's 3 seconds).
+
+   Each connector's `Collect` must have no side effects, which its M step's comparison test confirms.
 5. **Order (4)**: iMessage, GitHub, Lark, mail.
 6. **New installs (3g)**: a source switches on new installs only after it has run switched on, on the owner's hub, for
    a week without a difference. It doesn't wait for the other sources.

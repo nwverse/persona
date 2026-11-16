@@ -118,6 +118,16 @@ func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxR
 	}
 	for _, src := range srcs {
 		r.Names[src.ID] = src.Name
+		if c := h.connectorOf(src.ID); src.Switched && c != nil {
+			// A built-in read through its default subscription (#6381): its round entry is the built-in's, with the
+			// subscription's rows and read error.
+			in := assistantwire.InboxSource{ID: c.ID(), Name: connector.DisplayName(ctx, c), Extension: fromExtension(c.ID()),
+				Migrated: isMigrated(c.ID()), Counts: !src.ConnectorRows, Things: src.Things, ReadError: src.ReadError}
+			withAbilities(&in, c)
+			r.Names[src.ID] = in.Name
+			r.Sources = append(r.Sources, in)
+			continue
+		}
 		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Counts: true, Kinds: src.Kinds,
 			Things: src.Things, ReadError: src.ReadError, Via: src.Connector, ViaSource: src.SourceName, Chats: src.Chats})
 	}

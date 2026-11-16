@@ -103,7 +103,7 @@ func (s *Service) startDue(ctx context.Context) *sync.WaitGroup {
 		if IsPush(sub) {
 			continue // filled by its device, never pulled
 		}
-		asked := s.asked[sub.ID] || s.kicked[sub.ID] && pullScheduled(sub)
+		asked := s.asked[sub.ID] || s.kickDue(sub.ID, now) && pullScheduled(sub)
 		if !asked && (!pullScheduled(sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
 			continue
 		}
@@ -158,6 +158,12 @@ func before(a, b *time.Time) bool {
 	return a.Before(*b)
 }
 
+// kickDue says whether a changed event has made subscription id due by now (ConnectorChanged); under s.mu.
+func (s *Service) kickDue(id string, now time.Time) bool {
+	at, ok := s.kicked[id]
+	return ok && !now.Before(at)
+}
+
 // runOne runs a subscription once, if it is still due and no other run holds it.
 func (s *Service) runOne(ctx context.Context, id string) {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
@@ -166,9 +172,9 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	}
 	s.mu.Lock()
 	asked := s.asked[id]
-	kicked := s.kicked[id] && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g := s.gateOf(sub.Connector)
 	now := s.now()
+	kicked := s.kickDue(id, now) && pullScheduled(*sub) // still on: a changed event brought its run forward
 	g.prune(now)
 	perHour := defaultPerHour
 	if sub.MaxCallsPerHour > 0 {
@@ -179,15 +185,22 @@ func (s *Service) runOne(ctx context.Context, id string) {
 	if !g.last.IsZero() {
 		wait = g.last.Add(callGap + rand.N(callJitter)).Sub(now)
 	}
+	if _, switched := MigratedFrom(*sub); switched {
+		// A built-in's feed now: its runs replace the built-in's Collect calls one for one (#6381), outside the
+		// subscriptions' budget and gap; a pause the connector asked for still holds.
+		full, wait = false, 0
+	}
 	resume := g.paused
 	if full {
 		resume = g.calls[0].Add(time.Hour)
 	}
 	s.mu.Unlock()
 	if !asked && !kicked && (!pullScheduled(*sub) || sub.NextRunAt == nil || sub.NextRunAt.After(now)) {
-		s.mu.Lock()
-		delete(s.kicked, id) // switched off since
-		s.mu.Unlock()
+		if !pullScheduled(*sub) {
+			s.mu.Lock()
+			delete(s.kicked, id) // switched off since (a kick not due yet stays)
+			s.mu.Unlock()
+		}
 		return
 	}
 	if paused || full {
@@ -279,10 +292,12 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	}
 	s.mu.Lock()
 	g := s.gateOf(sub.Connector)
-	g.last = start
-	g.calls = append(g.calls, start)
+	if _, switched := MigratedFrom(sub); !switched { // a built-in's feed counts no subscription call (#6381)
+		g.last = start
+		g.calls = append(g.calls, start)
+	}
 	s.mu.Unlock()
-	pl := pull(ctx, c.Conn, sub.Source, sub.Recipe, since, until, s.o.Location(), sub.Label, sub.Continuation, tool.InputSchema)
+	pl := pull(ctx, withInboxThings(c.Conn), sub.Source, sub.Recipe, since, until, s.o.Location(), sub.Label, sub.Continuation, tool.InputSchema)
 	ms := s.now().Sub(start).Milliseconds()
 	if pl.problem != nil {
 		// A page that fails is asked for again once (one transient error must not re-read every committed page); when

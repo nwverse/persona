@@ -114,7 +114,7 @@ func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool
 func (h *Hub) shown(machine string, list []proto.Session) []proto.Session {
 	del := h.deletedAt(machine)
 	hidden := func(s *proto.Session) bool {
-		return s.Deleted || s.Archived && !s.Assistant || sessionHiddenByDeletion(*s, del)
+		return s.IsDeleted() || s.Archived && !s.Assistant || sessionHiddenByDeletion(*s, del)
 	}
 	for i := range list {
 		if !hidden(&list[i]) {

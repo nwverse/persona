@@ -78,3 +78,7 @@ A correct worktree creation result and a successful Agent reply do not prove tha
   went into `rev`, and every answer was refused once the phone had opened the terminal (#5265). Claude Code also redraws its dialogs differently between builds (2.1.322 puts a `│` before each row of
   the command, as before the warning). Check a parser change against real captures at several widths (120, 100, 57, 40) and a few seconds apart. Capture them from a throwaway `claude` in a private pty
   with a VT emulator (pyte), with no Persona hooks and outside herdr: no card reaches anyone's phone, and the screen can be resized at will.
+
+## A visible Codex composer does not prove takeover readiness
+
+Codex can draw an empty input box before its folder-trust dialog arrives. A takeover must wait for the original thread to be loaded and joined on the shared app-server, not merely for a running process, a visible composer, or an HTTP success. Test the late dialog after a transient composer, and send a real follow-up from the client. Keep the pending client action mounted when session discovery changes the history row into a live row, or a later failure and its continuation-only fallback can disappear before the request completes (#5739).

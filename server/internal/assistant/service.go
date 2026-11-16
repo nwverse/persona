@@ -133,6 +133,7 @@ type Service struct {
 	interrupts interruptBook
 
 	titles     titleBook       // titles.go
+	phoneKept  keptPhoneTools  // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames agentNamingBook // agent_naming.go
 	prefs      settingsBook    // profile.go
 	main       mainBook        // start.go
@@ -276,6 +277,7 @@ func New(o Options) *Service {
 	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
+	s.skillImportRoutes()
 	s.readinessRoutes()
 	s.availabilityRoutes()
 	s.startRoutes()

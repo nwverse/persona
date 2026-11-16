@@ -77,6 +77,27 @@ func TestSearchDeletedLastConversation(t *testing.T) {
 	}
 }
 
+func TestSearchReindexPreservesDeletedConversation(t *testing.T) {
+	s, _, store := searchService(t)
+	ctx := context.Background()
+	s.searchSweep(ctx)
+	if err := s.deleteConversation(ctx, "server", "trip"); err != nil {
+		t.Fatal(err)
+	}
+	store.resetIndex()
+	s.searchSweep(ctx)
+	store.mu.Lock()
+	deleted := len(store.rows[searchKey{"server", "trip"}])
+	control := len(store.rows[searchKey{"server", "old"}])
+	store.mu.Unlock()
+	if deleted != 0 || control == 0 {
+		t.Fatalf("reindex revived deletion or lost control: %d %d", deleted, control)
+	}
+	if convCode(s.conversationAvailable(ctx, "server", "trip")) != "conversation_deleted" {
+		t.Fatal("reindex removed tombstone")
+	}
+}
+
 func TestSearchDeletedPostgresCleanup(t *testing.T) {
 	database := todoTestDB(t)
 	ctx := context.Background()

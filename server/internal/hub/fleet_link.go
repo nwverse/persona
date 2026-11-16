@@ -173,13 +173,13 @@ func (h *Hub) takeFleetSessionsFrom(m *Machine, p assistantwire.FleetSessions, r
 	var newlyDeleted []string
 	var wasDeleted map[string]bool
 	for _, row := range list {
-		if !row.Deleted {
+		if !row.IsDeleted() {
 			continue
 		}
 		if wasDeleted == nil {
 			wasDeleted = map[string]bool{}
 			for _, previous := range m.keptSessions() {
-				if previous.Deleted {
+				if previous.IsDeleted() {
 					wasDeleted[previous.SessionID] = true
 				}
 			}

@@ -631,7 +631,7 @@ function NowTiles({ s, cores }: { s: NonNullable<DetailMetrics["latest"]>; cores
     { label: t("machines-machinedetail.swap"), value: s.swap_total ? bytesBin(s.swap_used) : t("machines-machinedetail.swap_off"), sub: s.swap_total ? t("machines-machinedetail.swap_total", { total: bytesBin(s.swap_total) }) : undefined, frac: swapPct, lv: "normal" },
   ];
   return (
-    <div className="mb-3 grid grid-cols-3 gap-2 lg:grid-cols-6">
+    <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((tile) => (
         <div key={tile.label} className="min-w-0 rounded-card bg-surface px-2.5 py-2.5 shadow-card sm:px-3">
           <div className="flex items-center gap-1.5 text-[11px] text-ink-3">

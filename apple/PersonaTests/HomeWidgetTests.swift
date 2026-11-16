@@ -253,5 +253,37 @@ struct HomeWidgetTests {
         #expect(score(.health) == 10)
         #expect(score(.agents, HomeSamples.stale()) == 0 && score(.agents, HomeSamples.unpaired) == 0)
     }
+
+    // MARK: The gateways' money
+
+    /// Usage's money is what the gateways say is today's: the `day` entries' cost, a shared key once. An entry known only
+    /// by its label, a week's or a month's, and a gateway that could not be read add nothing; with none, no money.
+    @Test func moneyIsWhatTheGatewaysSayIsToday() throws {
+        func answer(_ json: String) throws -> LauncherQuotaAnswer { try JSON.decoder.decode(LauncherQuotaAnswer.self, from: Data(json.utf8)) }
+        let keyed = try answer("""
+        {"quota":{"gateway":"g1","key_name":"k1","usage":[
+         {"label":"Today","period":"day","requests":3,"tokens":10,"cost_usd":1.25},
+         {"label":"This month","period":"month","requests":9,"tokens":90,"cost_usd":30}]}}
+        """)
+        let other = try answer(#"{"quota":{"gateway":"g2","usage":[{"label":"Today","period":"day","requests":1,"tokens":1,"cost_usd":0.5}]}}"#)
+        let unsaid = try answer(#"{"quota":{"gateway":"g3","usage":[{"label":"Today","requests":1,"tokens":1,"cost_usd":7}]}}"#)
+        let unread = try answer(#"{"error":"no reader","unsupported":true}"#)
+        #expect(HomeUsage.spentToday([keyed, keyed, other, unsaid, unread]) == 1.75)
+        #expect(HomeUsage.spentToday([unsaid, unread]) == nil)
+        #expect(HomeUsage.spentToday([]) == nil)
+        #expect(HomeUsage.build([], tokens: 5, tpm: 0, hourly: [], spent: 1.75)?.costToday == 1.75)
+    }
+
+    /// The launchers asked are those with a gateway: not the built-in claude, a direct API connection or a hidden one.
+    @Test func moneyIsAskedOfTheGatewayLaunchers() throws {
+        let json = """
+        [{"name":"gw","source":"persona","base_url":"https://gw.example.com"},{"name":"claude","source":"builtin"},
+         {"name":"direct","source":"persona","kind":"api","base_url":"https://api.example.com"},
+         {"name":"old","source":"zshrc","base_url":"https://old.example.com","hidden":true},{"name":"plain","source":"zshrc"},
+         {"name":"rc","source":"zshrc","details":{"m1":{"base_url":"https://rc.example.com"}}}]
+        """
+        let all = try JSON.decoder.decode([LauncherView].self, from: Data(json.utf8))
+        #expect(HomeUsage.gatewayLaunchers(all) == ["gw", "rc"])
+    }
 }
 

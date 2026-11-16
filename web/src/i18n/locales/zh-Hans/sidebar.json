@@ -27,7 +27,6 @@
   "show_all": "看全部",
   "pinned_section": "置顶",
   "directions": "常驻",
-  "direction_tasks": "{name}的任务",
   "task_agents": "{name}的 Agent",
   "launching": "正在启动",
   "launch_untitled": "新 Agent",
@@ -35,6 +34,7 @@
   "launch_background": "后台启动中",
   "idle_spaces": "空闲的空间 {count}",
   "recent": "最近（未运行）",
+  "recent_hint": "已经停下、或所在电脑离线的 Agent，最近的在前。点开可以看它做过什么。",
   "show_less": "收起",
   "show_more": "再显示 {count} 个",
   "quick_filters": "快速筛选",
@@ -150,5 +150,7 @@
   "switcher_count": "{count} 件等你处理",
   "leader_working": "在做 {count}",
   "leader_needs_you": "等你 {count}",
-  "codex_waiting": "等第一条消息"
+  "codex_waiting": "等第一条消息",
+  "direction_tasks_expand": "展开「{name}」的在办任务",
+  "direction_tasks_collapse": "收起「{name}」的在办任务"
 }

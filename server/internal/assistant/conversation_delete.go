@@ -101,8 +101,10 @@ func (s *Service) conversationAvailable(ctx context.Context, machine, id string)
 // deletedRow is also sent through fleet.sessions so the hub can enforce the
 // manager's decision on old links and subscriptions, even while it reconnects.
 func (s *Service) deletedRow(ctx context.Context, row deletedConversation) proto.Session {
-	return proto.Session{MachineID: row.Machine, SessionID: row.ID, Assistant: true, Deleted: true,
+	session := proto.Session{MachineID: row.Machine, SessionID: row.ID, Assistant: true,
 		Space: row.Space, Title: i18n.T(s.lang(ctx), "assistant-conversation_delete.deleted"), Status: proto.StatusOffline}
+	session.SetDeleted(true)
+	return session
 }
 
 func (s *Service) deletionRows(ctx context.Context, machine string, list []proto.Session, complete bool) []proto.Session {

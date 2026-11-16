@@ -147,7 +147,7 @@ func TestDeletePersonaFleetTombstone(t *testing.T) {
 			ft.d.setSessions("mac", nil)
 		}
 		rows := ft.s.publishList("mac")
-		if len(rows) != 1 || !rows[0].Deleted || rows[0].Cwd != "" || rows[0].LastText != "" || rows[0].Title == "private title" {
+		if len(rows) != 1 || !rows[0].IsDeleted() || rows[0].Cwd != "" || rows[0].LastText != "" || rows[0].Title == "private title" {
 			t.Fatalf("unsafe tombstone: %+v", rows)
 		}
 		raw, _ := json.Marshal(rows)

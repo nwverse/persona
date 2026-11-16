@@ -20,7 +20,8 @@ func TestPersonaDeletedTransport(t *testing.T) {
 	rows := n.m.sessionList()
 	for i := range rows {
 		if rows[i].SessionID == id {
-			rows[i] = proto.Session{MachineID: n.m.cfg.ID, SessionID: id, Assistant: true, Deleted: true, Status: proto.StatusOffline}
+			rows[i] = proto.Session{MachineID: n.m.cfg.ID, SessionID: id, Assistant: true, Status: proto.StatusOffline}
+			rows[i].SetDeleted(true)
 		}
 	}
 	reportSessions(h, n.m, rows...)
