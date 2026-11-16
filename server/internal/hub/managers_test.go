@@ -226,6 +226,22 @@ func TestManagersHideTheBuiltinWhileUnused(t *testing.T) {
 		t.Fatalf("the machine gone: %+v", m)
 	}
 
+	// Something in its inbox needs the user: shown until it is handled (the apps would mark it waiting otherwise).
+	r := dialRawBus(t, srv, busToken(t, h, assistantwire.AssistantID, "助手"))
+	if err := r.call(assistantwire.MethodHello, map[string]any{"id": assistantwire.AssistantID}, nil); err != nil {
+		t.Fatal(err)
+	}
+	say := func(n int) {
+		t.Helper()
+		if err := r.peer.Notify(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	say(2)
+	eventually(t, 5*time.Second, "shown while its inbox needs the user", func() bool { m := builtin(); return m.Hide && !m.Hidden })
+	say(0)
+	eventually(t, 5*time.Second, "hidden again once nothing waits", func() bool { return builtin().Hidden })
+
 	// Made the default: shown; asking for both at once is refused.
 	if code := managersDo(t, h, srv, "PATCH", "/api/v1/managers/"+assistantwire.AssistantID, map[string]any{"default": true, "hide": true}, nil); code != 409 {
 		t.Fatalf("default and hide at once: %d", code)

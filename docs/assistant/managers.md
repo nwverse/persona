@@ -96,7 +96,7 @@ The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol
 
 - The hub gives the assistant it starts a new token on every start, but **the name stays**: a name the user gave it is kept.
 - Manager ids: `m-` plus 6 hex digits for one made in the app; `assistant` for the hub's own.
-- **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default and owns no machine, `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
+- **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default, owns no machine and has nothing in its inbox that needs the user (`inbox_needs_you`), `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
 - Names: 1–40 characters, no control characters (C0 or C1) and no bidirectional formatting characters.
 
 ## Install codes

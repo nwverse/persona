@@ -74,8 +74,9 @@ type managerInfo struct {
 	// Builtin: the assistant this hub starts beside itself; it cannot be removed (hub.json assistant.external).
 	Builtin bool `json:"builtin,omitempty"`
 	// Hide (the built-in manager only): the user asked to keep it out of the switcher while it is not used (PATCH
-	// {"hide"}). Hidden: that is in effect, and the apps leave it out of the switcher. Not while it is the default or
-	// owns a machine: a machine that falls back to it (its manager removed) shows it again by itself (#9055).
+	// {"hide"}). Hidden: that is in effect, and the apps leave it out of the switcher. Not while it is the default, owns
+	// a machine or has something in its inbox that needs the user: a machine that falls back to it (its manager
+	// removed) shows it again by itself (#9055).
 	Hide     bool       `json:"hide,omitempty"`
 	Hidden   bool       `json:"hidden,omitempty"`
 	Host     string     `json:"host,omitempty"`
@@ -152,16 +153,19 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		}
 		m := managerInfo{ID: b.ID, Name: b.Name, Default: b.ID == def, Builtin: h.builtinManager(b.ID),
 			Host: b.Host, OS: b.OS, Arch: b.Arch, Deploy: b.Deploy, Version: b.Version, LastSeen: b.LastSeen}
-		if m.Builtin {
-			m.Hide = hide
-			m.Hidden = hide && !m.Default && !h.managerOwnsMachine(b.ID)
-		}
 		if p, ok := live[b.ID]; ok {
 			since := p.Since
 			m.Online, m.Since = true, &since
 			m.Host, m.OS, m.Arch, m.Deploy, m.Version = p.Host, p.OS, p.Arch, p.Deploy, p.Version
 			m.NeedsUpdate = !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn)
 			m.InboxNeedsYou = needsYou[b.ID]
+		}
+		if m.Builtin {
+			// Not hidden while it is used: the default, a computer of its own, or something in its inbox that needs
+			// the user (else the apps would mark that something waits where the switcher cannot go).
+			waiting := m.InboxNeedsYou != nil && *m.InboxNeedsYou > 0
+			m.Hide = hide
+			m.Hidden = hide && !m.Default && !waiting && !h.managerOwnsMachine(b.ID)
 		}
 		out = append(out, m)
 	}

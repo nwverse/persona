@@ -4341,13 +4341,14 @@ def builtin_owns_machine():
 
 def roster_entry(m, needs_you=None):
     """A manager as the roster has it: default, its inbox's Needs you count, and for the built-in one whether the user
-    asked to keep it out of the switcher (hide) and whether that is in effect (hidden: not the default, no computer;
-    hub/managers.go, #9055)."""
+    asked to keep it out of the switcher (hide) and whether that is in effect (hidden: not the default, no computer,
+    nothing in its inbox that needs the user; hub/managers.go, #9055)."""
     out = dict(m, **({"default": True} if m["id"] == MANAGERS["default"] else {}),
                **({"inbox_needs_you": needs_you[m["id"]]} if needs_you and m["id"] in needs_you else {}))
     if m.get("builtin") and MANAGERS.get("hide"):
         out["hide"] = True
-        if m["id"] != MANAGERS["default"] and not builtin_owns_machine(): out["hidden"] = True
+        waiting = (out.get("inbox_needs_you") or 0) > 0  # something in its inbox needs the user: shown
+        if m["id"] != MANAGERS["default"] and not waiting and not builtin_owns_machine(): out["hidden"] = True
     return out
 
 
