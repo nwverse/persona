@@ -202,6 +202,26 @@ func TestQuiescedIgnoresReplicationWorkers(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	// Logical replication needs wal_level=logical and a superuser; the default
+	// disposable Postgres (CI included) runs wal_level=replica. Skip only when
+	// the server cannot do it, never when it can.
+	probe, err := newPostgresBackend().connect(ctx, Target{Part: "hub", URL: base}, "postgres")
+	if err != nil {
+		fatal(t, err)
+	}
+	var walLevel string
+	var superuser bool
+	err = probe.QueryRow(ctx, `SELECT current_setting('wal_level'), (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)`).Scan(&walLevel, &superuser)
+	closeConn(ctx, probe)
+	if err != nil {
+		fatal(t, err)
+	}
+	if walLevel != "logical" {
+		skipf(t, "the server runs wal_level=%s; logical replication needs wal_level=logical", walLevel)
+	}
+	if !superuser {
+		skip(t, "PERSONA_TEST_DATABASE_URL is not a superuser connection; creating a subscription needs one")
+	}
 	id := randomSuffix(t)
 	pubName, subName := "pb_it_pub_"+id, "pb_it_sub_"+id
 	pubURL, err := withDatabase(base, pubName)
