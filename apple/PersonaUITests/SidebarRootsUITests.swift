@@ -134,7 +134,9 @@ final class SidebarRootsUITests: XCTestCase {
             if underJump(row) { column.swipeUp(velocity: .slow) } else { column.swipeDown(velocity: .slow) }
             Thread.sleep(forTimeInterval: 0.6) // the list's glide
         }
-        row.tap()
+        // At the frame just read: a row the list moves as it settles failed the tap's own lookup.
+        guard let frame = (try? row.snapshot())?.frame else { return }
+        app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
     }
 
     /// Picks an Agent's row in the sidebar's Agents list, scrolling to it; a row tapped while the list still glides after
@@ -147,9 +149,13 @@ final class SidebarRootsUITests: XCTestCase {
         // Any Agent: the first row in reach, clear of the jump and the head (and not `excluding`); a named one: its row.
         func find() -> XCUIElement {
             if let title { return rows.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch }
-            return rows.allElementsBoundByIndex.first {
+            // Found by its label, not its place in the list (an element bound by index can name another row, or none,
+            // once the list has scrolled).
+            let clear = rows.allElementsBoundByIndex.first {
                 $0.exists && $0.isHittable && !underJump($0) && !underHead($0) && !(excluding.map($0.label.contains) ?? false)
-            } ?? rows.firstMatch
+            }
+            guard let label = (clear.flatMap { try? $0.snapshot() })?.label else { return rows.firstMatch }
+            return rows.matching(NSPredicate(format: "label == %@", label)).firstMatch
         }
         var row = find()
         for _ in 0..<16 where !(row.exists && row.isHittable) {
