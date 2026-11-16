@@ -12,8 +12,7 @@
   "steps": [
     {
       "step": "launch",
-      "session": "assistant-chat",
-      "conversationKind": "assistant",
+      "tab": "Persona",
       "windowingMode": 5
     },
     {
@@ -27,7 +26,7 @@
     },
     {
       "step": "tap",
-      "resource-id": "settings-search"
+      "text": "Search settings"
     },
     {
       "step": "text",
@@ -50,7 +49,7 @@
       "step": "assert",
       "checks": {
         "pid": "unchanged",
-        "route": {"matches": "/chat$"}
+        "route": {"equals": "Persona"}
       }
     },
     {

@@ -238,6 +238,21 @@ class AdaptiveShotsTest(unittest.TestCase):
         with self.assertRaisesRegex(shots.AdaptiveFailure, "resumed"):
             shots.parse_persona_task(TASK_DUMP.replace("topResumedActivity", "otherActivity"), APP_ID)
 
+    def test_current_task_accepts_the_dumpsys_star_prefix(self):
+        dump = """  * Task{abcdef #42 I=com.example.persona.shots/persona.android.MainActivity}
+    mBounds=Rect(0, 0 - 1200, 960)
+    CurrentConfiguration: {1.0 320dpi sw600dp w600dp h480dp}
+    ActivityRecord{fedcba com.example.persona.shots/persona.android.MainActivity t42}
+  * Task{ffffff #43 I=com.example.other}
+    mBounds=Rect(0, 0 - 10, 10)
+  topResumedActivity=ActivityRecord{fedcba com.example.persona.shots/persona.android.MainActivity t42}
+"""
+        task = shots.parse_persona_task(dump, APP_ID)
+        self.assertEqual(42, task.task_id)
+        self.assertEqual((0, 0, 1200, 960), task.bounds)
+        self.assertEqual((600, 600, 480), task.configuration_dp)
+        self.assertNotIn("com.example.other", task.block)
+
     def test_rotation_and_current_display_dimensions_are_real_evidence(self):
         adb = FakeAdb()
         original = adb.shell

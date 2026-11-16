@@ -16,7 +16,12 @@
   "steps": [
     {
       "step": "launch",
-      "page": "inbox"
+      "page": "inbox",
+      "probePage": "Inbox"
+    },
+    {
+      "step": "rotate",
+      "orientation": "portrait"
     },
     {
       "step": "wm-size",
@@ -44,7 +49,8 @@
     },
     {
       "step": "tap",
-      "text": "韩梅梅"
+      "text": "Direct",
+      "index": 0
     },
     {
       "step": "assert",
@@ -154,7 +160,8 @@
     },
     {
       "step": "tap",
-      "text": "韩梅梅"
+      "text": "Direct",
+      "index": 0
     },
     {
       "step": "tap",
@@ -171,7 +178,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {
@@ -192,7 +198,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {
@@ -215,7 +220,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {
@@ -245,7 +249,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {
@@ -271,7 +274,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {
@@ -297,7 +299,6 @@
     {
       "step": "assert",
       "requires": {
-        "page": "韩梅梅",
         "fields": ["draftHmac", "focused"]
       },
       "checks": {

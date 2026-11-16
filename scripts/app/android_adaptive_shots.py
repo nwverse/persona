@@ -112,13 +112,14 @@ def parse_device_state(text):
 
 def _task_block(text, task_id):
     lines = text.splitlines()
+    task_start = r"^\s*(?:\*\s+)?Task\{"
     for index, line in enumerate(lines):
-        if re.match(r"^\s*Task\{", line) and re.search(r"(?:#|\bt)\s*" + str(task_id) + r"\b", line):
+        if re.match(task_start, line) and re.search(r"(?:#|\bt)\s*" + str(task_id) + r"\b", line):
             indent = len(line) - len(line.lstrip())
             block = [line]
             for following in lines[index + 1:]:
                 following_indent = len(following) - len(following.lstrip())
-                if following.strip() and following_indent <= indent and re.match(r"^\s*(?:Task\{|[A-Z][A-Za-z ]*\{)", following):
+                if following.strip() and following_indent <= indent and re.match(r"^\s*(?:\*\s+)?(?:Task\{|[A-Z][A-Za-z ]*\{)", following):
                     break
                 block.append(following)
             return "\n".join(block)
