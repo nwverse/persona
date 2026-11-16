@@ -77,6 +77,32 @@ NDK 29.0.14206865 / direct LLVM build, ABI sizes, uncompressed 16 KB packaging a
 described in `android/core/rustcore-android/README.md`. `scripts/build-android.sh` produces both ABIs without
 `cargo-ndk`; the Gradle task declares the core inputs so unchanged sources do not recompile Rust.
 
+## Android continuity adapter (#7448)
+
+`:core:data` routes native chat transport through `ContinuityAdapter`. Kotlin wraps the existing reducer and sync
+and remains the production default; `-PpersonaContinuity=rust` selects Rust for repository unit tests. Rust owns one
+lazy process-wide core, starts it on a worker after a frame, and applies patches and chat-owned fetch effects on
+coalesced frame drains. Only the JVM test scheduler waits with `flush`; the app returns after dispatch, not after a
+patch acknowledgement. State wakes use their chat identity.
+
+The adapter consumes #7554 without changing Rust, JNI or codecs: `ChatPatch.verified` owns verification,
+`Action::HubChanged` owns changes heard during a fill, and adjacent input/`Ack` submissions distinguish applied no-ops
+from queued work. Asynchronous fold responses carry `fold_id`, so independent folds open concurrently. Asynchronous
+older/fold calls install a single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects from expired inputs cannot satisfy
+later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
+
+Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
+finishes nor cancels it; until a response is successfully queued, its request owner reports failures or cancellation
+with `FillFailed`. Only content inputs newer than an error's input boundary can clear that error; arbitrary or older
+Acks cannot. Each reconciliation waits for its own successful fill-response receipt. Synchronous repository paths
+retain the original state-lock sections, serialized HTTP operations, downloaded fold results and error-clearing rules.
+They do not use receipt timeouts, operation slots or submitted-history generations. Only asynchronous adapters submit
+outside that lock and open concurrent folds. Ack-only frames reuse the item list, skip coverage scans and do not
+schedule cache writes.
+`Rejected` has no chat
+or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
+releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
