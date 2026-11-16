@@ -303,6 +303,7 @@ notify               GET /api/v1/push/stats/daily
 -                    GET /api/v1/recordings/{id}/live
 -                    GET /api/v1/recordings/{id}/photos
 -                    GET /api/v1/recordings/{id}/photos/{n}
+-                    GET /api/v1/remote-image
 agents.read          GET /api/v1/saved-agent-searches
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
