@@ -142,6 +142,8 @@ func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
 	return raw.result(r.now()), nil
 }
 
+var botOpenIDPattern = lazyre.New(`^ou_[A-Za-z0-9_-]+$`)
+
 // BotOpenID resolves the bound bot's stable identity. Search mentions use its
 // app ID, but thread-history and raw message reads can use this open ID instead.
 func (r *Runner) BotOpenID(ctx context.Context) (string, error) {
@@ -161,7 +163,7 @@ func (r *Runner) BotOpenID(ctx context.Context) (string, error) {
 	if info.Bot != nil {
 		id = info.Bot.OpenID
 	}
-	if err != nil || !strings.HasPrefix(id, "ou_") {
+	if err != nil || !botOpenIDPattern.MatchString(id) {
 		return "", cliError(KindOther, errors.New("invalid bot info JSON"))
 	}
 	return id, nil

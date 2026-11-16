@@ -174,6 +174,31 @@ func TestInboxAddressedPollDeduplicatesAndKeepsAlertContext(t *testing.T) {
 	}
 }
 
+func TestInboxAuthDoesNotCacheUnverifiedBotIdentity(t *testing.T) {
+	c := testConnector(t, "success")
+	for _, id := range []string{"", "ou_", "ou_example bot"} {
+		raw, err := json.Marshal(map[string]any{"data": map[string]string{"open_id": id}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LARKCLI_FAKE_BOT_INFO", string(raw))
+		auth, err := c.inboxAuth(context.Background())
+		if err != nil || auth.BotOpenID != "" || c.inboxBotOpenID != "" || c.inboxBotAppID != "" {
+			t.Fatalf("unverified bot identity was cached: input=%q auth=%+v err=%v", id, auth, err)
+		}
+	}
+	t.Setenv("LARKCLI_FAKE_BOT_INFO", `{"data":{"open_id":"ou_example_verified_bot"}}`)
+	auth, err := c.inboxAuth(context.Background())
+	if err != nil || auth.BotOpenID != "ou_example_verified_bot" || c.inboxBotOpenID != auth.BotOpenID {
+		t.Fatalf("bot identity lookup was not retried: auth=%+v err=%v", auth, err)
+	}
+	t.Setenv("LARKCLI_FAKE_BOT_INFO", `{"data":{"open_id":"ou_"}}`)
+	cached, err := c.inboxAuth(context.Background())
+	if err != nil || cached.BotOpenID != auth.BotOpenID {
+		t.Fatalf("verified bot identity cache was lost: auth=%+v err=%v", cached, err)
+	}
+}
+
 func TestInboxAddressedCardAndOwnerHandoffStayOpen(t *testing.T) {
 	card := addressedMessage("om_example_root", "cli_example_monitor", "Example Monitor",
 		`"<card>On-call: Example User\nAn isolated test alert</card>"`, "omt_example_topic", nil)

@@ -77,7 +77,9 @@ func (c *Connector) ReplayMessages(ctx context.Context, chatID, start, end strin
 	}
 	messages := make([]adapter.Message, 0, len(found))
 	for _, message := range found {
-		// The exact selection is authorized recovery; only live polling filters our bot's messages.
+		if isBoundAppMessage(message, auth.AppID) {
+			continue // Recovery must not turn our own bot's output back into work.
+		}
 		messages = append(messages, message)
 	}
 	sort.SliceStable(messages, func(i, j int) bool { return messageLess(messages[i], messages[j]) })

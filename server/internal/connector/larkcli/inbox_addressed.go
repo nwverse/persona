@@ -68,6 +68,7 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	if text, ok := value.(string); ok {
 		_ = json.Unmarshal([]byte(text), &value)
 	}
+	hasIdentity := false
 	var addressed func(any, bool) bool
 	addressed = func(value any, role bool) bool {
 		switch v := value.(type) {
@@ -75,9 +76,11 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 			tag, _ := v["tag"].(string)
 			if tag != "at" && tag != "person" {
 				role = role || cardRoleElement(v, true)
+			} else {
+				hasIdentity = true
 			}
 			// A direct label belongs to this identity, not to unrelated descendants.
-			identityRole := role || cardRoleElement(v, requireRole)
+			identityRole := role || cardRoleElement(v, false)
 			if tag == "at" && (!requireRole || identityRole) || tag == "person" && identityRole {
 				// Card user_id defaults to an open ID; generic element IDs are not user identities.
 				idType, hasIDType := v["id_type"]
@@ -112,6 +115,11 @@ func cardOwnerMatch(message adapter.Message, auth adapter.AuthStatus, requireRol
 	if addressed(value, false) {
 		return true
 	}
+	// Structured identities own the decision, even if their displayed names
+	// disagree. Only identity-free CLI projections may fall back to text.
+	if hasIdentity {
+		return false
+	}
 	// Compact CLI cards can have only text: require a labeled field and an exact
 	// current-account name, never an arbitrary name elsewhere in the card.
 	name := strings.TrimSpace(auth.UserName)
@@ -143,9 +151,13 @@ func cardRoleElement(value any, labelOnly bool) bool {
 		return cardRoleElement(element["content"], labelOnly)
 	}
 	text, _ := value.(string)
+	if labelOnly {
+		match := cardRole.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(text, "**", "")))
+		return len(match) == 2 && strings.TrimSpace(match[1]) == ""
+	}
 	for _, line := range strings.Split(text, "\n") {
 		match := cardRole.FindStringSubmatch(strings.TrimSpace(strings.ReplaceAll(line, "**", "")))
-		if len(match) == 2 && (!labelOnly || strings.TrimSpace(match[1]) == "") {
+		if len(match) == 2 {
 			return true
 		}
 	}

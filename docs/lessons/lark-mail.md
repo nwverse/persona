@@ -63,6 +63,9 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   must not lend its role to an unrelated nested mention.
   An explicit `at` can still be an ordinary mention without an assignment; an unrelated `person` must not inherit
   another person's completed role field. Test the emitted assignment flag, not just the actionable tier.
+  Keep rendered-name fallback separate from structured identities: a peer's ID must not match the owner through
+  display text. Use labeled-name fallback only for identity-free projections, and never inherit a multiline
+  completed field as an empty role label.
 - A selected historical recovery must finish and persist normal triage before bypassing the twin's age limit.
   Run triage only for the selected rows, even when twins are disabled; queue afterwards only when the normal verdict,
   policies and current twin configuration allow it. Do not force every recovered request into Needs You.
@@ -70,14 +73,16 @@ When mainline hides the send button for an empty composer, attachment drafts sti
   separately instead of dropping it or overwriting an unselected row. Keep older/undated move and completed-thread
   guards. Select only open rows for replay follow-up, checking again after mutes; `handled()` means active handling,
   not completion, and must not exclude an open conversation from continuation.
-- The bound-app feedback filter belongs to live polling, not exact-ID recovery. Route explicitly selected app
-  messages normally, without treating an app sender as the owner or admitting unselected context as activity.
+- Exact-ID recovery still needs the normal bound-app feedback filter: selecting our own bot's output must not
+  turn it into new work. Filter only a verified app sender matching the binding, not an owner's user ID carrying
+  app metadata or another bot. Do not update the seen ledger or cursor when excluding a selected bot message.
 - Structured card identities must use `user_id` or `open_id` with a nonempty `ou_` ID and no conflicting declared
   ID type. A generic element `id` is not a user identity and must not grant admission or a sender-mute exception.
 - Check bot-info fixtures against the CLI's output, not just an HTTP response example: the CLI can flatten the bot
   object into `data.open_id`. Accept that projection and a nested `bot.open_id`; when a bot object is present,
   require its own valid identity rather than falling back to an unrelated outer ID. Test both shapes and missing
-  or invalid bot identities.
+  or invalid bot identities. Reject empty `ou_` suffixes and invalid characters before caching, so unresolved
+  identity remains retryable and cannot silently settle a possible handoff.
 
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 

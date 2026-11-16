@@ -165,17 +165,21 @@ func TestInboxReplayRejectsUnknownOrOutsideSourceTimestamp(t *testing.T) {
 	}
 }
 
-func TestInboxReplayKeepsEligibleBoundAppSelection(t *testing.T) {
+func TestInboxReplayDropsBoundAppMessagesButKeepsEligibleOtherSenders(t *testing.T) {
 	for _, tc := range []struct {
 		name, chatType, content, kind string
 		tier                          connector.Tier
-		mention, owner, assigned      bool
+		mention, owner, otherApp      bool
+		assigned                      bool
 	}{
-		{"addressed app message", "group", `"Please review"`, "mention", connector.TierAction, true, false, false},
-		{"app responsibility card", "group", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_user"}]}`, "mention", connector.TierAction, false, false, true},
-		{"direct app message", "p2p", `"Bot update"`, "bot", "", false, false, false},
-		{"unaddressed app group message", "group", `"Routine update"`, "", "", false, false, false},
-		{"owner identity with app metadata", "group", `"Please review"`, "bot_handoff", connector.TierFYI, true, true, false},
+		{"addressed bound app message", "group", `"Please review"`, "", "", true, false, false, false},
+		{"bound app responsibility card", "group", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_user"}]}`, "", "", false, false, false, false},
+		{"direct bound app message", "p2p", `"Bot update"`, "", "", false, false, false, false},
+		{"unaddressed bound app group message", "group", `"Routine update"`, "", "", false, false, false, false},
+		{"owner identity with app metadata", "group", `"Please review"`, "bot_handoff", connector.TierFYI, true, true, false, false},
+		{"addressed other app message", "group", `"Please review"`, "mention", connector.TierAction, true, false, true, false},
+		{"other app responsibility card", "group", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_user"}]}`, "mention", connector.TierAction, false, false, true, true},
+		{"direct other app message", "p2p", `"Bot update"`, "bot", "", false, false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := addressedMessage("om_example_selected", "cli_example", "Example Bot", tc.content, "", nil)
@@ -183,6 +187,8 @@ func TestInboxReplayKeepsEligibleBoundAppSelection(t *testing.T) {
 			selected.Sender.SenderType, selected.Sender.IDType, selected.Sender.AppID = "app", "app_id", "cli_example"
 			if tc.owner {
 				selected.Sender.ID, selected.Sender.Name = "ou_example_user", "Example User"
+			} else if tc.otherApp {
+				selected.Sender.ID, selected.Sender.AppID = "cli_example_other_app", "cli_example_other_app"
 			}
 			if tc.mention {
 				selected.Mentions = []adapter.Mention{{ID: "cli_example"}}
@@ -192,10 +198,22 @@ func TestInboxReplayKeepsEligibleBoundAppSelection(t *testing.T) {
 			unselected.Sender.SenderType, unselected.Sender.IDType = "app", "app_id"
 			unselected.ChatType, unselected.CreateTime = tc.chatType, "2030-01-01T00:02:00Z"
 			c := addressedTestConnector(t, []adapter.Message{selected, unselected}, []adapter.Message{selected, unselected})
+			state := persistedInboxState{Cursor: "2030-01-02T12:00:00Z", PageToken: "example-live-page",
+				Seen: []string{unselected.MessageID}, Topics: []string{"omt_example_known"}, TopicsSeeded: true}
+			raw, err := json.Marshal(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &inboxStateStore{raw: raw}
+			c.SetStateStore(store)
 			items, err := c.ReplayMessages(context.Background(), selected.ChatID, "2030-01-01T00:00:00Z",
 				"2030-01-01T00:05:00Z", []string{selected.MessageID})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if string(store.raw) != string(raw) || !reflect.DeepEqual(c.inboxState, state) ||
+				!reflect.DeepEqual(c.inboxSeen, map[string]struct{}{unselected.MessageID: {}}) {
+				t.Fatalf("replay filter changed live cursor or seen ledger: state=%+v seen=%+v", c.inboxState, c.inboxSeen)
 			}
 			if tc.kind == "" {
 				if len(items) != 0 {
@@ -211,5 +229,21 @@ func TestInboxReplayKeepsEligibleBoundAppSelection(t *testing.T) {
 				t.Fatalf("unselected history was not retained as context: %+v", items[0])
 			}
 		})
+	}
+}
+
+func TestInboxReplayMixedSelectionDoesNotPromoteBoundAppMessage(t *testing.T) {
+	bot := addressedMessage("om_example_bot", "cli_example", "Example Bot", `"Bot request"`, "",
+		[]adapter.Mention{{ID: "cli_example"}})
+	bot.Sender.SenderType, bot.Sender.IDType = "app", "app_id"
+	peer := addressedMessage("om_example_peer", "ou_example_peer", "Example Peer", `"Peer request"`, "",
+		[]adapter.Mention{{ID: "cli_example"}})
+	bot.CreateTime, peer.CreateTime = "2030-01-01T00:01:00Z", "2030-01-01T00:02:00Z"
+	c := addressedTestConnector(t, []adapter.Message{bot, peer}, []adapter.Message{bot, peer})
+	items, err := c.ReplayMessages(context.Background(), peer.ChatID, "2030-01-01T00:00:00Z",
+		"2030-01-01T00:05:00Z", []string{bot.MessageID, peer.MessageID})
+	if err != nil || len(items) != 1 || items[0].Last != peer.MessageID || items[0].Kind != "mention" ||
+		items[0].Tier != connector.TierAction || !strings.Contains(items[0].Context, "Bot request") {
+		t.Fatalf("selected bot became activity or displaced peer/context: items=%+v err=%v", items, err)
 	}
 }

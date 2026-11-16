@@ -144,3 +144,42 @@ func TestCardStructuredOwnerIdentityRequiresOpenID(t *testing.T) {
 		}
 	}
 }
+
+func TestCardStructuredIdentitiesDoNotFallBackToRenderedNames(t *testing.T) {
+	auth := adapter.AuthStatus{OpenID: "ou_example_owner", UserName: "Example Owner"}
+	for _, tc := range []struct {
+		name, content       string
+		addressed, assigned bool
+	}{
+		{"another identity with owner's display name", `{"elements":[{"tag":"person","user_id":"ou_example_peer","text":"On-call: Example Owner"}]}`, false, false},
+		{"rendered projection disagrees with assignee", `{"text":"On-call: Example Owner","elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_peer"}]}`, false, false},
+		{"completed rendered field cannot lend role", `{"text":"On-call:\nExample Peer","elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false, false},
+		{"invalid structured identity cannot use display name", `{"elements":[{"tag":"person","user_id":"example_employee","text":"On-call: Example Owner"}]}`, false, false},
+		{"ordinary at survives conflicting rendered assignment", `{"text":"On-call: Example Owner","elements":[{"tag":"at","user_id":"ou_example_owner"}]}`, true, false},
+		{"ordinary person cannot borrow rendered assignment", `{"text":"On-call: Example Owner","elements":[{"tag":"person","user_id":"ou_example_owner"}]}`, false, false},
+		{"direct structured assignment uses stable identity", `{"elements":[{"tag":"person","user_id":"ou_example_owner","text":"On-call: Former Name"}]}`, true, true},
+		{"structured row uses stable identity", `{"elements":[{"tag":"plain_text","text":"On-call:"},{"tag":"person","user_id":"ou_example_owner","text":"Former Name"}]}`, true, true},
+		{"text-only structured projection", `{"elements":[{"tag":"plain_text","text":"On-call: Example Owner"}]}`, true, true},
+		{"compact rendered projection", `"<card>On-call: Example Owner</card>"`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, nested := range []bool{false, true} {
+				raw := json.RawMessage(tc.content)
+				if nested {
+					var err error
+					raw, err = json.Marshal(tc.content)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				message := adapter.Message{MsgType: "interactive", Content: raw}
+				if got := cardAddressesOwner(message, auth); got != tc.addressed {
+					t.Errorf("nested=%v addressed=%v want=%v", nested, got, tc.addressed)
+				}
+				if got := cardAssignsOwner(message, auth); got != tc.assigned {
+					t.Errorf("nested=%v assigned=%v want=%v", nested, got, tc.assigned)
+				}
+			}
+		})
+	}
+}
