@@ -44,6 +44,19 @@ var (
 
 func isLarkCLI(name string) bool { return name == "lark-cli" || filepath.Base(name) == "lark-cli" }
 
+// larkProfileEnvName is the variable lark-cli takes its profile from when no --profile is given (lark-cli 1.0.98): the
+// node sets it to lark.cli.profile in the assistant's environment (assistantLarkEnvNamed, #9123).
+const larkProfileEnvName = "LARKSUITE_CLI_PROFILE"
+
+// larkProfileEnv: a command names lark-cli's profile variable (to set it, unset it or pass it on), which like
+// --profile is the manager's to choose.
+var larkProfileEnv = lazyre.New(`(^|[^A-Za-z0-9_])LARKSUITE_CLI_PROFILE([^A-Za-z0-9_]|$)`)
+
+// larkProfileRead: reading the variable, which cannot change it, so a diagnostic passes: `$LARKSUITE_CLI_PROFILE`,
+// `${LARKSUITE_CLI_PROFILE}` and `printenv LARKSUITE_CLI_PROFILE`. An expansion with an operator
+// (`${LARKSUITE_CLI_PROFILE:=x}`) or any other mention still counts as naming it.
+var larkProfileRead = lazyre.New(`\$LARKSUITE_CLI_PROFILE|\$\{LARKSUITE_CLI_PROFILE\}|(^|[\s;&|(])printenv\s+LARKSUITE_CLI_PROFILE`)
+
 // parseLarkCLI reads `lark-cli <words…> [flags]`: the words name the command (`im +messages-send`, `api POST
 // /open-apis/…`), the flags are its input. ok is false when the gate cannot tell what the command is.
 func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok bool) {
