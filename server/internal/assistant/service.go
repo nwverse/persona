@@ -469,6 +469,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			Enabled: s.idleAutoCompact(ctx), IdleMinutes: s.idleAutoCompactMinutes(ctx), ContextTokens: s.idleAutoCompactTokens(ctx),
 		}
 	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
+		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
+		// on its launcher's window (and never adopts the spare).
+		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
+			putMainCompactWindow(s.settings(ctx), p)
+		}
+	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
 		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
 		if name, _ := p["launcher"].(string); name != "" {

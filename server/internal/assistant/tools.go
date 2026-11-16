@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,10 +40,11 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
-	if s.urgentOn(ctx) { // only while the owner has urgent calls on (urgent_call.go)
-		return toolsNamed(append(slices.Clip(toolNames), "urgent_call"))
+	tools := toolsNamed(toolNames)
+	if s.urgentOn(ctx) {
+		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
-	return toolsNamed(toolNames)
+	return append(tools, s.knowledgeFolderTools(ctx)...)
 }
 
 // toolsNamed are the MCP tools of these names, as prompts/mcp has them.
@@ -174,6 +174,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolLeaderProgress(ctx, self, args)
 	case "concern_report":
 		return s.toolConcernReport(ctx, machine, self, args) // concerns.go
+	case knowledgeSearchTool, knowledgeReadTool:
+		_, guest, err := s.guestOf(ctx, machine, self)
+		if err != nil || guest || s.isWorkMachine(machine) || isOutwardReader(ctx) {
+			return "", errors.New("remote knowledge folders are only available in private sessions")
+		}
+		return s.toolKnowledgeFolder(ctx, name, args)
 	case "kb_search", "kb_list", "kb_get", "kb_update":
 		return s.toolKB(ctx, name, args)
 	case "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume":

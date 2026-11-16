@@ -19,12 +19,18 @@ func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := assistantwire.IdleCompaction{Enabled: true, IdleMinutes: 30, ContextTokens: 300000}
+	wantWindow := defaultMainCompactWindow
 	check := func(params map[string]any) {
 		t.Helper()
 		raw, _ := json.Marshal(params["idle_compaction"])
 		var got assistantwire.IdleCompaction
 		if err := json.Unmarshal(raw, &got); err != nil || got != want {
 			t.Fatalf("idle compaction policy = %s (%v), want %+v", raw, err, want)
+		}
+		raw, _ = json.Marshal(params["main_compact_window"])
+		var window int
+		if err := json.Unmarshal(raw, &window); err != nil || window != wantWindow {
+			t.Fatalf("main compact window = %s (%v), want %d alongside idle policy", raw, err, wantWindow)
 		}
 	}
 	check(f.lastSend(t))
@@ -42,8 +48,10 @@ func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
 	check(f.lastSend(t))
 
 	off, minutes, tokens := false, 45, 450000
+	wantWindow = 250000
 	setSettings(t, s, func(v *Settings) {
 		v.IdleAutoCompact, v.IdleAutoCompactMinutes, v.IdleAutoCompactTokens = &off, &minutes, &tokens
+		v.MainCompactWindow = &wantWindow
 	})
 	want = assistantwire.IdleCompaction{Enabled: false, IdleMinutes: minutes, ContextTokens: tokens}
 	params, err = s.SendParams(ctx, SendParams{MachineID: "server", SessionID: main.SessionID, Params: map[string]any{"text": "next"}})
@@ -60,5 +68,8 @@ func TestIdleCompactPolicyReachesMainDeliveryPaths(t *testing.T) {
 	}
 	if _, exists := f.lastSend(t)["idle_compaction"]; exists {
 		t.Fatal("side chat received the main chat's idle compaction policy")
+	}
+	if _, exists := f.lastSend(t)["main_compact_window"]; exists {
+		t.Fatal("side chat received the main chat's compact window")
 	}
 }
