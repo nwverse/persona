@@ -1,0 +1,144 @@
+{
+  "head": "81ccd8010e09a2f2af8db1e6ec4efde70d7e95b3",
+  "web_tree": "6072a45e1f9c1d0ca61b47e75eb931fd50e04e09",
+  "browser": "149.0.7827.55",
+  "platform": "linux",
+  "node": "v24.20.0",
+  "screenshots": [
+    {
+      "file": "1440-light-standard-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "1440-light-standard-options.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "390-dark-large-source.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "390-dark-large-options.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    },
+    {
+      "file": "automatic-enabled.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "release-source.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-waiting.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "interrupt-confirm.png",
+      "width": 1440,
+      "theme": "light",
+      "textSize": "standard",
+      "mode": "available",
+      "scale": ""
+    },
+    {
+      "file": "backup-confirm-narrow-dark-large.png",
+      "width": 390,
+      "theme": "dark",
+      "textSize": "large",
+      "mode": "available",
+      "scale": "calc(14 / 13)"
+    }
+  ],
+  "interactions": [
+    "auto opt-in; source change disables auto and hides backups; program-only backup cancel/confirm; wait controls disabled; Update now cancel/confirm",
+    [
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "auto_update_nodes": true
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "release"
+        }
+      },
+      {
+        "path": "/hub/update/settings",
+        "method": "PUT",
+        "input": {
+          "source": "web-dev"
+        }
+      },
+      {
+        "path": "/hub/update/backups/snapshot-20261112000100000000-cccccccccccc/apply",
+        "method": "POST",
+        "input": {}
+      },
+      {
+        "path": "/hub/update",
+        "method": "POST",
+        "input": {
+          "now": true
+        }
+      }
+    ]
+  ],
+  "upstream_main": "fbf032bb47b9955fc0a0589c23e9b576a9321cfd",
+  "integrated_source": "410f382a2f47b7c054064dfb626d3a17c2aab062",
+  "scope": "Focused synchronization verification: wide light Standard and narrow dark Large; source/automation/program-only backup/idle/forced confirmation.",
+  "fixture": "web/e2e/hub-development-fixture.mjs",
+  "runner": "browser-smoke.mjs; reduced existing matrix, unchanged assertion bodies",
+  "author_inspected_all_screenshots": true,
+  "limitations": "Synthetic local API only; not production update, writer coordination, restoration, native-host or maintainer visual acceptance.",
+  "source_relation": "Capture source is 81ccd8010. The subsequent ordinary merge only integrates upstream Android code/docs; server, Web, integrations and backup tests are unchanged. The final review-assets add/remove pair does not change the integrated source tree.",
+  "runner_sha256": "ea1de3c9a4bea1ca67b795e1b331d6010b2b35c5474e13acdb4d5d997e4c9f3c",
+  "command": "PORT=6013 node web/e2e/hub-development-fixture.mjs; in another shell: node pr-assets/6921-sync/browser-smoke.mjs http://127.0.0.1:6013 <owned-output-directory> --executable <chromium>"
+}
