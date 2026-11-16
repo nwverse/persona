@@ -488,8 +488,29 @@ Phase 3 lands in several PRs.
     boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
     malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
     the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
-  - `StreamRepair`, visual gaps, timing, rendering, C/NAPI/Swift bindings, production adapters and the #4044
+  - `StreamRepair`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the #4044
     performance goal remain open.
+
+- **The four pure projections reach the C ABI (#8912).**
+  - `persona-core-ffi` gains `persona_core_project_answer`, `persona_core_display_answer`,
+    `persona_core_project_stream_chunks`, `persona_core_project_turns` and `persona_core_project_task_index`, sharing
+    `persona_core_project_sort`'s contract: one UTF-8 JSON document in, one JSON document out, no core handle, the
+    caller frees the result with `persona_core_bytes_free`, and any decode/projection/encode failure returns an empty
+    buffer. `display_answer` takes a bare JSON string (the option label), as its JNI counterpart does. The checked-in
+    `include/persona_core.h` declares all five; the existing dynamic-export drift check covers them (13 exports).
+  - The #8560 independently compiled C11 client now replays the unchanged fixtures through the real release library on
+    Linux: answer 15 question + 8 recommendation cases (complete conditional expected objects, invalid page/option,
+    the U+200B trim boundaries), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
+    the checked-in `spec/fixtures/lines/ios/differences.json` overlay applied by the client (54 cases hold 62 complete
+    turn objects; three compare empty arrays only), and task_index all five complete expected objects plus the
+    background receipt boundary. Both sides are parsed and compared canonically (sorted object keys, exact array order
+    and scalars), so no comparison depends on Rust's serialization key order. Exact-name manifests fail on an added,
+    dropped or renamed case; malformed input returns an empty buffer per domain and a deliberately wrong expected
+    object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
+    client source or release library fails rather than skips.
+  - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
+    performance claim. The Swift adapters and the real-C XCTest still need macOS and remain with #6793 / #7401; the
+    turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
 
 ### Migration rules (each domain)
 
