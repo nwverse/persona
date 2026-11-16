@@ -30,10 +30,15 @@ pub struct Item {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Fold {
+    #[serde(default)]
     pub tools: i64,
+    #[serde(default)]
     pub thoughts: i64,
+    #[serde(default)]
     pub through_seq: i64,
+    #[serde(default)]
     pub through_id: String,
+    #[serde(default)]
     pub until: Option<String>,
     #[serde(default)]
     pub images: Option<Vec<FoldImage>>,
