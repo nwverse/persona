@@ -814,6 +814,9 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
   Unfold All) and does not fold, as Working's title already behaves. Done reads its history (day counts, groups, Show Older) while
   Done is shown.
 - **Grouping**: By source / By time is the bar's trailing grouping menu, as on the Agents list (#7033), not a row of its own.
+  Android puts the two choices under "Group by" in the Inbox's ⋯ instead (hidden on Done and In progress, where they don't
+  apply): its `QuickFilterBar` has no trailing menu, and an Android list keeps its display choices in its ⋯ (the Agents
+  list's Display).
 - **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
   and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
 - **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words

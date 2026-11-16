@@ -59,6 +59,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.positionInParent
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
@@ -432,14 +434,20 @@ fun JRadio(selected: Boolean, onClick: (() -> Unit)?, modifier: Modifier = Modif
 
 // ------------------------------------------------------------------ segmented filters and chips
 
-data class JSegment(val label: String, val count: Int? = null, val status: Status? = null)
+/**
+ * One choice of [JSegmented]. [countTone]: the [count] in a capsule of that state's colours ([JToneCount]: none at 0,
+ * 99+ past 99) after the label, spoken with it ("Needs you, 12"); none: the count follows the label as plain text.
+ */
+data class JSegment(val label: String, val count: Int? = null, val status: Status? = null, val countTone: Status? = null)
 
 /**
  * A small set of mutually exclusive filters: a sliding pill in glass, underlined text tabs in brief, a ruled
- * strip of cells on the board. [compact] reduces spacing only; text keeps the ambient font scale.
+ * strip of cells on the board. [compact] reduces spacing only; text keeps the ambient font scale. [revealIn]: the
+ * [modifier]'s sideways scroll, in which the selected option is kept whole in sight ([revealWhenSelected]).
  */
 @Composable
-fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
+fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false,
+               revealIn: androidx.compose.foundation.ScrollState? = null) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     fun text(segment: JSegment) = segment.label + (segment.count?.let { " $it" } ?: "")
@@ -451,22 +459,28 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
         ) {
             options.forEachIndexed { index, segment ->
                 val on = index == selected
+                val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
                 Box(
-                    Modifier.clip(CircleShape).background(if (on) palette.action else Color.Transparent)
-                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }
+                    Modifier.revealWhenSelected(revealIn, on).clip(CircleShape).background(if (on) palette.action else Color.Transparent)
+                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }
                         .padding(horizontal = if (compact) Tokens.Space.s else 16.dp.dense, vertical = 9.dp.dense),
                     contentAlignment = Alignment.Center,
-                ) { Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                ) {
+                    if (segment.countTone == null) Text(text(segment), style = type.labelSmall, color = if (on) palette.onAction else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    else TonedSegmentLabel(segment, type.labelSmall, if (on) palette.onAction else palette.ink2, onFill = on)
+                }
             }
         }
         AppStyle.Brief -> Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (compact) Tokens.Space.s else 22.dp.dense)) {
             options.forEachIndexed { index, segment ->
                 val on = index == selected
+                val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
                 Column(
-                    Modifier.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }.padding(vertical = 6.dp.dense),
+                    Modifier.revealWhenSelected(revealIn, on).clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }.padding(vertical = 6.dp.dense),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(text(segment), style = type.label, color = if (on) palette.ink else palette.ink3, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    if (segment.countTone == null) Text(text(segment), style = type.label, color = if (on) palette.ink else palette.ink3, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+                    else TonedSegmentLabel(segment, type.label, if (on) palette.ink else palette.ink3)
                     Spacer(Modifier.height(6.dp.dense))
                     Box(Modifier.size(20.dp, 2.5.dp).clip(CircleShape).background(if (on) palette.ink else Color.Transparent))
                 }
@@ -479,25 +493,116 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
                 val on = index == selected
                 if (index > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
                 val accent = palette.accent
+                val spoken = segment.countTone?.let { spokenCount(segment.label, segment.count) }
                 Box(
-                    Modifier.weight(1f, fill = false)
+                    Modifier.weight(1f, fill = false).revealWhenSelected(revealIn, on)
                         // The selected one's underline is drawn, not laid out: a fillMaxWidth line widened that segment to
                         // its whole share of the row (the image editor's "Pen" took the row's width, "Box" stayed small).
                         .drawWithContent {
                             drawContent()
                             if (on) drawRect(accent, Offset(0f, size.height - 2.dp.toPx()), Size(size.width, 2.dp.toPx()))
                         }
-                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on },
+                        .clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } },
                 ) {
-                    Text(
-                        text(segment), style = type.labelSmall.copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Medium),
+                    val padding = Modifier.padding(horizontal = if (compact) Tokens.Space.s else 14.dp.dense, vertical = 10.dp.dense)
+                    val style = type.labelSmall.copy(fontWeight = if (on) FontWeight.Bold else FontWeight.Medium)
+                    if (segment.countTone == null) Text(
+                        text(segment), style = style,
                         color = if (on) palette.ink else palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = if (compact) Tokens.Space.s else 14.dp.dense, vertical = 10.dp.dense),
+                        modifier = padding,
                     )
+                    else TonedSegmentLabel(segment, style, if (on) palette.ink else palette.ink2, padding)
                 }
             }
         }
     }
+}
+
+/** A [JSegment] with a toned count: its label, then the count's capsule (none at 0); [onFill]: on the selected pill's fill. */
+@Composable
+private fun TonedSegmentLabel(segment: JSegment, style: androidx.compose.ui.text.TextStyle, color: Color, modifier: Modifier = Modifier,
+                              onFill: Boolean = false) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(segment.label, style = style, color = color, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        val tone = segment.countTone ?: return@Row
+        segment.count?.takeIf { it > 0 }?.let { Spacer(Modifier.width(JChipTokens.countGap)); JToneCount(it, tone, onFill = onFill) }
+    }
+}
+
+/**
+ * While [selected], a choice in a row that scrolls sideways with [scroll] is scrolled whole into sight, by as little as it
+ * takes, when it is first placed and whenever it becomes selected (a search or a link choosing it, not only a tap); one
+ * already in sight stays where it is. Only that row moves, never the page around it. Null [scroll]: nothing.
+ */
+fun Modifier.revealWhenSelected(scroll: androidx.compose.foundation.ScrollState?, selected: Boolean): Modifier =
+    if (scroll == null) this else this.then(RevealWhenSelected(scroll, selected))
+
+private data class RevealWhenSelected(val scroll: androidx.compose.foundation.ScrollState, val selected: Boolean) :
+    androidx.compose.ui.node.ModifierNodeElement<RevealNode>() {
+    override fun create() = RevealNode(scroll, selected)
+    override fun update(node: RevealNode) = node.update(scroll, selected)
+    override fun androidx.compose.ui.platform.InspectorInfo.inspectableProperties() {
+        name = "revealWhenSelected"
+        properties["selected"] = selected
+    }
+}
+
+private class RevealNode(private var scroll: androidx.compose.foundation.ScrollState, private var selected: Boolean) :
+    Modifier.Node(), androidx.compose.ui.node.LayoutAwareModifierNode {
+    /** Where it sits along the row's content, from its last placement. */
+    private var start = -1
+    private var end = -1
+    private var pending = selected
+
+    override fun onPlaced(coordinates: androidx.compose.ui.layout.LayoutCoordinates) {
+        start = coordinates.positionInParent().x.toInt()
+        end = start + coordinates.size.width
+        if (pending) reveal()
+    }
+
+    fun update(scroll: androidx.compose.foundation.ScrollState, selected: Boolean) {
+        this.scroll = scroll
+        if (selected && !this.selected) pending = true
+        this.selected = selected
+        if (pending) reveal()
+    }
+
+    private fun reveal() {
+        if (start < 0 || !isAttached) return
+        pending = false
+        if (!selected) return
+        val shown = scroll.value until scroll.value + scroll.viewportSize
+        val target = when {
+            scroll.viewportSize <= 0 -> return
+            start < shown.first -> start
+            end > shown.last + 1 -> end - scroll.viewportSize
+            else -> return
+        }
+        coroutineScope.launch { scroll.scrollTo(target) }
+    }
+}
+
+/** What TalkBack hears for a choice with a toned count: its name and the exact number ("Needs you, 12"), the name alone at 0. */
+@Composable
+internal fun spokenCount(label: String, count: Int?): String =
+    count?.takeIf { it > 0 }?.let { stringResource(R.string.designsystem_count_spoken, label, it) } ?: label
+
+/** A count's words in a badge: "99+" past 99 (iOS `CountBadge.text`). */
+internal fun countBadgeText(count: Int): String = if (count > 99) "99+" else "$count"
+
+/**
+ * A count in a capsule of [tone]'s colours, as [JSectionHeader]'s `countTone` draws it (iOS `CountBadge`: Needs you's look
+ * for what waits for the user, [Status.Idle]'s for a neutral total): nothing at 0, "99+" past 99. Pass the exact number
+ * in the control's spoken name ([spokenCount]).
+ */
+@Composable
+internal fun JToneCount(count: Int, tone: Status, modifier: Modifier = Modifier, onFill: Boolean = false) {
+    if (count <= 0) return
+    val colors = PersonaTheme.palette.status(tone)
+    // On a selected chip's fill the tint alone could vanish (a grey on black): it sits on the page's opaque surface.
+    Text(countBadgeText(count), modifier.clip(CircleShape).then(if (onFill) Modifier.background(PersonaTheme.palette.surfaceOpaque) else Modifier).background(colors.tint)
+        .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical),
+        style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = colors.text, maxLines = 1, softWrap = false)
 }
 
 /**
@@ -548,10 +653,14 @@ fun JChip(
     onRemove: (() -> Unit)? = null,
     removeLabel: String? = null,
     breathes: Boolean = true,
+    /** The [count] in a capsule of this state's colours ([JToneCount]: none at 0, 99+ past 99), spoken with the text
+     *  ("Needs you, 12"): the Inbox's section bar (#9053). None: quiet digits, as before. */
+    countTone: Status? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = RoundedCornerShape(PersonaTheme.shapes.chip)
+    val spoken = countTone?.let { spokenCount(text, count) }
     val edgeless = Color.Transparent
     val (fill, plainInk, border) = when {
         accent && !selected -> Triple(palette.accentSoft, palette.accent, if (style == AppStyle.Board) palette.line else edgeless)
@@ -573,6 +682,7 @@ fun JChip(
                     .semantics { if (role == Role.Checkbox) this.selected = selected }
                 else -> Modifier
             })
+            .then(if (spoken != null) Modifier.semantics { contentDescription = spoken } else Modifier)
             .padding(start = JChipTokens.horizontalPadding, end = if (onRemove != null) Tokens.Space.xs else JChipTokens.horizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -582,7 +692,10 @@ fun JChip(
         // With a ×, a long text gives way to it rather than pushing it out of the chip.
         Text(text, if (onRemove != null) Modifier.weight(1f, fill = false) else Modifier,
             style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        count?.let {
+        if (countTone != null) count?.takeIf { it > 0 }?.let {
+            Spacer(Modifier.width(JChipTokens.countGap))
+            JToneCount(it, countTone, onFill = selected && style != AppStyle.Board)
+        } else count?.let {
             Spacer(Modifier.width(JChipTokens.countGap))
             Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3, maxLines = 1, softWrap = false)
         }

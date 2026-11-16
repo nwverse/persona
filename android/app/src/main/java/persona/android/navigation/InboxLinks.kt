@@ -26,19 +26,24 @@ internal fun inboxDestination(key: NavKey, records: List<InboxRecord>, loaded: B
     else -> null
 }
 
-/** A listed item first, then a single read for a historical or not-yet-listed one. A direct chat link never needs that read. */
+/**
+ * A listed item first, then a single read for a historical or not-yet-listed one. A direct chat link never needs that read.
+ * [found] hears the item it opens, when there is one, so the Inbox list can move to where it is (#9053).
+ */
 internal suspend fun inboxDestinationWithLookup(
     key: NavKey,
     records: List<InboxRecord>,
     loaded: Boolean,
     pages: InboxItemPages,
     repository: InboxRepository,
+    found: (InboxRecord) -> Unit = {},
 ): InboxDestination? {
     if (key !is InboxItemRoute) return inboxDestination(key, records, loaded, pages)
-    records.firstOrNull { it.item.id == key.itemId }?.let { return InboxDestination.Open(inboxRowPage(it, pages)) }
+        ?.also { if (it is InboxDestination.Open && key is LarkChatRoute) records.firstOrNull { r -> r.feedId == key.chatId }?.let(found) }
+    records.firstOrNull { it.item.id == key.itemId }?.let { found(it); return InboxDestination.Open(inboxRowPage(it, pages)) }
     if (!loaded) return null
     return when (val result = readInboxItem(repository, key.itemId)) {
-        is InboxItemLookupResult.Found -> InboxDestination.Open(inboxRowPage(result.record, pages))
+        is InboxItemLookupResult.Found -> InboxDestination.Open(inboxRowPage(result.record, pages)).also { found(result.record) }
         InboxItemLookupResult.Missing -> InboxDestination.Missing
         is InboxItemLookupResult.Failed -> InboxDestination.Failed
     }

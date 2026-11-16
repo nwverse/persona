@@ -1084,26 +1084,34 @@ private const val BoardBayPeek = 0.4f
 /**
  * A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock).
  * [waiting]: it lists the agents that only wait in the background, so the Glass home draws it in that state's lighter tone.
+ * [countTone]: the count as a badge in that state's colours (Needs you's for what waits for the user, [Status.Idle]'s for a
+ * neutral total; none at 0, 99+ past 99) and part of the spoken name, as the Inbox's section bar draws its counts (#9053).
  */
 data class Bay(
     val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null,
-    val waiting: Boolean = false,
+    val waiting: Boolean = false, val countTone: Status? = null,
 )
 
 /**
  * The quick filters of a list. Glass shows glass chips; brief underlined tabs; the board a counter board with
  * one big number per bay — tapping a cell filters to it. A Needs You dot is still, as on iOS's `QuickFilterBar`.
+ * [revealSelected]: when the choice changes, also from outside the bar (a search, a link: the Inbox's section bar,
+ * #9053), a bar that scrolls sideways scrolls it whole into sight ([revealWhenSelected]).
  */
 @Composable
-fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, revealSelected: Boolean = false) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
+    val scroll = rememberScrollState()
+    val reveal = scroll.takeIf { revealSelected }
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
-            bays.forEachIndexed { index, bay -> JChip(bay.label, selected = index == selected, onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false) }
+        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
+            bays.forEachIndexed { index, bay -> JChip(bay.label, Modifier.revealWhenSelected(reveal, index == selected), selected = index == selected,
+                onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false, countTone = bay.countTone) }
         }
         // Tabs that do not fit scroll sideways rather than being cut off at the edge.
-        AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count) }, selected, onSelect, modifier.horizontalScroll(rememberScrollState()))
+        AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count, countTone = it.countTone) }, selected, onSelect,
+            modifier.horizontalScroll(scroll), revealIn = reveal)
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
             val shape = RoundedCornerShape(10.dp.corner)
             // Each bay is a share of the width while its label fits; more bays than that (the Agents list's six) keep
@@ -1113,16 +1121,22 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
             val whole = (maxWidth / BoardBayMinWidth).toInt().coerceAtLeast(1)
             val bayWidth = maxWidth / (whole + BoardBayPeek)
             val frame = Modifier.fillMaxWidth().clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
-            val row = if (fits) frame.height(IntrinsicSize.Min) else frame.horizontalScroll(rememberScrollState()).height(IntrinsicSize.Min)
+            val row = if (fits) frame.height(IntrinsicSize.Min) else frame.horizontalScroll(scroll).height(IntrinsicSize.Min)
             Row(row) {
                 bays.forEachIndexed { index, bay ->
                     if (index > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
                     val on = index == selected
                     val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
                     val cell = if (fits) Modifier.weight(1f) else Modifier.widthIn(min = bayWidth)
-                    Box(cell.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }) {
+                    // A toned count (the Inbox's section bar, #9053) shows no number at 0 and 99+ past 99, Needs you's in its
+                    // state's ink, and is spoken with the label.
+                    val toned = bay.countTone?.let { tone -> bay.count?.takeIf { it > 0 }?.let { it to tone } }
+                    val spoken = bay.countTone?.let { spokenCount(bay.label, bay.count) }
+                    Box(cell.revealWhenSelected(reveal.takeIf { !fits }, on).clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }) {
                         Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
-                            Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
+                            if (bay.countTone == null) Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
+                            else Text(toned?.let { countBadgeText(it.first) } ?: "—", style = type.number, maxLines = 1,
+                                color = when { toned == null -> palette.ink3; toned.second == Status.Idle -> palette.ink; else -> palette.status(toned.second).text })
                             Spacer(Modifier.height(2.dp.dense))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }

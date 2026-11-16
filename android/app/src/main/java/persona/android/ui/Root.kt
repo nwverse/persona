@@ -77,6 +77,8 @@ import persona.feature.inbox.InboxItemExtensionScreen
 import persona.feature.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
+import persona.feature.inbox.InboxLanding
+import persona.feature.inbox.LocalInboxLanding
 import persona.feature.inbox.ManagerLinks
 import persona.feature.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
@@ -406,6 +408,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val provisionalPages = remember(session.identity) { mutableSetOf<NavKey>() }
     val notePage = remember(provisionalPages) { { page: NavKey -> provisionalPages += page; Unit } }
     val inboxItemPages = InboxItemPages(itemPagePlaces, itemPageFailures.toMap(), retryItemPage, itemPagesKnown, notePage, nativeChats = nativeInboxChats)
+    // An item opened from outside the Inbox list moves the list to where the item is (#9053, InboxLink sets it).
+    val inboxLanding = remember(session.identity) { InboxLanding() }
     LaunchedEffect(itemPagesKnown) {
         if (!itemPagesKnown) return@LaunchedEffect
         val pages = InboxItemPages(currentItemPlaces, nativeChats = currentNativeInboxChats)
@@ -745,6 +749,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val sideRoom = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current) > 0 ||
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
+            LocalInboxLanding provides inboxLanding,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
           JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
@@ -920,12 +925,14 @@ private fun InboxLink(route: NavKey, inbox: InboxRepository, navigator: Navigato
     var attempt by remember(route) { mutableIntStateOf(0) }
     var destination by remember(route) { mutableStateOf<InboxDestination?>(null) }
     val pages = LocalInboxItemPages.current
+    val landing = LocalInboxLanding.current
     LaunchedEffect(route, inbox, attempt) {
         destination = null
         try { inbox.refresh() }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { /* Cached records and the single-item lookup still resolve what they can. */ }
-        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox)
+        // Opened from outside the list: the list under it moves to where the item is (#9053).
+        destination = inboxDestinationWithLookup(route, snapshot.records, true, pages, inbox, found = { landing?.land(it) })
     }
     LaunchedEffect(destination) {
         (destination as? InboxDestination.Open)?.let {
