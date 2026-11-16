@@ -29,6 +29,14 @@ Renaming a conversation uses Grok's native `_x.ai/session/rename` operation. The
 Grok's own session record, remains after restarts and later replies, and can be changed while a reply is running.
 Session discovery reads `generated_title` before the older `session_summary`, which can retain an earlier name.
 
+Conversations started with the Grok CLI in a terminal are listed too, under their working directory, so they appear in
+the Agents list and its repository grouping alongside the assistant's. One updated in the last seven days is listed;
+one a running Grok process holds (Grok's own `active_sessions.json`) is listed however old it is. While a terminal holds
+it, the conversation is read-only from Persona: its turns appear as the terminal writes them, and sending, renaming or
+changing its settings is refused (`terminal_open`), since a second writer would interleave with the terminal's turns.
+Once that terminal exits, the phone continues the conversation through ACP in the same directory. These conversations
+are not the assistant's: they get Persona's Agent tools, not the assistant's.
+
 The model catalog comes from the installed CLI. The companion verifies acknowledged settings and refuses unsupported
 reasoning levels. It supplies assistant tools through a private loopback MCP endpoint backed by the runtime SDK.
 The standard launcher Test runs a short isolated native conversation with the same model and effort, no Persona

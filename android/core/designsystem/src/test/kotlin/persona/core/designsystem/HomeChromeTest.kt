@@ -26,11 +26,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.filter
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -724,5 +726,42 @@ class HomeChromeTest {
         assertEquals("agents", selected)
         assertEquals(listOf("agents"), selections)
         assertEquals("switching pages must not open the menu", 1, menuOpens)
+    }
+
+    @Test fun personaButtonRoomKeepsSwitcherPositionWhenButtonIsHiddenInEveryStyle() {
+        val items = listOf(
+            NavItem("assistant", "Assistant", PhIcons.ChatCircle),
+            NavItem("agents", "Agents", PhIcons.Robot),
+        )
+        var style by mutableStateOf(AppStyle.Glass)
+        var showButton by mutableStateOf(true)
+        rule.setContent {
+            PersonaTheme(style = style, reduceMotion = true) {
+                Box(Modifier.width(560.dp)) {
+                    HomeNavigation(
+                        items = items,
+                        selected = "assistant",
+                        onSelect = {},
+                        leading = {
+                            if (showButton) JPersonaButton(PersonaState.Idle, "Sidebar", {})
+                            else JPersonaButtonRoom()
+                        },
+                    )
+                }
+            }
+        }
+        for (candidate in AppStyle.entries) {
+            rule.runOnIdle { style = candidate; showButton = true }
+            rule.waitForIdle()
+            val shownBounds = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            rule.onNodeWithContentDescription("Sidebar").assertExists()
+
+            rule.runOnIdle { showButton = false }
+            rule.waitForIdle()
+            val hiddenBounds = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            rule.onAllNodesWithContentDescription("Sidebar").assertCountEquals(0)
+            assertEquals("Switcher shifted horizontally in $candidate", shownBounds.left.value, hiddenBounds.left.value, 0.01f)
+            assertEquals("Switcher shifted vertically in $candidate", shownBounds.top.value, hiddenBounds.top.value, 0.01f)
+        }
     }
 }

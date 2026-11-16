@@ -265,6 +265,8 @@ type Service struct {
 	hubTr     hubRuns
 	sockets   sync.Once
 	socketMux *http.ServeMux
+	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
+	navMu sync.Mutex
 }
 
 var _ Handler = (*Service)(nil)
@@ -321,6 +323,7 @@ func New(o Options) *Service {
 	s.todoRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
+	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
 	s.companionRoutes()
 	s.kbInit(o.KB)
@@ -458,6 +461,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
 			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
+	}
+	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || method == DeviceSessionSend) {
+		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
+		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
+		// on its launcher's window (and never adopts the spare).
+		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
+			putMainCompactWindow(s.settings(ctx), p)
 		}
 	}
 	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
@@ -742,6 +753,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.agentDecisionSpoke(ctx, r, time.Now())
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

@@ -61,6 +61,8 @@ struct MeetingPage: View {
     @FocusState private var writing: Bool
     /// The transcript a highlight's time pushed (phase 2b): the page's, so it stays while the page is open.
     @State private var transcriptAt: MeetingTranscriptFocus?
+    /// The meeting room's page (#8731): live, highlights or map.
+    @State private var roomPage = MeetingRoomPage.live
 
     private var paused: Bool { capture.state == .paused }
 
@@ -129,20 +131,42 @@ struct MeetingPage: View {
     }
 
     @ViewBuilder private func liveLayout(_ entry: RecordingEntry) -> some View {
-        // While the field has the keyboard the subtitle steps aside and the top card keeps only its newest line or
-        // highlight, or its waiting line: the keyboard takes about half the screen, and the thread under them would get
-        // none of it. The structure stays the same, so the thread's scroll view keeps its place.
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                titleRow(entry)
-                stateLine()
-                if !writing { subtitle(entry) }
+        // The meeting room (#8731 v2): the title and its time, who is in it, then three pages to swipe for a meeting
+        // started with the live view (live lines and the thread, the highlights, the map). While the field has the
+        // keyboard the people and the tabs step aside and the live box keeps only its newest line: the keyboard takes
+        // about half the screen. The structure stays the same, so the thread's scroll view keeps its place.
+        let pages = entry.attendance?.liveView == true
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            roomTop(entry)
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.top, Theme.Space.s)
+            if !writing {
+                MeetingRoomPeople(entry: entry, paused: paused)
+                    .padding(.horizontal, Theme.Space.page)
+                subtitle(entry)
+                    .padding(.horizontal, Theme.Space.page)
             }
-            .padding(.horizontal, Theme.Space.page)
-            .padding(.top, Theme.Space.s)
             problems(entry)
-            if !writing { topics(entry) }
-            topCard(entry, writing: writing)
+            if pages, !writing { MeetingRoomTabs(page: $roomPage) }
+            if pages {
+                TabView(selection: $roomPage) {
+                    livePane(entry).tag(MeetingRoomPage.live)
+                    highlightsPane(entry).tag(MeetingRoomPage.highlights)
+                    MeetingTopicMap(title: entry.displayTitle, topics: conversation.meeting(id).topics).tag(MeetingRoomPage.map)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+            } else {
+                livePane(entry)
+            }
+        }
+        .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
+    }
+
+    /// The room's first page: the newest lines, then the thread (Persona's answers, Just Me, photos). Once the thread
+    /// has anything the box keeps only its newest line, so the thread under the people and the tabs keeps its room.
+    private func livePane(_ entry: RecordingEntry) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            MeetingLiveBox(entry: entry, exchanges: exchanges, folded: writing || !shown.ids.isEmpty)
                 .padding(.horizontal, Theme.Space.page)
             threadHeader(entry)
                 .padding(.horizontal, Theme.Space.page)
@@ -152,23 +176,42 @@ struct MeetingPage: View {
                     .padding(.vertical, Theme.Space.s)
             }
         }
-        .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
     }
 
-    private func titleRow(_ entry: RecordingEntry) -> some View {
-        HStack(alignment: .center, spacing: Theme.Space.s) {
-            Text(entry.displayTitle).font(Theme.Font.title).lineLimit(Theme.Recording.pageTitleLines)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("recording-now-title")
-                .frame(maxWidth: .infinity, alignment: .leading)
-            pageMenu(entry)
-            hideButton
+    /// The room's second page: the topics, then the highlights (or their waiting line).
+    private func highlightsPane(_ entry: RecordingEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
+                topics(entry)
+                topCard(entry, writing: false)
+                    .padding(.horizontal, Theme.Space.page)
+            }
+            .padding(.vertical, Theme.Space.s)
         }
     }
 
-    @ViewBuilder private var hideButton: some View {
-        if let close {
-            RecordingSheetCloseButton(title: String(localized: "Hide"), identifier: "recording-live-hide") { close() }
+    /// The room's top: collapse (the meeting goes on; the Live Activity and the page's card lead back), the title over
+    /// its time and state, and the page's menu.
+    private func roomTop(_ entry: RecordingEntry) -> some View {
+        HStack(alignment: .center, spacing: Theme.Space.s) {
+            if let close {
+                Button { close() } label: {
+                    ThemedIcon(Theme.Icon.minimizeRoom).font(Theme.Font.heading)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .background(Theme.Fill.chip, in: .circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Hide"))
+                .accessibilityIdentifier("recording-live-hide")
+            }
+            VStack(spacing: Theme.Space.xxs) {
+                Text(entry.displayTitle).font(Theme.Font.heading).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("recording-now-title")
+                stateLine()
+            }
+            .frame(maxWidth: .infinity)
+            pageMenu(entry)
         }
     }
 
@@ -373,6 +416,7 @@ struct MeetingPage: View {
                     RecordingJumpButton(unread: shown.ids.filter { !seen.contains($0) }.count) { following = true }
                         .padding(.trailing, Theme.Space.page)
                         .padding(.bottom, Theme.Space.s)
+                        .tabSwitchRoom() // left of the open Duo's floating tabs' switch (#4231)
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: Theme.Recording.arrivalOffset)))
                 }
             }
@@ -541,6 +585,7 @@ struct MeetingPage: View {
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
                     .frame(maxWidth: .infinity)
+                    .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
                     .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
                     .transition(.opacity)
             } else {

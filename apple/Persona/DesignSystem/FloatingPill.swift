@@ -21,7 +21,8 @@ extension View {
     /// to-do page its automatic edge was the hard one, a lighter band with a line along its top.
     func floatingFooter<Bar: View>(over page: Color, @ViewBuilder _ bar: () -> Bar) -> some View {
         safeAreaInset(edge: .bottom) {
-            bar().background { FloatingFooterBlur(page: page) }
+            // Beside the open Duo's floating tabs' switch (#4231), the blur still across the page.
+            bar().tabSwitchRoom().background { FloatingFooterBlur(page: page) }
         }
     }
 }

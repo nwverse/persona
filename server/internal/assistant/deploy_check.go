@@ -661,12 +661,17 @@ func (g githubForge) PRMerge(ctx context.Context, repo string, number int) (bool
 	return pr.Merged, pr.SHA, nil
 }
 
+// compareEmptyPage is a page number well past page 1; GitHub caps a compare at 10,000 commits.
+const compareEmptyPage = 1000
+
 func (g githubForge) Contains(ctx context.Context, repo, base, head string) (bool, bool, error) {
 	var c struct {
 		Status string `json:"status"`
 	}
-	// per_page=1: only the status is read, not the commits and files between them
-	err := g.get(ctx, fmt.Sprintf("/repos/%s/compare/%s...%s?per_page=1", repo, base, head), &c)
+	// Only the status is read. per_page=1 alone still returns the first commit and up to 300 files with their patches
+	// (1.3 MB on a busy main). Files come only on page 1, and status, ahead_by and behind_by repeat on every page, so a
+	// high page number carries the status with no files and at most one commit.
+	err := g.get(ctx, fmt.Sprintf("/repos/%s/compare/%s...%s?per_page=1&page=%d", repo, base, head, compareEmptyPage), &c)
 	if errors.Is(err, errForgeNotFound) || errors.Is(err, errForgeUnprocessable) {
 		return false, false, nil
 	}

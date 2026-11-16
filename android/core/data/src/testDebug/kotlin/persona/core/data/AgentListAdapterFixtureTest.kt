@@ -76,7 +76,8 @@ class AgentListAdapterFixtureTest {
             val expectedPinMismatches = when (query) {
                 "since:7d" -> 1 // #9027: multi-hub pin identity, the only grouping difference in this input
                 "is:error" -> 0 // no row; neither differing rule is exercised
-                else -> 1 // #9027's pin; no held group is emitted
+                "is:pinned" -> 0 // pin filter agrees for multi-hub paths; #9027 still shows on machine: / since:
+                else -> 1 // #9027 on machine:; no held group is emitted
             }
             assertEquals(query, expectedPinMismatches, reports.count { it.rule == "grouping" })
             assertTrue("other mismatch: $reports (#9027 multi-hub pin; #9033 Android heldInList)", reports.all { it.rule == "grouping" })

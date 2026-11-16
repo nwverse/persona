@@ -116,10 +116,14 @@ fun ChatTopBar(
             }
         }
     }
-    val listToggle = LocalPaneListToggle.current
+    val leading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val back: @Composable () -> Unit = {
-        if (listToggle != null) JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), listToggle)
-        else onBack?.let { JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), it) }
+        when (leading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), leading.onClick)
+            is DetailLeading.Back -> JIconButton(if (style == AppStyle.Glass) PhIcons.CaretLeft else PhIcons.ArrowLeft, stringResource(R.string.designsystem_back), leading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> Unit
+        }
     }
     when (style) {
         AppStyle.Glass -> Box(modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 10.dp.dense, vertical = 6.dp.dense)) {

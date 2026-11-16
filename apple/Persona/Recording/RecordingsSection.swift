@@ -811,10 +811,12 @@ struct RecordingsPage: View {
         // recording stay at the top of the list.
         List { RecordingsSection(form: form, startAtBottom: true) }
             .listStyle(.insetGrouped)
+            .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
                 RecordingCaptureControls(part: .bar, sharedForm: form)
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
+                    .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
                     .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
             }
         #else
@@ -826,7 +828,13 @@ struct RecordingsPage: View {
     var body: some View {
         page
             .themedPage()
+            #if os(iOS)
             .navigationTitle(MeetingWords.place)
+            #else
+            // visionOS keeps Recordings (#9310): Meetings is the iPhone's word (#8731), and this page's controls here
+            // still say Start Recording (`legacyControls`).
+            .navigationTitle(String(localized: "Recordings"))
+            #endif
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             // The next meeting's options (#8731 v2): private, language and microphone, out of the quick start.

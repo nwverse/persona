@@ -129,6 +129,33 @@ import UserNotifications
         attendance.room && attendance.sentRole == .participant && !VoiceCapture.simulator
     }
 
+    /// The experiment of #8731 B2 (Settings › Meetings › Experimental, off by default): turning the speaker on while a room
+    /// meeting records turns the system's echo cancellation on too, which stops the microphone for a moment. Until a phone
+    /// has measured that moment and how far-off voices sound with it, echo cancellation otherwise comes only as a meeting
+    /// starts taking part (`echoCancellation`).
+    nonisolated static let echoWithSpeakerKey = "meeting.echoCancellationWithSpeaker"
+
+    /// Whether turning the speaker on now turns echo cancellation on: the experiment is on, and not on the simulator,
+    /// where voice processing doesn't run.
+    nonisolated static func echoWithSpeaker(speaks: Bool, experiment: Bool, simulator: Bool) -> Bool {
+        speaks && experiment && !simulator
+    }
+
+    /// Persona answers out loud from now on, or not (`RecordingCapture.setPlaysAloud`); out loud, with the experiment on,
+    /// the room meeting's echo cancellation comes on too (`RecordingCapture.turnOnEchoCancellation`), after the change is
+    /// drawn: the engine's restart takes a moment, and the speaker answers the tap first.
+    private func setSpeaks(_ on: Bool) {
+        capture.setPlaysAloud(on)
+        let experiment = UserDefaults.standard.bool(forKey: Self.echoWithSpeakerKey)
+        guard Self.echoWithSpeaker(speaks: on, experiment: experiment, simulator: VoiceCapture.simulator) else { return }
+        // A few frames later, so the tap's new state is on screen before the main actor is busy with the engine (a main
+        // queue block can run before the frame it follows is drawn).
+        Task { [capture] in
+            try? await Task.sleep(for: .milliseconds(50))
+            capture.turnOnEchoCancellation()
+        }
+    }
+
     /// The activity's Talk and Done (#3862 phase 4): `open` is what the button showed (Talk: true, Done: false; nil from an
     /// activity drawn before it said). Talk opens a talk window, Done ends the open span; a tap that no longer matches
     /// what is open does nothing (`MeetingCallRule.activityTap`).
@@ -169,10 +196,10 @@ import UserNotifications
         if entry.attendance?.room == true {
             RecordingLibrary.shared.change(id) { e in
                 guard var a = e.attendance else { return }
-                a.set(role, at: at)
+                a.turn(role, at: at, now: .now)
                 e.attendance = a
             }
-            capture.setPlaysAloud(role.speaks)
+            setSpeaks(role.speaks)
             followSegments(id)
             if !role.speaks { MeetingSpeaker.shared.stop() }
             RecordingSync.shared.attendanceChanged(id)
@@ -183,7 +210,7 @@ import UserNotifications
         let lastPicked = role.attends ? MeetingAttendees.preferred(AppModel.shared) : nil
         guard let next = MeetingAttendees.turned(entry.attendance, to: role, at: at, lastPicked: lastPicked) else { return false }
         RecordingLibrary.shared.change(id) { $0.attendance = next }
-        capture.setPlaysAloud(role.speaks)
+        setSpeaks(role.speaks)
         if !role.speaks { MeetingSpeaker.shared.stop() }
         RecordingSync.shared.attendanceChanged(id)
         return true
@@ -219,7 +246,7 @@ import UserNotifications
         if !on { MeetingTranscription.shared.becameNote(recordingID, at: at) }
         library.change(recordingID) { $0 = Self.switched($0, meeting: on, at: at, named: named, start: start) }
         let speaks = library.entry(recordingID).map { $0.isMeeting && $0.attendance?.sentRole.speaks == true } ?? false
-        capture.setPlaysAloud(speaks)
+        setSpeaks(speaks)
         followSegments(recordingID)
         if !speaks { MeetingSpeaker.shared.stop() }
         // Live lines and questions wait for the hub to have it as it is now (`attendanceSettled`): a mark stored while it
