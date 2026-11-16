@@ -38,8 +38,8 @@ public enum PersonaCoreProjections {
             let output = projection(buffer.baseAddress, buffer.count)
             // The C contract transfers every returned allocation to its caller, including an empty failure result.
             defer { persona_core_bytes_free(output) }
-            guard let data = output.data else { throw PersonaCoreProjectionError.emptyResult }
-            let data = Data(bytes: data, count: output.length)
+            guard let pointer = output.data else { throw PersonaCoreProjectionError.emptyResult }
+            let data = Data(bytes: pointer, count: output.length)
             guard let result = String(data: data, encoding: .utf8) else {
                 throw PersonaCoreProjectionError.invalidUTF8Result
             }

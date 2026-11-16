@@ -83,7 +83,7 @@ public enum ProjectionBindingReplay {
         let operation = try ProjectionFixture.require(input["operation"], "operation")
         let page = try ProjectionFixture.require(operation.number("page"), "page")
         let questions = try ProjectionFixture.require(input["interaction"]?["questions"]?.array, "questions")
-        let question = try questions[safe: page] ?? { throw ProjectionFixtureError.invalidFixture("question index") }()
+        let question = try ProjectionFixture.require(questions[safe: page], "question index")
         var actual: [String: ContinuityJSON] = [
             "allowed": try ProjectionFixture.require(transition["allowed"], "allowed"),
             "resolution": try ProjectionFixture.require(transition["resolution"], "resolution"),
@@ -98,7 +98,7 @@ public enum ProjectionBindingReplay {
         if recommended {
             let optionIndex = try ProjectionFixture.require(operation.number("option_index"), "option_index")
             let options = try ProjectionFixture.require(question["options"]?.array, "options")
-            let option = try options[safe: optionIndex] ?? { throw ProjectionFixtureError.invalidFixture("option index") }()
+            let option = try ProjectionFixture.require(options[safe: optionIndex], "option index")
             let label = try ProjectionFixture.require(option.text("label"), "label")
             actual["display"] = try ProjectionFixture.project(
                 .string(label), "display_answer", using: PersonaCoreProjections.displayAnswer

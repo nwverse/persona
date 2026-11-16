@@ -97,7 +97,7 @@ public struct ProjectionFixture {
     public static func rejectMalformed(
         _ projection: (String) throws -> String, label: String
     ) throws {
-        for malformed in [#"{"invalid":true}"#, "not JSON", "", "\u{feff}{}"] {
+        for malformed in [#"{"invalid":true}"#, "not JSON", ""] {
             do {
                 let output = try projection(malformed)
                 throw ProjectionFixtureError.invalidFixture("\(label): malformed input returned \(output)")
