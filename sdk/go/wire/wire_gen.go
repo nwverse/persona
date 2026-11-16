@@ -4503,6 +4503,8 @@ type KBEntry struct {
 	Extra string `json:"extra,omitempty"`
 	// A chat's source (lark, mail, wechat, github…).
 	Source string `json:"source,omitempty"`
+	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
+	RecordingKind string `json:"recording_kind,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
