@@ -2257,7 +2257,9 @@ page the user watches during the meeting is the page they keep writing in after 
   subtitle and Topics hide and the top card keeps only its newest part (the Live box its newest line; the Highlights
   card its newest highlight, the latest `at`, or its waiting line; neither with Full Transcript), so the thread keeps its
   height (the structure stays the same, so the thread's scroll position holds); it changes on `Theme.Motion.state`, and
-  when the keyboard goes down the card is whole again. At accessibility sizes a one-line header (dot, time, menu, Hide)
+  when the keyboard goes down the card is whole again. In the meeting room (#8731 B1) the people row and the tabs step
+  aside instead, and only the Live page folds (its Live box to its newest line). The Highlights page keeps its card
+  whole, Full Transcript included, since the card is that page. At accessibility sizes a one-line header (dot, time, menu, Hide)
   stays fixed, the rest scrolls as one, nothing folds, and the bar stays pinned.
 - **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
   **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action; in the
