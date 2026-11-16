@@ -278,7 +278,7 @@ What never crosses the boundary:
 | 1 | Workspace, toolchain, runtime thread, codec generator, the three bindings, CI lane, and `continuity` (decision 3) end to end on all three clients | Every client replays the continuity fixtures through its binding; the go / no-go table is filled in |
 | 2 | The chat's item list driven by `continuity` patches, raw transport bytes decoded in Rust, then `sync`; iOS's native adapter and shadow run come first | Patches drive the real chat list on each client within the performance budgets, with the same iOS behavior and measured reference on each |
 | 3 | The domains with the most drift, one issue each: `needs-you` / `attention` / `entries` once #5974 settles the definition, `lines` and `answer` (turn folding, the answer across wakes), `sort` / `recents`, `wire` (tolerant decoding, D5), streaming assembly (#4044) | Each domain: shadow run, then old code deleted |
-| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4) | Cold launch draws from the snapshot before any sync |
+| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4). Design: `docs/plans/plan-rust-core-phase4-storage.md` (#9085) | Cold launch draws from the snapshot before any sync |
 
 Every phase after 0 opens its own issue under #6793. Markdown parsing is not on the list: iOS renders markdown text with
 MarkdownUI, and moving a syntax tree across FFI for every streamed chunk is a cost to measure before proposing it.
