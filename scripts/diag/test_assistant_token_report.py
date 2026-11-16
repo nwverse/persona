@@ -186,6 +186,25 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("private", out.getvalue())
         self.assertIn("?", out.getvalue())
 
+    def test_codex_environment_context_is_not_a_new_round(self):
+        def ev(payload):
+            return {"type": "event_msg", "payload": payload}
+        def usage(total):
+            return ev({"type": "token_count", "info": {"total_token_usage": {"total_tokens": total},
+                       "last_token_usage": {"input_tokens": 10, "cached_input_tokens": 2, "output_tokens": 1}}})
+        def runtime(text):
+            return {"type": "response_item", "payload": {"type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": text}]}}
+        s = self.run_lines([
+            {"type": "session_meta", "payload": {}},
+            ev({"type": "user_message", "message": source("supervision") + "request"}), usage(11),
+            runtime("<environment_context>private context</environment_context>"), usage(22),
+            runtime("<codex_internal_context>private context</codex_internal_context>"), usage(33),
+        ])
+        self.assertEqual((s["by_kind"]["supervision"]["rounds"], s["by_kind"]["supervision"]["model_calls"]), (1, 3))
+        self.assertNotIn("owner", s["by_kind"])
+        self.assertNotIn("private context", json.dumps(s))
+
     def test_mixed_transcripts_report_unknown_total_without_erasing_known_row(self):
         with tempfile.TemporaryDirectory() as d:
             claude = Path(d) / "c.jsonl"

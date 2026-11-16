@@ -29,6 +29,8 @@ USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input
 LEAD_CONTEXT = re.compile(r"(?s)^\s*<persona-context\b([^>]*)>(.*?)</persona-context>\s*")
 SOURCE_KIND = re.compile(r'\bkind="message-source"')
 SOURCE_KINDS = {"conversation", "patrol", "followup", "supervision", "meeting", "wake", "ask_later", "task_notice", "inbox", "system"}
+# Codex records runtime updates as role=user messages, but they are not new user inputs.
+CODEX_CONTEXT = re.compile(r"(?s)^\s*<(environment_context|codex_internal_context|turn_aborted)(?:\s[^>]*)?>.*</\1>\s*$")
 
 # First lines of the messages Persona types in (server/internal/prompts/injected.go), for transcripts written before
 # messages carried their source. They match the Chinese prompts the hub sends, so they stay in Chinese.
@@ -252,7 +254,7 @@ class Report:
                     last_event = None
                     parts = p.get("content") or []
                     text = "\n".join(x.get("text", "") for x in parts if isinstance(x, dict) and x.get("type") == "input_text")
-                    if text:
+                    if text and not CODEX_CONTEXT.match(text):
                         flush()
                         pending = (text, counted)
                 elif e.get("type") == "event_msg" and p.get("type") == "item_completed":
@@ -262,7 +264,7 @@ class Report:
                     if item.get("id"):
                         seen_ids.add(item["id"])
                     text = "\n".join(x.get("text", "") for x in item.get("content", []) if isinstance(x, dict) and x.get("type") == "text")
-                    if text:
+                    if text and not CODEX_CONTEXT.match(text):
                         if pending and pending[0] == text:
                             counted = pending[1]
                             pending = None
@@ -273,6 +275,8 @@ class Report:
                         last_event = ("item", text)
                 elif e.get("type") == "event_msg" and p.get("type") == "user_message" and isinstance(p.get("message"), str):
                     text = p["message"]
+                    if CODEX_CONTEXT.match(text):
+                        continue
                     if pending and pending[0] == text:
                         counted = pending[1]
                         pending = None
