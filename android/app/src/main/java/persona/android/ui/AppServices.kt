@@ -46,6 +46,7 @@ class ShellSession(
     val phone: PhoneToolsRuntime? = null,
     val demo: DemoHub? = null,
     val agentsWiring: persona.feature.agents.AgentsWiring = persona.feature.agents.AgentsWiring.Empty,
+    val listAdapter: persona.core.data.AgentListAdapter = persona.core.data.AgentListAdapters.create(),
     /** Launchers, "Reconnect", "Redeploy" and the engine of the hub's machines; null in demo mode. */
     val machines: MachineManagement? = null,
     /** The hub's voice extensions (voice chat); null in demo mode. */
@@ -70,6 +71,7 @@ class ShellSession(
         override fun tasks() = this@ShellSession.tasks
         override fun hubUpdates() = this@ShellSession.hubUpdates
         override fun machines() = this@ShellSession.machines
+        override fun listAdapter() = this@ShellSession.listAdapter
     }
 }
 
@@ -102,7 +104,7 @@ class AppServices @Inject constructor(
     private val mergedMetrics = shell.metrics { stack ->
         val route = stack.connection.route.value ?: return@metrics null
         HttpMachineMetricsApi(route.endpoint.url, stack.connection.token, stack.connection.http.client,
-            isCurrent = { stack.current && stack.connection.route.value == route })
+            isCurrent = { stack.current && stack.connection.route.value == route }, cache = stack.metricSnapshots)
     }
     private val mutableSession = MutableStateFlow<ShellSession?>(null)
     val session = mutableSession.asStateFlow()
@@ -166,7 +168,7 @@ class AppServices @Inject constructor(
                     knowledgeConnection, shell.actions, phone, agentsWiring = agentsWiring, machines = machineManagement,
                     voice = voice, groups = hubGroups, tasks = tasksStore, hubUpdates = hubUpdates,
                     hubAddresses = { listOf(data.credentials.hubAddress) + data.credentials.candidateAddresses + socket.knownAddresses() },
-                    computers = computers)
+                    computers = computers, listAdapter = app.agentListAdapter)
                 try {
                     coroutineScope {
                         launch {

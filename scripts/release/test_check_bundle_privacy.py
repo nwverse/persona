@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -186,7 +187,16 @@ class PublicConstantTests(unittest.TestCase):
         self.assertIn("email", self.kinds(field + ".cn"))
         self.assertIn(f"private value ({len(field)} chars)", self.kinds(field, words=(field,)))
 
-    def test_full_rfc1918_networks_are_not_host_addresses(self):
+    def test_gitlab_ssh_identity_is_not_an_email_or_a_domain_exemption(self):
+        identity = "git@" + "gitlab.com"
+        self.assertEqual(self.kinds(identity + "/-/issues/not_member"), set())
+        self.assertEqual(self.kinds("prefix" + identity + "suffix"), set())
+        for text in ("person@" + "gitlab.com", identity + ".cn", "git+owner@" + "gitlab.com",
+                     "prefix-" + identity, identity + "-user"):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text))
+        self.assertIn(f"private value ({len(identity)} chars)", self.kinds(identity, words=(identity,)))
+
         for network in NETWORKS:
             with self.subTest(network=str(network)):
                 self.assertEqual(self.kinds("constant" + str(network) + "nextConstant"), set())
@@ -461,7 +471,28 @@ class GoDependenciesTests(unittest.TestCase):
         self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
-class BundleScanIntegrationTests(unittest.TestCase):
+    def test_archive_members_preserve_public_go_context_and_reject_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "personad"
+            exe.write_bytes(b"public binary")
+            with patch.object(cbp, "go_dependencies", return_value={"tailscale.com"}):
+                with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="Persona-0.6.0-linux-amd64/personad")
+                members = list(cbp.archive_members(str(root / "release.tar.gz")))
+                self.assertEqual(members, [("Persona-0.6.0-linux-amd64/personad", b"public binary")])
+                with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                    archive.write(exe, "Persona-0.6.0-windows-amd64/personad.exe")
+                    archive.writestr("Persona-0.6.0-windows-amd64/persona-link-windows-amd64.exe", b"link")
+                self.assertEqual(len(list(cbp.archive_members(str(root / "release.zip")))), 2)
+                with tarfile.open(root / "unsafe.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="../outside")
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    list(cbp.archive_members(str(root / "unsafe.tar.gz")))
+                self.assertEqual(cbp.public_archive_dependencies("personad", True), {"tailscale.com"})
+                self.assertEqual(cbp.public_archive_dependencies("other.exe", True), set())
+                self.assertEqual(cbp.public_archive_dependencies("other", True), set())
+
     def scan(self, text, words=(), public=True, config=None, dependencies=DEPENDENCIES):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-test-") as directory:
             (Path(directory) / "binary").write_bytes(text if isinstance(text, bytes) else text.encode())

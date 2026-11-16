@@ -5,7 +5,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
-import { prBlockers } from "../../lib/todo-triage";
+import { openMergePRs, prBlockers } from "../../lib/todo-triage";
 import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -71,7 +71,7 @@ import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
+import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -272,10 +272,20 @@ export function rememberScope(tasks: PlanTask[], machines: Machine[]): string {
   return places.length ? t("assistant-tasks.plan_remember", { places: formatList(places) }) : "";
 }
 
+/** The scheduled task whose own run planned this (#8045), named for the card's "Let … start these by itself"; null for
+ *  every other plan, which the card draws as before. */
+export function planSchedule(plan: TaskPlan): { id: string; name: string } | null {
+  const task = plan.tasks.find((task) => task.schedule);
+  if (!task?.schedule) return null;
+  return { id: task.schedule, name: task.schedule_title?.trim() || t("assistant-tasks.plan_schedule_unnamed") };
+}
+
 export function PlanCard({ plan }: { plan: TaskPlan }) {
   const busy = useFeed((s) => s.busy[plan.id]);
   const machines = useStore((s) => s.machines);
   const [remember, setRemember] = useState(false);
+  const [scheduleGrant, setScheduleGrant] = useState(false);
+  const grantId = useId();
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
   const [workspaceChoice, setWorkspaceChoice] = useState<Record<number, TaskWorkspace>>({});
@@ -301,6 +311,9 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
   const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
   const scope = rememberScope(editedPlan.tasks, machines);
+  // offered where "Start these directly" is: a plan of only read-only tasks starts without asking anyway
+  const schedule = scope ? planSchedule(plan) : null;
+  const grant = Boolean(schedule) && scheduleGrant;
   const startEdits = () => {
     const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
     const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
@@ -324,10 +337,15 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
         {scope}
       </label>}
+      {schedule && <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-0.5">
+        <input id={grantId} type="checkbox" checked={scheduleGrant} onChange={(e) => setScheduleGrant(e.target.checked)} aria-describedby={`${grantId}-note`} className="accent-[var(--accent)]" />
+        <label htmlFor={grantId} className="cursor-pointer text-label text-ink-2">{t("assistant-tasks.plan_schedule_grant", { name: schedule.name })}</label>
+        <p id={`${grantId}-note`} className="col-start-2 text-label text-ink-3">{t("assistant-tasks.plan_schedule_grant_note")}</p>
+      </div>}
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps
           its buttons at the tray's bottom edge; a card that fits looks as it did (the padding it takes it gives back) */}
       <div data-plan-actions className="sticky bottom-0 z-[1] -mx-4 -mt-2 -mb-4 flex gap-2 rounded-b-card bg-surface px-4 pt-2 pb-4">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits()))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits(), grant))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -344,7 +362,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
           onClose={() => setEditing(false)}
           onStart={(edits) => {
             setEditing(false);
-            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow)));
+            void run(() => startPlan(plan, remember, planEditsToSend(plan, edits, ultracodeBlockedNow), grant));
           }}
         />
       </Suspense>}
@@ -680,9 +698,7 @@ export const TaskQuestions = memo(function TaskQuestions({ conversation }: { con
   if (!first && !answered.length) return null;
   return (
     <div className="flex flex-col gap-1">
-      {answered.map((a) => (
-        <AnsweredCard key={a.ix.id} card={a} />
-      ))}
+      {answered.length > 0 && <AnsweredSummary answered={answered} />}
       {first && (
         <>
           <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">
@@ -830,15 +846,17 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
   );
 }
 
-/** A fresh, open PR waiting for its maintainer, shown in its own tray group. */
+/** A task's fresh, open PRs waiting for their maintainers, shown in their own tray group: each with its own blockers. */
 function WaitingMergeRow({ todo }: { todo: Todo }) {
-  const blockers = prBlockers(todo);
+  const prs = openMergePRs(todo, Date.now());
   return <div data-pr-waiting-row={todo.id} className="flex items-start gap-2 px-3 py-2.5">
     <Icon name="pullRequest" size={14} className="mt-0.5 shrink-0 text-accent-ink" />
     <div className="min-w-0 flex-1">
       <button type="button" data-pr-task-link={todo.id} onClick={() => openTask(todo.id)} className="block max-w-full truncate text-left text-sm font-medium hover:underline">{todo.title}</button>
-      <a href={todo.pr_url} target="_blank" rel="noreferrer noopener" title={todo.pr_url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{todo.pr_url}</a>
-      <div className="truncate text-xs text-ink-2">{blockers.map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
+      {prs.map((facts) => <div key={facts.url} data-pr-waiting-url={facts.url}>
+        <a href={facts.url} target="_blank" rel="noreferrer noopener" title={facts.url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{facts.url}</a>
+        <div className="truncate text-xs text-ink-2">{prBlockers(todo, facts).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
+      </div>)}
     </div>
   </div>;
 }

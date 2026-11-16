@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from persona_identity import CONTEXT_TAG_PATTERN, FILE_TAG_PATTERN
+
 PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
@@ -3672,6 +3675,15 @@ MINUTES_SHAPE_START = os.environ.get("MOCK_RECORDING_MINUTES_SHAPE", "legacy")
 if MINUTES_SHAPE_START not in MINUTES_SHAPES:
     sys.exit("mock hub: MOCK_RECORDING_MINUTES_SHAPE must be one of %s" % ", ".join(MINUTES_SHAPES))
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+# Titles (#8873, docs/assistant/meeting-minutes.md "Titles (#8873)"): MOCK_RECORDING_TITLES=1, or POST /mock/recording_titles
+# {"on": true}, names a recording nobody named (no title, no calendar title) once it has 40 characters of text, as the hub's
+# live title does: the subject before a colon in its first line with one (导出：… → 导出), else its first line, at most 15
+# characters. The answer to its uploads, GET /api/v1/recordings and its detail then carry name and name_source. Off by
+# default, so recordings keep the names other tests expect.
+RECORDING_TITLES = [os.environ.get("MOCK_RECORDING_TITLES") == "1"]
+# Names given on the web (#8877): PUT /api/v1/recordings/{id}/title keeps one per recording ("" clears it), first in the
+# name until an upload changes the recording's title, as the hub's rule.
+RECORDING_RENAMED = {}
 RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
@@ -4657,6 +4669,29 @@ def features():
 def meeting_live(rid):
     return MEETING_LIVE.setdefault(rid, {"id": rid, "role": "off", "session": None, "segments": [], "bytes": 0, "fed": 0, "full": False,
                                          "asks": [], "sent": {}, "due": {}, "asks_rev": 0})
+
+
+def recording_title(body, rid=None):
+    """What the hub calls an upload (a name given on the web, its title, its calendar's, a made-up live title) and where
+    that comes from (#8873, #8877); (None, None) while it is named only by when it started."""
+    if rid and RECORDING_RENAMED.get(rid): return RECORDING_RENAMED[rid], "renamed"
+    title = (body.get("title") or "").strip()
+    cal = ((body.get("calendar") or {}).get("title") or "").strip()
+    if title: return title, ("calendar" if title == cal else "title")
+    if cal: return cal, "calendar"
+    if not RECORDING_TITLES[0] or body.get("kind") == "day": return None, None
+    lines = [(x.get("text") or "").strip() for x in body.get("segments", []) if not x.get("echo")]
+    if sum(len(x) for x in lines) < 40: return None, None
+    for line in lines:
+        if m := re.match(r"([^：:]{1,15})[：:]", line): return m.group(1).strip(), "model"
+    return next((x for x in lines if x), "")[:15], "model"
+
+
+def recording_named(out, body, rid=None):
+    """out with the name and name_source of upload body, when it has a name."""
+    name, source = recording_title(body, rid)
+    if name: out.update(name=name, name_source=source)
+    return out
 
 
 def recording_kind(body):
@@ -7186,6 +7221,12 @@ def recordings_route_locked(h, method, p):
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
         return h.send_json({"mode": RECORDING_MINUTES[0], "shape": RECORDING_MINUTES_SHAPE[0]}) or True
+    if p == "/mock/recording_titles":
+        if method == "POST":
+            body = json.loads(h.last_body or b"{}")
+            if type(body.get("on")) is not bool: return h.send_json({"error": "on must be true or false"}, 400) or True
+            RECORDING_TITLES[0] = body["on"]
+        return h.send_json({"on": RECORDING_TITLES[0]}) or True
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
@@ -7230,7 +7271,8 @@ def recordings_route_locked(h, method, p):
                                             "started_at": v["started_at"],
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
                                                if v.get("kind") == "day" else {}),
-                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {})}
+                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {}),
+                                            **recording_named({}, v, k)}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
     if p.endswith("/segments"):
@@ -7275,12 +7317,30 @@ def recordings_route_locked(h, method, p):
             threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
+    if p.endswith("/title") and method == "PUT":  # the owner's name from the web (#8877)
+        if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+        if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音", "code": "recording_not_found"}, 404) or True
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(title, str) or "\n" in title or "\r" in title or len(title.strip()) > 200:
+            return h.send_json({"error": "A title must be one line of at most 200 characters."}, 400) or True
+        RECORDING_RENAMED[rid] = title.strip()
+        name, source = recording_title(RECORDINGS[rid], rid)
+        for e in kb:
+            if e["id"] == rid: e["name"] = name or "录音"
+        meta = (KB_DETAIL.get(("recordings", rid)) or {}).get("meta")
+        if meta is not None:
+            for k in ("name", "name_source", "renamed"): meta.pop(k, None)
+            if name: meta.update(name=name, name_source=source)
+            if RECORDING_RENAMED[rid]: meta["renamed"] = RECORDING_RENAMED[rid]
+        return h.send_json({"name": name, "name_source": source} if name else {}) or True
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         if (t := TRANSCRIPTIONS.pop(rid, None)) and t.get("socket"): t["socket"]["fail"]("recording_deleted")
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDING_RENAMED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -7309,24 +7369,29 @@ def recordings_route_locked(h, method, p):
     if have and have["revision"] > body["revision"]:
         # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
         # stored one) and what was wrong with this upload's attendance fields, whatever the status.
-        out = {"id": rid, "revision": body["revision"], "status": "stale"}
+        out = recording_named({"id": rid, "revision": body["revision"], "status": "stale"}, have, rid)
         if MEETING_ATTENDANCE:
             out["attendance"] = meeting_live(rid)["role"]
             if room_of(rid) is None and (problem := meeting_attendance(body)[2]): out["attendance_problem"] = problem
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
         return h.send_json(transcription_upload_result(rid, body, out)) or True
     for seg in body.get("segments", []): seg.pop("source", None)
+    if have and RECORDING_RENAMED.get(rid) and (body.get("title") or "") != (have.get("title") or ""):
+        RECORDING_RENAMED.pop(rid)  # renamed on the phone since: the newer name wins (#8877)
     transcription_put(rid, body)
     RECORDINGS[rid] = {k: v for k, v in body.items() if k not in ("transcription", "timeline")}
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
-    entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
+    name, name_source = recording_title(body, rid)
+    entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
              "recording_kind": kind}  # #8870
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo"))},
+                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo")),
+                       **({"name": name, "name_source": name_source} if name else {}),
+                       **({"ai_title": name, "ai_title_from": "summary" if body.get("complete") else "live"} if name_source == "model" else {})},
               "summary": text, "segments": body.get("segments", [])}
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
@@ -7334,7 +7399,7 @@ def recordings_route_locked(h, method, p):
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = None  # made from the photos as they are when the detail is stored, below
-    out = {"id": rid, "revision": body["revision"], "status": "stored"}
+    out = recording_named({"id": rid, "revision": body["revision"], "status": "stored"}, body, rid)
     room = None
     if MEETING_ATTENDANCE:
         role, session, problem = meeting_attendance(body)
@@ -9238,6 +9303,14 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+# MOCK_EDITABLE=1: a Claude Code Lark approval whose outgoing text may be edited before Allow, plus a deny note.
+if os.environ.get("MOCK_EDITABLE") == "1":
+    INTERACTIONS.append({
+        "id": "ix_editable_lark", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+        "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+        "tool_name": "Bash", "summary": "回复发布群：测试已经通过，准备发版",
+        "tool_input": {"command": "lark api POST /conversations/oc_example/messages --body '{\"text\":\"测试已经通过，准备发版\"}'"},
+        "editable_text": "测试已经通过，准备发版"})
 
 # MOCK_ASK_LONG=1: Persona's main conversation waits on an ask_user card taller than a phone's dock (#3112): two
 # questions, the first with eight options that have descriptions, so the card has to scroll for the last ones.
@@ -9288,6 +9361,25 @@ if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
         copy.deepcopy(ix) for ix in INTERACTIONS
         if ix["id"] in ("ix_tests", "ix_ask_long") and ix["id"] not in ask_long_ids
     ]
+# Urgent calls (docs/assistant/urgent-call.md): the settings Settings › Urgent Calls reads, and with MOCK_URGENT_CALL=1
+# urgent calls on and the call `call_mock` about a pending card in Persona's main conversation, for the call page's
+# screenshots (`-showUrgentCallSample YES`).
+URGENT = {"settings": {"enabled": os.environ.get("MOCK_URGENT_CALL") == "1", "rules": [
+    {"id": "money_loss", "builtin": True}, {"id": "harm", "builtin": True}, {"id": "agent_disaster", "builtin": True},
+    {"id": "r_kids", "text": "接孩子相关的事"}], "daily_cap": 3, "quiet": None, "retry_minutes": 3}, "today": 1}
+URGENT_CALL = {"id": "call_mock", "title": "云账单扣费失控", "body": "要不要现在停掉这批实例？", "why": "rule",
+               "happening": "训练任务起的 8 台 GPU 实例近 1 小时扣了 2300 元，还在涨",
+               "rule": {"id": "money_loss", "text": "资金或资源正在损失：扣费失控还在涨、云资源被删、账号被盗刷或出现陌生扣款。"},
+               "machine_id": "server", "conversation_id": ASK1, "interaction_id": "", "state": "answered", "attempt": 1,
+               "seconds": 0, "outcome": "", "transcript": ""}
+if os.environ.get("MOCK_URGENT_CALL") == "1":
+    INTERACTIONS.append({
+        "id": "ix_urgent", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": [{"question": "要不要现在停掉这批 GPU 实例？", "header": "云账单", "multi_select": False, "options": [
+            {"label": "现在停掉 (Recommended)"}, {"label": "再等 10 分钟"}, {"label": "我自己处理"}]}]})
+    URGENT_CALL["interaction_id"] = "ix_urgent"
+
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -9525,6 +9617,22 @@ if os.environ.get("MOCK_ASSISTANT_CARDS"):
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
          "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件",
          "always_honored": False})  # the manager's own card: nothing keeps an Always (#3590)
+
+# MOCK_ASSISTANT_CARDS=run: Persona's main conversation instead asks to change six settings one after another, as a
+# run of `persona_settings set` approvals: the cards above its composer are one slot ("1 / 6"), each answer taking the
+# next one's place, and the answers fold into one line that goes a few seconds after the last.
+if os.environ.get("MOCK_ASSISTANT_CARDS") == "run":
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ("ix_assistant_bash", "ix_assistant_send")]
+    for _n, (_name, _to) in enumerate([("strong", "claude-opus-5-5 · high"), ("ops", "claude-opus-5-5 · high"),
+                                       ("quick", "claude-haiku-5-5 · low"), ("research", "claude-sonnet-5-5 · high"),
+                                       ("writer", "claude-sonnet-5-5 · medium"), ("review", "claude-opus-5-5 · xhigh")]):
+        INTERACTIONS.append(
+            {"id": "ix_settings_%d" % _n, "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+             "kind": "permission", "created_at": ago(minutes=(60 - _n) / 60), "expires_at": later(minutes=14),
+             "tool_name": "persona_settings", "tool_title": "改设置",
+             "tool_input": {"action": "set", "key": "model_profiles." + _name, "value": _to},
+             "summary": "性能 · %s：（无） → %s — 备用：主账号没额度时代替" % (_name, _to),
+             "always_honored": False})
 
 if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says needs approval (docs/extensions/iphone.md)
     INTERACTIONS.append(
@@ -11323,6 +11431,53 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
     ]
 
 
+# A scheduled task's briefing (#9041): its text is Markdown. The hub keeps it as written in `body` and says it as plain
+# words in summary, preview and the chain's received message; mode `before` is the same row as hubs before #9041 kept
+# it: no body, the Markdown run into one line and cut. GET /mock/assistant_inbox?mode=before|1 switches it. Made-up content.
+BRIEF_MD = ("**早报 · 周一**\n结论：上午有一节辅导课，下午没课。邮件和课程公告都**没有新消息**。\n\n"
+            "**今天的课**\n- **数据结构辅导课：10:30–12:20，教学楼 B201**\n- 课上有 3–5 道选择题小测，不补考\n\n"
+            "**本周要交**\n1. 周三 23:59 前交实验报告（第 4 章）\n2. 周五前在选课系统确认下学期课程\n\n"
+            "**提醒**\n- 周四图书馆下午闭馆\n- 校园卡余额 23 元，建议这周充值\n\n"
+            "> 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没课。邮件和课程公告都没有新消息。 今天的课 数据结构辅导课：10:30–12:20，教学楼 B201 "
+               "课上有 3–5 道选择题小测，不补考 本周要交 周三 23:59 前交实验报告（第 4 章） 周五前在选课系统确认下学期课程 提醒 周四图书馆下午闭馆 "
+               "校园卡余额 23 元，建议这周充值 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+
+
+def assistant_brief(mode):
+    base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
+    url = base + "/s/macbook/" + BLOG
+    if mode == "before":
+        one = " ".join(BRIEF_MD.split())
+        summary, preview, body = one[:200] + "…", one[:120] + "…", None
+        said = preview
+    else:
+        summary, preview, body = BRIEF_PLAIN, BRIEF_PLAIN[:120] + "…", BRIEF_MD
+        said = BRIEF_PLAIN[:200] + "…"
+    row = {"id": "assistant:s3", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "助手",
+           "title": "每日早报", "preview": preview, "count": 1, "started_at": ago(minutes=12), "updated_at": ago(minutes=12),
+           "tier": "fyi", "status": "fyi", "summary": summary, "reason": "定时任务设成每次都放进收件箱", "read": False,
+           "triaged_by": "rules", "context": "每日早报\n" + (body or summary),
+           "chain": [{"id": "c1", "at": ago(minutes=12), "kind": "received", "text": "收到 1 条新消息", "count": 1, "via": "assistant",
+                      "link": {"type": "source", "url": url}, "messages": [{"text": said}]},
+                     {"id": "c2", "at": ago(minutes=12), "kind": "triaged", "text": "分拣：知悉即可", "detail": "fyi", "via": "assistant"}],
+           "connector": {"thread": "assistant:macbook/" + BLOG, "label": "助手", "url": url}}
+    if body:
+        row["body"] = body
+    return row
+
+
+def assistant_inbox_area(h, method, p):
+    """/mock/assistant_inbox?mode=before|1 (MOCK_ASSISTANT_INBOX): the briefing row as hubs before #9041 kept it, or now."""
+    if not os.environ.get("MOCK_ASSISTANT_INBOX") or method != "GET" or p != "/mock/assistant_inbox":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for i, x in enumerate(INBOX):
+        if x["id"] == "assistant:s3":
+            INBOX[i] = assistant_brief(mode)
+    return h.send_json({"mode": mode}) or True
+
+
 # MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
 # `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
 if os.environ.get("MOCK_ASSISTANT_INBOX"):
@@ -11341,6 +11496,7 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
          "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
+    INBOX.insert(1, assistant_brief(os.environ.get("MOCK_ASSISTANT_INBOX", "1")))
 
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
@@ -19520,8 +19676,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<persona-context\b[^>]*>.*?</persona-context>\s*"),
-                re.compile(r"<persona-file\b[^>]*?/?>(?:\s*</persona-file>)?")]
+                re.compile(r"(?s)<" + CONTEXT_TAG_PATTERN + r"\b[^>]*>.*?</" + CONTEXT_TAG_PATTERN + r">\s*"),
+                re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
@@ -21193,6 +21349,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 SCREEN_INPUT = {"mode": os.environ.get("MOCK_SCREEN_INPUT", "")}
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
+# MOCK_SCREEN_X264=1 (#8859): MacBook's node found the user's own ffmpeg with libx264 (`screen_video.x264`), so its page
+# offers x264 for the live screen.
+SCREEN_X264 = os.environ.get("MOCK_SCREEN_X264") == "1"
 _SCREEN_VIDEO_FIXTURE = {}
 _SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
@@ -22462,6 +22621,7 @@ def computer_of(machine_id, enabled):
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
                              "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
         if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
+        if SCREEN_X264: c["screen_video"]["x264"] = "ffmpeg 9.0.2"
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
         c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
         if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
@@ -23169,6 +23329,10 @@ if MOCK_COMPUTER:
                           {"name": "no_auto_lock", "type": "array", "title": "插件开着时不自动锁屏", "unique_items": True,
                            "description": "打开的 Mac 在插件开着时一直不因空闲锁屏（node 持有 caffeinate，不改系统设置）；和 hub 断开 30 分钟后自动恢复。手动锁屏、合盖照常",
                            "confirm": "打开后这台 Mac 在插件开着时一直不会因为空闲锁屏，坐在它前面的人能直接用它。和 hub 断开 30 分钟后自动恢复。",
+                           "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
+                          {"name": "screen_x264", "type": "array", "title": "实时屏幕用 x264 编码", "unique_items": True,  # #8859
+                           "description": "打开的 Mac 在局域网直连时用你自己装的 ffmpeg（带 libx264，比如 Homebrew 的）编码实时屏幕：每帧快约 6 ms，多用一些 CPU。Persona 不带 x264 或 ffmpeg；没装、离开局域网或跟不上时用系统自带的编码器",
+                           "confirm": "打开后，这台 Mac 在局域网直连时用你自己装的 ffmpeg 编码实时屏幕。x264 是 GPL 软件，Persona 不带它；它更费 CPU，跟不上时自动换回系统自带的编码器。",
                            "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
                           {"name": "keep_awake", "type": "boolean", "title": "操作或开着 VNC 时保持唤醒", "default": True,
                            "description": "助手操作那台 Mac、或有人在看它的画面时，它不睡、不因空闲锁屏；最后一次操作 10 分钟后、画面关掉后就撤掉，不改系统设置"},
@@ -24586,7 +24750,8 @@ def plugins_route(handler, p, body):
             for m in MACHINES:
                 if "computer" in m:
                     m["computer"] = {**computer_of(m["id"], m["id"] in (cfg.get("machines") or [])),
-                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or [])}  # #1507 b2
+                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or []),  # #1507 b2
+                                     "screen_x264": m["id"] in (cfg.get("screen_x264") or [])}  # #8859
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
@@ -24678,6 +24843,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
+    "MOCK_URGENT_CALL=1  Urgent calls on, and the call call_mock (GET /api/v1/assistant/calls/call_mock) about a pending ask_user card in Persona's main conversation, for the call page (-showUrgentCallSample YES; docs/assistant/urgent-call.md)",
     "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
@@ -25141,6 +25307,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/ln":
             if "on" in q: LN["on"] = q["on"][0] == "1"
             return self.send_json(LN)
+        if p == "/api/v1/assistant/urgent-call":  # Settings › Urgent Calls (docs/assistant/urgent-call.md)
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/calls":
+            return self.send_json({"calls": []})
+        if p.startswith("/api/v1/assistant/calls/"):
+            return self.send_json(URGENT_CALL)
         if p == "/api/v1/push/ln-mode":
             return self.send_json({"enabled": LN["on"]})
         if p == "/api/v1/push/intercepts":  # kept whether the mode is on or off, as the hub keeps them
@@ -25863,6 +26035,7 @@ class H(BaseHTTPRequestHandler):
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if subscription_thread_area(self, "GET", p): return
+        if assistant_inbox_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
@@ -26898,9 +27071,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "操控电脑的插件没打开，或这台不是 Mac"}, 404)
             body = json.loads(self.last_body or b"{}")
             if "enabled" in body:
-                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False)}
+                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False),
+                                       "screen_x264": machine["computer"].get("screen_x264", False)}
             if "no_auto_lock" in body:  # "Do not lock automatically while the plugin is open" (#1507 b2)
                 machine["computer"] = {**machine["computer"], "no_auto_lock": bool(body["no_auto_lock"]) and machine["computer"].get("enabled", False)}
+            if "screen_x264" in body:  # x264 for the live screen (#8859)
+                machine["computer"] = {**machine["computer"], "screen_x264": bool(body["screen_x264"]) and machine["computer"].get("enabled", False)}
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
@@ -27855,6 +28031,13 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/assistant/urgent-call" and self.command == "PUT":
+            URGENT["settings"] = json.loads(self.last_body or b"{}")
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/urgent-call/test" and self.command == "POST":
+            return self.send_json({"devices": 1, "call": URGENT_CALL})
+        if p.startswith("/api/v1/assistant/calls/") and p.endswith("/state") and self.command == "POST":
+            return self.send_json(dict(URGENT_CALL, state=json.loads(self.last_body or b"{}").get("state", "")))
         if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
             LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
             return self.send_json({"enabled": LN["on"]})
@@ -27868,11 +28051,20 @@ class H(BaseHTTPRequestHandler):
                 PREFS["quiet"] = {k: body["quiet"].get(k, "") for k in ("enabled", "start", "end", "tz")}
             return self.send_json(PREFS)
         if p.startswith("/api/v1/sessions/") and p.endswith("/messages") and os.environ.get("MOCK_SEND_REFUSE"):
-            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds
+            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds.
+            # =peer_held|peer_unconfirmed: a Claude session outside Persona's terminals got it through its peer inbox but did
+            # not take it (held for approval at the computer in bypass permissions mode / not confirmed): delivered unknown
             body = json.loads(self.last_body or b"{}")
             SENT.append(body)
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
+            if os.environ["MOCK_SEND_REFUSE"] in ("peer_held", "peer_unconfirmed"):
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+                code = os.environ["MOCK_SEND_REFUSE"]
+                lang = readiness_mock.lang_of(self.headers.get("Accept-Language", ""))
+                return self.send_json({"error": readiness_mock.t(lang, "rpc-errors." + code), "code": code,
+                                       "detail": "the node's own words", "delivered": "unknown"}, 409)
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
                 # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
                 return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
@@ -28643,6 +28835,7 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
+MOCK_HELP.append("MOCK_ASSISTANT_CARDS=run  主对话连着请求改六项设置（persona_settings set），输入区上方只占一张卡的位置（「1 / 6」），答完下一张在原位顶上来，已回答的合成一行，最后一次回答后约 3 秒收起")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")

@@ -204,6 +204,10 @@ class TransportBindingFixtureTest {
         for (body in listOf(
             """{"type":"items","machine_id":"m1","session_id":7,"items":[]}""",
             """{"type":"items","machine_id":"m1","session_id":"s1","items":{}}""",
+            // #8995: the shared Envelope is checked even when an items frame never consumes rows.
+            """{"type":"items","machine_id":"m1","session_id":"s1","rows":"24"}""",
+            """{"type":"inbox","items":{}}""",
+            """{"type":"future_event","backlog":"yes"}""",
             "not json at all",
         )) {
             assertUnchanged("a refused frame is dropped: $body", Payload.Frame(body))

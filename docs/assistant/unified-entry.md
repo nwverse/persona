@@ -1043,16 +1043,57 @@ Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `n
 `state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`. A task also carries its brief's fields (`goal`, `out_of_bounds`,
 `continues`, `continues_why`, `started_why`, and the hub's `brief`): "Briefs" above.
 
-- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), or covered by a `tasks.trust` entry (its directory or one above it); otherwise save an `open` plan and emit chat activity.
+- MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), covered by a `tasks.trust` entry (its directory or one above it), or, in a round the hub started for a scheduled task, covered by that scheduled task's own start grant ("A scheduled task's own start grant" below); otherwise save an `open` plan and emit chat activity.
   Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
 - `POST /api/v1/task-plans/{id}/start`: may include user-edited fields. Create a to-do per task (`origin`, `plan_id`), then start its Agent (`startSession` with `todo_id`).
-  With `remember: true`, record this kind (`machine|<repository or folder>|read-or-edit`, "Start These Directly" above) in `tasks.trust`. `POST …/dismiss`: do not start.
+  With `remember: true`, record this kind (`machine|<repository or folder>|read-or-edit`, "Start These Directly" above) in `tasks.trust`.
+  With `schedule_grant: true` on a plan a scheduled task's round made, add the same kind to that scheduled task's start grant instead (below). `POST …/dismiss`: do not start.
 - MCP tool `task_plan_withdraw` (assistant only, #6739): the conversation that put up an `open` plan takes it down with a
   one-sentence `reason`: `dismissed` as `POST …/dismiss` leaves it (the apps are told), with a `task_plan_withdrawn`
   work event (plan, conversation, reason, task titles). Another conversation's plan, a plan not `open`, and an empty
   reason are refused. A withdrawn plan is no answer of the owner's: the "Start These Directly" count and the setup
   suggestions leave it out. The snapshot's plans waiting to start give each plan's id for it.
+- A plan made in a round the hub started for a scheduled task names it: each task's `schedule` (its id) and `schedule_title`, the hub's alone (a tool call's or an edit's are dropped). Never in the health space.
 - `ultracode` (#12): the assistant sets it per task, as on `agent_start`, rather than writing the word into the prompt; the Agent starts with Claude Code's ultracode on (`session.start` `ultracode: true`). On start, `true` / `false` from the card overrides it and leaving it out keeps the assistant's choice.
+
+### A scheduled task's own start grant
+
+A round the hub starts for a scheduled task (a routine, a follow-up, Run now) has no message from the owner, so a
+writable task it hands out used to wait on its card however much the owner wanted the schedule to do that work
+(#8045). The owner's consent to a schedule is now recorded on the schedule itself (`assistant/schedule_grant.go`):
+
+- **Set**: only by the owner, on the card of one of that schedule's own rounds: "Let “<scheduled task>” start these by
+  itself" (`schedule_grant: true` on Start). Each writable task's kind, as "Start These Directly" names it (computer +
+  repository or folder + edit, resolved once admission fixed the folder that runs), is added to the task's
+  `start_grant`. No tool call (`schedule_routine`, `schedule_followup`, `task_plan`), no app body (`PUT` / `POST` on
+  the task) and no Start that is not the owner's sets or widens it, and it is not added to `tasks.trust`. The plan keeps
+  the schedule as its round had it (`schedule_basis`): a Start after the schedule changed grants nothing.
+- **Only for schedules that read nothing from outside**: a schedule whose runs get the briefing's facts (Inbox
+  matters), the north star's report or a saved state note (an earlier run wrote it), that runs into the conversation it
+  came from, or that is in the health space never offers or uses one.
+- **Only in a clean round**: a schedule with a grant starts each round in a new conversation of its own, under an id
+  the hub picks before it starts (Claude Code only: another agent picks its own id, so its rounds are never clean and
+  their cards don't offer a grant), and that conversation's context leaves out the live snapshot (Lark messages,
+  calendar, the Inbox matters followed, agents' lines: `Context`). The assistant's own instructions and memory in its
+  directory still load, as in every conversation of the assistant's. An automatic retry of a failed round goes on in
+  that round's conversation, not a clean one, so what it plans asks. `task_plan` there starts a writable task whose kind
+  the grant covers (as a remembered kind covers its folder tree) without the card only when the hub noted the round as
+  it sent it (in memory, so not after a hub restart), the turn began with that schedule's own prompt written after
+  that, and the whole conversation, as its machine reads it, is that prompt and the agent's own work with Persona's
+  own tools that read nothing from outside (`grantSafeTools`: planning, listing computers and repositories,
+  `notify_user`, Claude Code's `ToolSearch` and `TodoWrite`), ending with this `task_plan` call: the round's first
+  (a second one's answer names other work, which may come from outside). Mail, Inbox, web pages, shell commands,
+  files (the knowledge base included), agent transcripts, a relayed message or a picture keep the card, and so does
+  anything the hub cannot read or tell (a node that does not say the page is whole).
+- **`user_requested` in a round**: a round the hub started has no message of the owner's, so `task_plan` ignores
+  `user_requested` in a turn a scheduled task started, with or without a grant: while the hub has a round under way in
+  that conversation, or when its latest turn began with a scheduled prompt (after a hub restart too). An owner who
+  writes into that turn gets the card.
+- **Everything else keeps the card**: other scheduled tasks' rounds, every turn the hub did not start for that
+  schedule, kinds outside the grant.
+- **Lifetime**: no expiry. It holds while the schedule's prompt, target (the computer and conversation its runs go
+  to), space, `facts` and `report` are the ones it was given under; editing any of them drops it, and so does deleting
+  the task. The scheduled task's page lists the kinds with Remove (`DELETE /api/v1/assistant/tasks/{id}/start-grant`).
 
 ### Chat activity
 
