@@ -579,6 +579,51 @@ class WatcherTests(unittest.TestCase):
         self.watcher.touch_leases(("example/one", 7))
         self.assertGreater(self.watcher.state.data["worktree_leases"]["/tmp/lease"]["heartbeat"], 1)
 
+    def test_no_patch_repair_attempt_consumes_a_code_repair_round(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, repair_rounds=1)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model", side_effect=pr_watch_common.RepairAttemptError("no change")):
+            with self.assertRaises(pr_watch_common.RepairAttemptError):
+                self.watcher.repair_findings(self.config["repositories"][0], pr(), self.root,
+                                             [{"path": "x.py", "line": 1, "severity": "P1",
+                                               "summary": "wrong", "suggestion": "fix"}])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
+
+    def test_ordinary_conflict_setup_failure_does_not_exhaust_repair(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               repair_rounds=2)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", side_effect=pr_watch_common.WatchError("setup failed")):
+            self.watcher.process("example/one", 7)
+        self.assertNotIn("repair_exhausted", self.watcher.state.get("example/one", 7))
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
+
+    def test_exhausted_conflict_does_not_start_another_worker(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               repair_rounds=3)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main") as update:
+            self.watcher.process("example/one", 7)
+        update.assert_not_called()
+        self.assertIn("repair_exhausted", self.watcher.state.get("example/one", 7))
+
+    def test_resumed_success_publication_failure_uses_backoff(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="passed", semantic="passed",
+                               verification="passed", review_posted=False, success_posted=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "success_review", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "retry")
+        self.assertGreater(state["retry_after"], time.time())
+
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])

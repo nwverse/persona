@@ -177,6 +177,8 @@ class Watcher:
             previous = digest
         elif previous is None and marker.exists():
             previous = marker.read_text(encoding="utf-8").strip()
+        elif previous is None and not self.allow_config_migration:
+            raise WatchError("existing watcher state has no configuration fingerprint; use --migrate-config while the service is stopped")
         if previous != digest and not self.allow_config_migration:
             raise WatchError("watcher configuration changed; use a fresh state file or --migrate-config while the service is stopped")
         path = Path(self.config["state"]).with_suffix(".lock")
@@ -565,7 +567,12 @@ class Watcher:
                        outcome="repairing", failure=reason,
                        findings=old.get("findings", findings), semantic="findings", base=pr["baseRefOid"])
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
-        pr_watch_repair.repair_with_model(repo, pr, str(worktree), reason, self.config["reviewer"])
+        try:
+            pr_watch_repair.repair_with_model(repo, pr, str(worktree), reason, self.config["reviewer"])
+        except pr_watch_common.RepairAttemptError:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           repair_rounds=rounds + 1, outcome="repairing", failure=reason)
+            raise
         self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                        repair_rounds=rounds + 1, outcome="repairing", failure=reason)
         new_number, checks = pr_watch_repair.commit_and_push_repair(
@@ -668,7 +675,12 @@ class Watcher:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
             return False
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
-        pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
+        try:
+            pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
+        except pr_watch_common.RepairAttemptError:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
+            raise
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                        repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
         new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
@@ -831,7 +843,13 @@ class Watcher:
                         return
                     if not linked_issue(current_pr["body"], repo):
                         raise WatchError("PR has no linked issue; not merged")
-                    self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
+                    try:
+                        self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
+                    except WatchError as error:
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       outcome="retry", retry_after=time.time() + 60,
+                                       success_posted=False, failure=str(error))
+                        return False
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                              review_posted=True, success_posted=True)
                     self.finish_merge(config, current_pr, current)
@@ -874,11 +892,15 @@ class Watcher:
                             self.exhaust_repair(repo, number, pr, evidence_key,
                                                 "The PR still conflicts with main after %d repair rounds; no further base update was attempted." % REPAIR_LIMIT)
                         return
+                    conflict_started = [False]
+                    def before_conflict():
+                        conflict_started[0] = True
+                        self.state.put(repo, number, head, evidence_key=evidence_key,
+                                       repair_rounds=rounds + 1, outcome="repairing")
                     worktree = self.worktree(repo, number, pr)
                     updated_head = pr_watch_repair.update_branch_with_main(
                         repo, pr, str(worktree), pr["baseRefOid"], self.config["reviewer"],
-                        before_conflict=lambda: self.state.put(repo, number, head, evidence_key=evidence_key,
-                                                              repair_rounds=rounds + 1, outcome="repairing"))
+                        before_conflict=before_conflict)
                     if updated_head:
                         base = pr_watch_repair.merged_main(str(worktree), updated_head)
                         merged_pr = dict(pr, headRefOid=updated_head, baseRefOid=base)
@@ -902,7 +924,7 @@ class Watcher:
                     self.recover_infrastructure(repo, worktree, error)
                     attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
-                    if rounds >= REPAIR_LIMIT:
+                    if rounds > REPAIR_LIMIT or rounds == REPAIR_LIMIT and conflict_started[0]:
                         return self.exhaust_repair(repo, number, pr, evidence_key, error)
                     if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                         self.state.put(repo, number, head, evidence_key=evidence_key,

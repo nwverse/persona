@@ -190,6 +190,10 @@ def pr_snapshot(repo, number, timeout=90, environ=None):
     return data
 
 
+class RepairAttemptError(WatchError):
+    """A completed repair attempt that produced no usable patch."""
+
+
 class VerificationError(WatchError):
     """A completed failed check with enough information for a base comparison."""
     def __init__(self, message, command=None, output="", failures=None, checks=None):

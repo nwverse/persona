@@ -10,7 +10,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from pr_watch_common import WatchError, SHA, bounded, checked, gh_json, pr_snapshot, run, test_or_fix, verification_env
+from pr_watch_common import RepairAttemptError, WatchError, SHA, bounded, checked, gh_json, pr_snapshot, run, test_or_fix, verification_env
 from pr_watch_merge import linked_issue
 from pr_watch_review import argv_with_prefix
 from pr_watch_verify import verify
@@ -611,7 +611,7 @@ def repair_with_model(repo, pr, worktree, failure, config):
             checked(["git", "add", "-A"], cwd=isolated)
         diff = checked(["git", "diff", "--cached", "--stat"], cwd=isolated)
         if not diff.strip():
-            raise WatchError("automatic repair worker made no code change: " + bounded(result.stdout, 1000))
+            raise RepairAttemptError("automatic repair worker made no code change: " + bounded(result.stdout, 1000))
         patch = checked(["git", "diff", "--cached", "--binary"], cwd=isolated)
         if pr_snapshot(repo, pr["number"])["headRefOid"] != pr["headRefOid"]:
             raise WatchError("PR head moved before applying the repair patch")
