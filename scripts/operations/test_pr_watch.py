@@ -445,6 +445,17 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.comments, [])
         self.assertEqual(self.watcher.state.get("example/one", 7)["review_attempts"], 3)
 
+    def test_verification_retry_preserves_p2_publication_state(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[finding]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertTrue(state["review_posted"])
+        self.assertEqual(state["published_findings"], [finding])
+        self.assertEqual(state["published_fingerprint"], state["review_fingerprint"])
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \

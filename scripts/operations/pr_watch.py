@@ -1111,6 +1111,9 @@ class Watcher:
                                base_failures=latest.get("base_failures"),
                                retry_after=time.time() + 300, failure=str(error),
                                retry_reason="verification_repair",
+                               review_posted=latest.get("review_posted"),
+                               published_findings=latest.get("published_findings", []),
+                               published_fingerprint=latest.get("published_fingerprint"),
                                infrastructure_fingerprint=latest.get("infrastructure_fingerprint"))
                 if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                     # An unavailable repair worker is not a successfully
@@ -1121,6 +1124,9 @@ class Watcher:
                                    repair_attempts=attempts, repair_rounds=int(latest.get("repair_rounds", 0)),
                                    retry_after=time.time() + 3600, retry_reason="verification_repair",
                                    failure=str(error),
+                                   review_posted=latest.get("review_posted"),
+                                   published_findings=latest.get("published_findings", []),
+                                   published_fingerprint=latest.get("published_fingerprint"),
                                    infrastructure_fingerprint=latest.get("infrastructure_fingerprint"))
                 if not self.dry_run and publish:
                     self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
