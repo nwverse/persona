@@ -43,7 +43,11 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
 turn replay compares complete expected `turns` arrays using the checked-in `spec/fixtures/lines/ios/differences.json`.
 Its 57 cases include three that compare empty arrays only; they do not verify layout. It does not compare rendered
-lines, execute Swift or connect a production Android adapter.
+lines, execute Swift or connect a production Android adapter. The operation replay (#8815) additionally drives
+`RustCore` dispatch/drain through JNI, preserves each raw JSON item and calls the turn projection at all 10 checkpoints
+in the four existing operation cases. It compares 13 complete turn objects and exact item IDs against the same checked-in
+corpus plus overlay, and separately replays the existing replacement through the standalone `replace` branch. These
+runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
