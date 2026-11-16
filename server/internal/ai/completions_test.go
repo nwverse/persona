@@ -169,6 +169,7 @@ func TestChatRejectsNoEffortValue(t *testing.T) {
 	}{
 		{"none unsupported with allowed levels", `{"error":{"message":"Unsupported value: 'none' is not supported with this model. Supported values are: 'minimal', 'low', 'medium', 'high'.","param":"reasoning_effort"}}`, true},
 		{"none named as unsupported", `{"error":{"message":"unsupported reasoning_effort \"none\""}}`, true},
+		{"pydantic enum rejection", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Input should be 'minimal', 'low', 'medium' or 'high'","type":"enum"}]}`, true},
 		{"generic invalid value code for the field", `{"error":{"code":"invalid_value","message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"different named level without field association", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, false},
 		{"ceiling still wins", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
@@ -180,6 +181,38 @@ func TestChatRejectsNoEffortValue(t *testing.T) {
 				t.Fatalf("ChatRejectsNoEffortValue() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestChatCompletionsOffPydanticEnumRetry(t *testing.T) {
+	var requests []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		if body["reasoning_effort"] == "none" {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Input should be 'minimal', 'low', 'medium' or 'high'","type":"enum"}]}`)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer s.Close()
+	client := New(Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "model", ReasoningEffort: "off"})
+	for i := 0; i < 2; i++ {
+		if _, err := client.Chat(context.Background(), Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(requests) != 3 || requests[0]["reasoning_effort"] != "none" {
+		t.Fatalf("requests = %v", requests)
+	}
+	for _, i := range []int{1, 2} {
+		if _, present := requests[i]["reasoning_effort"]; present {
+			t.Fatalf("request %d should omit none: %v", i+1, requests[i])
+		}
 	}
 }
 
@@ -287,18 +320,49 @@ func TestChatCompletionsEffortRejectionCache(t *testing.T) {
 }
 
 func TestChatEffortCacheKey(t *testing.T) {
-	base := chatEffortCacheKey("https://gw.example.com", "first-key", "model-a")
-	if base != chatEffortCacheKey("https://gw.example.com/", "first-key", "model-a") {
+	base := chatEffortCacheKey("https://gw.example.com", "first-key", "model-a", "node-a")
+	if base != chatEffortCacheKey("https://gw.example.com/", "first-key", "model-a", "node-a") {
 		t.Fatal("trailing slashes split one connection")
 	}
 	for _, other := range []string{
-		chatEffortCacheKey("https://other.example.com", "first-key", "model-a"),
-		chatEffortCacheKey("https://gw.example.com", "second-key", "model-a"),
-		chatEffortCacheKey("https://gw.example.com", "first-key", "model-b"),
+		chatEffortCacheKey("https://other.example.com", "first-key", "model-a", "node-a"),
+		chatEffortCacheKey("https://gw.example.com", "second-key", "model-a", "node-a"),
+		chatEffortCacheKey("https://gw.example.com", "first-key", "model-b", "node-a"),
+		chatEffortCacheKey("https://gw.example.com", "first-key", "model-a", "node-b"),
 	} {
 		if other == base {
-			t.Fatal("different gateway, credential or model shares a cache entry")
+			t.Fatal("different gateway, credential, model or route shares a cache entry")
 		}
+	}
+}
+
+func TestChatCompletionsEffortCacheSeparatesRoutes(t *testing.T) {
+	var requests []map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer s.Close()
+	for _, via := range []string{"node-a", "node-b", "node-a"} {
+		client := New(Config{API: "chat", BaseURL: s.URL, APIKey: "example-key", Model: "model", ViaMachine: via, ReasoningEffort: "high"})
+		if _, err := client.Chat(context.Background(), Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(requests) != 4 || requests[2]["reasoning_effort"] != "high" {
+		t.Fatalf("second route inherited the first route's rejection: %v", requests)
+	}
+	if _, present := requests[3]["reasoning_effort"]; present {
+		t.Fatalf("first route did not use its own cached rejection: %v", requests[3])
 	}
 }
 

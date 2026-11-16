@@ -27,7 +27,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		body["max_tokens"] = r.MaxTokens
 	}
 	ApplyReasoningEffort(body, "chat", c.cfg.Model, c.cfg.ReasoningEffort)
-	droppedEffort := OmitChatEffort(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ReasoningEffort)
+	droppedEffort := OmitChatEffort(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ViaMachine, c.cfg.ReasoningEffort)
 	if droppedEffort {
 		delete(body, "reasoning_effort")
 	}
@@ -57,7 +57,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			fieldRejected := ChatRejectsReasoningEffort(raw)
 			offValueRejected := !fieldRejected && ChatNoThinking(c.cfg.ReasoningEffort) && ChatRejectsNoEffortValue(raw)
 			if !noRetry && !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && (fieldRejected || offValueRejected) {
-				RememberChatEffortRejection(c.cfg.BaseURL, key, c.cfg.Model, offValueRejected)
+				RememberChatEffortRejection(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ViaMachine, offValueRejected)
 				droppedEffort = true
 				delete(body, "reasoning_effort")
 				logf("ai: chat/completions: gateway rejected reasoning_effort; retrying once without it")
@@ -112,8 +112,8 @@ type chatEffortCache struct {
 
 var processChatEffortCache chatEffortCache
 
-func chatEffortCacheKey(baseURL, key, model string) string {
-	return gateKey(baseURL, key) + "\x00" + model
+func chatEffortCacheKey(baseURL, key, model, viaMachine string) string {
+	return gateKey(baseURL, key) + "\x00" + viaMachine + "\x00" + model
 }
 
 // omitChatEffort says whether this connection/model already rejected the requested form of effort recently.
@@ -171,13 +171,13 @@ func (c *chatEffortCache) rememberChatEffortRejection(key string, noneOnly bool)
 }
 
 // OmitChatEffort applies a connection's learned rejection to a probe as well as a real call.
-func OmitChatEffort(baseURL, key, model, effort string) bool {
-	return processChatEffortCache.omitChatEffort(chatEffortCacheKey(baseURL, key, model), effort)
+func OmitChatEffort(baseURL, key, model, viaMachine, effort string) bool {
+	return processChatEffortCache.omitChatEffort(chatEffortCacheKey(baseURL, key, model, viaMachine), effort)
 }
 
 // RememberChatEffortRejection records a probe's explicit rejection for later probes and real calls.
-func RememberChatEffortRejection(baseURL, key, model string, noneOnly bool) {
-	processChatEffortCache.rememberChatEffortRejection(chatEffortCacheKey(baseURL, key, model), noneOnly)
+func RememberChatEffortRejection(baseURL, key, model, viaMachine string, noneOnly bool) {
+	processChatEffortCache.rememberChatEffortRejection(chatEffortCacheKey(baseURL, key, model, viaMachine), noneOnly)
 }
 
 // ChatRequiresCompletionTokens recognizes a rejected token field that explicitly requests its replacement.
@@ -305,7 +305,8 @@ func chatNoEffortValueMessage(message, param string) bool {
 	if strings.Contains(message, "reasoning_effort_above_ceiling") {
 		return false
 	}
-	for _, valueError := range []string{"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort"} {
+	for _, valueError := range []string{"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
+		"input should be", "not one of", "not a valid enum", "not a valid enumeration"} {
 		if strings.Contains(message, valueError) {
 			return param == "reasoning_effort" || strings.Contains(message, "reasoning_effort") && strings.Contains(message, "none")
 		}
