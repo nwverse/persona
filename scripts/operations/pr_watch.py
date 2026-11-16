@@ -491,6 +491,9 @@ class Watcher:
             atomic_json(self.state.path, self.state.data)
 
     def comment_findings(self, repo, number, pr, findings, inline=True):
+        head = pr.get("headRefOid") or pr.get("head")
+        if not isinstance(head, str) or not pr_watch_common.SHA.fullmatch(head):
+            raise WatchError("findings publication requires an exact head")
         blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
         if not self.repositories[repo]["merge"]:
             action = "Review-only mode: no automatic repair or merge will be attempted. Please correct the findings in a new head."
@@ -504,11 +507,11 @@ class Watcher:
             body = "Findings from the previous head; this is not a review of the current head.\n\n%s" % action
         else:
             body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
-                pr["headRefOid"][:9], len(findings), action)
+                head[:9], len(findings), action)
         comments = [{"path": f["path"], "line": f["line"], "side": "RIGHT",
                      "body": "**%s** — %s\n\n**Suggestion:** %s" % (f["severity"], f["summary"], f["suggestion"])}
                     for f in findings]
-        payload = {"commit_id": pr["headRefOid"], "event": "COMMENT", "body": body, "comments": comments}
+        payload = {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments}
         if not inline:
             fallback = body + "\n\nThe following findings belong to the previous head; they are grouped because its line anchors are no longer current.\n\n" + "\n\n".join(
                 "%d. **%s `%s:%s`** — %s\n   **Suggestion:** %s" %

@@ -490,6 +490,15 @@ class WatcherTests(unittest.TestCase):
         history = self.watcher.state.data["finding_publications"]["example/one#7"][SHA_A]
         self.assertEqual(history["published_findings"], findings)
 
+    def test_internal_superseded_head_can_publish_grouped_findings(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            self.watcher.comment_findings("example/one", 7, {"head": SHA_A}, [finding], inline=False)
+        self.assertEqual(execute.call_args.args[0][1:3], ["pr", "review"])
+        self.assertIn("previous head", execute.call_args.args[0][-1])
+        history = self.watcher.state.data["finding_publications"]["example/one#7"]
+        self.assertEqual(history[SHA_A]["published_findings"], [finding])
+
     def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
         self.watcher.config["repositories"][0]["merge"] = False
         findings = [
