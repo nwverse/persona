@@ -116,6 +116,62 @@ final class PhoneScreenTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(PhoneScreenRestore.self, from: Data(old.utf8)).records.first?.zoom)
     }
 
+    private func record(_ pid: Int32 = 3, _ window: UInt32 = 4) -> PhoneScreenRestore.Record {
+        .init(pid: pid, window: window, app: "Terminal", frame: .init(x: 10, y: 20, width: 600, height: 400), minimized: false,
+              fullScreen: false)
+    }
+
+    private func tempStore() throws -> (PhoneScreenRestoreStore, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("phone-screen-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir) }
+        return (PhoneScreenRestoreStore(url: dir.appendingPathComponent("phone-screen.json")), dir)
+    }
+
+    /// #9540: the restore file can't be written (its directory is read-only): no ⌘+ goes out, and the record in memory
+    /// stays as the disk has it (the frame saved before the move, no zoom).
+    func testAFailedSaveSendsNoZoomKeyAndKeepsMemoryAsTheDisk() throws {
+        let (store, dir) = try tempStore()
+        var restore = PhoneScreenRestore()
+        restore.add(record())
+        XCTAssertTrue(store.writeRecords(restore), "the frame record before the move")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path) // the next write fails
+        var sent: [Int] = []
+        let went = PhoneScreenZoom.raise(&restore, pid: 3, window: 4, steps: 2, save: store.writeRecords, send: { sent.append($0) })
+        XCTAssertFalse(went)
+        XCTAssertEqual(sent, [], "a zoom key was sent with no record of it on disk")
+        XCTAssertNil(restore.record(pid: 3, window: 4)?.zoom, "memory says zoomed, the disk doesn't")
+        XCTAssertEqual(store.readRecords(), restore, "memory and disk differ")
+        // A save that fails some other way (the closure says so) is the same.
+        XCTAssertFalse(PhoneScreenZoom.raise(&restore, pid: 3, window: 4, steps: 2, save: { _ in false }, send: { sent.append($0) }))
+        XCTAssertEqual(sent, [])
+    }
+
+    /// #9540: the zoom saved, then the helper "crashes": a new session reads the file and gets back exactly the ⌘− that
+    /// undo it; no record, no window: nothing is raised; already raised: not raised twice.
+    func testAZoomSavedBeforeACrashIsUndoneAfterTheRestart() throws {
+        let (store, _) = try tempStore()
+        var restore = PhoneScreenRestore()
+        restore.add(record())
+        XCTAssertTrue(store.writeRecords(restore))
+        var sent: [Int] = []
+        XCTAssertTrue(PhoneScreenZoom.raise(&restore, pid: 3, window: 4, steps: 2, save: store.writeRecords, send: { sent.append($0) }))
+        XCTAssertEqual(sent, [2])
+        // The order the keys need: by the time they went, the disk had the steps.
+        let afterCrash = store.readRecords()
+        XCTAssertEqual(afterCrash.record(pid: 3, window: 4)?.zoom, 2)
+        XCTAssertEqual(afterCrash.records.map(PhoneScreenZoom.undo), [-2])
+        XCTAssertFalse(PhoneScreenZoom.raise(&restore, pid: 3, window: 4, steps: 2, save: store.writeRecords, send: { sent.append($0) }))
+        XCTAssertFalse(PhoneScreenZoom.raise(&restore, pid: 9, window: 9, steps: 2, save: store.writeRecords, send: { sent.append($0) }))
+        XCTAssertEqual(sent, [2], "raised twice, or a window with no record")
+        // Put back: the record goes and so does the file.
+        restore.remove(pid: 3, window: 4)
+        XCTAssertTrue(store.writeRecords(restore))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.url.path))
+        XCTAssertEqual(PhoneScreenZoom.undo(record()), 0)
+    }
+
     func testOverlapAndMatch() {
         let a = PhoneScreenRect(x: 0, y: 0, width: 10, height: 10)
         XCTAssertFalse(a.overlaps(PhoneScreenRect(x: 10, y: 0, width: 5, height: 5)))

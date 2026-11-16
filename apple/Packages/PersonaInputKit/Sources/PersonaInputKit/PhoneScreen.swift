@@ -268,6 +268,59 @@ public enum PhoneScreenZoom {
     }
 }
 
+extension PhoneScreenZoom {
+    /// Raises a placed window's text (#9540): `steps` go into its record, the records are saved, and only once that save
+    /// succeeded are the keys sent (`send`), so a crash after them always leaves the ⌘− to undo them on disk. A failed
+    /// save sends nothing and takes the steps back out of the record, so the records in memory are what the disk holds.
+    /// True when the keys went.
+    @discardableResult
+    public static func raise(_ restore: inout PhoneScreenRestore, pid: Int32, window: UInt32, steps: Int,
+                             save: (PhoneScreenRestore) -> Bool, send: (Int) -> Void) -> Bool {
+        guard steps > 0, let r = restore.record(pid: pid, window: window), r.zoom == nil else { return false }
+        restore.setZoom(steps, pid: pid, window: window)
+        guard save(restore) else {
+            restore.setZoom(nil, pid: pid, window: window)
+            return false
+        }
+        send(steps)
+        return true
+    }
+
+    /// The keys that undo a record's zoom: as many ⌘− (negative) as it got ⌘+, 0 for none.
+    public static func undo(_ r: PhoneScreenRestore.Record) -> Int {
+        guard let z = r.zoom, z > 0 else { return 0 }
+        return -z
+    }
+}
+
+/// The restore records on disk (`~/.persona/phone-screen.json` for the helper): JSON, written atomically, gone while
+/// there is nothing to put back. `save` says whether the disk now holds exactly `restore`.
+public struct PhoneScreenRestoreStore: Sendable {
+    public let url: URL
+
+    public init(url: URL) { self.url = url }
+
+    public func readRecords() -> PhoneScreenRestore {
+        guard let data = try? Data(contentsOf: url) else { return PhoneScreenRestore() }
+        return (try? JSONDecoder().decode(PhoneScreenRestore.self, from: data)) ?? PhoneScreenRestore()
+    }
+
+    public func writeRecords(_ restore: PhoneScreenRestore) -> Bool {
+        let files = FileManager.default
+        if restore.records.isEmpty {
+            try? files.removeItem(at: url)
+            return !files.fileExists(atPath: url.path)
+        }
+        do {
+            try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(restore).write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
 /// The helper's `--preflight` line for this mode, `phone_screen: <version> granted|missing` (Accessibility), which the
 /// node reads to offer it. A helper without the mode prints none.
 public enum PhoneScreenPreflight {
