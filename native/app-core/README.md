@@ -48,7 +48,9 @@ unchanged fixtures through every pure C projection: sort's `empty_list`, `person
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
-`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
@@ -66,18 +68,24 @@ corpus plus overlay, and separately replays the existing replacement through the
 runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
-fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
-gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
+visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
+partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
+`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
-consumer state, UI badges or actual background execution. The viewed-image leaf (#8860) uses the existing turn
-projection to keep the image entry's owner, compares the complete post-overlay viewed line through real Kotlin/JNI,
-and checks duplicate/running/error/Read-extension and wrong-expectation cases. It does not cover full ChatLine,
-folded images, UI image loading or actual tool execution.
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
+projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
+real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
+optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
+full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
@@ -129,6 +137,27 @@ and after draining on close, each shadow logs only `compared=<count> mismatches=
 `compared` excludes queued inputs, failed native work and rejections; `mismatches` counts individual rule reports.
 Release source sets contain neither the shadow nor its preferences.
 
+## HarmonyOS Agents-list adapter (#8957)
+
+`AgentWorkspace` delegates its filtering, ordering and grouping to `NativeAgentListAdapter`, retaining the existing
+ArkTS projection and `ResourceRow` identity as the production authority. Only `BuildProfile.DEBUG` dynamically loads
+`DebugAgentListShadow`; release never imports that module or calls `coreProjectSort`. The worker receives a plain
+core-input/projection snapshot, not `ResourceRow`, owner callbacks or preferences closures. Its serial taskqueue cannot
+replace the native rows, and snapshot/native failures affect only diagnostics.
+
+Reports contain the domain, a fixed rule and counts/enum flags (`sessions`, `machines`, pin/mute counts and
+query/grouping/quick shape), never IDs, paths, titles, query text, payload content or error messages.
+`harmony/tests/agent-list-adapter.test.mjs` covers this contract and the dynamic-import gate; no release HAP scan was
+available in this environment.
+
+The core lane also runs `harmony/tests/core-host/agent-sort-adapter.test.mjs`, driving the real core and the production
+native adapter with all 30 `agents_list` fixtures. It compares complete groups/rows/visible rows rather than reducing
+both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `counts`, `group-order` or
+`unread-shown`, tracked by #8966. The unchanged core/fixture comparison passes all 30. Native grouping,
+membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
+Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
+`devecocli`, so a release HAP was not built.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
@@ -160,9 +189,17 @@ binary; a missing helper or too-old Node fails the test rather than skipping it.
 replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
 The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
 from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
+`harmony/tests/core-host/projections.test.mjs` (#8937) replays the unchanged 15 answer + 8 display_answer,
+21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
+conditional next-page, picks and display fields. The receipt retains its description and started call with empty
+notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
+The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
+`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
+label, while the other three take JSON documents.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
-mistake, so it is not a substitute. These host projections do not exercise an ArkTS state codec, a loaded NAPI module,
-NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical device.
+mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
+a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
+device. No production client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
@@ -220,6 +257,22 @@ JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below);
   which feeds each case's `input` exactly as the file holds it and compares every published item with its raw source
   text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
+
+### Source-derived WebSocket Envelope projection (#8955)
+
+`persona_core::wire_envelope` is a pure diagnostic projection of the narrow current-iOS slice in
+`spec/fixtures/wire-envelope`: the shared scalar and raw-JSON envelope keys, `mesh` / `fleet` tolerance, unknown
+types, and routing requirements for `hello`, `inbox`, `items`, `fleet`, `screen` and `sessions_list`. It returns
+accepted, ignored or dropped with the documented projected fields; known event types outside that set return
+`out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
+The existing continuity transport behavior and its known differences are unchanged.
+
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
+the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
+malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`
+extreme floating-point behavior and full Item / Fleet models remain explicitly limited in the domain README.
+Neither replay executed Swift, iOS, a simulator, a production adapter or a physical device.
 
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 

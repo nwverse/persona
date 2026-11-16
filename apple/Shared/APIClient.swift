@@ -673,6 +673,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(no_auto_lock: on)))
     }
 
+    /// x264 for this Mac's live screen (#8859; the plugin's screen_x264, asked on the phone first).
+    func setComputerScreenX264(machine: String, _ on: Bool) async throws -> MachineComputer {
+        struct Body: Encodable { var screen_x264: Bool }
+        return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(screen_x264: on)))
+    }
+
     /// The machine page's Install Cua Driver, Grant Access and Cancel: `install`, `grant`, `cancel`.
     func computerJob(machine: String, _ action: String) async throws -> MachineComputer {
         try JSON.decoder.decode(MachineComputer.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/\(action)"))
@@ -773,8 +779,9 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
     func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
-        try await get("/api/v1/machines/\(machine)/launchers",
-                      query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try await client.get("/api/v1/machines/\(machine)/launchers",
+                                    query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
     }
     /// Built-in catalog prices for the ids a turn used (`POST /api/v1/launchers/catalog`, #5426). An id the catalog
     /// leaves out is absent; a known id with no price is present and nil. Empty in, empty out.
@@ -800,10 +807,14 @@ nonisolated struct APIClient: Sendable {
         try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
-    /// ask (a few seconds, kept 10 minutes); refresh asks it again.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false) async throws -> LauncherModels {
+    /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
+    /// even when the computer's Agent engine has a provider of the same name.
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
-        return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
+        var query = refresh ? ["refresh": "1"] : [:]
+        if let purpose { query["purpose"] = purpose }
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
     /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
     /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
@@ -2023,6 +2034,11 @@ nonisolated struct APIClient: Sendable {
         /// Why the relay gave no grant, in its words ("403 topic not served", a redirect, a network error): the hub
         /// says it beside this device in Settings › Devices and `hub doctor` (#5998).
         var relayError: String?
+        /// Urgent calls (docs/assistant/urgent-call.md): the PushKit token while calls are on, the relay's grant for it
+        /// (topic `<bundle id>.voip`) and why there is none. An older hub ignores them.
+        var voipToken: String?
+        var voipGrant: String?
+        var voipError: String?
         /// What this app understands beyond the first version's pushes: `withdraw`, a silent push naming the cards that
         /// are over, whose notifications it then removes (#4349). An older hub ignores it.
         var features: [String]?
@@ -2032,13 +2048,24 @@ nonisolated struct APIClient: Sendable {
             case name, kind, topic, locale, features
             case deviceID = "device_id", apnsToken = "apns_token", apnsEnv = "apns_env"
             case pushKey = "push_key", relayURL = "relay_url", relayGrant = "relay_grant", relayError = "relay_error"
+            case voipToken = "voip_token", voipGrant = "voip_grant", voipError = "voip_error"
         }
     }
     /// Registers this device's push token; the hub answers which way its pushes take (nil: an older hub, which does
     /// not say).
     func register(device: DeviceBody) async throws -> PushRoute? {
-        struct Answer: Decodable { var push: PushRoute? }
-        return try await post("/api/v1/devices", body: device, as: Answer.self).push
+        try await registerRoutes(device: device).push
+    }
+
+    /// What a registration answers: the way pushes reach the device, and the way an urgent call's ring does (nil: an
+    /// older hub, which does not say).
+    struct DeviceRoutes: Decodable, Sendable {
+        var push: PushRoute?
+        var call: PushRoute?
+    }
+
+    func registerRoutes(device: DeviceBody) async throws -> DeviceRoutes {
+        try await post("/api/v1/devices", body: device, as: DeviceRoutes.self)
     }
 
     /// The way a hub's pushes reach a device (docs/operations/push-relay.md "Which way a device is pushed").

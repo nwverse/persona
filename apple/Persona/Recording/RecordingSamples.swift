@@ -39,6 +39,12 @@ enum RecordingSamples {
     /// A longer finished meeting for the summary card (#6563, `-showMeetingSample overview` opens it): five minutes with
     /// lines in each, so a hub that makes a topic of each minute has five, in two groups.
     static let overviewMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000006563")!
+    /// Recordings nobody named (#8873, `-showMeetingSample untitled|untitled-page|untitled-live`): a finished meeting and a
+    /// finished note with no title and no calendar event, which a hub names from what was said (the mock hub with
+    /// `MOCK_RECORDING_TITLES=1`); `untitled-page` opens the meeting's page, `untitled-live` adds a meeting being
+    /// recorded, also unnamed.
+    static let untitledMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000008873")!
+    static let untitledNote = UUID(uuidString: "00000000-0000-0000-0000-000000008874")!
 
     #if os(iOS)
     /// The lines the `flow` sample hears, one segment of one sentence each, a few seconds apart.
@@ -124,6 +130,41 @@ enum RecordingSamples {
         try? RecordingLibrary.shared.save(entry)
     }
 
+    /// `-showMeetingSample untitled|untitled-page|untitled-live` (#8873): recordings with no title and no calendar event.
+    /// Each says its subject before a colon in its first line, which the mock hub's made-up title takes; a fresh copy each
+    /// run, so the hub's name comes from this run's uploads.
+    private static func installUntitled(live: Bool) {
+        let start = Date(timeIntervalSince1970: 1_800_177_000)
+        func sentences(_ lines: [(Double, String)]) -> [RecordingSegment] {
+            [RecordingSegment(index: 0, start: 0, duration: 120, sentences: lines.map { RecordingSentence(start: $0.0, end: $0.0 + 10, text: $0.1) })]
+        }
+        for id in [untitledMeeting, untitledNote] {
+            if RecordingLibrary.shared.entry(id) != nil { try? RecordingLibrary.shared.remove(id) }
+            RecordingLibrary.shared.restore(id)
+        }
+        var meeting = RecordingEntry(id: untitledMeeting, createdAt: start, source: .phone, active: false, expectedSegments: 1)
+        meeting.meeting = RecordingMeeting()
+        meeting.segments = sentences([(2, "导出上限评审：大文件导不出来的问题先过一遍。"), (20, "这一版先保留 4 MB 的上限，发版说明里写清楚。"),
+                                      (45, "张三负责周五前补上回归测试。"), (70, "还没定的是上限按条目算还是按录音算。")])
+        try? RecordingLibrary.shared.save(meeting)
+        var note = RecordingEntry(id: untitledNote, createdAt: start.addingTimeInterval(7200), source: .phone, active: false,
+                                  expectedSegments: 1)
+        note.segments = sentences([(3, "周末采购：牛奶、鸡蛋和咖啡豆，顺便看看有没有新的滤纸。"), (25, "周六上午去，中午之前回来做饭。")])
+        try? RecordingLibrary.shared.save(note)
+        #if os(iOS)
+        guard live else { return }
+        RecordingLibrary.shared.restore(liveMeeting)
+        var now = RecordingEntry(id: liveMeeting, createdAt: .now.addingTimeInterval(-754), source: .phone, active: true)
+        now.meeting = RecordingMeeting()
+        now.segments = [RecordingSegment(index: 0, start: 0, duration: 60, sentences: [
+            RecordingSentence(start: 1, end: 9, text: "供应商续约：合同下个月到期，先看最近两次交付。"),
+            RecordingSentence(start: 30, end: 40, text: "最近两次都晚了一周左右，但现在换供应商成本太高。"),
+        ])]
+        try? RecordingLibrary.shared.save(now)
+        RecordingCapture.shared.showSample(liveMeeting, elapsed: 754)
+        #endif
+    }
+
     /// `-showMeetingSample recording|paused|interrupted`: a meeting 12:34 into its recording, as the recording page and its
     /// Live Activity show it (no microphone); `listening|taking-part|answered`: the same with Persona attending (#2981);
     /// `room-listening|room-taking-part`: the same as a room meeting (#3862) started with the live view (phase 2), whose
@@ -143,15 +184,19 @@ enum RecordingSamples {
         #if os(iOS)
         guard let mode = UserDefaults.standard.string(forKey: "showMeetingSample") else {
             // A run without them: an earlier run's made-up meetings go, so other tests see only their own recordings.
-            for id in [liveMeeting, pastMeeting, overviewMeeting] where RecordingLibrary.shared.entry(id) != nil {
+            for id in [liveMeeting, pastMeeting, overviewMeeting, untitledMeeting, untitledNote] where RecordingLibrary.shared.entry(id) != nil {
                 try? RecordingLibrary.shared.remove(id)
             }
             return
         }
-        // The summary card's meeting alone, or the others alone: a run syncs only the made-up meetings it shows.
-        let others = mode == "overview" ? [liveMeeting, pastMeeting] : [overviewMeeting]
+        // The summary card's meeting alone, the unnamed ones alone, or the others alone: a run syncs only the made-up
+        // meetings it shows.
+        let untitled = ["untitled", "untitled-page", "untitled-live"].contains(mode)
+        let others = mode == "overview" ? [liveMeeting, pastMeeting, untitledMeeting, untitledNote]
+            : untitled ? [liveMeeting, pastMeeting, overviewMeeting] : [overviewMeeting, untitledMeeting, untitledNote]
         for id in others where RecordingLibrary.shared.entry(id) != nil { try? RecordingLibrary.shared.remove(id) }
         if mode == "overview" { installOverviewMeeting(); return }
+        if untitled { installUntitled(live: mode == "untitled-live"); return }
         let start = Date(timeIntervalSince1970: 1_800_003_600)
         let meeting = RecordingMeeting(eventID: "sample-weekly", title: "产品周会", start: start, end: start.addingTimeInterval(3600),
                                        location: "3 楼会议室", attendees: ["张三", "李四", "王五"])

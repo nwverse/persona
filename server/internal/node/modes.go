@@ -116,6 +116,25 @@ func validModesFor(launcher, mode, effort string) error {
 	return nil
 }
 
+// An assistant's custom launcher name does not identify its agent. Only resolve the launcher for levels that need
+// Codex: ordinary Claude levels remain a cheap check, and unknown levels never become valid through a probe.
+func (n *Node) validAssistantModes(ctx context.Context, launcher, mode, effort string) error {
+	if err := validModes(mode, ""); err != nil {
+		return err
+	}
+	if effort == "" || slices.Contains(effortLevels, effort) {
+		return nil
+	}
+	if !slices.Contains(proto.CodexEffortLevels, effort) {
+		return validModes(mode, effort)
+	}
+	agent, err := n.assistantAgent(ctx, launcherOr(launcher, "claude"))
+	if err != nil {
+		return err
+	}
+	return validModesFor(agent, mode, effort)
+}
+
 // modeFlags are the claude flags starting a session with a mode / effort (values already validated).
 func modeFlags(mode, effort string) string {
 	var b strings.Builder
