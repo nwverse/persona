@@ -102,14 +102,19 @@ keyed! {
         kind = "kind": CacheSeen<Option<String>>,
         role = "role": CacheSeen<Option<String>>,
         tool_use_id = "tool_use_id": CacheSeen<Option<String>>,
-        fold = "fold": CacheSeen<FoldValue>,
-        supervision_user = "supervision_user": CacheSeen<bool>,
+        fold = "fold": Raw<'a>,
+        supervision_user = "supervision_user": CacheSeen<Option<bool>>,
     }
 }
 
 /// A keyed or positional cached item. Serde's derived struct historically accepted the positional representation;
 /// this adapter retains it and feeds the same `CacheHead`, including the same fold normalizer and defaults.
-pub(crate) struct CacheItemHead<'a>(pub(crate) CacheHead<'a>);
+pub(crate) struct CacheItemHead<'a> {
+    pub(crate) head: CacheHead<'a>,
+    /// In positional form, fold is deserialized as a `FoldValue` (legacy behavior).
+    /// In object form, fold is read as `Raw` and parsed separately for consistent recursion depth.
+    pub(crate) positional_fold: Option<FoldValue>,
+}
 
 impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -127,7 +132,10 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
                 if matches!(head.id, CacheSeen::Missing) {
                     return Err(A::Error::missing_field("id"));
                 }
-                Ok(CacheItemHead(head))
+                Ok(CacheItemHead {
+                    head,
+                    positional_fold: None,
+                })
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
@@ -147,9 +155,10 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
                 position!(kind, Option<String>);
                 position!(role, Option<String>);
                 position!(tool_use_id, Option<String>);
-                position!(fold, FoldValue);
-                position!(supervision_user, bool);
-                Ok(CacheItemHead(head))
+                // Positional form: read fold as FoldValue to preserve legacy error positions.
+                let positional_fold = seq.next_element::<FoldValue>()?;
+                position!(supervision_user, Option<bool>);
+                Ok(CacheItemHead { head, positional_fold })
             }
         }
 
@@ -158,7 +167,8 @@ impl<'de: 'a, 'a> Deserialize<'de> for CacheItemHead<'a> {
 }
 
 /// A fold's normalized comparison value. Null means absence; other JSON values retain the cache's tolerant shape.
-/// Objects keep the first value of every key recursively, matching the endpoints/supervision read by `ItemFold`.
+/// Objects keep the first value of every key at the top level, matching the endpoints/supervision read by `ItemFold`.
+/// Nested objects use `serde_json::Value`'s default last-value-wins for duplicate keys (not recursive first-value-wins).
 /// serde_json still owns the bounded recursion and numeric/string validation of the selected tree.
 pub(crate) enum FoldValue {
     Absent,
