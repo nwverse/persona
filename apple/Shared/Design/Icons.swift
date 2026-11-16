@@ -436,6 +436,10 @@ extension Theme {
         static let screen = "display"
         /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
         static let displays = "display.2"
+        /// Phone Screen (#9314): one of the Mac's windows on a portrait display of its own, the live screen's third mode.
+        static let phoneScreen = "rectangle.portrait"
+        /// The Mac's windows to put on Phone Screen's display (#9314).
+        static let macWindows = "macwindow.on.rectangle"
         /// The Mac's pointer drawn over its screen in the app's VNC (#1343), when the Mac sends none of its own.
         static let pointer = "cursorarrow"
         /// VNC in a small window over everything (picture in picture).
