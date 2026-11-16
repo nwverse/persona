@@ -658,11 +658,13 @@ func TestDevices(t *testing.T) {
 	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"}}); err != nil {
+	if err := d.UpsertDevice(ctx, Device{DeviceID: "a", Name: "iPhone", APNSToken: "t2", PushKey: "pk", RelayURL: "https://relay.example/relay", RelayGrant: "g", Credential: "dev_1", RelayError: "403 topic not served", Features: []string{"withdraw"},
+		VoIPToken: "v1", VoIPGrant: "vg", VoIPError: "none yet"}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := d.Devices(ctx)
-	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) {
+	if err != nil || len(list) != 1 || list[0].APNSToken != "t2" || list[0].PushKey != "pk" || list[0].RelayURL != "https://relay.example/relay" || list[0].RelayGrant != "g" || list[0].Credential != "dev_1" || list[0].RelayError != "403 topic not served" || !slices.Equal(list[0].Features, []string{"withdraw"}) ||
+		list[0].VoIPToken != "v1" || list[0].VoIPGrant != "vg" || list[0].VoIPError != "none yet" {
 		t.Fatalf("devices = %+v, %v", list, err)
 	}
 	if err := d.DeleteDevice(ctx, "a"); err != nil {

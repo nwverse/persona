@@ -84,6 +84,57 @@ class TestFlightActionTests(unittest.TestCase):
             ), "")
 
 
+    def test_old_tag_ignore_rules_allow_only_the_disposable_generated_project(self):
+        with tempfile.TemporaryDirectory() as home:
+            root = Path(home)
+            (root / "apple").mkdir()
+            (root / ".gitignore").write_text("/apple/*.xcodeproj\n!/apple/Persona.xcodeproj\n")
+            project = root / "apple/Persona.xcodeproj"
+            for relative in (
+                "project.pbxproj", "project.xcworkspace/contents.xcworkspacedata",
+                "xcshareddata/xcschemes/Persona.xcscheme", "xcshareddata/xcschemes/PersonaVision.xcscheme",
+                "xcshareddata/xcschemes/PersonaWatch.xcscheme",
+            ):
+                (project / relative).parent.mkdir(parents=True, exist_ok=True)
+                (project / relative).write_text("generated: " + relative)
+            self.assertFalse(action.discard_generated_project(root, ["notes.txt"]))
+            self.assertTrue(project.exists())
+            self.assertTrue(action.discard_generated_project(root, ["apple/Persona.xcodeproj/project.pbxproj"]))
+            self.assertFalse(project.exists())
+            for relative in (
+                "project.pbxproj", "project.xcworkspace/contents.xcworkspacedata",
+                "xcshareddata/xcschemes/Persona.xcscheme", "xcshareddata/xcschemes/PersonaVision.xcscheme",
+                "xcshareddata/xcschemes/PersonaWatch.xcscheme",
+            ):
+                (project / relative).parent.mkdir(parents=True, exist_ok=True)
+                (project / relative).write_text("generated: " + relative)
+            (project / "unexpected.txt").write_text("not generated")
+            self.assertFalse(action.discard_generated_project(root, ["apple/Persona.xcodeproj/unexpected.txt"]))
+            self.assertTrue(project.exists())
+
+    def test_tracked_changes_still_block_prepare_after_generated_files_are_verified(self):
+        with tempfile.TemporaryDirectory() as home:
+            root = Path(home)
+            worktree = root / "worktree"
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.email", "release@example.com"], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Release Fixture"], check=True)
+            (root / "tracked.txt").write_text("source\n")
+            subprocess.run(["git", "-C", str(root), "add", "tracked.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "source"], check=True)
+            commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+            subprocess.run(["git", "-C", str(root), "worktree", "add", "-q", "--detach", str(worktree), commit], check=True)
+            subprocess.run(["git", "-C", str(root), "branch", "-q", "main", commit], check=True)
+            subprocess.run(["git", "-C", str(root), "remote", "add", "origin", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "fetch", "-q", "origin", "refs/heads/main:refs/remotes/origin/main"], check=True)
+            (worktree / "tracked.txt").write_text("local change\n")
+            with patch.object(action, "run", wraps=action.run) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    action.prepare(root, worktree, commit)
+            commands = [item.args[0] for item in run.call_args_list]
+            self.assertIn(["git", "diff", "--quiet", "HEAD", "--"], commands)
+            self.assertNotIn(["git", "checkout", "--detach", commit], commands)
+
     def test_internal_visibility_is_required(self):
         with tempfile.TemporaryDirectory() as home:
             with self.assertRaisesRegex(RuntimeError, "Internal"):
