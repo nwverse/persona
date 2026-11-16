@@ -50,7 +50,7 @@ public enum ProjectionBindingReplay {
         )
         for (field, value) in [("page", 99), ("option_index", 99)] {
             var operation = try ProjectionFixture.require(question.input["operation"]?.object, "operation")
-            operation[field] = .number(Double(value))
+            operation[field] = .number(Decimal(value))
             var input = try ProjectionFixture.require(question.input.object, "input")
             input["operation"] = .object(operation)
             do {
@@ -115,7 +115,7 @@ public enum ProjectionBindingReplay {
             }
             expectedPicks = .object(picks)
         }
-        let expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Double(page))
+        let expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Decimal(page))
         try ProjectionFixture.assertEqual(
             try ProjectionFixture.require(transition["page"], "page"), expectedPage, "answer/\(name)/page"
         )
