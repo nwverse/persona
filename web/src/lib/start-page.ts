@@ -1,5 +1,5 @@
 // Where the app opens (#9071, docs/web/web.md "Start page"): Persona's main chat, unless the user chose another page in
-// Settings › General › Start page. The hub keeps the choice (GET / PUT /api/v1/navigation, its default manager's): a
+// Settings › General › Start page. It also carries the sidebar's arrangement to and from the hub (below). The hub keeps the choice (GET / PUT /api/v1/navigation, its default manager's): a
 // hub has one owner, so every device of theirs follows. This browser keeps a copy, so an opening decides before the
 // first paint without waiting for the hub, and keeps the choice itself where the hub has no such route (404). Only an
 // opening at the root address goes there (a new tab, the installed app, the hub's address typed): a reload, Back /
@@ -11,6 +11,7 @@ import { api, ApiError } from "./api";
 import { stripBase } from "./base";
 import { hasSlots } from "./extension-slots";
 import { NAV_PAGES } from "./persona-nav";
+import { adoptSidebarPrefs, chosen, getSidebarPrefs, onSidebarPrefsSaved } from "./sidebar-pages";
 import { isResumed } from "./reconnect";
 import { navigate, type Route } from "./router";
 import { onHubEvent, useStore } from "./store";
@@ -117,19 +118,47 @@ export function useStartPageCheck(listed: (key: string) => boolean, extensionPag
   });
 }
 
-// The hub's choice, read at every hello that did not resume (a resumed one gets the pushes it missed) and pushed on each
-// change. A hub that never stored one is handed the one this browser kept while there was no record.
+// The sidebar's arrangement (lib/sidebar-pages.ts) goes the same way: each change made here is sent; while one is on its
+// way the hub's pushes of it are not taken (an older one would undo a newer); one the hub did not take goes again at the
+// next hello instead of being replaced by the hub's.
+let sending = 0;
+let unsent = false;
+onSidebarPrefsSaved((pages) => {
+  if (synced === false) return; // this browser only
+  sending++;
+  api<{ pages?: unknown }>("/navigation", { method: "PUT", json: { pages } })
+    .then(
+      (r) => {
+        noteStartPageSynced();
+        unsent = false;
+        if (sending === 1 && r.pages) adoptSidebarPrefs(r.pages);
+      },
+      (e) => {
+        noteStartPageSynced(e);
+        unsent = synced !== false;
+      },
+    )
+    .finally(() => sending--);
+});
+
+// The hub's choices, read at every hello that did not resume (a resumed one gets the pushes it missed) and pushed on
+// each change. A hub that never stored one is handed the one this browser kept while there was no record.
 onHubEvent("hello", (msg) => {
   if (isResumed(msg)) return;
-  api<{ start?: string }>("/navigation").then(
+  api<{ start?: string; pages?: unknown }>("/navigation").then(
     (r) => {
       noteStartPageSynced();
+      const handover: Record<string, unknown> = {};
       if (typeof r.start === "string") keepStartPage(r.start);
-      else if (current) void api("/navigation", { method: "PUT", json: { start: current } }).catch(() => {});
+      else if (current) handover.start = current;
+      if (r.pages && !unsent) adoptSidebarPrefs(r.pages);
+      else if (chosen(getSidebarPrefs())) handover.pages = getSidebarPrefs();
+      if (Object.keys(handover).length) void api("/navigation", { method: "PUT", json: handover }).then(() => (unsent = false), () => {});
     },
-    noteStartPageSynced, // the copy here stays
+    noteStartPageSynced, // the copies here stay
   );
 });
 onHubEvent("navigation", (msg) => {
   if (typeof msg.start === "string") keepStartPage(msg.start);
+  if (msg.pages && !sending) adoptSidebarPrefs(msg.pages);
 });

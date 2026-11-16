@@ -1,5 +1,16 @@
 # Lessons: web UI and interactions
 
+## A stalled export page is incomplete history (#9430)
+
+When a page promised older history, an empty page or one without an older new item must stop paging and mark the export
+partial. A page outside the requested range must not overwrite collected messages. Show the incomplete warning even
+when no usable timestamp was returned; a file that stopped safely must not look complete.
+
+## Historical times need their own UTC offset (#9422)
+
+Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
+and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+
 ## ZIP preview limits must check actual bytes (#9384)
 
 A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate
