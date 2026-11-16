@@ -26,13 +26,12 @@ extension MarkdownUI.Theme {
                 FontSize(.em(ReplyMetrics.inlineCode))
                 BackgroundColor(Theme.codeBackground)
                 #else
-                // In the body's color on light gray, tappable to copy (#2984, `CodeCopyMarkdown`): applied after a
-                // link's style, so a copy link keeps it; a path that opens is linked as plain words and stays blue.
-                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts (`runFonts`).
+                // The system's monospaced face on no background (#9477), tappable to copy (#2984, `CodeCopyMarkdown`).
+                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts
+                // (`runFonts`); its ink is `InlineCodeInk`'s. A thin space where it meets a CJK letter (`InlineCodeGap`).
                 FontFamilyVariant(.monospaced)
                 FontSize(.em(ReplyMetrics.inlineCode))
-                ForegroundColor(Theme.primaryText)
-                BackgroundColor(Theme.inlineCodeBackground)
+                InlineCodeInk()
                 #endif
             }
             .strong { FontWeight(.semibold) }
@@ -113,6 +112,22 @@ extension View {
     /// The block's runs keep their fonts under the style's font design (`RunFonts`).
     func runFonts() -> some View { modifier(RunFonts()) }
 }
+
+#if os(iOS)
+/// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
+/// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
+/// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
+/// every other code span is in a chat) is no link to the eye: the code's ink, not the link's.
+struct InlineCodeInk: TextStyle {
+    func _collectAttributes(in attributes: inout AttributeContainer) {
+        if let url = attributes.link {
+            if CodeCopyURL.parse(url) != nil { attributes.swiftUI.foregroundColor = Theme.Reply.codeInk }
+        } else if attributes.swiftUI.foregroundColor == nil {
+            attributes.swiftUI.foregroundColor = Theme.Reply.codeInk
+        }
+    }
+}
+#endif
 
 extension MarkdownUI.Theme {
     /// A fenced code block: monospaced, scrolling sideways, on the code background.
@@ -1070,7 +1085,7 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(item.text ?? "")))))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply(item.text ?? ""))))))
                                 .markdownTheme(.persona)
                                 .readingContent()
                                 .markdownSoftBreakMode(.lineBreak)
@@ -1242,7 +1257,7 @@ nonisolated enum StreamTail {
         memo(tail) { tail in
             var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
             if StreamRepair.end(of: tail) == .text { shown += " ▍" }
-            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(shown)))))
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply(shown))))))
         }
     }
 }
@@ -1273,11 +1288,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply($0)))))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply($0)))))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
@@ -1389,7 +1404,7 @@ nonisolated struct AssistantRowText {
     init(_ text: String) {
         // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); bold next to CJK punctuation
         // closes (`CJKEmphasis`, #3863); links end where `Links` says, not at the next space; formulas as pictures.
-        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(text))))
+        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply(text)))))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths

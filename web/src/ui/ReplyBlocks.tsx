@@ -85,16 +85,26 @@ type HNode = { type: string; tagName?: string; value?: string; properties?: Reco
 
 /** A rehype plugin, last: inline code inside a link (a path that opens, a written link) is marked `data-linked`, so
  *  it stays the link's and is not a copy button of its own inside it (Markdown's `code`). Inline code in a table cell
- *  of at most 24 characters is marked `data-chip`: styles.css keeps it whole on one line (#9146). */
+ *  of at most 24 characters is marked `data-chip`: styles.css keeps it whole on one line (#9146). A side of inline code
+ *  whose words beside it end or start with a CJK letter is marked in `data-gap` (`s` before it, `e` after it), and
+ *  styles.css leaves a little room there (#9477): with no background, `用`pnpm`装` ran the code into the words. Not beside
+ *  a space or CJK punctuation, which have room of their own. Only plain words count (the first screen's bytes): code
+ *  after bold words or alone in a link gets none. */
 export function rehypeLinkedCode() {
   return (tree: HNode) => mark(tree, false, false);
 }
 
+/** A kana, Han or Hangul letter (iOS: PersonaKit `CJKEmphasis.isCJKLetter`). */
+const CJK_LETTER = /[\u3041-\u30fa\u3400-\u9fff\uac00-\ud7af]/;
+
 function mark(node: HNode, inLink: boolean, inCell: boolean) {
-  for (const c of node.children ?? []) {
-    if (c.type !== "element") continue;
-    if (c.tagName === "code" && inLink) c.properties = { ...c.properties, dataLinked: true };
-    if (c.tagName === "code" && inCell && c.children?.length === 1 && c.children[0].value!.length <= 24) c.properties = { ...c.properties, dataChip: true };
+  const kids = node.children ?? [];
+  kids.forEach((c, i) => {
+    if (c.type !== "element") return;
+    if (c.tagName === "code") {
+      const gap = (CJK_LETTER.test((kids[i - 1]?.value ?? "").slice(-1)) ? "s" : "") + (CJK_LETTER.test((kids[i + 1]?.value ?? "")[0]) ? "e" : "");
+      c.properties = { ...c.properties, ...(inLink && { dataLinked: true }), ...(inCell && c.children?.length === 1 && c.children[0].value!.length <= 24 && { dataChip: true }), ...(gap && { dataGap: gap }) };
+    }
     mark(c, inLink || c.tagName === "a", inCell || c.tagName === "td");
-  }
+  });
 }

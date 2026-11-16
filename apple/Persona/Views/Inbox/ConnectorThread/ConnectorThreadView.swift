@@ -394,7 +394,7 @@ struct ThreadRichTextView: View {
                 Divider()
             }
             // Read line by line as written, as a chat's reply is (ReplyBreaks): a Lark post is one line per paragraph.
-            Markdown(Self.memo(text.body) { MarkdownContent(CJKEmphasis.apply(ReplyBreaks.apply($0))) })
+            Markdown(Self.memo(text.body) { MarkdownContent(CJKEmphasis.apply(InlineCodeGap.apply(ReplyBreaks.apply($0)))) })
                 .markdownSoftBreakMode(.lineBreak)
                 .markdownTheme(.persona)
                 .textSelection(.enabled)

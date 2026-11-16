@@ -225,7 +225,7 @@ nonisolated enum Theme {
     enum Radius {
         /// A file's thumbnail in a list row, about an icon's size (the Files tab): a page's corner, not a tile's.
         static let thumbnail: CGFloat = 3
-        /// Badges, inline code, small marks.
+        /// Badges, small marks.
         static let badge: CGFloat = 6
         /// Code blocks, thumbnails, segmented controls, small tiles.
         static let control: CGFloat = 10
@@ -1059,8 +1059,6 @@ nonisolated enum Theme {
 
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
-    /// Inline code in a reply (#2984): a light gray under the body's color (blue is for what opens).
-    static let inlineCodeBackground = Color(light: 0xEBEBEF, dark: 0x2C2C31)
     /// A reply's code block's title bar (#2984): its language and Copy, a shade off `codeBackground`.
     static let codeBar = Color(light: 0xE8E5DE, dark: 0x27282D)
     /// A reply's quote (#2984): its card under the accent bar, the accent faint.
