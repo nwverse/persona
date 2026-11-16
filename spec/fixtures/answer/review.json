@@ -403,7 +403,7 @@
       "name": "review_hides_options",
       "description": "The review replaces the options, so no option can be picked while it shows.",
       "source": [
-        "apple/Persona/Views/Interactions/InteractionViews.swift: QuestionForm.submit, send"
+        "apple/Persona/Views/Interactions/InteractionViews.swift: QuestionForm.plain, showsFooter"
       ],
       "input": {
         "profile": "ios_current",

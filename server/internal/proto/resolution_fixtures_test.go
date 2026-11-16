@@ -283,6 +283,23 @@ func swiftBlock(t *testing.T, source, marker string) string {
 	return ""
 }
 
+// swiftCallEnd returns the index just past the parenthesis closing the first call in s, or -1.
+func swiftCallEnd(s string) int {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
 // The generated Swift executables only live in t.TempDir. Enable this on macOS for source-backed checks.
 //
 // Two programs compile from the same copied declarations, so one contract drifting from its source does not hide the
@@ -341,7 +358,13 @@ func TestResolutionFixturesIOS(t *testing.T) {
 	if footer < 0 {
 		t.Fatal("QuestionForm review footer missing")
 	}
+	// Only the footer call itself, so a missing label cannot pick up the inline ScreenReview's closure.
 	review := question[footer:]
+	if end := swiftCallEnd(review); end < 0 {
+		t.Fatal("QuestionForm review footer call unterminated")
+	} else {
+		review = review[:end]
+	}
 	for _, pair := range [][2]string{{"back: ", "reviewBack"}, {"submit: ", "reviewSubmit"}} {
 		at := strings.Index(review, pair[0])
 		if at < 0 || !strings.HasPrefix(review[at+len(pair[0]):], "{") {
@@ -606,8 +629,6 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 			"if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {",
 			"let t = text.trimmingCharacters(in: .whitespacesAndNewlines)",
 			"Resolution(keys: [\"enter\"], text: t)", "Resolution(keys: keys)",
-			// The review of several questions (#2970): its footer shows the answer on its way and is then disabled.
-			"sending: isSending ? \"submit\" : nil", "if stepped, !reviewing {",
 		},
 		"apple/Persona/Views/Interactions/ScreenReview.swift": {
 			".disabled(sending != nil)",
@@ -645,6 +666,23 @@ func TestResolutionFixtureSourceEvidence(t *testing.T) {
 			if !strings.Contains(string(data), snippet) {
 				t.Errorf("source evidence changed in %s: %s", path, snippet)
 			}
+		}
+	}
+
+	// The review of several questions (#2970) replaces the options and the form's footer, and its own footer shows the
+	// answer on its way and is then disabled. Checked inside QuestionForm: the BeautifulUI form has lookalikes.
+	views, err := os.ReadFile(filepath.Join(root, "apple/Persona/Views/Interactions/InteractionViews.swift"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := swiftBlock(t, string(views), "struct QuestionForm:")
+	for _, snippet := range []string{
+		"private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }",
+		"private var showsReviewFooter: Bool { stepped && reviewing }",
+		"if stepped, reviewing {", "ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? \"submit\" : nil,",
+	} {
+		if !strings.Contains(question, snippet) {
+			t.Errorf("source evidence changed in QuestionForm: %s", snippet)
 		}
 	}
 
