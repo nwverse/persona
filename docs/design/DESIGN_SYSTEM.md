@@ -1206,7 +1206,8 @@ line, or the percentage for an empty label. Only this center text is capped at
 `ExtensionSurfaceTokens.circularLabelLargestTypeSize` (`.xxxLarge`, matching `Theme.interfaceLargestTypeSize`) and
 shrinks to `ExtensionSurfaceTokens.circularLabelMinimumScale` when needed to fit the fixed ring.
 VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and nonfinite ratios become zero.
-Other extension widget families retain their existing progress view.
+The circular gauge is independent of `progress.style`. `accessory_rectangular` uses a bar and `accessory_inline`
+omits progress.
 
 The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
 
@@ -1217,6 +1218,22 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
 - **Record** (#5493, `MeetingRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): static, the recording mark in the system's red and **Record**, the word of every start ("One Record entry (#5243)"); the rectangular face adds "Meeting" under it (what a tap records; a longer line was cut short in en and ja). A tap opens the app straight into a meeting recording (`persona://record?meeting=1`), or marks the meeting while all-day recording runs. Its kind stays `persona.watch.meeting-recording`. `-openWatchItem record-complication` previews every family.
 
 ### 3.14 Home Screen and Lock Screen widgets
+
+Extension widgets use `ExtensionSurfaceTokens`. In small, medium and large families, `progress.style == "ring"`
+draws a fixed ring (`ringSize`, 50 pt; `ringStroke`, 7 pt) with a same-color track (`ringTrackOpacity`), a clockwise
+arc from twelve o'clock (`ringStartAngle`) and round ends. Zero shows only the track; one fills the ring. Finite
+ratios are clamped to 0–1 and nonfinite ratios become zero. The center shows a locale-formatted whole percentage
+in `ringNumber` (15 pt rounded semibold at the default size), capped at `ringNumberLargestTypeSize` and shrinking
+to `ringNumberMinimumScale`. The label sits beside the ring in the bar's `label` font on at most two lines, capped
+at `ringContentLargestTypeSize` and shrinking to `ringLabelMinimumScale` (0.5). Text that still does not fit uses
+system truncation; detail is omitted. The row is one VoiceOver element with the progress label and percentage.
+In a Home Screen layout containing a ring, metric and chart text is capped at `ringContentLargestTypeSize`
+(`.xxxLarge`) and shrinks to `ringContentMinimumScale` so the fixed widget canvas retains every line at accessibility sizes.
+`progressTint` follows the bar's default accent without tone coloring; the arc participates in system widget accents.
+Items retain their order. A medium widget uses two columns only when its fitted view has exactly one section with
+`[metric?, progress(style: "ring"), chart]` and that chart has exactly one series and is not candlestick: metric and
+ring on the left, chart on the right. All other layouts stack items vertically. An omitted, `bar` or unknown style
+uses the default bar. Accessory families follow 3.13.
 
 The widget extension doesn't build `Theme`: Persona's widgets take their colors, type, sizes and marks from `HomeWidgetTokens` (`apple/Shared/Design/HomeWidgetTokens.swift`), whose symbols mirror `Theme.Icon` with an `// icon:` note, as the watch's complications do. Heroes, rings and faces are fixed sizes (the system sets a widget's size); every line of words is a text style. A hero may shrink to fit (`heroMinScale`), and a name in a row shrinks a little (`nameMinScale`) before it is cut short. Every widget in `docs/apple/home-widgets.md`.
 
