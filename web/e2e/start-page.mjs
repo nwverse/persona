@@ -36,20 +36,18 @@ const check = (name, ok, detail) => {
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
 
 /** A new browser (another device): signed in, its first opening done, nothing else kept. */
-async function device({ width, height, theme = "light", hideToday = false, todayFirst = false }) {
+async function device({ width, height, theme = "light", hideToday = false }) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme, deviceScaleFactor: 2, serviceWorkers: "block", hasTouch: width < 640 });
-  await context.addInitScript(([theme, todayFirst]) => {
+  await context.addInitScript((theme) => {
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.language", "en");
-    // Today at the top of the sidebar, as Settings › General › Sidebar pages already allows (this browser's order)
-    if (todayFirst) localStorage.setItem("sidebar.pages", JSON.stringify({ order: ["p:example-today/today"], shown: [], hidden: [] }));
     // the addresses the page put in place of the one it was opened at, in order
     const replace = history.replaceState;
     history.replaceState = function (...a) {
       (window.__replaced ??= []).push(new URL(String(a[2]), location.href).pathname);
       return replace.apply(this, a);
     };
-  }, [theme, todayFirst]);
+  }, theme);
   // nothing leaves the loopback origin
   await context.route("**/*", (route) => (new URL(route.request().url()).origin === new URL(root).origin ? route.continue() : route.abort()));
   if (hideToday) {
@@ -163,15 +161,23 @@ try {
     // screenshots: the setting and the app opened on Today, light and dark, wide and phone
     for (const theme of ["light", "dark"]) {
       for (const [width, height] of [[1440, 900], [390, 844]]) {
-        const d = await device({ width, height, theme, todayFirst: true });
+        const d = await device({ width, height, theme });
         await d.p.waitForFunction((k) => localStorage.getItem("persona.startPage") === k, TODAY, { timeout: 20_000 });
         const s = await showSetting(d.p, width);
         await s.locator("select").waitFor();
+        // Today at the top of the sidebar too, with Sidebar pages' ↑ (this browser's order, as before this change)
+        const up = d.p.getByRole("button", { name: "Move Today up" });
+        while (await up.isEnabled()) await up.click();
+        await s.evaluate((e) => e.scrollIntoView({ block: "center" }));
         await d.p.screenshot({ path: join(shots, `setting-${theme}-${width}.png`) });
         const t = await openRoot(d.context);
         await t.locator("[data-columns] section").nth(2).waitFor({ timeout: 20_000 });
         await t.waitForTimeout(600); // the cards' fade-up
         check(`${theme} ${width}: opened on Today`, new URL(t.url()).pathname === TODAY_PATH, t.url());
+        if (width >= 640) {
+          const first = await t.locator('[data-sidebar-column] nav a, [data-sidebar-column] a[href^="/extension/"], [data-sidebar-column] a[href="/overview"]').evaluateAll((as) => as.map((a) => a.getAttribute("href")).filter((h) => h && h !== "/")[0]);
+          check(`${theme} ${width}: Today is the sidebar's first page`, first === TODAY_PATH, first);
+        }
         await t.screenshot({ path: join(shots, `today-${theme}-${width}.png`) });
         await d.context.close();
       }

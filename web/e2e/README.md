@@ -65,7 +65,7 @@ reload stay on the main chat; that a second browser (another device) opens on th
 choice at its hello and opens on Today from its next opening; and that a Today the hub's extension list leaves out opens
 from the browser's copy and then gives way to the main chat, the choice kept and the setting saying why. `--old-hub`
 checks that a hub answering 404 leaves the choice in the browser and the setting says so. Light and dark screenshots of
-the setting and of the app opened on Today (with Today first in the sidebar, as Sidebar pages already allows) at
+the setting and of the app opened on Today (Today moved first with Sidebar pages' ↑, as that setting already allows) at
 1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory. The run sets the mock's start page and puts it
 back to the default; a 240-second watchdog ends it, and the last line is the verdict.
 
