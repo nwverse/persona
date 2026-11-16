@@ -342,7 +342,7 @@ class Watcher:
                     raise
                 with self.git_lock:
                     recovered = pr_watch_recovery.recover_worktree_failure(
-                        root, self.config["state"], error, state=self.state)
+                        root, self.config["state"], error, state=self.state, repo=repo)
                 if not recovered:
                     raise
                 self.log("%s#%s repaired a watcher-owned Git failure; retrying the same head" % (repo, number))
@@ -425,7 +425,7 @@ class Watcher:
         with self.git_lock:
             return pr_watch_recovery.recover_worktree_failure(
                 self.repositories[repo]["checkout"], self.config["state"], error,
-                protected=self.active_worktrees(), state=self.state)
+                protected=self.active_worktrees(), state=self.state, repo=repo)
 
     def comment_findings(self, repo, number, pr, findings):
         blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
@@ -726,23 +726,28 @@ class Watcher:
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("retry_after", 0) > time.time():
             return
         if old.get("head") == head and old.get("evidence_key") == evidence_key \
-                and old.get("retry_reason") in ("semantic_review", "verification_repair") \
+                and old.get("retry_reason") in ("semantic_review", "verification_repair", "semantic_repair") \
                 and ((old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
-                     or (old.get("retry_reason") == "verification_repair" and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
+                     or (old.get("retry_reason") in ("verification_repair", "semantic_repair")
+                         and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
             # The completed backoff permits a fresh independent attempt budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, repair_attempts=0, retry_after=0)
         if old.get("outcome") == "continuation":
             return
         if old.get("outcome") == "repair_comment_pending":
-            if self.dry_run:
+            if old.get("head") != head or old.get("evidence_key") != evidence_key:
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="retry", retry_after=0, failure=None,
+                                     repair_comment_posted=False)
+            elif self.dry_run:
                 return False
-            reason = old.get("failure") or "The previous repair budget was exhausted without a recorded diagnostic."
-            if not self.dry_run:
+            else:
+                reason = old.get("failure") or "The previous repair budget was exhausted without a recorded diagnostic."
                 self.comment(repo, number, "The previous repair budget was exhausted. The last failure was:\n\n```text\n%s\n```\n\nThe new three-round budget permits one more repair attempt." % bounded(reason, 12000))
-            old = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                 outcome="retry", retry_after=0, failure=None,
-                                 repair_comment_posted=True)
+                old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                     outcome="retry", retry_after=0, failure=None,
+                                     repair_comment_posted=True)
         if old.get("outcome") in ("repair_published", "base_updated") \
                 and old.get("head") == head and old.get("evidence_key") == evidence_key:
             return
@@ -881,6 +886,7 @@ class Watcher:
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          base=pr["baseRefOid"], format=FORMAT_VERSION, outcome="reviewing",
                                          verification_policy=VERIFICATION_POLICY_VERSION,
+                                         review_policy=REVIEW_POLICY_VERSION,
                                          repair_rounds=rounds)
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
@@ -1023,6 +1029,13 @@ class Watcher:
             # verification failures and semantic findings stay terminal for
             # this exact base/head until the PR changes.
             retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
+            if phase == "semantic_repair":
+                repair_attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
+                delay = 3600 if repair_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT else 60 * repair_attempts
+                self.state.put(repo, number, head, evidence_key=evidence_key, outcome="retry",
+                               repair_attempts=repair_attempts, retry_after=time.time() + delay,
+                               retry_reason="semantic_repair", failure=str(error))
+                return False
             attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + (0 if phase in ("semantic", "semantic_repair") else 1)
             exhausted_review = phase == "semantic" and attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT
             outcome = ("retry" if retry or phase == "verification" else

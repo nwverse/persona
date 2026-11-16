@@ -479,6 +479,30 @@ class WatcherTests(unittest.TestCase):
                                infrastructure_fingerprint="same")
         self.assertEqual(self.watcher.state.get("example/one", 7)["failure"], "precise error")
 
+    def test_repair_comment_pending_never_posts_against_a_new_head(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, outcome="repair_comment_pending", failure="old failure")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(head=SHA_B)), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False), \
+                patch.object(self.watcher, "comment") as comment:
+            self.watcher.process("example/one", 7)
+        comment.assert_not_called()
+
+    def test_retry_blocking_findings_never_repair_in_review_only_mode(self):
+        self.watcher.config["repositories"][0]["merge"] = False
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", semantic="findings",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "repair_findings") as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_not_called()
+
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])

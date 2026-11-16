@@ -35,7 +35,7 @@ def atomic_leases(state_file, data):
     temporary.replace(path)
 
 
-def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, state=None):
+def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, state=None, repo=None):
     """Reclaim expired leases using one lock-protected state snapshot."""
     if state is not None:
         state.lock.acquire()
@@ -47,6 +47,7 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         for name, lease in leases.items():
             path = owned_path(state_file, name)
             if (path in keep or lease.get("active") or not path.exists()
+                    or repo is not None and lease.get("repository") != repo
                     or time.time() - float(lease.get("heartbeat", 0)) < older_than):
                 continue
             candidates.append(path)
@@ -56,6 +57,7 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         for path in candidates:
             lease = leases.get(str(path), {})
             if (path in keep or lease.get("active")
+                    or repo is not None and lease.get("repository") != repo
                     or time.time() - float(lease.get("heartbeat", 0)) < older_than):
                 continue
             try:
@@ -122,8 +124,8 @@ def recover_object_debris(checkout):
     checkout = Path(checkout).resolve()
     common_text = checked(["git", "rev-parse", "--git-common-dir"], cwd=checkout).strip()
     common = (checkout / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
-    if common.parent != checkout or common.name != ".git":
-        raise WatchError("refusing to repair objects outside the trusted watcher checkout")
+    if common.name != ".git" or not common.is_dir() or common.is_symlink():
+        raise WatchError("refusing to repair objects outside the trusted Git common directory")
     objects = common / "objects"
     removed = 0
     for directory in objects.iterdir() if objects.is_dir() else ():
@@ -144,10 +146,10 @@ def recover_object_debris(checkout):
     return removed
 
 
-def recover_worktree_failure(checkout, state_file, error, protected=(), state=None):
+def recover_worktree_failure(checkout, state_file, error, protected=(), state=None, repo=None):
     """Repair a known infrastructure condition and report whether to retry once."""
     if STORAGE_ERROR.search(str(error)):
-        removed = reclaim_worktrees(checkout, state_file, protected, state=state)
+        removed = reclaim_worktrees(checkout, state_file, protected, state=state, repo=repo)
         if not removed:
             return False
         return True

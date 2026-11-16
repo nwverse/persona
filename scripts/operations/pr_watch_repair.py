@@ -656,6 +656,7 @@ def commit_and_push_repair(repo, pr, worktree, base, failure, verify_config=None
     issues = linked_issue(pr.get("body", ""), repo)
     if issues:
         message += "Refs #%d\n\n" % issues[0]
+    message += "Automated repair reason:\n" + bounded(failure, 6000) + "\n"
     # Use only the maintainer's configured Git identity; no tool attribution.
     with tempfile.NamedTemporaryFile(prefix="pr-watch-repair-message-", mode="w", encoding="utf-8", delete=False) as message_file:
         message_file.write(message)
