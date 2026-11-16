@@ -837,15 +837,17 @@ class Watcher:
             raise WatchError("could not mark the long-inactive PR: " + bounded(result.stderr, 1000))
         self.state.annotate(repo, number, last_progress_at=last_progress,
                             stale_marked_at=int(time.time()), stale_head=pr["headRefOid"])
-        self.comment(repo, number, reason)
-        self.state.annotate(repo, number, stale_notice=reason)
+        if old.get("stale_notice") != reason:
+            self.comment(repo, number, reason)
+            self.state.annotate(repo, number, stale_notice=reason)
         latest = pr_snapshot(repo, number)
         if latest["state"] != "OPEN" or latest["isDraft"] or latest["headRefOid"] != pr["headRefOid"]:
             # A push during publication is substantive work, even if it is an
             # old commit. Leave the marked PR open for its next review cycle.
             self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
-        progress = self.stale_progress_at(repo, number, latest, old, ignore_notice=reason)
+        marked = self.state.get(repo, number)
+        progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
         # the marker write cannot make its own timestamp look like new work.
@@ -910,7 +912,9 @@ class Watcher:
             previous = old
             history = self.state.data.get("finding_publications", {}).get(repo + "#" + str(number), {}).get(previous.get("head"), {})
             unpublished = (previous.get("head") and previous.get("findings")
-                           and history.get("published_findings") != previous["findings"])
+                           and history.get("published_findings") != previous["findings"]
+                           and not (previous.get("review_posted") and
+                                   previous.get("published_findings", previous["findings"]) == previous["findings"]))
             if unpublished and not self.dry_run:
                 # A changed head invalidates line anchors, not the usefulness
                 # of the complete old review. Publish it once as grouped text,
@@ -1043,7 +1047,7 @@ class Watcher:
                 return
             if self.dry_run:
                 return
-            if old.get("review_posted") and not config["merge"]:
+            if old.get("review_posted") and not config["merge"] and old.get("verification") in ("passed", "base_failure"):
                 return
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
                                                 and old.get("semantic") == "passed") \

@@ -125,6 +125,44 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 1)
         self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
 
+    def test_review_only_published_p2_still_verifies(self):
+        self.watcher.repositories["example/one"]["merge"] = False
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="passed_with_findings", semantic="passed",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        verify.assert_called_once()
+        review.assert_not_called()
+
+    def test_legacy_published_findings_are_not_republished_on_new_head(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="findings", semantic="findings",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(SHA_B)), \
+                patch.object(self.watcher, "comment_findings") as publish, \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        publish.assert_not_called()
+
+    def test_first_stale_close_uses_post_mark_state(self):
+        old = time.time() - 8 * 86400
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
+        current = pr()
+        with patch.object(self.watcher, "stale_progress_at", return_value=old), \
+                patch.object(pr_watch, "pr_snapshot", side_effect=[current, dict(current, state="CLOSED")]), \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            self.assertTrue(self.watcher.mark_and_close_stale(config, current, {}))
+        self.assertTrue(any(call.args[0][1:3] == ["pr", "close"] for call in execute.call_args_list))
+
     def test_stale_pr_is_marked_explained_then_closed_without_merging(self):
         self.watcher.config["repositories"][0]["close_stale"] = True
         self.watcher.repositories["example/one"]["close_stale"] = True
