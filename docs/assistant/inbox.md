@@ -74,8 +74,8 @@ allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type
 
 | Code | Status | `delivered` | `retryable` | When |
 | --- | --- | --- | --- | --- |
-| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat. Reply in the source's own app. |
-| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, or lark-cli is not installed or too old. |
+| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat, a subscription's row whose item or `reply_to` is gone (#9194). Reply in the source's own app. |
+| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, lark-cli is not installed or too old, or a subscription is gone or its connector can't be called now. |
 | `inbox_source_signed_out` | 503 | `none` | false | lark-cli is not signed in, or its sign-in expired. |
 | `inbox_send_denied` | 502 | `none` | false | The source refused the send: a missing permission or scope, or the chat or message is gone or closed to the bot. |
 | `inbox_send_rate_limited` | 429 | `none` | true | The source is rate limited (lark-cli, or an extension's `rate_limited` error); `retry_after` seconds and a `Retry-After` header when it said how long. |
@@ -86,8 +86,10 @@ allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type
 **Not sent versus in doubt.** Every code but `assistant_in_doubt` means nothing went out: the failure came before the send (no connector, no record, no way to
 reply) or the source answered that it refused it. Such a send's record is forgotten, so the same reply asked again is really tried again; `retryable: true`
 says the cause is passing, `retryable: false` that the same request fails the same way until the user acts (signs in, turns the source on, replies in the
-source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included)
-or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`, and the same reply is not sent again.
+source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included),
+a mail whose SMTP server got the whole message and never answered it (the connection dropped or the wait ran out, `mail.ErrMaybeSent`, #9166; a server's
+refusal of it is still not sent) or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`,
+and the same reply is not sent again.
 
 **For the apps** (their wording is #9126's): say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
 sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. A confirmed suggestion is taken even when its send

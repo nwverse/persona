@@ -76,6 +76,9 @@ struct SidebarPageRoots {
         var closesOverlay: Bool { move != .drillDown }
     }
 
+    /// The main conversation in front, nothing saved: where every sidebar starts (`UnifiedSidebar.roots`, P3).
+    static let start = SidebarPageRoots()
+
     /// The root in front.
     private(set) var current: SidebarPageRoot = .conversation
     private var saved: [SidebarPageRoot: NavigationPath] = [:]
