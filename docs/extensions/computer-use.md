@@ -1177,6 +1177,82 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   and `PERSONA_TEST_FFMPEG=… go test -run 'X264|FFmpeg' ./internal/node/` (the probe on the real thing). Without the
   variable both skip the parts that need ffmpeg.
 
+### Phone Screen (#9314)
+
+A third mode next to Mouse Mode and Trackpad Mode: the Mac gets a portrait virtual display shaped like the phone's
+picture, the window the phone picks fills it, and the phone switches windows from a list. Text reads at phone size
+without zooming. For people who already work on their Mac from the live screen; Mouse Mode stays the default.
+The approach and its measurements of macOS follow [Snug](https://github.com/zephyr4123/snug) (MIT; code adapted from it
+keeps its notice, `THIRD_PARTY_NOTICES.md`).
+
+- **Who does what**: Persona Input (Persona Link's helper that already holds Accessibility for pixel scrolling) runs a
+  session, `--socket <path> --token <t> --phone-screen`, started by the node like its scroll session. Moving other apps'
+  windows needs Accessibility (`AXIsProcessTrusted`), which the same System Settings switch gives it. `--preflight`
+  prints a second line, `phone_screen: <version> granted|missing`; a helper from before prints none, and the node then
+  offers nothing.
+- **The virtual display** (`PhoneScreenDisplay.swift`, the sizes in `PersonaInputKit`'s `PhoneScreenFit`): private
+  `CGVirtualDisplay`, portrait, aspect = the picture's height / width (clamped 1…2.2). macOS offers a 2× desktop mode only
+  from 540 × 800 points, so the base width is 540 (wider for a short picture); every 10 points up to 1080 is a mode of the
+  same aspect, HiDPI on, so a window with a large minimum size gets a wider mode and the picture only scales. Three fixed
+  identities (vendor, product, serial), so ColorSync keeps one profile. A new display comes online at the mode macOS
+  remembers for it (the first time 1080 wide at 1×), so the helper switches it to the base width at 2× and places it.
+- **Switching modes from a child**: a short-lived run of the helper's own binary (`--phone-screen-set`, `-mode`, `-has`)
+  does every mode switch and move. A process that switched a virtual display's mode itself keeps it online about 40 s
+  after letting it go (Snug); switched from a child, it went offline 0.02 s after release here. The helper also can't read
+  the modes of a display that appeared after it started, so its size comes from `CGDisplayBounds` and a child checks that
+  a new mode is listed.
+- **Where it goes**: against the main display on the first side with room (right, left, below, above), aligned to main's
+  top or left edge (`PhoneScreenPlacement`), because of how Screen Sharing lays out displays of different scales (next).
+- **Framebuffer layout** (measured on macOS 26.6 with one 1920 × 1080 1× display and a 540 × 950 pt 2× virtual one):
+  Screen Sharing draws each display at its own pixel size, so the framebuffer was 3000 × 1900, not the displays' point
+  box (2460 × 1080). Five placements (left, right, below, above, offset) all fit one rule: the edge of a display that
+  touches the main display sits at main's pixel coordinate, and the display extends by its own pixels. A 540 × 1021 pt
+  display right of main gave 3000 × 2042, as the rule says. The node's `displays[]` carry `scale` (AppKit's
+  `backingScaleFactor`) so the phone can apply it.
+- **Other displays and windows stay put**: before adding and after removing, the helper records the other displays' modes
+  and the frames of every window on screen; once the virtual display is offline it sets back any mode macOS changed (it
+  applies the modes it remembers per combination of displays) and moves back windows that moved.
+- **Windows** (`PhoneScreenSession.swift`, `PhoneScreenAX.swift`): the list is the standard windows of apps in the Dock
+  (Accessibility, minimized ones included), front to back as on screen. Placing a window writes where it was (frame,
+  minimized, full screen) to `~/.persona/phone-screen.json` first (no record, no move), takes it out of full screen or the
+  Dock, sets size, position, size and checks (up to 10 tries; the same frame twice means the app or the menu bar holds it
+  there), takes a wider mode when the app's minimum size is larger, and brings it to the front through Accessibility's
+  `AXFrontmost` (macOS 14 and later ignore `activate()` from a helper in the background). Placing another window puts the
+  previous one back. Every Accessibility call waits at most 1 s for an app that hangs. A session that died leaves records,
+  and the next one puts those windows back before anything else.
+- **Ending**: when the node closes the socket (the phone sent `stop`, its RFB stream ended, or the node went away) or the
+  helper gets SIGTERM, it puts every window back, lets the display go, waits until it is offline and sets back what moved.
+  A display let go while the Mac's monitor sleeps goes offline only when it wakes (Snug).
+- **Node** (`phonescreen.go`): `screen.phone {pair, op, width, height, pid, window}` with `op` start, windows, place or
+  stop. Like the video channel it needs the RFB stream carrying `pair` open and signed in (`not_signed_in`), allows one
+  session per Mac (`busy` for another pair), and attaches the session to that stream, so it ends when the stream does.
+  Requests go to the helper one at a time; one that takes longer than its limit (start 30 s, place 30 s, windows 15 s)
+  ends the session. The statuses carry `phone_screen {version, permission}` from the cached `--preflight`.
+- **Manager**: `POST /api/v1/machines/{mid}/computer/phone-screen` (protocol.md), with the clipboard's gate. Window titles
+  are never logged.
+- **iPhone** (`VNCPage`, `PhoneScreenLink`, `PhoneScreenWindows`): ⋯ › Mode lists Phone Screen when the Mac's status has
+  `phone_screen` (a kept choice on a Mac that no longer offers it acts as Mouse Mode). While the mode is on and the screen
+  is live, the page starts the session for its RFB connection's `pair` with the picture's size in points (read while the
+  keyboard is down), and a new connection starts it again. A line over the top of the picture (not above it, so the
+  picture keeps its shape) says "Setting up the phone screen…" meanwhile, or why it couldn't (Accessibility not allowed,
+  another device has it, Persona Link too old). The page then
+  shows only the new display: RFB crops to it with the mixed-scale rule (`VNCDisplays.anchored`; Screen Sharing sends
+  DesktopSize when the display comes and goes, measured), and the video channel captures it by its id. The first time it is
+  up with nothing on it, and from the bottom bar's Windows button, a sheet lists the Mac's windows by app (the one on the
+  display checked, minimized ones marked); a tap puts one there and closes it. Leaving the mode or closing the page sends
+  `stop`. Touches: a tap clicks there; one finger scrolls (by the point through Persona Input where it may, with a coast);
+  held half a second then dragged, it drags (selects text); held and lifted, the right button; two fingers and pinching as
+  in Mouse Mode. The mock hub's `MOCK_PHONE_SCREEN=1` (with `MOCK_SCREEN=fake`) plays a Mac that has it, for screenshots.
+- **Measured on a Mac** (macOS 26.6, 2026-11-16, a node stand-in driving the signed helper): start 1.7–2.1 s to a 540 ×
+  1021 pt display at 2×; place 0.6–0.9 s; switching windows put the previous one back; stop 0.9 s, after which the display
+  was gone, the main display's mode unchanged and none of 180 windows had moved.
+- **Measured over Screen Sharing**: a client connected when the display comes gets DesktopSize 3000 × 2042 about 1.7 s
+  after `start` and 1920 × 1080 again after `stop`.
+- **Known limits**: `CGVirtualDisplay` is private and may change with macOS. On a Mac with no display attached any added
+  display replaces the default one (Snug). Windows in another Space or in full screen in their own Space are not listed
+  yet. With displays of mixed scales chained away from the main display, RFB may still not find the virtual display
+  (video captures it by id either way).
+
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 
 Reference: Computer Use settings in the Codex desktop app. The main session read only the UI strings in its package, took no code, and found:

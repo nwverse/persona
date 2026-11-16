@@ -436,6 +436,10 @@ extension Theme {
         static let screen = "display"
         /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
         static let displays = "display.2"
+        /// Phone Screen (#9314): one of the Mac's windows on a portrait display of its own, the live screen's third mode.
+        static let phoneScreen = "rectangle.portrait"
+        /// The Mac's windows to put on Phone Screen's display (#9314).
+        static let macWindows = "macwindow.on.rectangle"
         /// The Mac's pointer drawn over its screen in the app's VNC (#1343), when the Mac sends none of its own.
         static let pointer = "cursorarrow"
         /// VNC in a small window over everything (picture in picture).
@@ -740,6 +744,11 @@ extension Theme {
         static let meeting = "person.2.wave.2"
         /// Invite someone into a meeting (#8731: Persona, on the Meetings home and in the meeting room).
         static let invite = "person.badge.plus"
+        /// Leave the meeting room for the rest of the app while the meeting records (#8731: the room's collapse).
+        static let minimizeRoom = "chevron.compact.down"
+        /// Persona says its answers out loud in the meeting / only on screen (#8731: the meeting room's speaker).
+        static let answersAloud = "speaker.wave.2"
+        static let answersOnScreen = "speaker.slash"
         /// Persona stops attending the meeting being recorded (#2981: the recording Live Activity's Turn Off).
         static let attendanceOff = "waveform.slash"
         /// Talk to Persona in the meeting (#3862 phase 4): held on the meeting page, a talk window from the Live Activity.

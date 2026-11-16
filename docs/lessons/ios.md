@@ -78,6 +78,23 @@ function before trusting it.
 - The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
   under Analytics Data instead.
 
+## A device's freeze report names its build: check it before reproducing (#9173)
+
+An iPhone Duo froze scrolling up an Agent chat, at the same answer each time, until the watchdog killed it
+(`0x8BADF00D`). Hours of simulator runs with the conversation's own items (layouts, text sizes, devices, live replies,
+an optimized build) never froze, because they ran today's code: the two `.ips` files showed the main thread in ICU
+under `PathRefs.textRefs(in:)` ← `AssistantRowText.init` ← `AssistantText.body`, the pattern #8911 had fixed that
+morning, and the device ran a Debug build from before it. The answer in view wasn't the culprit either: the lazy list
+lays out the next row past the screen, and the message above it had model names in code spans
+(`org/long-ascii-name-v1`, no extension), each tried 2^n ways.
+
+- Ask for the report (Analytics Data, `Persona-…ips`) and the build (Settings › About › Diagnostics › Build) first.
+  The frames date the code too: `textRefs(in:)` has had a deadline argument since #9128.
+  `git merge-base --is-ancestor <fix> <build>` says whether a fix is in it.
+- In a pattern run over message text, alternatives inside a repetition must not take the same character, and a
+  `[^x]*` scan started from every opener on a line is quadratic: past a few thousand characters, scan by hand with
+  the next closer's position worked out once (`PathMarkdown.protectedRanges`).
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
@@ -116,6 +133,10 @@ the fix and 448 KB after; the Assistant page went from 906 to 573 KB and a conve
 ## Keep a control's accessibility identifier off its surrounding container (#7033)
 
 A SwiftUI container's `accessibilityIdentifier` can replace the identifiers on a nested `Menu` and `ScrollView`, while the buttons inside the scroll view keep theirs. The Agents capsule looked correct and its filters remained queryable, but its grouping icon was exposed under the capsule's identifier instead of `agents.grouping`. Put identifiers on the actionable controls, not on their surrounding capsule, and test both the menu's identity and its fixed frame after a horizontal drag.
+
+## A UI test cannot see a label that is cut (#9121)
+
+The Agents capsule drew a filter that was neither chosen nor in the strip's middle as its first two characters and an ellipsis (「工作…」), while VoiceOver and `XCUIElement.label` read the whole name: the button carries its own accessibility label, so the drawn text is not in the accessibility tree and a UI test that asserts labels passes whatever is painted. A width check does not catch it either, since three Chinese or Japanese characters and two characters with an ellipsis take the same room. Guard what is drawn by its pixels: `FilterCapsuleTests` renders a chip and the bare name with `ImageRenderer`, crops both to the ink and compares them, after checking that the comparison tells 「工作中」 from 「工作…」. Screenshots in every shipped language are the other evidence.
 
 ## Words cut off by a clip still take touches, over the rows below them (2026-11-13, #6645)
 
@@ -548,6 +569,19 @@ page and the newest message stays over the composer. A fade drawn by the footer 
   footer's measured height: margins that track the footer would move the list on every card, tray and line of text.
 - **Whatever is drawn after the fade covers what is drawn before it.** The footer's gradient also dimmed Jump to Latest, which is
   an overlay of the list. The fog is now the list's first overlay; the navigator and the arrow come after it.
+
+## A blurred footer over a list beside the iPad's sidebar (2026-11-16, #9008)
+
+- `safeAreaBar(edge: .bottom)` gives a bar the system's scroll-edge blur, but beside the iPad's floating sidebar it took
+  12 pt off the list's leading margin, whatever the bar held: the to-do page's cards sat 8 pt from the sidebar and 20 pt
+  from the other side (iPhone unaffected). A ZStack around the list, `listSectionMargins`, `contentMargins`,
+  `listStyle(.insetGrouped)` and a narrower bar left it as it was. Its automatic edge was also the hard one there, a
+  lighter band with a line along its top; `.scrollEdgeEffectStyle(.soft)` removes the line, not the margin.
+- `floatingFooter` keeps `safeAreaInset` (margins as before) and draws its own blur under the bar: a material masked along
+  `EasedFade`, one fixed layer, so scrolling never redraws it. The material alone lit a black page gray in dark; washing
+  it halfway back to the page's color (`Theme.groupedPage` behind a grouped list) keeps dark black.
+- Check a bottom bar on an iPad in landscape beside the sidebar, both edges of the cards measured against the build
+  before, and in dark as well as light.
 
 ## Personal Agent entry availability (#2935)
 
@@ -1287,13 +1321,21 @@ Use an invalidation revision as the task key and handle the flag after completio
   rather than removing app isolation for tests. Run all PersonaTests before submitting; one noncompiling file blocks the target (2026-10-31 `KnowledgeTests`).
 - The app defaults to MainActor isolation. System-owned callbacks on system queues (`PHPhotoLibrary.performChanges`, `SFSpeechRecognizer.requestAuthorization`,
   `fetchReminders`, `PHImageManager`, `WCSession.sendMessage` reply / error…) without SDK `Sendable` annotation compile without warnings but inherit main isolation,
-  crashing when runtime isolation checks fail (`dispatch_assert_queue_fail`, every image save on 2026-10-31). Always write `{ @Sendable … in`; `BackgroundCallbackTests` checks source.
+  crashing when runtime isolation checks fail (`dispatch_assert_queue_fail`, every image save on 2026-10-31; turning on urgent calls, #9256). Always write
+  `{ @Sendable … in`; `scripts/test/test_apple_background_callbacks.py` checks the source. It was the PersonaTests class `BackgroundCallbackTests`, which
+  only `xcodebuild test` runs: #9092 merged without running it and shipped the crash it lists (#9258). A check that only reads source belongs in
+  `scripts/test/`, where every Apple PR's guard pass runs it without a build.
   SDK `NS_SWIFT_SENDABLE` callbacks (HealthKit, URLSession) and main-thread delegates need no change. Actual system-feature UI tests (`PhotoSaveTests`) expose it.
+- Where the check is (#9256): the trap is compiled into a main-actor closure handed to a block parameter that is not `Sendable`, as above. A main-actor
+  method that satisfies a plain Swift protocol's requirement (LiveCommunicationKit's `ConversationManagerDelegate`, an isolated conformance) has no
+  check, so the framework calling it on its own queue does not stop the app; it is still main-actor code running off the main thread, so such a delegate's
+  methods are `nonisolated` and hop. To see which closures carry the check, disassemble a Debug object file (`xcrun llvm-objdump -d -r X.o`) and list the
+  functions that call `swift_task_reportUnexpectedExecutor`. Most are SwiftUI and collection closures run in place; the ones that matter are those handed to a system API.
 - `{ @Sendable … in` is not enough for a new thread's body. In some batch builds (Xcode 26.3, `MainThreadWatchdog.swift` batched with
   `LinkSheet.swift`) `Thread(block:)` is imported as taking a `@MainActor @Sendable` block, and a closure literal passed to it takes that isolation,
   so the watchdog loop trapped on its own thread about a second after every DEBUG launch (`dispatch_assert_queue_fail`, #4703). The same file
   compiled alone was fine, so single-file experiments hid it. Bind the body to a typed `let body: @Sendable () -> Void = { … }` and pass
-  `Thread(block: body)`; `BackgroundCallbackTests` rejects closure literals handed to `Thread` / `detachNewThread`.
+  `Thread(block: body)`; `scripts/test/test_apple_background_callbacks.py` rejects closure literals handed to `Thread` / `detachNewThread`.
 - For custom concurrency helpers delivering results to main, mark the function `@MainActor` and use `withTaskGroup(…, isolation: MainActor.shared)`.
   An `isolation: isolated (any Actor)? = #isolation` parameter alone did not reliably keep task groups on caller actor: `HubFanOut.run`
   callbacks ran in background, and reading `AppModel` triggered isolation checks, crashing every launch (`dispatch_assert_queue_fail`,
@@ -1327,6 +1369,17 @@ Use an invalidation revision as the task key and handle the flag after completio
   multi-statement closures in long modifier chains (`.task { … }`) are inferred with the entire chain, with shifting error lines. Extract closure methods and computed ids (`ChatView.prewarmRows`).
 - Xcode 26.3 / Swift 6.2.4 also times out on long array-concatenated fixtures (`RFBClientTests.sessionFollowsDesktopSize`).
   Build `[UInt8]` arrays by protocol header, rectangle fields and encoding segments, preserving bytes / assertions; do not exclude tests to bypass original scheme builds.
+- **A page's modifier chain outgrows the type checker again, even in a property of its own** (2026-11-17, #9379, #7292, after #7302):
+  `ChatsView.listColumn` (15 modifiers, most with a closure of their own) is one expression, and Xcode 26.0 and 26.3 stop at "unable
+  to type-check this expression in reasonable time" on its first line, though no line in it is wrong. Raising the solver's limits
+  (`-solver-memory-threshold`, `-solver-scope-threshold`, `-solver-expression-time-threshold`) does not make it compile. Cut the
+  chain into stages, each a function of the one before it that returns `some View` (`listColumnProbes(_:)` and the three after it),
+  so Swift types each apart; move the body of a closure that has more than one statement into a method (`stackPathChanged(to:)`), and
+  give a value that feeds `onChange(of:)` a `let` with its type. Keep the modifiers' order and evaluate it all in the same getter: the type, the
+  identity and what the view reads stay what they were, and no `AnyView` is added at the cuts. On Xcode 26.3 the four stages type-check
+  in 1–11 ms each and the slowest method in 72 ms. A piece getting slow shows before it fails: the build's `expression took N ms to
+  type-check (limit: 150ms)` warnings (`OTHER_SWIFT_FLAGS` in `apple/project.yml`), and `-Xfrontend -debug-time-function-bodies` there
+  lists every function's time.
 - Swift evaluates arguments left-to-right: in `emit(s, i, word(…, &i, …))`, `emit` receives i before `word` changes it (file-viewer `println!` lost its !).
   Store results first when one argument changes a variable used by another.
 - Build-product Info.plist script stages (Settings › About › Build commit, `project.yml` `Stamp the commit`) must declare `$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)`
@@ -2497,6 +2550,11 @@ agent for Codex-only levels, and test both an explicit effort and a configured e
   "nothing new" or "no earlier commits". Keep the quiet path only for the automatic live refresh; a read the user started
   says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
   small pure type (`GitReadFailure`) so a test pins which case is quiet.
+
+- Connector sign-in is also user-initiated: the first device-code request has no poll to retry it if it fails.
+  `AppModel.show` suppresses timeout-shaped errors, including HTTP 502 diagnostics containing `deadline exceeded`.
+  Keep sign-in errors in the login model and show them beside the retry action; suppress cancellation only. Use the
+  connector's scrubbed API message so generic 5xx formatting does not hide the configuration advice.
 
 ## Configuration refusals are not retryable connection failures (#1915)
 

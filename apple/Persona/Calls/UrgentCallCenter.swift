@@ -16,8 +16,11 @@ import UserNotifications
     static let shared = UrgentCallCenter()
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
 
-    /// The call the page shows: answered, or opened from its notification.
-    private(set) var session: UrgentCallSession?
+    /// The call the page shows: answered, or opened from its notification (`UrgentCallPresenter`, which the cover reads).
+    private(set) var session: UrgentCallSession? {
+        get { UrgentCallPresenter.shared.session }
+        set { UrgentCallPresenter.shared.session = newValue }
+    }
 
     /// How long a ring lasts before it counts as missed (the manager rings once more after its retry wait).
     static let ringFor: Duration = .seconds(45)
@@ -33,18 +36,27 @@ import UserNotifications
     }
 
     @ObservationIgnored private var ringing: [UUID: Ringing] = [:]
-    /// LiveCommunicationKit's manager: made once, used only from the main actor (its async calls run on its own queue),
-    /// so it is held unchecked rather than sent between regions.
-    @ObservationIgnored nonisolated(unsafe) private let manager: ConversationManager
-    @ObservationIgnored private let delegate = Delegate()
+    /// LiveCommunicationKit's manager, made the first time a call needs it (a VoIP push, its notification tapped), never
+    /// at launch: the call page's cover reads this center on every launch, with urgent calls on or off. Used only from
+    /// the main actor (its async calls run on its own queue), so it is held unchecked rather than sent between regions.
+    @ObservationIgnored nonisolated(unsafe) private var made: ConversationManager?
+    @ObservationIgnored private let delegate = UrgentCallLCKDelegate()
 
-    private init() {
+    private var manager: ConversationManager {
+        if let made { return made }
         let config = ConversationManager.Configuration(ringtoneName: nil, iconTemplateImageData: nil, maximumConversationGroups: 1,
                                                        maximumConversationsPerConversationGroup: 1, includesConversationInRecents: false,
                                                        supportsVideo: false, supportedHandleTypes: [.generic])
-        manager = ConversationManager(configuration: config)
-        manager.delegate = delegate
+        let m = ConversationManager(configuration: config)
+        m.delegate = delegate
+        made = m
+        return m
     }
+
+    /// Whether the manager was made (the tests: launching makes none).
+    var managerMade: Bool { made != nil }
+
+    private init() {}
 
     // MARK: Ringing
 
@@ -72,9 +84,10 @@ import UserNotifications
             ringing[uuid] = Ringing(ring: ring, session: session)
             Task { await session.prepare() }
         }
+        nonisolated(unsafe) let lck = manager // made now, for the call; used from the main actor only
         Task {
             do {
-                try await manager.reportNewIncomingConversation(uuid: uuid, update: update)
+                try await lck.reportNewIncomingConversation(uuid: uuid, update: update)
             } catch {
                 // Focus or Do Not Disturb can refuse the call: the companion notification is what the owner sees then.
                 Self.log.notice("urgent call: the call was not shown: \(error.localizedDescription, privacy: .public)")
@@ -138,9 +151,10 @@ import UserNotifications
     /// The companion notification was tapped: answer the call while it rings, else open its conversation.
     func opened(callID: String, group: String) {
         if let (uuid, r) = ringing.first(where: { $0.value.ring.id == callID }), !r.answered {
+            nonisolated(unsafe) let lck = manager
             Task {
                 do {
-                    try await manager.perform([JoinConversationAction(conversationUUID: uuid)])
+                    try await lck.perform([JoinConversationAction(conversationUUID: uuid)])
                 } catch {
                     answered(uuid) // no call to join (the system refused it): the page opens all the same
                     audioActivated()
@@ -180,7 +194,8 @@ import UserNotifications
     func hangUp() {
         guard let session else { return }
         if let (uuid, _) = ringing.first(where: { $0.value.session === session }) {
-            Task { try? await manager.perform([EndConversationAction(conversationUUID: uuid)]) }
+            nonisolated(unsafe) let lck = manager
+            Task { try? await lck.perform([EndConversationAction(conversationUUID: uuid)]) }
         } else {
             session.hangUp()
         }
@@ -195,7 +210,8 @@ import UserNotifications
     }
 
     private func end(_ uuid: UUID, _ reason: Conversation.EndedReason) {
-        guard let conversation = manager.conversations.first(where: { $0.uuid == uuid }) else { return }
+        guard let made, let conversation = made.conversations.first(where: { $0.uuid == uuid }) else { return }
+        let manager = made
         manager.reportConversationEvent(.conversationEnded(.now, reason), for: conversation)
     }
 
@@ -240,41 +256,42 @@ import UserNotifications
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }
 
-    // MARK: LiveCommunicationKit
+}
 
-    /// The conversation manager's delegate: LiveCommunicationKit calls it on its own queue, so each call hops to the
-    /// main actor.
-    private final class Delegate: ConversationManagerDelegate, @unchecked Sendable {
-        func conversationManager(_ manager: ConversationManager, conversationChanged conversation: Conversation) {}
-        func conversationManagerDidBegin(_ manager: ConversationManager) {}
-        func conversationManagerDidReset(_ manager: ConversationManager) {}
+/// The conversation manager's delegate. LiveCommunicationKit calls it on its own queue, so every method is
+/// `nonisolated` and hops to the main actor itself: in this main-actor-by-default target an unmarked method is the
+/// main actor's, and the runtime's isolation check stops the app when the system calls it from another queue (the
+/// TestFlight crash at launch of #8734's first build).
+nonisolated final class UrgentCallLCKDelegate: ConversationManagerDelegate, @unchecked Sendable {
+    nonisolated func conversationManager(_ manager: ConversationManager, conversationChanged conversation: Conversation) {}
+    nonisolated func conversationManagerDidBegin(_ manager: ConversationManager) {}
+    nonisolated func conversationManagerDidReset(_ manager: ConversationManager) {}
 
-        func conversationManager(_ manager: ConversationManager, perform action: ConversationAction) {
-            nonisolated(unsafe) let action = action
-            let uuid = action.conversationUUID
-            Task { @MainActor in
-                switch action {
-                case let join as JoinConversationAction:
-                    join.fulfill(dateConnected: .now)
-                    UrgentCallCenter.shared.answered(uuid)
-                case let end as EndConversationAction:
-                    end.fulfill(dateEnded: .now)
-                    UrgentCallCenter.shared.endedOnPhone(uuid)
-                default:
-                    action.fail()
-                }
+    nonisolated func conversationManager(_ manager: ConversationManager, perform action: ConversationAction) {
+        nonisolated(unsafe) let action = action
+        let uuid = action.conversationUUID
+        Task { @MainActor in
+            switch action {
+            case let join as JoinConversationAction:
+                join.fulfill(dateConnected: .now)
+                UrgentCallCenter.shared.answered(uuid)
+            case let end as EndConversationAction:
+                end.fulfill(dateEnded: .now)
+                UrgentCallCenter.shared.endedOnPhone(uuid)
+            default:
+                action.fail()
             }
         }
+    }
 
-        func conversationManager(_ manager: ConversationManager, timedOutPerforming action: ConversationAction) {}
+    nonisolated func conversationManager(_ manager: ConversationManager, timedOutPerforming action: ConversationAction) {}
 
-        func conversationManager(_ manager: ConversationManager, didActivate audioSession: AVAudioSession) {
-            Task { @MainActor in UrgentCallCenter.shared.audioActivated() }
-        }
+    nonisolated func conversationManager(_ manager: ConversationManager, didActivate audioSession: AVAudioSession) {
+        Task { @MainActor in UrgentCallCenter.shared.audioActivated() }
+    }
 
-        func conversationManager(_ manager: ConversationManager, didDeactivate audioSession: AVAudioSession) {
-            Task { @MainActor in UrgentCallCenter.shared.audioDeactivated() }
-        }
+    nonisolated func conversationManager(_ manager: ConversationManager, didDeactivate audioSession: AVAudioSession) {
+        Task { @MainActor in UrgentCallCenter.shared.audioDeactivated() }
     }
 }
 #endif

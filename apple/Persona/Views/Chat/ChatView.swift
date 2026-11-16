@@ -822,6 +822,7 @@ struct ChatView: View {
         .confirmDeleteSession($deleting)
         // Deleted here or from the list beside it: the chat goes (AppModel.deletedSession).
         .onChange(of: model.deletedSession) { _, gone in if let gone { closedAgent(gone, order: []) } }
+        .stackSegment()
         .sheet(item: $file) { ref in
             FileViewer(ref: ref, key: key)
                 .environment(\.showInFiles, (session?.cwd ?? "").isEmpty ? nil : { target in
@@ -830,6 +831,7 @@ struct ChatView: View {
                     withAnimation(Theme.Motion.standard) { pane = .files }
                 })
         }
+        .stackSegment()
         .sheet(item: $openedKnowledge) { entry in NavigationStack { KnowledgeDetailView(entry: entry) } }
         .sheet(isPresented: $planOpen) { PlanSheet(plan: latestPlan) }
         return AnyView(activityMiddle)
@@ -2184,7 +2186,8 @@ struct ChatView: View {
                         guard let mark = navigationJump else { return }
                         await jumpToInput(mark)
                     }
-                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under) }
+                    // Left of the open Duo's floating tabs' switch, which stands up past the footer there (#4231).
+                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under).tabSwitchRoom() }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
@@ -2208,6 +2211,8 @@ struct ChatView: View {
             // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
             // has measured itself.
             ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { pickOrFooter } }
+                // Room beside the open Duo's floating tabs' switch while it shows (#4231): the composer and what is over it.
+                .tabSwitchRoom()
                 .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
@@ -2249,6 +2254,7 @@ struct ChatView: View {
                 guard let api = model.api(shownKey.group) else { throw CancellationError() }
                 return try await api.catalogPrices(ids)
             }))
+        .stackSegment()
         .environment(\.openSubagent, actions.openSubagent)
         .environment(\.openPlan, actions.openPlan)
         .environment(\.subagentsByCall, subagentsByCall)
@@ -2258,6 +2264,7 @@ struct ChatView: View {
             guard let sid = model.revealChild?.sessionID, let group = ChildSessionLines.group(of: sid, in: currentLines()) else { return }
             openWork.insert(group)
         }
+        .stackSegment()
         .environment(\.workflowChat, key)
         .environment(\.chatActions, actions)
         .environment(\.subagentParent, key)
@@ -6959,12 +6966,13 @@ struct SessionInfoSheet: View {
                     let started = info.startedAt.flatMap { $0.isMeaningful ? $0 : nil }
                     if counted || usage != nil || started != nil {
                         Section("Usage") {
-                            if counted { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens) + " tokens") }
+                            // The context is left out while unknown: 0 before the first reply and right after a compaction (#9207).
+                            if counted, info.contextTokens > 0 { row(Theme.Icon.context, String(localized: "Context"), Self.tokens(info.contextTokens)) }
                             if let usage { ContextUsageRow(usage: usage) }
                             if counted, info.compactions > 0 { row(Theme.Icon.collapseAll, String(localized: "Compactions"), String(localized: "\(info.compactions) times")) }
                             if counted {
                                 row(Theme.Icon.conversation, String(localized: "Chat"), String(localized: "\(info.turns) turns"))
-                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens) + " tokens")
+                                row("text.word.spacing", String(localized: "Output"), Self.tokens(info.outputTokens))
                             }
                             if let started {
                                 row(Theme.Icon.time, String(localized: "Started"), started.formatted(date: .abbreviated, time: .shortened))
@@ -6978,7 +6986,7 @@ struct SessionInfoSheet: View {
                                 row(Theme.Icon.todo, String(localized: "To-dos"), todo.title)
                             }
                             .sheet(isPresented: $showTodo) {
-                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }
+                                NavigationStack { TodoDetailView(todoID: todo.id).macSheetDone { showTodo = false } }.overTabSwitch()
                                     #if os(macOS)
                                     .macSheet()
                                     #elseif os(iOS)
@@ -7102,13 +7110,8 @@ struct SessionInfoSheet: View {
     /// The coding agent in the pane: Claude Code unless the session names another agent.
     private var agent: String { session.map { $0.isClaude ? "Claude Code" : $0.agentLabel } ?? "Claude Code" }
 
-    static func tokens(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...: String(format: "%.2fM", Double(n) / 1_000_000)
-        case 1_000...: String(format: "%.1fk", Double(n) / 1_000)
-        default: "\(n)"
-        }
-    }
+    /// "1.25K tokens": the count as the Machines page and the web write it (TokenFormat), with a localized unit (#9205).
+    static func tokens(_ n: Int) -> String { String(localized: "\(TokenFormat.count(n)) tokens") }
 }
 
 /// A finished exchange: messages, the folded process, the answer.

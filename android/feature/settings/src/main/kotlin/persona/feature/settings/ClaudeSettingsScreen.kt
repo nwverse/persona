@@ -53,7 +53,8 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
     val (liveReplies, liveRepliesState) = rememberLiveReplies(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     val (dirs, dirsState) = rememberClaudeDirs(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     var dirInput by remember { mutableStateOf("") }
-    val saveDirs = claudeDirsSaver(dirs) { dirInput = "" }
+    LaunchedEffect(state.machineId) { dirInput = "" }
+    val saveDirs = claudeDirsSaver(dirs, machineId = { state.machineId }) { dirInput = "" }
     fun set(key: String, value: JsonElement) {
         scope.launch { model.set(key, value, online)?.let { feedback?.notice(it.resolve(res)) } }
     }
@@ -127,8 +128,20 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
                 )
             }
         }
-        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !dirsState.unsupported) claudeDirsSection(dirsState, dirInput, { dirInput = it },
-            onRetry = { scope.launch { dirs.load(state.machineId) } }, onSave = { blocked, key, done -> saveDirs(blocked, key, done) })
+        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank()) {
+            // A frame can pass between picking another computer and its read starting: until it does, the section reads
+            // this computer's own state, or it would show - and a tap would write - the computer shown before (#9276).
+            val dirsUi = dirsState.forMachine(state.machineId)
+            if (!dirsUi.unsupported) {
+                claudeDirsSection(
+                    dirsUi,
+                    dirInput,
+                    { dirInput = it },
+                    onRetry = { scope.launch { dirs.load(state.machineId) } },
+                    onSave = { blocked, key, done -> saveDirs(blocked, key, done) },
+                )
+            }
+        }
     }
     if (picking) JActionSheet(online.map { machine ->
         JAction(machine.displayName, PhIcons.Laptop, checked = machine.id == state.machineId, onClick = { model.choose(machine.id) })
