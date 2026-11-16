@@ -727,7 +727,7 @@ class Watcher:
             return
         if old.get("head") == head and old.get("evidence_key") == evidence_key \
                 and old.get("retry_reason") in ("semantic_review", "verification_repair", "semantic_repair", "base_update") \
-                and ((old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
+                and ((old.get("retry_reason") in ("semantic_review", "base_update") and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
                      or (old.get("retry_reason") in ("verification_repair", "semantic_repair", "base_update")
                          and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
             # The completed backoff permits a fresh independent attempt budget.
@@ -1054,7 +1054,9 @@ class Watcher:
             retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
             if phase == "semantic_repair":
                 repair_attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
-                delay = 3600 if repair_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT else 60 * repair_attempts
+                if repair_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+                    return self.exhaust_repair(repo, number, pr, evidence_key, error)
+                delay = 60 * repair_attempts
                 self.state.put(repo, number, head, evidence_key=evidence_key, outcome="retry",
                                repair_attempts=repair_attempts, retry_after=time.time() + delay,
                                retry_reason="semantic_repair", failure=str(error))

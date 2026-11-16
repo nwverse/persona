@@ -342,6 +342,30 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state["repair_rounds"], 2)
         self.assertIn("comment unavailable", state["comment_failure"])
 
+    def test_base_update_retry_recovers_after_exhausted_backoff(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", review_attempts=3,
+                               retry_reason="base_update", retry_after=0)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
+                patch.object(pr_watch_repair, "update_branch_with_main", return_value=False) as update:
+            self.watcher.process("example/one", 7)
+        update.assert_called_once()
+
+    def test_semantic_repair_infrastructure_exhaustion_publishes_final_failure(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[finding]), \
+                patch.object(pr_watch_repair, "repair_with_model", side_effect=pr_watch_common.WatchError("offline")), \
+                patch.object(pr_watch, "checked", return_value=""):
+            for _ in range(3):
+                if "example/one#7" in self.watcher.state.data["prs"]:
+                    self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
+                self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "repair_exhausted")
+        self.assertIn("offline", self.comments[-1])
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
