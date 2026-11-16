@@ -157,7 +157,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if p, err := n.launcherProbe(ctx, launcher); err == nil {
+		if p, err := n.keptProbe(ctx, launcher); err == nil { // the probe the message's checks just read (#9097)
 			declare(contextLimit(p.Env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]), contextLimit(p.Env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]))
 			declare(0, codexCapacity(p.Args))
 			c.ownSettings = settingsArg(p.Args)
