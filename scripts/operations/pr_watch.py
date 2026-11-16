@@ -323,7 +323,10 @@ class Watcher:
             for lease in self.state.data.get("worktree_leases", {}).values():
                 if lease.get("repository") == repo and lease.get("number") == number and lease.get("active"):
                     lease["heartbeat"] = time.time()
-            pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
+            try:
+                pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
+            except OSError as error:
+                self.log("lease heartbeat persistence failed; retaining the in-memory lease: " + bounded(error, 300))
 
     @contextmanager
     def merging(self, repo):
@@ -559,7 +562,7 @@ class Watcher:
             finding["severity"], finding["path"], finding["line"], finding["summary"], finding["suggestion"])
             for finding in findings)
         if rounds >= REPAIR_LIMIT:
-            return self.exhaust_repair(repo, number, pr, evidence_key, reason)
+            return self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure") or reason)
         latest = pr_snapshot(repo, number)
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             return False
