@@ -45,16 +45,17 @@ import PushKit
 
     nonisolated func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
         let hex = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
-        MainActor.assumeIsolated { // the registry's queue is the main one
-            guard token != hex else { return }
-            token = hex
+        Self.onMain {
+            let push = UrgentCallPush.shared
+            guard push.token != hex else { return }
+            push.token = hex
             PushRegistrar.shared.reregister()
         }
     }
 
     nonisolated func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-        MainActor.assumeIsolated {
-            token = nil
+        Self.onMain {
+            UrgentCallPush.shared.token = nil
             PushRegistrar.shared.reregister()
         }
     }
@@ -63,8 +64,16 @@ import PushKit
                                   completion: @escaping () -> Void) {
         nonisolated(unsafe) let dictionary = payload.dictionaryPayload
         nonisolated(unsafe) let done = completion
-        MainActor.assumeIsolated {
-            UrgentCallCenter.shared.incoming(dictionary, done: done)
+        Self.onMain { UrgentCallCenter.shared.incoming(dictionary, done: done) }
+    }
+
+    /// Runs `body` on the main actor: at once on the main thread (the registry's queue), else as soon as the main queue
+    /// can. PushKit calls on the registry's queue, but nothing here traps if it ever does not.
+    nonisolated static func onMain(_ body: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { body() }
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { body() } }
         }
     }
 }

@@ -133,7 +133,8 @@ import Speech
     /// Asks for both, as turning urgent calls on does; true when both are allowed.
     static func requestAccess() async -> Bool {
         let speech = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
-            SFSpeechRecognizer.requestAuthorization { done.resume(returning: $0 == .authorized) }
+            // Called on a queue of the system's: a closure of this main-actor class would be the main actor's and trap.
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in done.resume(returning: status == .authorized) }
         }
         let mic = await AVAudioApplication.requestRecordPermission()
         return speech && mic

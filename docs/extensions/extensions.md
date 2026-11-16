@@ -40,7 +40,7 @@ The user's decision: extensions, connectors and chat bots all belong to the **ma
 
 **What the hub does**:
 
-- Forwards these routes **to the manager as-is**: it opens a stream over `/api/v1/bus/relay` (`extensions.accept`) and runs this one HTTP exchange on it, so SSE and WebSocket are still streams. Who is asking goes in `X-Persona-*` headers (device, role, whether it is the owner using the main token locally, admin UI session, language, address); any of these headers sent by the client are stripped, and the hub's credentials are not forwarded. Extension pages in the admin UI are forwarded only through the admin UI route group (with the admin session header).
+- Forwards these routes **to the manager as-is**: it runs each HTTP exchange on a stream over `/api/v1/bus/relay` (`extensions.accept`), so SSE and WebSocket are still streams. A stream carries one request at a time and stays open for the next (HTTP keep-alive, `server/internal/hub/extensions_relays.go`), so only a request that finds no idle stream pays for a new one: `extensions.accept` and the manager's WebSocket, several round trips between the two machines. The hub keeps up to 4 idle streams per manager for 90 s and pings them every 15 s, closing one that does not answer. It closes them when the manager's bus connection ends or is replaced, and the next connection gets new ones. A WebSocket always gets a new stream and closes it when it ends; a request cut short (its client went away, its credential was revoked) closes its stream. Who is asking goes in `X-Persona-*` headers (device, role, whether it is the owner using the main token locally, admin UI session, language, address); any of these headers sent by the client are stripped, and the hub's credentials are not forwarded. Extension pages in the admin UI are forwarded only through the admin UI route group (with the admin session header).
 - When an extension token hits one of the hub's own routes, the hub asks the manager (`extensions.authorize`: the token's hash, the hub route pattern), and the manager says whose token it is and whether that scope is granted. The table is `extwire.RouteScopes` (`TestRouteScopes` still guards it).
 - Keeps the manager's last report (also stored under the hub's own key `hub.extensions_report`, used after a hub restart before the manager reports): the `features` in hello, `computer` / `browser` in the machine list, screen ports. It forwards by the extensions' API prefixes, and for sends that declare receipts, the hub still records the receipts.
 - What its own features need, it asks through `extensions.hub_call`: GitHub sign-in (avatar tiers) and the manager's `persona_settings` (mailboxes, each source's own triage rules). The node's MCP tools (`mcp.tools` / `mcp.call`), the extension wording on gate command cards, and `assistant.lark` belong to the manager (`docs/server/machines.md` ("Who handles computer events")): the assistant's `fleet_tools.go` asks the extensions directly in the same process (`extmgr`'s `AgentTools`, `CallTool`, `AssistantSummary`, `AssistantLark`, in the same order as before), bypassing the hub; if the caller stops waiting (the node cancels the call), the card it was waiting on is withdrawn too. Model config belongs to the assistant (`docs/assistant/model-config.md`). What it needs from extensions (providers, the voice extension's model, extensions that need a triage model, quota plugins: `app.call plugins.*`) and what extensions need from it (`models.usable`, `models.launcher_http`, `models.launchers`) are asked directly inside the manager's process, bypassing the hub (`extmgr/models_link.go`, `launcherquota.go`).
@@ -117,7 +117,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
-| `ui` (version 6) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
+| `ui` (version 8) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
 | `events` (version 1) | `event.` | `id`, `subscribe` (a list of event names, see "Events") | Process speaks the protocol, `on_startup` | Only tells the extension what happened on the hub, see "Events" below |
@@ -2077,7 +2077,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `6`; the web sends `6`, the other apps send `5` (Android; iOS catching up) until they draw all of UI version 6; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `8`; the web sends `8`, iOS and Android send `6` (their native stream `7`) until they draw all of UI version 8; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -2220,7 +2220,7 @@ If you do not want to see an extension's entries and cards: disable the extensio
 
 ### Compatibility
 
-**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 6).
+**UI versions**: 1 is the original eight item types and two slots; 2 adds three slots, `chart` / `stat_grid` / `segmented`, `refresh_after` and context; for 3 see "UI version 3" above; for 4 see "UI version 4: code hosting"; for 5 see "UI version 5: code review"; for 6 see "UI version 6"; 7 is a section's `key` for the native stream (see `schema/extension/README.md`), which needs no downgrade; for 8 see "UI version 8". The version of the `ui` extension point changes with it (`hub.extension_points.ui` in `initialize`, currently 8).
 
 - **Older app, new slot**: the app only queries the slots it knows by `placement`; it does not see new slots and does not error. `nav_page` also appears in the extension details' `ui`, so older apps (web) can still open it under **Settings › Extensions** › this extension;
   important content can therefore just go in `nav_page`, without a `plugin_page`.
@@ -2582,6 +2582,55 @@ The component showcase's version 6 pages are `web/src/showcase/v6` (with their p
 every `ExtensionViewModel` saying what the app's renderer draws (`drawnByApp`). Widgets, the watch and the system extensions keep the Shared version, 3: they draw none of it.
 The retired native Mac app compiled the same code but kept what it reported before (pages 4, the stream 5, cards 3), so the hub downgraded for it (`docs/archive/apple/mac.md`: new features skipped it).
 See "App: Settings › Extensions" below for each part. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+
+## UI version 8 (#9158)
+
+A dashboard page: section cards side by side on a wide screen, such as a personal "Today" page with a full-width "Needs me" card on top
+and then Calendar | Lark today and WeChat | Running Agents in pairs, each card with an icon, its title, a link beside it, a summary line,
+a list and a link at the bottom. The app sends `8` in `context.ui_version`; `hub.extension_points.ui` is `8`; there is no new `features`
+entry (as with 4 to 6, an older hub holds the app's version to its own, and the extension sees that). No new component: fields only,
+authoritative in `schema/extension/view.schema.json` (`x-since: 8`); examples are `schema/extension/examples/View.v8-*.json`.
+**An app sends 8 only when it draws all of the below** (and all of 7, a section's `key`, which needs nothing drawn).
+
+7 is not reused: it is the native stream's section key (#5956), and Android's stream already sends 7, so 8 keeps what 7 promises.
+
+| Where | Field | What it does |
+| --- | --- | --- |
+| `View.layout` | `columns` | On a wide screen the sections are cards in a grid, two columns, or three when there is room; in reading order (left to right, then down); **rows aligned**: each row of cards is as tall as its tallest card (not masonry, which would move cards out of reading order). On a narrow screen a single column, exactly as `stack`. In a card (`compact`) or inside another page it is a stack |
+| `Section.span` | `full` | In a columns view the card takes the whole row (the "Needs me" card); absent, one column. Other layouts ignore it |
+| `Section.icon`, `Section.icon_color` | a `NavIcon`, a `Color` | An icon before the section's title, from the same set and colors as a row's (`icon_color` only colors the icon, never text) |
+| `Section.link` | `{title (1–40), action}` | A link beside the title ("Calendar ›"): pressing it does `action` as a row's action does, through `ui.action`, so the answer may push a page, or `action.push` opens one without asking. It is one of the view's actions (`wire.Actions`): its `push` is checked like any other, an assistant-only action is taken out of an extension's view. The bottom link ("3 more this week ›") stays what it was: a row with an action, or `more` |
+| `Section.columns` | 1–3 | How many rows sit side by side in the section on a wide screen, in reading order; one on a narrow screen and when absent. Any other component in the section keeps the whole width |
+
+A section's link, icon and columns work in every layout, not only `columns`. In a columns view the title, icon and link are drawn inside
+the card, at its top; elsewhere where the title always was.
+
+### Compatibility
+
+The hub draws version 8 for an older app (`downgrade8`, `server/internal/extension/ui_v8.go`, before the older downgrades), so nothing
+is lost but the arrangement:
+
+| Version 8 | Version 1–7 |
+| --- | --- |
+| `layout: columns` | `stack`: the same cards one under another, as a narrow screen draws them |
+| `Section.link` on a full page (a `nav_page`, an `extension_page`, a `machine_section`, a `launcher_section`, an `inbox_item`) | the section's last row (before a version 1–2 app's Load More button), titled as the link, with its action, so it stays reachable |
+| `Section.link` in a card, a widget, or a native stream | left out: a card and a widget open a page of their own; a native stream sends a press back by the key of the node pressed, and such a row is none of the source's nodes. A page already holding 300 components gets no row either |
+| `Section.span`, `icon`, `icon_color`, `columns` | left out |
+
+The view the extension drew is checked first, whatever the app's version; then what the app gets is checked again (as for every version).
+Extensions may still draw an older app differently (`ui_version`). `UIStreamSection` takes the new section fields, so a native stream's source
+may draw them; the stream's clients send 7 and get the table above.
+
+**The web** (#9158) draws all of it and sends `8` (`web/src/views/extensions/ViewBody8.tsx`, a chunk loaded with the first view that has
+version 8 in it; the rows side by side in `ViewBody.tsx`'s `Run`). A columns view takes the page's whole width, as a split view does. The
+grid follows the width of the page's content, not of the window (container queries): two columns once each card keeps 24rem, three once
+three do; at 1440 × 900 with the sidebar open that is two. A card's rows go two a line once the card is 36rem wide, three at 54rem; side
+by side they have no hairline between them. The card's head is an overview card's (`text-meta` medium title), the icon in its named
+color, the link in the accent with ›, a spinner in its place while its action is on its way. The web's native stream still sends 7.
+`web/e2e/extension-columns.mjs` checks the grid in a browser against the mock (`MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1`).
+
+**iOS and Android** have the fields in their generated types and still send 6 (their native stream 7): the hub draws them a stack until
+they draw version 8 (their own changes, after #9158).
 
 ## System-level placements (#1858)
 

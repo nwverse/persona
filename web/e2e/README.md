@@ -48,6 +48,24 @@ drawn after it with the header where it was tapped, and a search for `make step-
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
 
+## An extension's dashboard page: UI version 8's columns layout (#9158)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-columns.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 the five cards are in reading order in two columns,
+the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
+each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
+its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
+(the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
+run, and the last line is the verdict.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
