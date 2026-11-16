@@ -5194,6 +5194,8 @@ private struct AgentsCoverWatch: View {
     let catalogEnabled: Bool
     let covered: (Bool) -> Void
     let chatShown: () -> Void
+    /// This list's place among the Agents lists in sight (`RuntimeSessionLists.listInSight`, #9487).
+    @State private var sightID = UUID()
 
     /// The shell's slide between the pages shows the list again.
     private var isCovered: Bool {
@@ -5219,7 +5221,12 @@ private struct AgentsCoverWatch: View {
             // Whether each machine's herdr runs, and the worktrees, while the list is in sight.
             .modifier(HerdrPolling(watch: herdr, key: herdrKey, covered: isCovered))
             .modifier(WorkspaceCatalogPolling(catalog: catalog, enabled: catalogEnabled, covered: isCovered))
-            .onChange(of: isCovered, initial: true) { _, now in covered(now) }
+            .onChange(of: isCovered, initial: true) { _, now in
+                covered(now)
+                // Out of sight, the hub's lists read for hints once a window; in sight, as they come.
+                model.sessionLists.listInSight(sightID, !now)
+            }
+            .onDisappear { model.sessionLists.listInSight(sightID, false) }
             .onChange(of: model.visibleSession) { _, key in if key != nil { chatShown() } }
     }
 }
