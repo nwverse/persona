@@ -40,6 +40,10 @@ type PlanTask struct {
 	Title   string `json:"title"`
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
+	// InboxItem explicitly names the handed-off item this task is for, never the conversation's latest item.
+	InboxItem string `json:"inbox_item,omitempty"`
+	// InboxHandoff is the hub-owned operation validated when the plan was made.
+	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	Cwd           string `json:"cwd"`

@@ -1046,6 +1046,12 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   request again sends nothing more), or starts the main conversation with it, and answers `{item, session}`; a work machine is refused, and a failed send records nothing (`apierr.Call`'s status, as for a new conversation).
   The item keeps the hand-off (`handoffs`: `machine_id`, `session_id`, `at`, the latest 5) and its chain gets one `handling` entry per conversation ("Handed to Persona's main chat",
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
+  When that conversation dispatches work with `task_plan`, each related task supplies `inbox_item` with the handoff's exact item id.
+  The manager validates the conversation, machine, open item and link policy, records the handoff operation on the plan, and rechecks it at Start.
+  Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link,
+  without filing the item, changing its draft or sending a reply. Unrelated tasks omit the field. Multiple tasks retain their own back-references:
+  the web detail lists each task and its current workers, scoped to the item's manager, and one completed task cannot file an item with other unfinished tasks.
+  Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
   That conversation may then write back with `inbox_suggest` and `item` (above). What the user does with its suggestion is told there, wrapped to name the item
   (`prompts/inbox/handoff_note.md`; a Persona notice sent as a plain `session.send` without a message id, a failure only logged, which the hub marks `injected` (`system` / `inbox`)
   so the apps show one line, "Inbox: an update on “title”", not the model's text as a user bubble): reject, instruct, handback, a confirmed reply sent (which files the item as replied:

@@ -89,6 +89,10 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	}
 	for i := range p.Tasks {
 		t := &p.Tasks[i]
+		if err := s.checkPlannedInbox(ctx, p.Conversation, *t); err != nil {
+			t.Error = err.Error()
+			continue
+		}
 		var todo Todo
 		if t.ReuseTodo != "" {
 			// The todo is already there with its own title, notes and task card in the conversation's feed (a Lark topic
@@ -115,6 +119,15 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			if retitle {
 				s.nameTodoLater(ctx, todo.ID, title, t.Prompt)
 			}
+		}
+		if err := s.linkPlannedInbox(ctx, p.Conversation, *t, todo); err != nil {
+			t.Error = err.Error()
+			if t.ReuseTodo != "" {
+				s.releaseTakenTodo(t.ReuseTodo)
+			} else if err := s.deleteTodo(ctx, todo.ID); err != nil {
+				s.logf("task %s: undo Inbox admission: %v", todo.ID, err)
+			}
+			continue
 		}
 		t.TodoID = todo.ID
 		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
