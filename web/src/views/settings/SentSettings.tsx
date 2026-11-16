@@ -418,13 +418,13 @@ function DetailBody({ item }: { item: SentItem }) {
       {item.let_through.edited_from && (
         <section>
           <div className="mb-1.5 flex items-center gap-2">
-            <h3 className="flex-1 text-[12px] font-medium text-ink-3">{t("settings-sent.d_original")}</h3>
+            <h3 className="flex-1 text-xs font-medium text-ink-3">{t("settings-sent.d_original")}</h3>
             <Button tone="quiet" icon="copy" onClick={() => void copyText(item.let_through.edited_from!)}>
               {t("settings-sent.copy_text")}
             </Button>
           </div>
-          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-inset p-3 font-sans text-[12.5px] leading-relaxed text-ink shadow-hairline select-text">{item.let_through.edited_from}</pre>
-          {textCut(item.let_through.edited_from) && <p className="mt-1.5 text-[11.5px] leading-snug text-ink-3">{t("settings-sent.text_cut", { count: formatNumber(SENT_TEXT_MOST) })}</p>}
+          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-inset p-3 font-sans text-sm leading-relaxed text-ink shadow-hairline select-text">{item.let_through.edited_from}</pre>
+          {textCut(item.let_through.edited_from) && <p className="mt-1.5 text-xs leading-snug text-ink-3">{t("settings-sent.text_cut", { count: formatNumber(SENT_TEXT_MOST) })}</p>}
         </section>
       )}
       <section>

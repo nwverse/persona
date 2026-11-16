@@ -34,30 +34,30 @@ export function usePermissionText(ix: Interaction) {
         </Button>
       </div>
       {editing && (
-        <label className="flex flex-col gap-1 text-[12px] text-ink-3">
+        <label className="flex flex-col gap-1 text-xs text-ink-3">
           {t("chat-interactions.edit_text_label")}
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={4}
             aria-label={t("chat-interactions.edit_text_label")}
-            className="min-h-24 resize-y rounded-control bg-field px-2.5 py-2 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink-3 focus:ring-2 focus:ring-accent"
+            className="min-h-24 resize-y rounded-control bg-field px-2.5 py-2 text-sm leading-relaxed text-ink outline-none placeholder:text-ink-3 focus:ring-2 focus:ring-accent"
           />
         </label>
       )}
       {denyOpen && (
-        <label className="flex flex-col gap-1 text-[12px] text-ink-3">
+        <label className="flex flex-col gap-1 text-xs text-ink-3">
           {t("chat-interactions.deny_note_label")}
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder={t("chat-interactions.deny_note_placeholder")}
             aria-label={t("chat-interactions.deny_note_label")}
-            className="h-8 rounded-control bg-field px-2.5 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:ring-2 focus:ring-accent"
+            className="h-8 rounded-control bg-field px-2.5 text-sm text-ink outline-none placeholder:text-ink-3 focus:ring-2 focus:ring-accent"
           />
         </label>
       )}
-      {changed && <p className="text-[12px] text-ink-3">{t("chat-interactions.edited_pending")}</p>}
+      {changed && <p className="text-xs text-ink-3">{t("chat-interactions.edited_pending")}</p>}
     </div>
   );
   return { editor, allow, deny, changed, canAllow, composing: editing || denyOpen };
