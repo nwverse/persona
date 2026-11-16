@@ -20,6 +20,7 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Close a session | ✅ | |
 | Create a session from the phone, resume a Claude session that isn't running | ✅ | Since #5548 Orca opens a terminal in the session's worktree and runs `claude --resume` there, as herdr does; other agents' sessions are refused with why (`orca_resume`) |
 | Claude in the desktop app or in a terminal Persona does not drive | ✅ | Listed as running with its own state, transcript streamed; messages go through the session's peer inbox (a named pipe). Questions and permission prompts there stay on the computer. See "Claude outside Persona's terminals" below |
+| Persona plugin for Claude Code (desktop app sessions, other terminals) | ✅ | The resident node installs and updates it at the user scope of `%USERPROFILE%\.claude` with Claude Code's own CLI (the one on `PATH`, or the desktop app's copy under `%LOCALAPPDATA%\Claude-3p\claude-code`); `persona-link plugin status\|install\|uninstall\|on\|off` ([link.md](link.md) "Claude Code plugin") |
 | Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection definitions") (#1943) |
 | Port forwarding | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
 | Codex discovery (processes, homes, `--listen` endpoints, which rollouts a process holds open) | ✅ | Win32 calls, no processes spawned: Toolhelp32 and the PEB for `codex.exe`, each one's handle table for its open rollouts ("Codex" below). Compatible Codex forks are still not discovered |
@@ -70,6 +71,7 @@ To build both programs from source instead:
 
 ```powershell
 cd server
+go generate ./internal/runtimepkg   # the runtime packages and the Claude Code plugin the node carries
 go build -o personad.exe .\cmd\personad
 go build -o persona-link.exe .\cmd\persona-link
 .\persona-link.exe install --personad .\personad.exe --pair '<the persona://link?… link from the hub>'   # skip --pair if already paired
@@ -115,6 +117,7 @@ is a release or your own `go build`, the supervisor is the same program. Approac
 | `persona-link name [<new>\|--reset]` | As on Linux: shows or changes what the hub calls this computer ([link.md](link.md), "The computer's name") |
 | `persona-link node install` / `node uninstall` | Not installed separately: the node is in the same scheduled task; use `install` (with node) / `install --no-node` |
 | `persona-link node status [--json]` | Whether the scheduled task includes the node, and the task's state |
+| `persona-link plugin status\|install\|uninstall\|on\|off [--json]` | The Persona plugin for Claude Code, through `personad.exe claude-plugin`; on by default ([link.md](link.md) "Claude Code plugin") |
 
 ## Updates through the hub
 
@@ -152,6 +155,7 @@ On a machine with the scheduled task installed, first run `schtasks /End /TN "Pe
 
 ```powershell
 cd server
+go generate ./internal/runtimepkg   # the runtime packages and the Claude Code plugin the node carries
 go build -o personad.exe .\cmd\personad
 go build -o persona-link.exe .\cmd\persona-link
 .\personad.exe node --attach            # resident node; keep it open in another window

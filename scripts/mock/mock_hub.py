@@ -8102,6 +8102,38 @@ ITEMS[ASK1] = (
 # MOCK_ASSISTANT_WORKING=1 (#6230): the unanswered user message the working main conversation is on.
 if os.environ.get("MOCK_ASSISTANT_WORKING") == "1":
     ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 0.2, text="把今天的待办按优先级排一下，告诉我先做哪个。")]
+# MOCK_WAKE_AFTER_ANSWER=1 (#9140): the main conversation asked for three background checks (A), then asked something
+# else (B) and got its answer in full; each check's notification then woke the assistant with no message of the user's,
+# and it wrote about A again. Four final texts lie between two of the user's messages: each is the answer of its own
+# exchange, so the answer to B stays on screen and the woken turns follow under their notices.
+if os.environ.get("MOCK_WAKE_AFTER_ANSWER") == "1":
+    def _woke(ts_min, title, task_id):
+        return it("system", "notice", ts_min, text="Background command completed · " + title, wake=True,
+                  task={"kind": "shell", "status": "completed", "title": title, "task_id": task_id})
+
+    def _check(line, task_id, ts_min):
+        return tool("Bash", {"command": "timetable --line %s --day saturday" % line.lower(), "description": line + " line timetable",
+                             "run_in_background": True},
+                    "Command running in background with ID: %s. Output is being written to: /tmp/claude/%s.output" % (task_id, task_id), ts_min)
+
+    ITEMS[ASK1] = (
+        [it("user", "text", 30, text="Which trains to the coast run this Saturday? Check all three lines.")]
+        + _check("Coast", "bkc", 29.9) + _check("Valley", "bkv", 29.9) + _check("Harbour", "bkh", 29.9)
+        + [it("assistant", "text", 29.6, text="All three timetable checks are running in the background. I will tell you as each one comes in.")]
+        + [it("user", "text", 28.5, text="Meanwhile: what should I pack for two days there?")]
+        + [it("assistant", "text", 28.2, text="A rain jacket and a warm layer, two shirts, walking shoes and sunscreen. All of it fits in a day pack.")]
+        + [_woke(25, "Coast line timetable", "bkc")]
+        + tool("Read", {"file_path": "/tmp/claude/bkc.output"}, "08:10 Saturday: runs", 24.9)
+        + [it("assistant", "text", 24.8, text="The Coast line is in: the 08:10 runs on Saturday.")]
+        + [_woke(20, "Valley line timetable", "bkv")]
+        + [it("assistant", "text", 19.9, text="The Valley line too: the 10:40 runs, with one change.")]
+        + [_woke(10, "Harbour line timetable", "bkh")]
+        + tool("Read", {"file_path": "/tmp/claude/bkh.output"}, "13:05 Saturday: runs", 9.9)
+        + [it("assistant", "text", 9.8, text="All three are in: the 08:10, the 10:40 and the 13:05 run. Only the 08:10 is direct.")]
+    )
+    for _s in ASSISTANT:
+        if _s["session_id"] == ASK1:
+            _s.update(title="A weekend on the coast", last_text="All three are in: the 08:10, the 10:40 and the 13:05 run.")
 # MOCK_QUOTE=1: a message sent with "Quote" earlier (#2427): the main conversation's history has one that starts with a
 # `> ` block of the answer above, and a reply to it, so the bubble's quote card shows for a message from the transcript.
 if os.environ.get("MOCK_QUOTE") == "1":
@@ -21971,7 +22003,7 @@ def truth():
 # POST /mock/sync/card {"session": "<id>"}: a permission card in that session (an assistant conversation too), sent as
 # the hub sends one; answering it tells every app it ended, as the hub does (interaction_resolved).
 # GET /mock/sync/truth?session=<id>: what the chat should show: each turn's user message and its answer (the agent's
-# last words in it), the session's pending cards and its state.
+# last words in it; a wake starts a turn too), the session's pending cards and its state.
 SYNC_CARDS = {"n": 0}
 # MOCK_SYNC_REVS=1: a transcript that grows (a reply, an echoed send) moves its session's updated_at and rev and the list
 # says so, as the hub's does: what tells a page that missed the items push to catch up (#3139). Off, the list stays.
@@ -22021,6 +22053,8 @@ def sync_truth(sid):
         if x.get("role") == "user" and x.get("kind") == "text" and not x.get("injected") and not x.get("from"):
             messages.append({"from": "user", "text": x.get("text") or "", "state": "shown"})
             answer = None
+        elif x.get("wake"):
+            answer = None  # a notice that woke the idle agent starts a turn: the turn before it keeps its answer (#9140)
         elif x.get("role") == "assistant" and x.get("kind") == "text":
             if answer is None:
                 messages.append({"from": "agent", "text": x.get("text") or ""})
@@ -24397,6 +24431,9 @@ def markets_route(handler, p, body):
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
                     "placement": "nav_page", "size": "full", "icon": "calendar"}]
+        if GAUGE_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
+                    "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -29002,6 +29039,7 @@ def features():
 
 
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29579,6 +29617,8 @@ _plugins_route_without_extensions = plugins_route
 def plugins_route(handler, p, body):
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
+    if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
+        return mock_quota(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29672,6 +29712,48 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GAUGE=1 (with MOCK_EXTENSIONS=1): a made-up gateway's quota page, UI version 9's gauge (#9337): a row
+# of status tiles, then a card of three rings, each filled to the quota left with the amount in its centre and the
+# limit's name below, green while there is enough and amber once it runs low; the reset times are the card's footer.
+# Pressing the low ring answers a toast. All names and numbers are invented.
+GAUGE_MODE = os.environ.get("MOCK_EXTENSION_GAUGE") == "1"
+
+
+def _quota_ring(key, title, value, ratio, **extra):
+    color = "amber" if ratio < 0.2 else "green"
+    tile = {"key": key, "title": title, "value": value, "gauge": {"ratio": ratio, "unit": "USD", "color": color}}
+    tile.update(extra)
+    return tile
+
+
+def _quota_view():
+    return {"title": "Gateway quota", "refresh_after": 300, "sections": [
+        {"key": "status", "items": [{"type": "grid", "key": "status", "tiles": [
+            {"key": "state", "title": "Gateway", "value": "Online", "icon": "wifi", "color": "green"},
+            {"key": "keys", "title": "Keys", "subtitle": "1 paused", "value": "3", "icon": "lock"},
+            {"key": "requests", "title": "Requests today", "value": "1,284", "icon": "chart",
+             "spark": {"values": [420, 610, 580, 820, 960, 1010, 1284], "color": "blue"}},
+            {"key": "errors", "title": "Errors", "value": "0.4%", "icon": "warning", "badge": {"text": "Low", "color": "green"}},
+        ]}]},
+        {"key": "quota", "title": "Quota left", "footer": "5 hours resets in 1 h 49 min · this week resets in 1 d 16 h",
+         "items": [{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+             _quota_ring("five_hours", "5 hours", "4.69", 0.94),
+             _quota_ring("week", "This week", "38.20", 0.76),
+             _quota_ring("fable_week", "Fable this week", "0.62", 0.12, badge={"text": "Low", "color": "amber"},
+                         action={"id": "open_limit", "values": {"limit": "fable_week"}}),
+         ]}]},
+    ]}
+
+
+def mock_quota(handler, body):
+    request = json.loads(body) if body else {}
+    if request.get("action") == "open_limit":
+        handler.send_json({"toast": "Fable this week: 0.62 USD left"})
+    else:
+        handler.send_json({"view": _quota_view()})
     return True
 
 

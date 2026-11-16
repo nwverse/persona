@@ -31,6 +31,9 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// it moves, so theirs sits on the page in front and does not read the strip at all (`PagerPill`).
     @Environment(\.shellPillFollowsStrip) private var follows
     @Environment(\.buiTheme) private var theme
+    /// The system's side column the upright switch stands in (nil: floating over the page, at its trailing corner): its
+    /// counts hang toward the page.
+    @Environment(\.shellRailEdge) private var railEdge
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -42,13 +45,20 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
                 .padding(Theme.Space.xs)
                 .background(theme.colors.field, in: .capsule)
                 .overlay(Capsule().strokeBorder(theme.colors.line, lineWidth: Theme.Size.hairline))
-                .animation(Theme.Motion.state, value: chosen)
+                .modifier(SwitchMotion(chosen: chosen, upright: axis == .vertical))
         } else {
             row
                 .padding(Theme.Space.xs)
                 .surface(interactive: true, in: .capsule)
-                .animation(Theme.Motion.state, value: chosen)
+                .modifier(SwitchMotion(chosen: chosen, upright: axis == .vertical))
         }
+    }
+
+    /// Where a segment's count hangs: off its corner toward the page on the upright switch (iPhone Duo, #4231), past
+    /// which is the screen's edge and under which rests the thumb; off the trailing one across the top.
+    private var badgeCorner: Alignment {
+        guard axis == .vertical else { return .topTrailing }
+        return railEdge == .leading ? .topTrailing : .topLeading
     }
 
     /// The page the switch shows as chosen: the shell's, or `tab` outside it.
@@ -74,24 +84,26 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
 
     private var row: some View {
         stack {
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: badgeCorner) {
                 if opensMenu(.assistant) {
                     Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
                         .menuStyle(.button)
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("shell-assistant")
-                        .accessibilityHint("Chat menu")
+                        .modifier(MenuSegmentAccess(hint: "Chat menu", upright: axis == .vertical, title: String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), symbol: Self.symbol(.assistant)))
                 } else {
                     button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
                 }
+                // Upright, the switch stands for the tabs (iPhone Duo): Persona's count as the system's tab showed it.
+                if axis == .vertical { WaitingBadge(axis: axis, tab: .assistant) }
             }
-            ZStack(alignment: .topTrailing) {
+            ZStack(alignment: badgeCorner) {
                 if opensMenu(.chats) {
                     Menu { workMenu() } label: { segment("Agents", .chats, selected: true) }
                         .menuStyle(.button)
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("shell-agents")
-                        .accessibilityHint("List options")
+                        .modifier(MenuSegmentAccess(hint: "List options", upright: axis == .vertical, title: "Agents", symbol: Self.symbol(.chats)))
                 } else {
                     button("Agents", .chats, id: "shell-agents")
                 }
@@ -131,7 +143,7 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
-        .accessibilityAddTraits(chosen == value ? .isSelected : [])
+        .modifier(ButtonSegmentAccess(selected: chosen == value, upright: axis == .vertical, title: title, symbol: Self.symbol(value)))
     }
 
     @ViewBuilder private func segment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
@@ -152,16 +164,26 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         return value == .chats ? Theme.Icon.agents : Theme.Icon.ai
     }
 
-    /// A segment of the side rail's switch: the page's symbol over its name, square, the pill (`PagerPill`) under the
-    /// chosen one.
+    /// A segment of the upright switch (iPhone Duo's side rail and tabs, #4231): the page's symbol alone in a tap target,
+    /// as a tab bar's item down the side; its name is what VoiceOver reads and what a long press shows large
+    /// (`ButtonSegmentAccess`, `MenuSegmentAccess`). Under the chosen one the pill: the strip's (`PagerPill`) in the shell, its own round one
+    /// over the tabs, where there is no strip.
     private func railSegment(_ title: String, symbol: String, selected: Bool) -> some View {
-        VStack(spacing: Theme.Space.xxs) {
-            ThemedIcon(symbol).font(Theme.Font.heading)
-            Text(title).font(Theme.Font.caption).lineLimit(1).minimumScaleFactor(0.7)
-        }
-        .foregroundStyle(selected ? Color.primary : Color.secondary)
-        .scaledFrame(width: Theme.Shell.railSegment, height: Theme.Shell.railSegment)
-        .contentShape(.rect(cornerRadius: Theme.Radius.card))
+        ThemedIcon(symbol).font(Theme.Font.heading)
+            .foregroundStyle(selected ? Color.primary : Color.secondary)
+            .tapTargetFrame()
+            .background {
+                if selected, shell == nil {
+                    if AppStyle.current.usesBeautifulUI {
+                        Color.clear.buiSurface(Capsule(), fill: theme.colors.surface, elevation: .button)
+                            .matchedGeometryEffect(id: "pill", in: pill)
+                    } else {
+                        Capsule().fill(Theme.Shell.segment).matchedGeometryEffect(id: "pill", in: pill)
+                    }
+                }
+            }
+            .contentShape(.capsule)
+            .accessibilityLabel(title)
     }
 
     private func beautifulSegment(_ title: String, selected: Bool) -> some View {
@@ -232,13 +254,17 @@ private struct PagerPill: View {
 }
 
 /// How many agents wait on the user, over the switch's Agents. Its own view: the count changes with nearly every push
-/// (an agent asks, another is answered), and only this badge is drawn again.
+/// (an agent asks, another is answered), and only this badge is drawn again. Over the upright switch's Assistant
+/// (iPhone Duo, #4231) the same for Persona's own conversations (`tab: .assistant`, `TabBadges.assistant`), as the
+/// system's Persona tab counted them.
 private struct WaitingBadge: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shellRailEdge) private var railEdge
     var axis: Axis = .horizontal
+    var tab: AppTab = .chats
     private var offset: CGSize {
-        // On the side rail, inside the segment's corner: past it is the screen's edge.
-        if axis == .vertical { return CGSize(width: -Theme.Space.xs, height: Theme.Space.xs) }
+        // Upright (iPhone Duo), off the segment's corner toward the page (`ShellSwitch.badgeCorner`), clear of its symbol.
+        if axis == .vertical { return UprightBadge.offset(railEdge: railEdge) }
         #if os(iOS) || os(visionOS)
         if LarkHomePreference.shared.shows { return CGSize(width: -Theme.Space.s, height: -Theme.Space.l) }
         #endif
@@ -246,17 +272,109 @@ private struct WaitingBadge: View {
     }
 
     var body: some View {
-        let waiting = model.agentsWaiting
+        let waiting = tab == .assistant ? model.badges.assistant : model.agentsWaiting
         if AppStyle.current.usesBeautifulUI, let text = CountBadge.text(waiting) {
             BUIPill(text, tone: .custom(ink: StatusPalette.needsYou.text, fill: StatusPalette.needsYou.tint))
                 .offset(offset)
                 .allowsHitTesting(false)
                 .accessibilityLabel(StateName.count(.needsYou, waiting))
+                .modifier(UprightCountID(axis: axis, tab: tab))
         } else if waiting > 0 {
             CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
                 .offset(offset)
                 .allowsHitTesting(false)
+                .modifier(UprightCountID(axis: axis, tab: tab))
         }
+    }
+}
+
+/// The switch's motion, in the one step of its chain where the pill's glide always was (the switch across the top as it
+/// was, #6735's stack). Upright (iPhone Duo's side rail and tabs, #4231) also: a bar of fixed items at the default text
+/// size (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, the pill moving at once with Reduce
+/// Motion on, and away while the keyboard is up, as the tab bar it stands for goes under the keyboard: faded and out of
+/// reach, never taken out of the tree (a segment's menu may be open as the keyboard goes, docs/lessons/ios.md).
+private struct SwitchMotion: ViewModifier {
+    let chosen: AppTab
+    let upright: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if upright {
+            let up = KeyboardState.shared.isUp
+            content
+                .animation(reduceMotion ? nil : Theme.Motion.state, value: chosen)
+                .dynamicTypeSize(...Theme.Shell.switchTypeSize)
+                .accessibilityElement(children: .contain)
+                .accessibilityAddTraits(.isTabBar)
+                // Only the fade moves with it, not what the segments do as the keyboard comes or goes.
+                .animation(Theme.Motion.standard) {
+                    $0.opacity(up ? 0 : 1).offset(y: up && !reduceMotion ? Theme.Space.l : 0)
+                }
+                .allowsHitTesting(!up)
+                .accessibilityHidden(up)
+        } else {
+            content.animation(Theme.Motion.state, value: chosen)
+        }
+    }
+}
+
+/// A chosen segment that opens its menu: its hint, in the one step where it always was. Upright (#4231) also selected,
+/// and its name and symbol shown large on a long press, as a tab bar's item shows them (DESIGN_SYSTEM.md 6.2): the
+/// segment draws its symbol alone at the default text size.
+private struct MenuSegmentAccess: ViewModifier {
+    let hint: LocalizedStringKey
+    let upright: Bool
+    let title: String
+    let symbol: String
+
+    func body(content: Content) -> some View {
+        if upright {
+            content.accessibilityHint(hint).accessibilityAddTraits(.isSelected)
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityHint(hint)
+        }
+    }
+}
+
+/// A segment's button: selected when chosen, in the one step where that always was. Upright (#4231) also its name and
+/// symbol shown large on a long press.
+private struct ButtonSegmentAccess: ViewModifier {
+    let selected: Bool
+    let upright: Bool
+    let title: String
+    let symbol: String
+
+    func body(content: Content) -> some View {
+        if upright {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
+        }
+    }
+}
+
+/// The upright switch's counts by name (`shell-agents-count`, `shell-assistant-count`), for the UI tests; the switch across
+/// the top is as it was.
+private struct UprightCountID: ViewModifier {
+    let axis: Axis
+    let tab: AppTab
+
+    func body(content: Content) -> some View {
+        if axis == .vertical {
+            content.accessibilityIdentifier(tab == .assistant ? "shell-assistant-count" : "shell-agents-count")
+        } else {
+            content
+        }
+    }
+}
+
+/// Where a count hangs off an upright segment's corner toward the page (`ShellSwitch.badgeCorner`): out past the
+/// capsule's edge, above the segment's symbol.
+nonisolated enum UprightBadge {
+    static func offset(railEdge: HorizontalEdge?) -> CGSize {
+        CGSize(width: railEdge == .leading ? Theme.Space.s : -Theme.Space.s, height: -Theme.Space.xs)
     }
 }
 

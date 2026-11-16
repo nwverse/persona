@@ -43,8 +43,10 @@ class ChildSessionsTest {
     }
 
     @Test fun listsDockCountsProjectsAndRequestsHaveOneParentHome() {
+        // By Machine only sections computers from the hub's machine list (iOS machineOrder); pass the parent's host.
+        val hosts = listOf(Machine("m", "Example"))
         for (grouping in AgentGrouping.selectable) {
-            val list = buildAgentList(rows.map(::AgentSession), settings = AgentListSettings(grouping = grouping))
+            val list = buildAgentList(rows.map(::AgentSession), hosts, settings = AgentListSettings(grouping = grouping))
             assertEquals(grouping.name, 1, list.counts[AgentQuickFilter.NeedsYou])
             assertEquals(grouping.name, 0, list.counts[AgentQuickFilter.Working])
             assertTrue(list.children.isEmpty())

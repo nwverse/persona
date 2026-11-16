@@ -1233,8 +1233,9 @@ keeps its notice, `THIRD_PARTY_NOTICES.md`).
 - **iPhone** (`VNCPage`, `PhoneScreenLink`, `PhoneScreenWindows`): ⋯ › Mode lists Phone Screen when the Mac's status has
   `phone_screen` (a kept choice on a Mac that no longer offers it acts as Mouse Mode). While the mode is on and the screen
   is live, the page starts the session for its RFB connection's `pair` with the picture's size in points (read while the
-  keyboard is down), and a new connection starts it again. A line under the bars says "Setting up the phone screen…"
-  meanwhile, or why it couldn't (Accessibility not allowed, another device has it, Persona Link too old). The page then
+  keyboard is down), and a new connection starts it again. A line over the top of the picture (not above it, so the
+  picture keeps its shape) says "Setting up the phone screen…" meanwhile, or why it couldn't (Accessibility not allowed,
+  another device has it, Persona Link too old). The page then
   shows only the new display: RFB crops to it with the mixed-scale rule (`VNCDisplays.anchored`; Screen Sharing sends
   DesktopSize when the display comes and goes, measured), and the video channel captures it by its id. The first time it is
   up with nothing on it, and from the bottom bar's Windows button, a sheet lists the Mac's windows by app (the one on the

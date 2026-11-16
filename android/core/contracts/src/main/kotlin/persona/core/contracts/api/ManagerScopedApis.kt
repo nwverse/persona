@@ -116,4 +116,7 @@ private class ManagerConnectors(private val source: ConnectorsManagement, privat
     override suspend fun deleteMessagesData() = withContext(owner) { source.deleteMessagesData() }
     override suspend fun messagesChats(before: String?) = withContext(owner) { source.messagesChats(before) }
     override suspend fun messagesThread(chatId: String, before: String?) = withContext(owner) { source.messagesThread(chatId, before) }
+    override suspend fun gitHubAuth() = withContext(owner) { source.gitHubAuth() }
+    override suspend fun setGitHubAuth(machine: String?) = withContext(owner) { source.setGitHubAuth(machine) }
+    override suspend fun setGitHubInboxOptions(options: GitHubInboxOptions) = withContext(owner) { source.setGitHubInboxOptions(options) }
 }

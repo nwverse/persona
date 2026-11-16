@@ -12,7 +12,7 @@
   "workspace_engine_path": "路径由机器的工作区引擎决定；可修改分支后重新预览。",
   "tray_needs_you": "要你处理",
   "tray_running": "进行中",
-  "tray_empty_pr": "没有等待合并的 PR",
+  "tray_empty_parked": "没有搁置中的事",
   "tray_review": "等 Persona 验收",
   "tray_empty_review": "没有等 Persona 验收的任务",
   "pr_blocker_review_required": "需要审查",
