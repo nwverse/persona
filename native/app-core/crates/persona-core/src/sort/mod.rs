@@ -40,7 +40,10 @@ pub struct Machine {
 /// The owner-qualified path: `group|manager|id` when manager is supplied, otherwise the existing `group|id`.
 pub fn machine_path(group: Option<&str>, manager: Option<&str>, id: &str) -> String {
     match manager {
-        Some(manager) if !manager.is_empty() => format!("{}|{}|{}", group.unwrap_or(""), manager, id),
+        Some(manager) if !manager.is_empty() => match group {
+            Some(group) if !group.is_empty() => format!("{group}|{manager}|{id}"),
+            _ => format!("{manager}|{id}"),
+        },
         _ => match group {
             Some(group) if !group.is_empty() => format!("{group}|{id}"),
             _ => id.to_owned(),
@@ -49,7 +52,9 @@ pub fn machine_path(group: Option<&str>, manager: Option<&str>, id: &str) -> Str
 }
 
 impl Machine {
-    fn path(&self) -> String { machine_path(self.group.as_deref(), self.manager.as_deref(), &self.id) }
+    fn path(&self) -> String {
+        machine_path(self.group.as_deref(), self.manager.as_deref(), &self.id)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -764,11 +769,7 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
     }
     let mut spaces: Vec<Space> = spaces.into_values().collect();
     for space in &mut spaces {
-        let key = format!(
-            "{}/{}",
-            space.preference_machine_id,
-            space.name
-        );
+        let key = format!("{}/{}", space.preference_machine_id, space.name);
         space.pinned = input.pins.spaces.contains(&key);
         space.muted = input.mutes.spaces.contains(&key);
         space.members.sort_by(|a, b| {

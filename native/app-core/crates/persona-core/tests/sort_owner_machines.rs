@@ -31,7 +31,9 @@ fn managers_on_one_hub_machine_keep_independent_groups_and_filters() {
     assert_eq!(groups[1].rows, ["hub|shared/second"]);
 
     for (manager, session) in [("alpha", "first"), ("beta", "second")] {
-        let filtered = persona_core::sort::project(&serde_json::from_value(input("machine", &format!("hub|{manager}|shared"))).expect("filter"));
+        let filtered = persona_core::sort::project(
+            &serde_json::from_value(input("machine", &format!("hub|{manager}|shared"))).expect("filter"),
+        );
         assert_eq!(filtered.groups.len(), 1);
         assert_eq!(filtered.groups[0].rows, [format!("hub|shared/{session}")]);
     }

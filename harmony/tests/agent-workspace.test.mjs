@@ -202,7 +202,7 @@ test('iOS state, machine and space groupings share core visibility and release r
   assert.equal(workspace.visibleRows().length, 3);
   assert.deepEqual(workspace.groups.map((group) => group.id), ['state/working']);
   workspace.setGroupingMode('machine');
-  assert.deepEqual(workspace.groups.map((group) => group.id), ['machine/m1', 'machine/m2']);
+  assert.deepEqual(workspace.groups.map((group) => group.id), ['machine/work|m1', 'machine/work|m2']);
   assert.ok(workspace.groups.every((group) => group.showMachine && !group.showRepository && !group.showWorktree));
   workspace.setGroupingMode('space');
   assert.equal(workspace.groups.length, 2);
