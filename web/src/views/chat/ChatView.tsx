@@ -95,6 +95,7 @@ import { NavRail } from "./NavRail";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
+import { publishTranscript, unpublishTranscript } from "./transcript-share";
 import { useEarlierStretches } from "./useEarlierStretches";
 import { dayRowKey, withDayDividers } from "./day-dividers";
 import { useFoldSearch } from "./useFoldSearch";
@@ -371,6 +372,14 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => ownCard(d.ix)));
   // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript)
   const tr = useTranscript(mid, sid, { starting: Boolean(launching), updatedAt: session?.updated_at, rev: session?.rev, cache: mainCache, assistant });
+  const transcriptOwner = useRef<object>({});
+  useEffect(() => {
+    if (!embedded) publishTranscript(transcriptOwner.current, mid, sid, tr);
+  }, [embedded, mid, sid, tr]);
+  useEffect(() => {
+    if (embedded) return;
+    return () => unpublishTranscript(transcriptOwner.current, mid, sid);
+  }, [embedded, mid, sid]);
   // a conversation that moved between Claude Code and Codex (#5054): its earlier sessions read above the live one, as
   // one conversation; without engine_history this is the transcript as it is
   const earlier = useEarlierStretches(mid, sid, assistant ? undefined : session?.engine_history, tr);
