@@ -51,6 +51,7 @@ class DebugEntryActivity : ComponentActivity() {
                 catch (error: Exception) { android.util.Log.w("DebugEntry", "Cannot add mock hub", error) }
             }
         }
+        if (source.getStringExtra("debug.automation") == "true") DebugAssistantStackProbe.enable(application)
         startActivity(mainActivityIntent(this).apply {
             source.extras?.let { putExtras(it) }
             data = source.data
