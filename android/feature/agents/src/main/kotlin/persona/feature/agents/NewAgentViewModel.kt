@@ -8,6 +8,8 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.feature.chat.ComposerUploadLimiter
+import persona.feature.chat.R as ChatR
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -231,6 +233,7 @@ internal class NewAgentViewModel(
     private var modelsJob: Job? = null
     private var workspacesJob: Job? = null
     private val uploadJobs = mutableMapOf<String, Job>()
+    private val uploadLimiter = ComposerUploadLimiter()
     init {
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
@@ -581,7 +584,8 @@ internal class NewAgentViewModel(
         // The photos and the uploaded files go with the first message as the composer writes them (#2321); the tab is
         // named from what was typed, as on iOS.
         val first = if (async && current.attachments.isNotEmpty())
-            NewAgentAttachments.firstMessage(typed.orEmpty(), current.attachments, uploads?.photosOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
+            NewAgentAttachments.firstMessage(current.prompt.takeIf(String::isNotBlank).orEmpty(), current.attachments,
+                uploads?.photosOnly?.invoke().orEmpty(), uploads?.filesOnly?.invoke().orEmpty()).takeIf { it.isNotEmpty() }
         else typed
         val efforts = current.modelEfforts
         // A catalog workspace picked (#7259): the start goes into it, by its engine's id, in its folder.
@@ -665,11 +669,13 @@ internal class NewAgentViewModel(
     fun canUpload(machineId: String): Boolean = machineId.isNotEmpty() && uploads?.service?.invoke(machineId) != null
     /** How many more photos fit (iOS `MessagePhotos.limit`, 4). */
     fun photoRoom(): Int = (NewAgentAttachments.MAX_PHOTOS - state.value.attachments.count { it.media }).coerceAtLeast(0)
+    /** How many more ordinary files fit; this is separate from the photo/video places. */
+    fun fileRoom(): Int = (NewAgentAttachments.MAX_FILES - state.value.attachments.count { !it.media }).coerceAtLeast(0)
     private val noticeChannel = Channel<AgentText>(Channel.BUFFERED)
     /** What the form's toast says (iOS `model.toast`): a pick not taken, an upload that failed. */
     val notices: Flow<AgentText> = noticeChannel.receiveAsFlow()
     fun notice(text: AgentText) { noticeChannel.trySend(text) }
-    /** Picked photos and files join the form and go to the computer picked, each on its own (iOS `NewAgentAttachments.upload`). */
+    /** Picked photos and files join the form and go to the computer picked, three at a time. */
     fun attach(picked: List<persona.feature.chat.ComposerAttachment>) {
         val uploads = uploads
         val current = state.value
@@ -677,8 +683,30 @@ internal class NewAgentViewModel(
             picked.forEach { uploads?.discard?.invoke(it) }
             return
         }
-        mutable.update { it.copy(attachments = it.attachments + picked, attachedOn = it.machineId, attachNote = null) }
-        picked.forEach { upload(it.id) }
+        var files = fileRoom()
+        var media = photoRoom()
+        val accepted = picked.filter { attachment ->
+            if (attachment.media) (media > 0).also { if (it) media-- }
+            else (files > 0).also { if (it) files-- }
+        }
+        val refused = picked.filterNot { it in accepted }
+        refused.forEach(uploads.discard)
+        if (refused.isNotEmpty()) notice(AgentText(
+            if (refused.any { it.media }) R.string.agents_attach_photo_limit else ChatR.string.chat_composer_file_limit))
+        if (accepted.isEmpty()) return
+        mutable.update { it.copy(attachments = it.attachments + accepted, attachedOn = it.machineId, attachNote = null) }
+        accepted.forEach { upload(it.id) }
+    }
+    /** A failed file stays in the form; Retry goes through the same three-slot pump. */
+    fun retryAttachment(id: String) {
+        val attachment = state.value.attachments.firstOrNull { it.id == id } ?: return
+        if (attachment.error == null || attachment.uploadState == DraftUploadState.Invalid || state.value.locked) return
+        mutable.update { current ->
+            current.copy(attachments = current.attachments.map {
+                if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Pending) else it
+            })
+        }
+        upload(id)
     }
     /** ✕ on a photo or a file: an upload still going stops. */
     fun removeAttachment(id: String) {
@@ -694,7 +722,7 @@ internal class NewAgentViewModel(
         clearAttachments()
     }
     private fun clearAttachments() {
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val gone = state.value.attachments
         mutable.update { it.copy(attachments = emptyList(), attachedOn = "", attachNote = null) }
@@ -720,29 +748,62 @@ internal class NewAgentViewModel(
         // The services of the hub group this computer belongs to (bindingsFor): the group's own machine id goes up.
         val service = uploads.service(machine)
         if (service == null) {
-            // No hub to send it with: it goes, as iOS's upload without an API does.
-            drop(id)
+            if (attachment.image) {
+                // The existing photo UI has no retained failure row; ordinary files do.
+                drop(id)
+            } else {
+                // The picker can return after the hub went away. Keep the document and make Retry explain the offline failure.
+                val error = ComposerOperationException(persona.core.contracts.CoreText.of(
+                    persona.core.contracts.CoreText.Key.ComposerUploadOffline))
+                notice(uploadFailure(attachment.name, error))
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, error), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
+            }
             return
         }
-        mutable.update { s -> s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it }) }
-        uploadJobs[id] = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
-                val path = uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment)
+                val path = uploadLimiter.withSlot {
+                    mutable.update { s ->
+                        s.copy(attachments = s.attachments.map {
+                            if (it.id == id) it.copy(error = null, uploadState = DraftUploadState.Uploading) else it
+                        })
+                    }
+                    uploads.upload(service, persona.core.contracts.SessionKey(machine, ""), attachment) { size ->
+                        mutable.update { s ->
+                            s.copy(attachments = s.attachments.map {
+                                if (it.id == id) it.copy(size = size) else it
+                            })
+                        }
+                    }
+                }
                 // Another computer picked meanwhile: this one's path is no use there.
                 mutable.update { s ->
                     if (s.attachedOn != machine) s
                     else s.copy(attachments = s.attachments.map { if (it.id == id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it })
                 }
-                uploadJobs.remove(id)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                uploadJobs.remove(id)
                 if (state.value.attachedOn != machine) return@launch
-                // As iOS (`FileUploads.run`): a toast says why, and the attachment goes.
+                // A failed upload stays as a row with its reason and Retry; its local content is not discarded.
                 notice(uploadFailure(attachment.name, e))
-                drop(id)
+                if (attachment.image) {
+                    drop(id)
+                    return@launch
+                }
+                mutable.update { s ->
+                    s.copy(attachments = s.attachments.map {
+                        if (it.id == id) it.copy(error = uploads.errorText(attachment.name, e), uploadState = DraftUploadState.Failed) else it
+                    })
+                }
             }
         }
+        uploadJobs[id] = job
+        // An older cancelled job must not unregister its replacement for the same attachment id.
+        job.invokeOnCompletion { uploadJobs.remove(id, job) }
     }
     /**
      * Another computer was picked (iOS `computerChanged`): files are on the one picked before, so they come out with a
@@ -753,7 +814,7 @@ internal class NewAgentViewModel(
         val current = state.value
         val from = current.attachedOn
         if (from.isEmpty() || from == to) return
-        uploadJobs.values.forEach { it.cancel() }
+        uploadJobs.values.toList().forEach { it.cancel() }
         uploadJobs.clear()
         val files = current.attachments.filterNot { it.image }
         val photos = current.attachments.filter { it.image }.map { it.copy(path = null, error = null, uploadState = DraftUploadState.Pending) }
