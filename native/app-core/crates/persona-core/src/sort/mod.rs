@@ -257,7 +257,7 @@ impl Row {
             format!("{group}|")
         };
         let machine_path = format!("{prefix}{}", session.machine_id);
-        let held = input.settings.held.as_deref() == Some(short_id.as_str());
+        let held = input.settings.held.as_deref() == Some(format!("{prefix}{short_id}").as_str());
         let sort_date = if state == AgentState::Working {
             session.state_since.as_deref().or(session.updated_at.as_deref())
         } else {
