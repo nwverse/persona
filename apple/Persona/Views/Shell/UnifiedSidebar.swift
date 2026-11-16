@@ -32,7 +32,8 @@ import PersonaWire
     @ObservationIgnored weak var linedUpWith: UnifiedSidebar?
     /// The page beside the sidebar: its root, picked in the sidebar, and the drill-down path each root was left with
     /// (#8359, `SidebarPageRoots`). A pick replaces the root; only what is opened inside the page is pushed.
-    private(set) var roots = SidebarPageRoots()
+    /// Starts as a constant, no call: `RootView` holds a `UnifiedSidebar` in `@State` (performance rule P3).
+    private(set) var roots = SidebarPageRoots.start
     /// The root in front.
     var root: SidebarPageRoot { roots.current }
     /// The page beside the sidebar is the Persona conversation (with or without pages opened from it): its row is the
