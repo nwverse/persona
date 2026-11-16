@@ -909,6 +909,79 @@ Settings › Meetings, the meeting page, the Live Activity, the recording's page
   too) the card holds no line and no Live box, Full Transcript shows the hub's lines, then on `{"upstream": "failed"}`
   the phone's own under the notice, and back on the page the notice under the card's title.
 
+## A meeting's tape and its replay
+
+For development and tests only (#9417): DEBUG builds, launch arguments, no UI and no setting. Tuning how the live
+transcript, the highlights and the map work together needs the same meeting played many times; a real meeting is slow to
+hold and never the same twice. So a meeting can be recorded from an audio file, everything the meeting room was shown is
+written down as it arrives (a *tape*), and a tape plays back in the room at its own pace.
+
+### An audio file in place of the microphone
+
+`-openMeetingAudio <file>` (an absolute path, or a name in the app's Documents folder): every recording started in that
+run (never an all-day one) hears the file instead of the microphone. `RecordingFileInput` reads it at real time, 100 ms a
+buffer, and `RecordingSegmentWriter` takes its buffers through `process` as the input tap's: the 16 kHz conversion (a
+stereo file is mixed down), the level, the segment files, Talk's listener and the hub uplink all run as for a microphone.
+The engine's input is never opened (no tap, no voice processing; a route change and `turnOnVoiceProcessing` change
+nothing), so the microphone permission isn't asked for, and no virtual sound card or system audio setting is involved;
+the players of a room meeting still play through the engine's output. Pause stops the file and Continue goes on from
+there; after the file's end silence comes at the same pace until Stop.
+
+### The tape
+
+A run with `-openMeetingAudio` also writes the tape of the meeting it records (`MeetingTapeRecorder`, following
+`MeetingTranscription` and `MeetingConversation` through Observation; nothing in the meeting's own code knows of it) to
+the app's Documents/meeting-tapes/`<recording id>`.json, a second after each change and at once at Stop, then with the
+minutes once the hub wrote them (read every 15 seconds for up to 20 minutes). Get it from the simulator with
+`xcrun simctl get_app_container <udid> <bundle id> data` (Documents/meeting-tapes/ under it); a tape folder keeps the
+tape as tape.json with its audio beside it.
+
+`MeetingTape` (JSON, `format` `persona-meeting-tape`, `version` 1; times in seconds):
+
+| Field | What |
+| --- | --- |
+| `title`, `finalTitle` | The title the meeting started with, and the one it had at the end (the hub may name it) |
+| `startedAt` | When the recording started (ISO 8601) |
+| `audio` | The audio file's name; the recording's 0 is the file's 0 |
+| `locale`, `transcription`, `service`, `role` | The language, `hub` or `device` as asked, the speech service, Persona's role at the start |
+| `endedAfter`, `duration` | Seconds after the start when Stop was pressed, and the recording's length then |
+| `events[]` | Every change the room was shown, in the order it came: `kind`, `t` (seconds after the start when it reached the app), `at` (the recording's position then), and the kind's fields |
+| `minutes`, `minutesState`, `minutesAfter` | The minutes as the hub wrote them (`RecordingMinutes`), its `minutes_state`, and when they came |
+| `phoneLines` | The phone's own lines (its on-device transcript) at the end, when it had any |
+
+The events' kinds: `interim` (the hub's caption: `start`, `text`; no `text` once it went), `line` (a line of the live log:
+`n`, `start`, `end`, `text`, `source`), `topics` (the whole list, the map), `highlights` (the whole list), `room` (the
+room's state) and `problem` (the transcription's standing problem, `text` its code). `MeetingTape.frame(at:)` is what the
+room holds at a moment.
+
+### Replay
+
+`-showMeetingReplay <tape>` (an absolute path to a tape or a tape folder, a name in Documents/meeting-tapes, or `sample`
+for the made-up `MeetingTapeSample`), with `-showMeetingReplaySpeed 1|2|4` (0.25 to 16) and `-showMeetingReplayEnd YES`
+(the meeting ends by itself at the tape's end; otherwise it goes on, silent, until End). Open the Recordings page
+(`-openShellPage recordings`) and the room comes up: a made-up room meeting (`MeetingReplay.id`), Persona answering on
+screen, started with the live view and the highlights, records itself with no microphone while the tape's events reach
+the room's stores at `t` divided by the speed: the captions and lines into `MeetingTranscription` as hub transcription
+has them, the room, the topics and the highlights into `MeetingConversation`. The replayed meeting stays off every hub
+(`MeetingReplay.holds`): `RecordingSync.status` never makes it pending, `MeetingConversation` never reads its `…/live`,
+it asks for no hub transcription (so no audio socket and no gap upload), and after End its minutes are the tape's.
+
+To see the hub's current highlights and map logic on the same audio, record it again: start a meeting with
+`-openMeetingAudio` and the tape's audio, then compare the new tape with the old one.
+
+Real meetings' audio and tapes hold other people's words: they stay on the machine that made them, never in the
+repository, a gist, an issue or a PR. The repository has only the made-up sample: `MeetingTapeSample` and its
+JSON, apple/PersonaTests/Fixtures/meeting-tape/tape.json, with its audio, apple/PersonaTests/Fixtures/meeting-tape/audio.m4a
+(macOS `say` in two voices, the same words at the same times).
+
+Tests: `MeetingTapeTests` (the fixture is the made-up tape and survives a round trip, a frame at each moment, a line read
+again in its place, the schedule at 1×, 2× and 4×, the speed's bounds, the replay held away from sync and showing the
+hub's lines and the room's lists, the launch argument, the file's real-time pace and pause, a writer recording the
+file as a microphone); `MeetingReplayUITests` against the mock hub (the made-up tape at 2×: the lines one by one, the
+two highlights, the map's three topics, End with the tape's minutes and nothing at the mock; a meeting started with
+`-openMeetingAudio`: no prompt, the file's audio up the audio socket in hub transcription and the hub's lines back in
+the room). PERSONA_SHOTS saves `replay-<appearance>-live|live-end|highlights|map|end|after|minutes|file-input`.
+
 ## All-day recording (Apple)
 
 The contract (the wire between watch, phone and hub, retention, the recap) is `docs/assistant/day-recap.md` (#4741); this is how the Apple apps carry it out. The rules are pure and unit tested on the phone's target (`apple/Shared/Recording/`: `RecordingDay.swift` for the contract's values and wire types, `RecordingDayOutbox` for what the watch sends and how, `AllDayAlertPolicy` for what the wrist, Notification Center and the face show, `AllDaySnapshot` for the complication). On the watch `WatchAllDay` carries them out, `RecordingCapture` records in day mode and `WatchDayTransfer` sends; on the phone `RecordingDayReceiver` hands chunks to `RecordingDayStore`, then `RecordingDayTranscriber`, `RecordingDaySync`, `RecordingDayKeeper` and `RecordingDayCatchUp` take them on (`apple/Persona/Recording/`).
