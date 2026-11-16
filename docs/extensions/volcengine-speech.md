@@ -121,8 +121,13 @@ language it was said in, as the contract wants).
 - **Replay** (`bigmodel_nostream`, the streaming-input endpoint: more accurate, results once the audio ends): windows of about five
   minutes, ended at the first half second of quiet after that (at the latest 30 s more), at a hole and at `end`, each one session, its
   audio at the job's `speed`. A window's utterances are its sentences, then `window`; a window with no text where the transcript of
-  record had some (6 characters or more, and one per 5 s) is `kept: true`, so the hub's live text stays. A window that fails is tried
-  once more; a second failure ends the job (the manager tries the pass again). The final pass bills about the meeting's length again.
+  record had some (6 characters or more, and one per 5 s) is `kept: true`, so the hub's live text stays. In a meeting's final pass (it
+  has a transcript of record) a window that fails is tried once more; a second failure ends the job (the manager tries the pass again).
+  In a job with no transcript of record (an extension's, "Transcription for extensions" in extensions.md) a window that fails is tried
+  three times (at once, then after 2 and 4 s); after the third it goes out as `kept: true`, which the manager hands the extension as a
+  gap, and the job goes on (#8887). Failures still count in a row across windows: a fourth with no window getting through in between
+  (a service that is down) ends the job. A window waiting to be tried again holds back the windows after it, so they go out in order.
+  The final pass bills about the meeting's length again.
 - **Hotwords** (`request.corpus.context`, `{"hotwords": [{"word": …}]}`): the job's glossary (the meeting's title and calendar title,
   its attendees, then the owner's glossary) with the titles (the first two terms when longer than 8 characters or with a space) moved
   last: names and the owner's own terms matter most. Live sessions take what fits in the service's 100 tokens (a Chinese or Japanese
@@ -167,7 +172,8 @@ a quota gateway's key reaches the voice extension today, so the owner enters it 
 - `server/internal/volc`: the client against `volctest`, a stand-in written from the service's documentation independently of the
   client (its own framing): live jobs (captions, sentences and their recording times, flush, end, usage, the request and its hotwords),
   a dropped session replaced without a sentence said twice or out of order, a hole, a pause, refusals (`upstream_forbidden`,
-  `no_upstream`), replay windows (kept ones), the old console's headers, synthesis and its errors, the settings check (what it tries, its
+  `no_upstream`), replay windows (kept ones; a failing window as a gap in an extension's job, a service that goes down, a final pass
+  that still ends), the old console's headers, synthesis and its errors, the settings check (what it tries, its
   words), the page.
 - `server/internal/extmgr` `TestVolcSetup`, `TestVolcMeetingsSwitch`: the hub runs the real program (the test binary as `volc`) against
   the stand-in (`PERSONA_VOLC_SERVICE`): off until turned on, needs setup without a key, a refused key not saved, a key checked, sealed

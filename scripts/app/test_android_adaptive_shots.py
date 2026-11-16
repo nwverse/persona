@@ -91,6 +91,29 @@ def make_runner(adb, output, document=None, reset=False):
 
 
 class AdaptiveShotsTest(unittest.TestCase):
+    def test_navigation_reads_default_and_explicit_tabs(self):
+        chat = {"machineId": "machine", "sessionId": "session"}
+        cases = [
+            ({}, ("Persona", None)),
+            ({"chats": {"Persona": chat}}, ("Persona/chat", "machine/session")),
+            ({"tab": "Agents", "chats": {"Agents": chat}}, ("Agents/chat", "machine/session")),
+        ]
+        for position, expected in cases:
+            with self.subTest(position=position), tempfile.TemporaryDirectory() as output:
+                runner = make_runner(FakeAdb(), output)
+                runner.shell_ready = mock.Mock(return_value="shell-position.json")
+                runner.adb.shell = mock.Mock(return_value=json.dumps(position))
+                self.assertEqual(expected, runner.read_navigation())
+
+    def test_navigation_rejects_explicit_invalid_tabs(self):
+        for tab in (None, "", False, 1):
+            with self.subTest(tab=tab), tempfile.TemporaryDirectory() as output:
+                runner = make_runner(FakeAdb(), output)
+                runner.shell_ready = mock.Mock(return_value="shell-position.json")
+                runner.adb.shell = mock.Mock(return_value=json.dumps({"tab": tab}))
+                with self.assertRaisesRegex(shots.AdaptiveFailure, "shell position has no route tab"):
+                    runner.read_navigation()
+
     def test_steps_never_restart_and_each_theme_may_clear_once(self):
         document = scenario([{"step": "launch"}, {"step": "open", "tab": "Agents"},
                              {"step": "rotate"}, {"step": "capture", "name": "one", "state": "flat"}])

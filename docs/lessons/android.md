@@ -771,3 +771,12 @@ modifier or an effect (`snapshotFlow`), and derive booleans such as "keyboard up
 inset in steps with `ViewCompat.dispatchApplyWindowInsets` and counts recompose scopes with a `CompositionObserver` set on
 the root composition, which also sees subcompositions; the caller's file and line come from a stack trace in `onScopeEnter`.
 `JPage`'s `SubcomposeLayout` still subcomposes some slots per measure (about 16 scopes a frame), left for later.
+
+## Shadow comparisons require equivalent contracts (#7448)
+
+A shared field name does not imply shared semantics: Kotlin continuity's per-input `verified` can be true for restored
+cache while Rust's `ChatPatch.verified` stays false until a fresh baseline. Compare common state and request fields;
+cover intentionally different verification semantics with explicit real-JNI tests rather than rebuilding the Rust
+state machine locally. Rejection is driver-level and uncorrelated: signal it without payloads, preserve it across
+multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
+may stop on that signal without affecting Kotlin or another chat's work.
