@@ -837,6 +837,13 @@ state machine locally. Rejection is driver-level and uncorrelated: signal it wit
 multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
 may stop on that signal without affecting Kotlin or another chat's work.
 
+A strict comparison of a retained draft also flags a difference that is only representation, and neither side is the
+reference until the iOS oracle says so (#9238). Android's answer builder removes a question's Other entry on a single
+choice; iOS's `QuestionForm.pick` and the core keep it as an empty string. Answers, pages and resolutions agree, and iOS
+reads both alike, but Android draws its Other field while the key exists, so the core's draft can't be stored as it is.
+Changing the core to match Android would have moved it away from iOS. The shared `expected` objects carry answers, not
+the draft, so nothing could decide this until `TestResolutionFixturesIOS` began reporting the draft each click leaves.
+
 ## An offline computer can still have a readable workspace catalog (#9317)
 
 The workspace catalog is read from the hub, which persists its last successful node inventory. Skipping the hub read
@@ -851,3 +858,22 @@ or missing workspace list is a failure, not evidence that every workspace disapp
 ## The NDK prebuilt host directory follows the OS (#9327)
 
 Choose `darwin-x86_64` on macOS and `linux-x86_64` on Linux for the release `llvm-readelf` check and the Gradle `ndkHost` / `ndkTools` inputs; NDK 29 has no `linux-x86_64` tree on a Mac, so a hard-coded path fails that check after the libraries build.
+
+## Cap a page's bottom bar on the bar, not on the row in it (#9009)
+
+`PageFrame` already limits whatever a page passes as `bottomBar` to `ReadingWidth + 40.dp` (800dp) and centers it, so two
+buttons weighted across it were each about 370dp wide on a tablet or an unfolded screen. A narrower cap for one page goes on
+the bar itself, `JBottomBar(Modifier.widthIn(max = Tokens.Size.readable))`: `JBottomBar` applies the modifier first and its own
+`fillMaxWidth()` after it, so on a wide window the bar is exactly the cap and the frame centers it. A `widthIn` on the row inside
+leaves Glass's capsule, and the hairline strip in Brief and Board, 800dp wide around a narrow row. `ReadingWidth` (760dp) is no cap here, the frame's own is
+almost as wide; `Tokens.Size.readable` (560dp, iOS's) is what a bar of a few buttons gets.
+
+A cap can cut a label the uncapped bar showed whole: in a fixed 560dp the Japanese 「エージェントに任せる」 was ellipsized from 1.3 times
+the text size in Glass, 1.5 in Brief and Board (every label was whole at 370dp). Scale the cap with `LocalDensity.current.fontScale`, as `ToolDetails` does its `box120`.
+
+Test it with a method-level `@Config(qualifiers = "en-w840dp-h700dp-xhdpi")` (the window is what `PageFrame` measures) and the
+buttons' `getUnclippedBoundsInRoot()`, in every style and with a one-button state too (`TodoBottomBarWidthTest`). A label's cut is
+`isLineEllipsized(0)` on its text node's layout under `@GraphicsMode(NATIVE)`: `hasVisualOverflow` was true for every `JButton` label
+(`softWrap = false`), cut or not. Draw each language at each text size (`LocalDensity` with the font scale, not the configuration). To
+draw `main` for a side-by-side, run a shots test that does not name the new token in a worktree of `main`: the same file draws both
+sides, and `android_shots_diff.py` shows a phone's pictures identical and the difference on a wide one only inside the bar.

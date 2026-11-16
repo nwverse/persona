@@ -1743,6 +1743,8 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/workspace-board` | `{revision,action,...}` → the full updated board; `full` only, a stale revision gets 409 `conflict` |
 | GET | `/api/v1/workspace-board/settings` | `{enabled,can_write}`: the board switch (#2475), one per hub; when never set, inferred from whether the board has been changed, see "Workspace board" |
 | PUT | `/api/v1/workspace-board/settings` | `{enabled}` → `{enabled,can_write}`; `full` only, missing `enabled` returns 400 |
+| GET | `/api/v1/navigation` | `{"start"?}`: the page the apps open on (#9071), one per hub, so the owner's for all their devices; `start` is left out until something is stored, see "Navigation" |
+| PUT | `/api/v1/navigation` | `{start}` → `{start}`; `full` only; a missing `start` or one of another shape returns 400 |
 | GET | `/api/v1/workspaces` | `{workspaces:[Workspace],errors?:[{machine_id,error}]}`; workspace discovery independent of Agents, keeps the last known info on failure, readable by `answer` |
 | POST | `/api/v1/machines/{mid}/reconnect` | Reconnect that machine's node |
 | GET · POST | `/api/v1/machines/{mid}/codex/{sid}/takeover` | Signed-in full-device route; generic device-call APIs are denied. GET → `{token,cwd,transcript_path,continuation_prompt}` with a single-use two-minute token. POST requires `{token,confirm_stop:true}` only while the original writer is running; `false` is accepted once it has exited. The manager verifies process identity and terminal instance, then sends one Ctrl+D only with empty composer and no modal or queued input. It waits for process exit, a complete stable transcript ending, and a fresh writer scan; any failed check or timeout refuses. No signals or forced termination. Takeover resumes the same thread/session ID in a new terminal tab. The separate continue option alone starts an independent session with context and attached to-do preserved. `encrypted_context` is continuation-only. |
@@ -1765,6 +1767,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/machines/{mid}/computer/{install\|grant\|cancel}` | The machine page's **Install Cua Driver**, **Grant Access**, **Cancel**: the node runs it in the background (`computer.install` / `computer.grant` / `computer.cancel`), → 200 `Computer`, progress is in its `job` (`{kind, state: running\|done\|failed\|cancelled, step?, error?, started}`), and the page keeps polling with GET. Plugin not enabled for this machine 404; offline, a job already running, or node too old 409 |
 | GET / DELETE | `/api/v1/machines/{mid}/computer/apps`, `…/computer/apps/{bundle}`, `…/computer/apps/revoke/{bundle}` | The machine page's **Apps Allowed for the Assistant**: GET → `{"apps":[{bundle_id, name, at}],"manager"}`; DELETE removes the saved approval by its identifier and returns the remaining list (future prompts follow `app_approval`); can't save 500. Optional `?expected_manager=<manager id>`: the hub checks it against the manager it relays to (409 `machine_owner_changed`) and acknowledges a successful answer with `X-Persona-Computer-Apps-Owner`. The guarded `…/apps/revoke/{bundle}` requires it (428 `expected_manager_required`); the hub relays it to the manager as the plain DELETE ([computer-use.md](../extensions/computer-use.md) "Approving per app") |
 | GET / POST | `/api/v1/machines/{mid}/computer/clipboard` | This Mac's clipboard (used while the App is viewing the screen, #1343): GET → `{"text"}` (truncated beyond 1 MiB); POST `{"text"}` puts it there and returns `{"text":""}` on success (doesn't echo the text). Goes through the node's `computer.clipboard` (`pbcopy` / `pbpaste`); plugin `cua` or `ego` not enabled for this machine 404, offline 409, and a node error (too old, text over 1 MiB, read/write failure) is also 409 ([computer-use.md](../extensions/computer-use.md) "App") |
+| POST | `/api/v1/machines/{mid}/computer/phone-screen` | Phone Screen for the live screen (#9314, [computer-use.md](../extensions/computer-use.md) "Phone Screen (#9314)"): `{pair, op, width?, height?, pid?, window?}`, `op` one of `start` (`width` × `height`: the phone's picture in points) → `{display, displays}`, `windows` → `{windows:[{pid, window, app, bundle?, title, minimized?, placed?, frame?}]}`, `place` (`pid`, `window`) → `{display, placed}`, `stop` → `{}`. `display` / `displays[]`: `{id, x, y, width, height, scale, main?}` in the global display space (points). Relayed to the node's `screen.phone`, which binds the session to the signed-in RFB stream carrying `pair`. Same gate as the clipboard (plugin `cua` or `ego` on for the Mac 404, offline 409; full devices only). Refusals keep the node's `code`: `bad_request` 400, `not_signed_in` / `permission` 403, `no_session` / `no_display` / `window_gone` 404, `busy` 429, `unavailable` 503 (also a node from before it), the rest (`display`, `not_responding`) 409 |
 | GET / PUT | `/api/v1/machines/{mid}/clipboard` | Sharing this computer's clipboard with the phone (#3064, [clipboard.md](../operations/clipboard.md)), `full` only (an answer-only device or an extension's token 403 `read_only`). GET → `{kind:"text"\|"image"\|"empty"\|"concealed", text?, image?:{mime:"image/png", data:<base64>}}` (`concealed`: a password manager marked it secret or transient, no content). PUT `{"text"}` or `{"image":{"mime":"image/png"\|"image/jpeg","data":<base64>}}` → 204. Switch off 403 `clipboard_disabled`; the computer can't share 409 `clipboard_unsupported` (`error` says why); offline 503; body over 10 MB or content over the limits (text 4 MiB, image 7 MiB) 413 `too_large`; not a PNG/JPEG 400 `clipboard_bad_image`; the node failed 502 `clipboard_failed`. Content is never logged |
 | GET / PUT | `/api/v1/machines/{mid}/clipboard/settings` | The machine's clipboard sharing switch, off by default, kept per machine in settings (works while offline): PUT `{"enabled":bool}` → 200 `MachineClipboard`; GET → the same. Missing `enabled` 400 |
 | GET / PUT | `/api/v1/machines/{mid}/browser` | This Mac's ego lite (plugin `ego`, [plan-ego-browser.md](../plans/plan-ego-browser.md)): GET asks the node's `browser.status` on the spot → `Browser` (`{enabled, installed, version?, set_up, imported, analytics?, ready, note?, screen_sharing, displays?, job?}`); PUT `{"enabled": bool}` is the machine page's switch (the plugin's `machines`). Plugin not enabled or not a Mac → 404 |
@@ -2149,6 +2152,7 @@ Server → client:
 | `saved_agent_searches` | `revision` (decimal string): the default manager committed a saved-query mutation; re-read the collection while its view is open, respecting the message's manager stamp. No query/name payload; see "Saved Agent searches" |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
+| `navigation` | `start`: the start page changed (`PUT /api/v1/navigation`, "Navigation"); clients keep it for their next opening |
 | `urgent_call` | `{id, state, conversation}`: an urgent call moved on (answered, declined, missed, ended, cancelled when its card was answered elsewhere); a phone still ringing for it ends the call (`docs/assistant/urgent-call.md`) |
 | `kb_selection` | —: the knowledge base's selection was saved (`PUT /api/v1/kb/selection`, or a per-item change from the assistant); clients re-read `GET /api/v1/kb/selection` |
 | `todos` | —: pushed whenever to-dos or links change; clients re-fetch `GET /api/v1/todos` |
@@ -4813,6 +4817,26 @@ Each write broadcasts `{"type":"agents"}` (the list) and `{"type":"agents.prefs"
 The web shows a prefs change at once and then PUTs it. When the PUT fails (other than a 404 / 405 from a hub without the route, where the change stays in localStorage only), it puts back the value from before unless a later change came, shows "Couldn't save the list settings: …", and reads `GET /agents/prefs` again once its PUTs are done, so a change the hub did not store never looks saved (#1880).
 - Pinned sessions always appear in "Pinned" at the top, followed by custom sections, then groups from `view.group`.
 - After a successful PUT, broadcasts `{"type":"agents.prefs"}`, and other clients GET again. When an old hub lacks this endpoint (404), clients store preferences only locally.
+
+## Navigation
+
+The page the apps open on (#9071): `GET /api/v1/navigation` / `PUT /api/v1/navigation`, answered by the default manager
+(`server/internal/assistant/navigation.go`, relayed by the hub like the other `assistantwire.Routes`) and kept in its
+settings table under the key `navigation`, `{"start":"<page>"}`. A hub has one owner, so this is the user's choice and
+every device of theirs follows it.
+
+- `start` is `""` for the default, the main conversation, or a page's key as the web's sidebar names it (`web/src/lib/persona-nav.ts`
+  `NAV_PAGES`: `home` for Overview, `inbox`, `health`, `messages`, `workspace-board`, `todos`, `routines`, `kb`, `machines`,
+  `terminal`), or `p:<extension>/<page>` for an extension's `nav_page` (`docs/extensions/extensions.md` "UI slots"). The
+  manager checks only the shape (a lowercase word of at most 64 characters, or `p:` and two parts of at most 128 characters
+  without spaces or `/`): which pages there are is the apps' business, and an app opens on the default for a key it does not
+  know or a page that is not there now, keeping the choice.
+- `start` is left out of the answer until a PUT stores one; `""` once the default was chosen. An app that kept a choice of its
+  own while there was no record (a hub or manager without the route, a new default manager) PUTs it when the answer has none.
+- PUT `{start}` requires `full` (an `answer` credential gets 403; extension tokens never reach it, `extwire.RouteScopes` does
+  not list it); it replaces only the fields it carries and broadcasts `{"type":"navigation","start":"<page>"}`.
+- A hub or default manager from before answers 404: the web then keeps the choice in the browser only and says so in the
+  setting (`docs/web/web.md` "Start page"). iOS and Android do not read it yet.
 
 ## Tags in messages (parsed by clients)
 

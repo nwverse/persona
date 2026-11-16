@@ -12,7 +12,7 @@
   "workspace_engine_path": "パスはマシンのエンジンが決定します。ブランチを変更すると再表示します。",
   "tray_needs_you": "要対応",
   "tray_running": "進行中",
-  "tray_empty_pr": "マージ待ちのプルリクエストはありません",
+  "tray_empty_parked": "保留中のタスクはありません",
   "tray_review": "Persona の確認待ち",
   "tray_empty_review": "Persona の確認待ちのタスクはありません",
   "pr_blocker_review_required": "レビューが必要",
