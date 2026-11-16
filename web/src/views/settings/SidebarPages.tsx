@@ -28,7 +28,7 @@ function NameField({ initial, label, onDone, onCancel }: { initial: string; labe
         onDone(name);
       }}
     >
-      {/* eslint-disable-next-line jsx-a11y/no-autofocus -- it opens on the user's own press */}
+      {/* focused as it opens: it opens on the user's own press */}
       <input autoFocus value={name} maxLength={40} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Escape" && onCancel()} aria-label={label} className={cx(FIELD, "flex-1")} />
       <Button tone="primary" type="submit" disabled={!name.trim() && !initial} className="h-8">{t("settings.sidebar_groups_save")}</Button>
       <Button tone="quiet" onClick={onCancel} className="h-8">{t("settings.sidebar_groups_cancel")}</Button>
