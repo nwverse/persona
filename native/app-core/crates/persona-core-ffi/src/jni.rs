@@ -301,7 +301,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepa
     .unwrap_or_default()
 }
 
-/// Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed.
+/// Applies one question-answer operation from a JSON input string. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>(
     mut env: JNIEnv<'a>,
@@ -321,7 +322,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>
     .unwrap_or_default()
 }
 
-/// Formats a question option's display text and recommendation flag. Pure function, no runtime handle needed.
+/// Formats a question option's display text and recommendation flag. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_displayAnswer<'a>(
     mut env: JNIEnv<'a>,

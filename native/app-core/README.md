@@ -183,6 +183,27 @@ both sides to unordered IDs. Current host evidence: 1/30 equal; 29 differ in `co
 membership/filter and rank parity remain open, so the adapter's existence is not migration or device acceptance.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
+## Android answer adapter and shadow (#9143)
+
+`AnswerBuilder.build/display` keeps its existing signatures and delegates to a Kotlin-default `AnswerAdapter`, so every
+existing Agent request and chat panel keeps the same returned Kotlin objects. The separate hub-provided task
+recommendation text (`TodoAsk.recommend`) is not part of this question-option projection. Release compiles only the
+Kotlin path; `RustCoreAnswer`, the observer and its preferences have no Release source-set or JNI entry.
+
+The DEBUG launcher accepts `--es debug.answerShadow on` (then force-stop and relaunch; use `off` to disable it for the
+next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar. Kotlin
+returns before the observer's own FIFO worker converts the question-only operation, loads the native library or calls
+JNI. Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
+unsupported, not as parity. Exact answer/display comparisons stay in that worker; a report contains only domain, rule
+and counts/flags/operation enums, never a label, question, answer, identifier or exception message. Every 10 completed
+comparisons logs only `answer compared=<count> mismatches=<count>` to `PersonaCoreShadow`.
+
+The replay compares all 15 `questions.json` and 8 `recommended.json` complete expected objects through both the
+current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
+as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
+evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
+both packaged ABIs.
+
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes

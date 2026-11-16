@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Check the packaged Android variants' sort-shadow native boundary, without a device."""
+"""Check the packaged Android variants' DEBUG-only sort and answer JNI boundaries, without a device."""
 from __future__ import annotations
 
 import argparse
 import subprocess
 from pathlib import Path
 
-SYMBOL = "Java_persona_core_rustcore_NativeBridge_projectSort"
+SHADOW_SYMBOLS = {
+    "Java_persona_core_rustcore_NativeBridge_projectSort": "sort shadow",
+    "Java_persona_core_rustcore_NativeBridge_projectAnswer": "answer shadow",
+    "Java_persona_core_rustcore_NativeBridge_displayAnswer": "answer shadow",
+}
 
 
 def main() -> None:
@@ -20,12 +24,12 @@ def main() -> None:
         raise SystemExit(f"Release native guard found no libraries under {args.root}")
     for library in libraries:
         output = subprocess.check_output([str(args.readelf), "--dyn-syms", str(library)], text=True)
-        exported = SYMBOL in output
-        print(f"{library}: sort shadow export={'present' if exported else 'absent'}")
-        found |= exported
+        exported = sorted(symbol for symbol in SHADOW_SYMBOLS if symbol in output)
+        print(f"{library}: DEBUG-only exports={exported or 'none'}")
+        found |= bool(exported)
     if found:
-        raise SystemExit("Release Android native libraries must not export the DEBUG-only sort shadow")
-    print("PASS: Release Android native libraries have no sort-shadow JNI export")
+        raise SystemExit("Release Android native libraries must not export DEBUG-only sort or answer shadows")
+    print("PASS: Release Android native libraries have no sort or answer shadow JNI exports")
 
 
 if __name__ == "__main__":
