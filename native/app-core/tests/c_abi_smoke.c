@@ -858,7 +858,7 @@ static void check_stream_repair(void) {
         {"- 运行：\n  ~~~\n  make", "- 运行：\n  ~~~\n  make\n  ~~~", "code", "closesAFenceInTheListItemItOpenedIn"},
         {"- 运行：\n  ```\n  make\n  ``", "- 运行：\n  ```\n  make\n  ```", "code", "closesAFenceInTheListItemItOpenedIn"},
         {"```\na\n  ", "```\na\n```", "code", "leavesOutALineOfOnlyIndentationSoFar"},
-        {"这是 **重要", "这是 **重要", "text", "bounded marker behavior"},
+        {"这是 **重要", "这是 **重要**", "text", "closesWhatTheGrowingLineLeavesOpen (#9286)"},
         {"```swift\nlet a\n```", "```swift\nlet a\n```", "code", "tellsWhereTheTextEnds"},
         {"```swift\nlet a\n```\n", "```swift\nlet a\n```\n", "text", "tellsWhereTheTextEnds"},
         {"```swift\nlet a", "```swift\nlet a\n```", "code", "tellsWhereTheTextEnds"},

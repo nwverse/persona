@@ -28,7 +28,7 @@ const fence = [
   [{text: '- 运行：\n  ~~~\n  make', repaired: '- 运行：\n  ~~~\n  make\n  ~~~', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
   [{text: '- 运行：\n  ```\n  make\n  ``', repaired: '- 运行：\n  ```\n  make\n  ```', end: 'code'}, 'closesAFenceInTheListItemItOpenedIn'],
   [{text: '```\na\n  ', repaired: '```\na\n```', end: 'code'}, 'leavesOutALineOfOnlyIndentationSoFar'],
-  [{text: '这是 **重要', repaired: '这是 **重要', end: 'text'}, 'bounded marker behavior'],
+  [{text: '这是 **重要', repaired: '这是 **重要**', end: 'text'}, 'closesWhatTheGrowingLineLeavesOpen (#9286)'],
   [{text: '```swift\nlet a\n```', repaired: '```swift\nlet a\n```', end: 'code'}, 'tellsWhereTheTextEnds'],
   [{text: '```swift\nlet a\n```\n', repaired: '```swift\nlet a\n```\n', end: 'text'}, 'tellsWhereTheTextEnds'],
   [{text: '```swift\nlet a', repaired: '```swift\nlet a\n```', end: 'code'}, 'tellsWhereTheTextEnds'],

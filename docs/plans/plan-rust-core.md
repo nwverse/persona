@@ -607,15 +607,17 @@ Phase 3 lands in several PRs.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
     are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
-    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. The C ABI
-    projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host projection (#9241) replay the
-    same repair and end inputs, plus the existing JNI digit, leading-blank-line and delimiter boundaries, as 22 fence
-    + 19 marker/boundary + 36 table/boundary complete `{repaired, end}` objects. Expectations are independently stated
-    from Apple tests/source and the JNI replay, not Rust output. Both surfaces reject malformed input and wrong `end`,
-    wrong `repaired` and extra-field expectations. The NAPI export `coreProjectStreamRepair` is committed in the
-    generated ArkTS declaration and covered by the drift check. Inline markup,
-    math blocks, `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and the
-    #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline repair
+    (#9286) adds 51 explicit Apple assertions plus source-derived boundary controls through that same real JNI
+    boundary. It also replays all 342 Unicode-scalar prefixes of Apple's mixed reply through real stream-chunks JNI
+    into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
+    follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math recognition prevents inline repair there. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair`
+    ArkTS host projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 36
+    table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
+    `repaired` and extra-field expectations; they do not replay the complete inline or mixed-reply corpora. The NAPI
+    export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift check.
+    The `.math` end state, `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and
+    the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host
     evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
