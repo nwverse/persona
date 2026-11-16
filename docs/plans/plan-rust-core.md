@@ -459,8 +459,14 @@ Phase 3 lands in several PRs.
     burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
     and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
     incremental ChatStore rebuild algorithm or its timing evidence.
-  - The two source-order layout cases, rendered lines, task indexes, incremental rebuilds, production adapters and
-    turn C/NAPI/Swift boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
+  - `persona_core::task_index` covers the fixture-facing `TaskIndex.build` fields (#8842): started calls, notice/call
+    association, descriptions, UTC start times and per-call status sequences. Real Kotlin/JNI replay compares all five
+    existing task-index expected objects, plus a background receipt whose notices/statuses are empty but whose original
+    description is retained. Offset timestamps are normalized to whole-second UTC. Malformed input and a wrong expected
+    object are rejected. This is not rendered `ChatLine`, complete TaskIndex consumer state, UI badges, actual
+    background execution or timing evidence.
+  - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
+    boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
     `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 

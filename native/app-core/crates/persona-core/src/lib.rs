@@ -13,6 +13,7 @@ pub mod recents;
 pub mod sort;
 pub mod state;
 pub mod stream_chunks;
+pub mod task_index;
 pub mod transport;
 pub mod turns;
 
