@@ -110,7 +110,7 @@ mod tests {
         started_receiver
             .recv_timeout(Duration::from_secs(1))
             .expect("the worker must be busy");
-        let (other_sender, other_receiver) = mpsc::sync_channel(1);
+        let (other_sender, _) = mpsc::sync_channel(1);
         sender
             .try_send(Job {
                 operation: Operation::Display,
