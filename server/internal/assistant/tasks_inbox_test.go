@@ -133,10 +133,14 @@ func TestTaskPlanInboxSourcesPersistWithoutCrossItemInheritance(t *testing.T) {
 }
 
 func TestTaskPlanInboxRejectsInvalidSources(t *testing.T) {
-	for _, why := range []string{"missing", "conversation", "machine", "filed", "bot", "owner bot"} {
+	for _, why := range []string{"missing", "another manager", "conversation", "machine", "filed", "bot", "owner bot"} {
 		t.Run(why, func(t *testing.T) {
 			s, _ := newTaskService(t)
-			it := taskInboxItem(t, s, "example:source", "box", "c1x1x1")
+			source := s
+			if why == "another manager" {
+				source, _ = newTaskService(t)
+			}
+			it := taskInboxItem(t, source, "example:source", "box", "c1x1x1")
 			s.inbox.mu.Lock()
 			switch why {
 			case "missing":

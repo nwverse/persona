@@ -124,7 +124,6 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			t.Error = err.Error()
 			if keep {
 				t.TodoID = todo.ID
-				t.Error = fmt.Sprintf("%v (task %s is kept for the newer Inbox write; retry with this todo_id)", err, todo.ID)
 			}
 			if t.ReuseTodo != "" {
 				s.releaseTakenTodo(t.ReuseTodo)
