@@ -365,11 +365,13 @@ class StreamRepairBindingFixtureTest {
             expected(combiningAtLimit, "math"), replay(combiningAtLimit))
         assertEquals("401 extended graphemes exceed the limit",
             expected(combiningAboveLimit, "text"), replay(combiningAboveLimit))
+        assertEquals("Character.isWhitespace includes NEL even though Foundation whitespaces excludes it",
+            expected("${'$'}x${'$'}", "text"), replay("${'$'}x${'$'}"))
         assertEquals("fence wins over math-looking contents", expected("```\n${'$'}${'$'}\nx\n```", "code"), replay("```\n${'$'}${'$'}\nx\n```"))
         assertThrows("wrong display repaired string is rejected", AssertionError::class.java) {
             assertEquals("wrong display repair", expected("${'$'}${'$'}E=mc^2${'$'}${'$'}!", "math"), replay("${'$'}${'$'}E=mc^2${'$'}${'$'}"))
         }
-        println("JNI StreamRepair math display: ${cases.size + 5} source-derived boundaries plus wrong-object rejection")
+        println("JNI StreamRepair math display: ${cases.size + 6} source-derived boundaries plus wrong-object rejection")
     }
 
     @Test fun everythingBeforeTheLastLineStaysAsItWasForEveryApplePrefix() {

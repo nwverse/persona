@@ -562,7 +562,7 @@ fn inline_math_spans(line: &str) -> impl Iterator<Item = (usize, usize)> {
         if character == "$"
             && index + 1 < graphemes.len()
             && graphemes[index + 1].1 != "$"
-            && !is_math_whitespace(graphemes[index + 1].1.chars().next().unwrap_or(' '))
+            && !is_math_character_whitespace(graphemes[index + 1].1.chars().next().unwrap_or(' '))
             && let Some(span) = closing_inline_dollar(&graphemes, index)
             && plausible_math(&line[next..graphemes[span].0])
         {
@@ -591,7 +591,7 @@ fn closing_inline_dollar(graphemes: &[(usize, &str)], open: usize) -> Option<usi
                 .get(index + 1)
                 .is_some_and(|(_, next)| next.chars().next().is_some_and(|c| c.is_numeric()));
             let before = graphemes[index - 1].1;
-            let valid = !is_math_whitespace(before.chars().next().unwrap_or(' '))
+            let valid = !is_math_character_whitespace(before.chars().next().unwrap_or(' '))
                 && !after_digit
                 && graphemes.get(index + 1).is_none_or(|(_, next)| *next != "$");
             return valid.then_some(index);
@@ -611,6 +611,10 @@ fn find_math_pair(graphemes: &[(usize, &str)], start: usize, first: &str, second
 fn is_math_whitespace(character: char) -> bool {
     matches!(character, '\t'..='\r')
         || unicode_general_category::get_general_category(character) == GeneralCategory::SpaceSeparator
+}
+
+fn is_math_character_whitespace(character: char) -> bool {
+    character.is_whitespace()
 }
 
 fn is_math_wide(character: char) -> bool {
