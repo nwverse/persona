@@ -123,6 +123,7 @@
   "room_ready_listener": "Persona 正以旁听身份参会 · 回答只显示在屏幕上",
   "room_ready_participant": "Persona 正以参与身份参会 · 回答可以念出来",
   "room_ready_off": "Persona 在会上，但现在没有在听。",
+  "room_ready_notes": "Persona 没有被邀请进会：只记议题和要点，不回答问题。",
   "room_problem_runtime_unsupported": "助手所在的电脑运行不了会议对话。提问会根据这场会的材料回答。",
   "room_problem_node_too_old": "助手所在的电脑需要更新的 Persona 才能参会。提问会根据这场会的材料回答。",
   "room_problem_machine_offline": "助手所在的电脑离线了。Persona 每分钟重试一次，在那之前提问会根据这场会的材料回答。",
