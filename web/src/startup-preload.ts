@@ -543,7 +543,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
  * with it). 31 B of room so the next main does not tip it.
  */
 // Preserve the 7 B feature allowance while retaining main's queue-panel idle reduction.
-export const IDLE_TIER_BUDGET = 45_056;
+// Conversation-deletion guards, file retirement and open-search invalidation (#6172):
+// main 86a706664 measures 44,981 B with identical Node/dependencies; integrated tree measured 45,492 B.
+// The 511 B increment consumes 75 B of existing room, adding exactly 436 B. Intent-loading and check logic stay intact.
+export const IDLE_TIER_BUDGET = 45_492;
 
 const gzip = promisify(gzipCompress);
 

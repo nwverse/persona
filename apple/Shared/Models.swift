@@ -661,7 +661,14 @@ extension Launcher {
     /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAEX…) are left out; the node
     /// refuses them with a reason too.
     var runsAssistant: Bool {
-        assistant == true || (baseURL != "(traex)" && (agent == nil || agent == "" || agent == "claude" || agent == "codex"))
+        if let assistant { return assistant }
+        guard baseURL != "(traex)" else { return false }
+        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
+        // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
+        let managed = source == "persona" || source == LegacyNames.product
+        let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
+        guard machine || managed, !(managed && agent == "codex") else { return false }
+        return agent == nil || agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
     }
 }
 

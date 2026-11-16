@@ -50,6 +50,20 @@ import PersonaWire
         #expect(order().ordered(list).map(\.sessionID) == ["c", "a", "b"])
     }
 
+    /// The same session id on two machines, at the same time: the complete id decides, whichever order the machines
+    /// answered in (spec/fixtures/sort `cross_machine_same_session_id` and its reversed input, #9064).
+    @Test func sameSessionIdOnTwoMachinesGoesByTheCompleteId() {
+        let a = session("shared-session", "working", updated: 10, machine: "machine-a")
+        let b = session("shared-session", "working", updated: 10, machine: "machine-b")
+        for list in [[b, a], [a, b]] {
+            #expect(order().ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+            #expect(order(byRank: false).ordered(list).map(\.id) == ["machine-a/shared-session", "machine-b/shared-session"])
+        }
+        // the session id still comes first: another machine's earlier id stays ahead
+        let c = session("aaa", "working", updated: 10, machine: "machine-z")
+        #expect(order().ordered([a, c]).map(\.id) == ["machine-z/aaa", "machine-a/shared-session"])
+    }
+
     @Test func quietSpaceRowsFollowActivityWhileTheSpacesTabsKeepTheirOrder() throws {
         var first = session("first", "idle", updated: 19), second = session("second", "idle", updated: 8)
         var latest = session("latest", "idle", updated: 59)
