@@ -1,3 +1,4 @@
 {
-  "forbidden": "This device cannot search chats"
+  "forbidden": "This device cannot search chats",
+  "changed": "Search results changed. Please try your search again."
 }
