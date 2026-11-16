@@ -453,11 +453,16 @@ Phase 3 lands in several PRs.
     cases contain 62 complete turn objects after the overlay; `empty_session` and the two empty-turn layout cases
     compare empty arrays only. It checks malformed input plus a wrong expected value. This is host-JNI evidence, not
     a production Android adapter.
-  - The four operation-sequence cases, two source-order layout cases, rendered lines, task indexes, incremental
-    rebuilds, production adapters and turn C/NAPI/Swift boundaries are outside this slice. Both turn comparisons
-    deliberately ignore rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or
-    performance claim is made. `spec/README.md` continues to name the shared corpus, not Rust, as the reference until
-    migration.
+  - The four operation-sequence cases also have real Kotlin/JNI coverage (#8815). The host uses `RustCore`'s
+    dispatch/drain patches to retain raw item JSON, then `projectTurns` for all 10 checkpoints: 13 complete turn
+    objects and exact item IDs match the corpus plus the current-iOS overlay. A separate replay sends the existing
+    burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
+    and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
+    incremental ChatStore rebuild algorithm or its timing evidence.
+  - The two source-order layout cases, rendered lines, task indexes, incremental rebuilds, production adapters and
+    turn C/NAPI/Swift boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
+    and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
+    `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
