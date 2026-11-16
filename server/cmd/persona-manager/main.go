@@ -19,10 +19,12 @@ import (
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
 	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/managercli"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/volc"
 )
 
 // What the build wrote in (-X), as personad's (the hub's update checks a program by `version -v`).
@@ -62,12 +64,14 @@ const usage = `usage:
                            (docs/assistant/managers.md; persona-manager manager -h for the details)
   persona-manager extension …  the extensions on this machine (docs/extensions/extensions.md "Command line")
   persona-manager voice     the built-in voice extension (the manager runs it)
+  persona-manager volc      the built-in Volcengine speech extension (the manager runs it)
   persona-manager tailcat-key  print the built-in manager's tailcat key (created the first time)
   persona-manager node …    this computer's node, when the manager runs it as itself: with no persona-node or
                            personad of its build beside it, or PERSONA_SPLIT_PROGRAMS=0 (personad node …)
   persona-manager version [-v]  the version; -v adds the channel and build number`
 
 func main() {
+	modelhttp.SetVersion(version)
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage)
@@ -117,6 +121,8 @@ func main() {
 		err = extmgr.ExtensionCommand(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "voice":
 		err = voice.Run(ctx)
+	case "volc": // the built-in Volcengine speech extension's program (docs/extensions/volcengine-speech.md)
+		err = volc.Run(ctx, version)
 	default: // join, run, install, uninstall, status, search-reindex (manager.Main says what it does not know)
 		err = managercli.Manager(ctx, buildInfo(), args)
 	}

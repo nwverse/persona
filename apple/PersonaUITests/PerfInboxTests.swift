@@ -3,7 +3,7 @@ import XCTest
 /// The inbox, Feishu chats and topic groups, the Feishu messages page and mail (#5730).
 /// Mock (`scripts/app/perf-test.sh`, suite `inbox`): MOCK_LARK=1 MOCK_LARK_RICH=1 MOCK_LARK_TOPIC=1 MOCK_INBOX_EXTRA=150
 /// MOCK_MAIL=1 MOCK_AGENTS=1 MOCK_MANAGERS=0 (one assistant, so 「周末徒步群」 is in the list; on the default roster it
-/// belongs to 工作).
+/// belongs to 「工作」).
 final class PerfInboxTests: PerfTestCase {
     private let lark = ["-demo.on", "NO", "-integrations.lark.enabled", "YES"]
 

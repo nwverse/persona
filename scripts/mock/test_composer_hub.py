@@ -46,12 +46,20 @@ class ComposerFixtureTests(unittest.TestCase):
             with urlopen(base + "/api/v1/sessions", timeout=2) as response:
                 sessions = json.load(response)["sessions"]
             by_id = {x["session_id"]: x for x in sessions}
-            self.assertEqual(by_id["a1f3c2d4-0000-4000-8000-000000000001"]["model"],
-                             "gpt-6.1-sol-codex-mini-preview-2026-11-05")
+            agent = by_id["a1f3c2d4-0000-4000-8000-000000000001"]
+            self.assertEqual(agent["model"], "gpt-6.1-sol-codex-mini-preview-2026-11-05")
             self.assertEqual(by_id["b2e4d6f8-0000-4000-8000-000000000001"]["model"], "gpt-6.1-sol")
+            # One manager (#8640): the Agent on MacBook is this assistant's, so the app's session index keeps it and
+            # enables the composer. A multi-manager roster would stamp it for another assistant and leave the field
+            # disabled after openSession.
+            self.assertEqual(agent.get("manager"), "assistant")
+            self.assertNotIn("capabilities", agent)
             with urlopen(base + "/api/v1/launchers", timeout=2) as response:
                 launchers = json.load(response)["launchers"]
             self.assertEqual([x["model"] for x in launchers[:2]], ["gpt-6.1-sol", "gpt-6.1"])
+            with urlopen(base + "/api/v1/managers", timeout=2) as response:
+                roster = json.load(response)
+            self.assertEqual(len([m for m in roster["managers"] if m.get("installing") is None]), 1)
 
     def test_a_send_to_the_working_agent_lands_in_its_transcript(self):
         """Without that copy the app keeps the message queued for minutes, across launches, and in the next test its
