@@ -382,4 +382,15 @@
     <string name="designsystem_stepper_plus">增加</string>
     <string name="designsystem_copy_too_large">文本过大无法复制，请使用分享</string>
     <string name="designsystem_copied">已拷贝</string>
+    <string name="designsystem_shortcuts_title">键盘快捷键</string>
+    <string name="designsystem_shortcuts_send">发送消息</string>
+    <string name="designsystem_shortcuts_send_keys">Ctrl 或 ⌘ + Return</string>
+    <string name="designsystem_shortcuts_newline">换行</string>
+    <string name="designsystem_shortcuts_newline_keys">Return 或 Shift + Return</string>
+    <string name="designsystem_shortcuts_close">关闭最上层</string>
+    <string name="designsystem_shortcuts_close_keys">Esc</string>
+    <string name="designsystem_shortcuts_help">显示快捷键帮助</string>
+    <string name="designsystem_shortcuts_help_keys">Ctrl + /</string>
+    <string name="designsystem_shortcuts_terminal">终端优先接收</string>
+    <string name="designsystem_shortcuts_terminal_keys">Esc、Tab、Shift + Tab、Ctrl + C、方向键</string>
 </resources>

@@ -586,7 +586,7 @@ fun ComposerTextField(
 ) {
     val palette = PersonaTheme.palette
     BasicTextField(
-        value, onValueChange, modifier.fillMaxWidth(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
+        value, onValueChange, modifier.fillMaxWidth().hardwareShortcutTextInput(), enabled = enabled, maxLines = maxLines, keyboardOptions = keyboardOptions,
         textStyle = PersonaTheme.type.body.copy(color = palette.ink), cursorBrush = SolidColor(if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent),
         decorationBox = { inner ->
             Box {
