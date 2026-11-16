@@ -14,6 +14,9 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if os(iOS)
+                .urgentCallCover() // an answered urgent call's page, over everything (UrgentCallView.swift)
+                #endif
                 #if DEBUG && os(iOS)
                 .task { ProductionContinuityShadow.shared.install() } // Lazy: no core is created until a real input arrives.
                 #endif
@@ -157,6 +160,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Here, for HealthKit to wake the app after a workout (#2526); only a build with background delivery reads the
         // reports' small state file this early.
         if WorkoutReports.deliversInBackground { WorkoutReports.shared.observe() }
+        // Urgent calls' PushKit registry, when they are on: a VoIP push that launches the app reaches only one made now.
+        UrgentCallPush.shared.start()
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
@@ -166,6 +171,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             AppModel.shared.adopt([cfg] + more)
         }
         let d = UserDefaults.standard
+        #if os(iOS)
+        if d.bool(forKey: "showUrgentCallSample") { // the urgent call page, from the mock hub (UrgentCallCenter.showSample)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                UrgentCallCenter.shared.showSample()
+            }
+        }
+        #endif
         // `-openPairLink <persona://pair?…>`: pairs as a scanned link does (`pair`, then the device token trade), unlike
         // `-pairURL`; `-openPairLinkTimes 2` handles the same link again a few seconds later (#2766).
         if let s = d.string(forKey: "openPairLink"), let cfg = ServerConfig(pairURL: s) {
@@ -435,6 +448,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
         #if os(iOS)
+        // An urgent call's companion notification (UrgentCallCenter): answers the call while it rings, else opens its
+        // conversation.
+        let callInfo = response.notification.request.content.userInfo
+        if let call = callInfo[UrgentCallCenter.callKey] as? String {
+            let group = callInfo[PushCrypto.groupKey] as? String ?? ""
+            nonisolated(unsafe) let done = completionHandler
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    UrgentCallCenter.shared.opened(callID: call, group: group)
+                    done()
+                }
+            }
+            return
+        }
         // "Recording paused" (MeetingRecorder.notifyPaused): open Recordings; coming to the front resumes it.
         if response.notification.request.content.userInfo[RecordingLink.notificationKey] != nil {
             nonisolated(unsafe) let done = completionHandler

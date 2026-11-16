@@ -40,27 +40,31 @@ public nonisolated enum PathRefs {
     private static let whole = try! NSRegularExpression(pattern: "^~?/[^\\s`]+(?: [^\\s`]+)*$")
     private static let fullStops = try! NSRegularExpression(pattern: "(?<=[^./])\\.+$")
 
-    /// The paths in plain text, in order (the longer first at one place), at most `limit`.
+    /// The paths in plain text, in order (the longer first at one place), at most `limit`. All of it within
+    /// `BoundedRegex.budget`: past that, what was found by then (#9108: a row's paths kept a recording's app at full CPU
+    /// in the background until iOS killed it).
     public static func find(in text: String, limit: Int = 40) -> [PathRef] {
         let ns = text as NSString
+        let deadline = BoundedRegex.deadline()
         var out: [PathRef] = []
-        for m in codeSpan.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        for m in BoundedRegex.matches(codeSpan, in: text, until: deadline).matches {
             let inner = m.range(at: 1)
-            if let r = codePathRef(ns.substring(with: inner)) { out.append(shifted(r, by: inner.location)) }
+            if let r = codePathRef(ns.substring(with: inner), until: deadline) { out.append(shifted(r, by: inner.location)) }
         }
-        for r in textRefs(in: text) where !out.contains(where: { $0.range == r.range }) { out.append(r) }
+        for r in textRefs(in: text, until: deadline) where !out.contains(where: { $0.range == r.range }) { out.append(r) }
         out.sort { $0.range.location != $1.range.location ? $0.range.location < $1.range.location : $0.range.length > $1.range.length }
         return Array(out.prefix(limit))
     }
 
-    /// The paths of text as outside backticks, there or in them.
-    public static func textRefs(in text: String) -> [PathRef] {
+    /// The paths of text as outside backticks, there or in them, as far as they are found by `deadline`.
+    public static func textRefs(in text: String, until deadline: ContinuousClock.Instant = BoundedRegex.deadline()) -> [PathRef] {
         let ns = text as NSString
-        return Self.text.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { ref(m: $0, in: ns) }
+        return BoundedRegex.matches(Self.text, in: text, until: deadline).matches.compactMap { ref(m: $0, in: ns) }
     }
 
     /// The path a whole code span is (`/tmp/a.md`, `src/a.ts:12`, 「~/报告/第四季度.docx」), or nil; its range is in `code`.
-    public static func codePathRef(_ code: String) -> PathRef? {
+    /// Nil too when `deadline` comes first.
+    public static func codePathRef(_ code: String, until deadline: ContinuousClock.Instant = BoundedRegex.deadline()) -> PathRef? {
         let ns = code as NSString
         let lead = ns.length - (code.drop { $0 == " " } as Substring).utf16.count
         let t = code.trimmingCharacters(in: .whitespaces)
@@ -68,13 +72,12 @@ public nonisolated enum PathRefs {
         guard !t.isEmpty, !t.hasPrefix("//"), !t.contains("://") else { return nil }
         // Whole: the line taken off its end, the rest a path from the root or home, Chinese and spaces too.
         var path = t, lineNo: Int?, col: Int?
-        if let m = trailingLine.firstMatch(in: t, range: NSRange(location: 0, length: tn.length)), m.range.length > 0 {
+        if let m = BoundedRegex.firstMatch(trailingLine, in: t, until: deadline), m.range.length > 0 {
             path = tn.substring(to: m.range.location)
             lineNo = number(m, 1, tn) ?? number(m, 3, tn)
             col = lineNo == nil ? nil : number(m, 2, tn)
         }
-        let pn = path as NSString
-        if whole.firstMatch(in: path, range: NSRange(location: 0, length: pn.length)) != nil {
+        if BoundedRegex.firstMatch(whole, in: path, until: deadline) != nil {
             let parts = path.split(separator: "/").count
             if parts >= (path.hasPrefix("~") ? 1 : 2), !isRoot(path) {
                 return PathRef(range: NSRange(location: lead, length: tn.length), path: path, line: lineNo == 0 ? nil : lineNo,
@@ -82,7 +85,7 @@ public nonisolated enum PathRefs {
             }
         }
         // Or one path that is the whole span (`ios/Persona/Foo.swift`, 「docs/设计/说明.md」).
-        if var r = textRefs(in: t).first, r.range.location == 0, r.range.length == tn.length {
+        if var r = textRefs(in: t, until: deadline).first, r.range.location == 0, r.range.length == tn.length {
             r.whole = true
             return shifted(r, by: lead)
         }
@@ -187,6 +190,8 @@ public nonisolated struct PathMarkdown: Sendable {
 
     public init(_ source: String, limit: Int = 40) {
         self.source = source
+        // One budget for the whole answer, however many lines it has (#9108).
+        let deadline = BoundedRegex.deadline()
         var spots: [Spot] = []
         var fence: MarkdownFence?
         var at = 0
@@ -199,7 +204,7 @@ public nonisolated struct PathMarkdown: Sendable {
             }
             if let f = MarkdownFence.opening(t) { fence = f; continue }
             if line.hasPrefix("    ") || line.hasPrefix("\t") { continue } // indented code (as `Links.markdown`)
-            for s in Self.spots(in: line) {
+            for s in Self.spots(in: line, until: deadline) {
                 var s = s
                 s.range.location += at
                 s.ref.range.location += at
@@ -250,23 +255,23 @@ public nonisolated struct PathMarkdown: Sendable {
     // (bare links are made those by `Links.markdown` first).
     static let protected = try! NSRegularExpression(pattern: #"!?\[[^\]\n]*\]\([^)\n]*\)|!?\[[^\]\n]*\]\[[^\]\n]*\]|<[^\s<>]+>|^\s*\[[^\]\n]+\]:.*$"#)
 
-    /// The paths of one line (outside a code block).
-    private static func spots(in line: String) -> [Spot] {
+    /// The paths of one line (outside a code block), as far as they are found by `deadline`.
+    private static func spots(in line: String, until deadline: ContinuousClock.Instant) -> [Spot] {
         let ns = line as NSString
         let all = NSRange(location: 0, length: ns.length)
         let code = codeSpans(Array(line.utf16))
-        let links = protected.matches(in: line, range: all).map(\.range)
+        let links = BoundedRegex.matches(protected, in: line, range: all, until: deadline).matches.map(\.range)
             .filter { r in !code.contains { NSLocationInRange(r.location, $0.whole) } }
         func covered(_ r: NSRange) -> Bool {
             links.contains { NSIntersectionRange($0, r).length > 0 } || code.contains { NSIntersectionRange($0.whole, r).length > 0 }
         }
         var out: [Spot] = []
         for c in code where !links.contains(where: { NSIntersectionRange($0, c.whole).length > 0 }) {
-            guard var r = PathRefs.codePathRef(ns.substring(with: c.inner)) else { continue }
+            guard var r = PathRefs.codePathRef(ns.substring(with: c.inner), until: deadline) else { continue }
             r.range.location += c.inner.location
             out.append(Spot(range: c.whole, ref: r, code: true))
         }
-        for r in PathRefs.textRefs(in: line) where !covered(r.range) {
+        for r in PathRefs.textRefs(in: line, until: deadline) where !covered(r.range) {
             out.append(Spot(range: r.range, ref: r, code: false))
         }
         return out.sorted { $0.range.location < $1.range.location }

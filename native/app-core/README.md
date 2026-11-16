@@ -8,8 +8,8 @@ One Rust library under the iOS, Android and HarmonyOS clients' native UIs. Desig
 | Crate | What it is |
 | --- | --- |
 | `persona-core` | Pure logic: no IO, no clock, no FFI, no `unsafe`. Today it holds `continuity` (a chat's items, how far they are complete, and what to fetch), ported from the rules every client implements (`spec/fixtures/continuity`). `transport` decodes the hub's continuity payloads from raw bytes into `continuity`'s inputs (see "Transport decoding" below). |
-| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` only queues an action's bytes. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
-| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. |
+| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` is lock-free on the caller: it pushes an encoded action onto the worker's channel, with the pending count and stop flag in atomics. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
+| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. The JNI dispatch moves the action bytes into the worker's channel without a second copy. |
 | `persona-core-ohos` | HarmonyOS's single NAPI library. Its default host build tests the close-safe runtime registry and all shared fixtures; the `ohos` feature adds ohos-rs's NAPI entry points and thread-safe callbacks, supplied by the device runtime. |
 | `persona-core-typegen` | Generates the clients' bincode codecs for the `wire` types: Kotlin to android/core/rustcore, Swift to apple/Packages/PersonaCore and ArkTS to harmony/entry/src/main/ets/core/rustcore. All are committed and checked for drift. |
 
@@ -44,11 +44,13 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
 `libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
-`persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
+`persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
-`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
+`persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
+folded line. Expected objects
 are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
 exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
 A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
@@ -66,18 +68,26 @@ corpus plus overlay, and separately replays the existing replacement through the
 runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
 The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
-fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
-gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
+visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
+The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
+partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
+`markersOnly` cases/controls plus digit boundaries. Table repair (#9164) replays all 22 repair and 15 table/text end
+assertions from Apple's table-related tests, including half-written rows, early delimiter rows, list indentation and
+lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
-8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
+9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
-consumer state, UI badges or actual background execution. The viewed-image leaf (#8860) uses the existing turn
-projection to keep the image entry's owner, compares the complete post-overlay viewed line through real Kotlin/JNI,
-and checks duplicate/running/error/Read-extension and wrong-expectation cases. It does not cover full ChatLine,
-folded images, UI image loading or actual tool execution.
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
+projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
+real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
+optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
+full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
@@ -142,6 +152,52 @@ JSON, message text, identifiers, history or sequence values. DEBUG uses the mirr
 `-showContinuityShadow NO` to turn it off and `YES` to opt in for performance A/B; Release has neither the mirror nor
 the switch. Optimized simulator evidence is labelled as such and is not a physical-device acceptance.
 
+## Android Agents-list adapter and sort shadow (#8954)
+
+`:feature:agents` supplies its existing scoped list projection to `AgentListAdapter`. Kotlin remains authoritative; the
+default factory and the entire Release source set return only `KotlinAgentListAdapter`, with no observer or shadow class.
+The optional DEBUG observer uses `projectSort` on its own FIFO worker after the Kotlin result has returned. Enable it in
+JVM tests with `-Ppersona.sort=shadow`, or launch `DebugEntryActivity` with `--es debug.sortShadow on`, then force-stop
+and relaunch (`off` disables it). Reports use the `PersonaCoreShadow` tag and hold only `agents-list-sort`, a rule code
+and counts/flags/enum values: never titles, paths, queries, identifiers or exception messages.
+
+The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
+use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
+headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
+identity and includes the core's `held` field from the shell's visible Agent chat when the row remains Unread. The
+production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
+instant makes `since:` searches deterministic. The 30 checked-in `agents_list` fixtures pass through both production
+Kotlin and the real host JNI projection; additional real-JNI cases found #9027 (multi-hub pin identity in the core)
+and #9033 (Android does not yet implement iOS's `heldInList`). Those differences are recorded, not hidden or changed
+to match Rust.
+
+Release has no sort-shadow implementation and its native library does not export `Java_..._projectSort`. The app still
+packages the other core entry points for the existing packaging work: this is a strict boundary for this shadow, not a
+claim that the whole native library is absent. `buildAndroidReleaseCore` builds its own Cargo target and checks both
+ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally prove that no shadow class is on the
+classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
+production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
+not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
+## HarmonyOS Agents-list core (#8957, #8966)
+
+`CoreAgentListAdapter` calls the synchronous pure `coreProjectSort` NAPI function directly. It is the only production
+Agents-list sorter: the temporary ArkTS projection, debug shadow, snapshot worker and comparison reports are deleted.
+`AgentWorkspace` maps the core's complete groups, `visible_rows`, folds and counts back to the original `ResourceRow`
+identities used by native actions. The default is iOS By Status; By Machine and By Project are the other choices.
+State/space folds, idle expansion, quick filters including BackgroundWaiting, pin/mute ranks, search operators and
+multi-Hub machine identities all use the same settings as the core. When manager is supplied, machine paths are
+`group|manager|id` (or `manager|id` for the default Hub); legacy input without it retains `group|id`. This keeps
+same-Hub, same-ID managers independent (#9068). Per-Hub pin/mute preference scoping is the separate #9027 contract.
+Native failure retains the last usable projection
+and exposes the existing failure state instead of presenting an empty successful list. There is no second release
+sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
+
+`harmony/tests/core-host/agent-sort-adapter.test.mjs` drives the production adapter's real native-import contract and
+the real core through all 30 unchanged `agents_list` fixtures. The complete expected objects match **30/30**. Host
+workspace tests also exercise frozen-reading identity, explicit folds, filters and offline-history membership. The
+portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
+Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
+`devecocli`, so a release HAP was not built.
 ## Reproducing phase-1 evidence
 
 These are experiment entry points, not claims that every cell has run. A host or simulator result never substitutes
@@ -180,10 +236,19 @@ notices/statuses. Exact manifests, malformed inputs and deliberately wrong expec
 The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
 `coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
 label, while the other three take JSON documents.
+`harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
+all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
+turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
+same generated ArkTS codec and existing registry dispatch/flush/drain commands replay four operation cases at all 10
+checkpoints, with exact item IDs and 13 complete turn objects; an existing burst is also replayed through the
+standalone `replace` branch. Exact manifests, malformed/wrong-shaped inputs and deliberately wrong static and
+checkpoint expectations are checked. The helper supplies a fold range only after the real runtime requests it. No
+turn fixture, overlay or turn-grouping semantics changes.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
 mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
 a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
-device. No production client uses the new exports yet.
+device. In particular, the turn helper evidence does not replace #8808's real Linux NAPI addon loader. No production
+client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
@@ -242,11 +307,30 @@ JSON is decoded once, in Rust). `Action::WirePayload` carries the bytes (below);
   text; that is host evidence only, not a device or iOS run.
 - The refusal rules are tested by the crate's unit tests: every key a decoder reads, with every kind of wrong value.
 
+### Source-derived WebSocket Envelope projection (#8955)
+
+`persona_core::wire_envelope` is a pure diagnostic projection of the narrow current-iOS slice in
+`spec/fixtures/wire-envelope`: the shared scalar and raw-JSON envelope keys, `mesh` / `fleet` tolerance, unknown
+types, and routing requirements for `hello`, `inbox`, `items`, `fleet`, `screen` and `sessions_list`. It returns
+accepted, ignored or dropped with the documented projected fields; known event types outside that set return
+`out_of_scope`, never an assumed acceptance. It does not route an event, publish a patch or replace `decode_frame`.
+The existing continuity transport behavior and its known differences are unchanged.
+
+All 64 complete expected objects were hand-derived from the Swift sources cited per case, including duplicate keys
+whose input reaches the decoder as raw source text. `cargo test` and `WireEnvelopeBindingFixtureTest` replay exactly
+the same file and expectations; the latter calls the real host Kotlin/JNI `projectWireEnvelope` function, and checks
+malformed input and a wrong expectation. Integer spellings, encodings, unprojected nested models, raw `JSONValue`
+extreme floating-point behavior and full Item / Fleet models remain explicitly limited in the domain README.
+Neither replay executed Swift, iOS, a simulator, a production adapter or a physical device.
+
 It does not match iOS everywhere. The module's documentation has the full list; in short:
 
-- **Keys only other events use.** iOS's `Envelope` is one struct for every event type, so iOS also drops an `items`
-  frame when such a key (`rows`, `features`, `fleet`, …) has the wrong type. The core checks the keys an `items`
-  frame carries and ignores the rest, so it does not follow every unrelated addition to the Swift struct.
+- **Shared scalar / raw-JSON Envelope keys are checked before routing (#8995).** iOS decodes its shared `Envelope`
+  before choosing an event. `decode_frame` now rejects a wrong-typed known scalar, list shape or raw `JSONValue`
+  number even when another event owns the key (`rows`, `features`, `state`, `backlog`, `args`, …). An unknown event
+  type remains `Frame::Other`; it is not treated as a continuity event. The #8955 source-derived fixture replays this
+  production gate, and the real host Kotlin/JNI, ArkTS and independently compiled C ABI paths check the same rules.
+  The production Item JSON and exact `bad_item` locations are unchanged; `dispatch` still only queues bytes.
 - **Nested structs the core does not read.** iOS refuses a payload when an item's `image`, `task`, `compact`,
   `injected` or `model_refusal`, or a fold's `images` or `tasks`, fails to decode. The core accepts it.
 - **Number spellings the hub never writes.** The core takes integer literals only and refuses `8.0` or `8e0`, which

@@ -90,7 +90,7 @@ nonisolated enum AvatarImage {
     }
 
     /// Reads an image file the user picked (the Mac's open panel, the Files app), within its security scope.
-    static func read(_ url: URL) throws -> Data {
+    static func readPickedFile(_ url: URL) throws -> Data {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > fileLimit {

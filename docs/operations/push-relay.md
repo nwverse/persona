@@ -106,7 +106,7 @@ GET  /relay/v1/health     → {"ok":true,"apns":true,"push_types":["alert","back
 
 The relay address must be `https` (the hub also only accepts `https`, or `http` to a local loopback address for end-to-end scripts): grants and Live Activity content must not cross the network in plaintext.
 
-hub: `POST /api/v1/devices` gains three fields: `push_key` (the phone's public key, base64 of the X9.63 uncompressed point), `relay_url`, `relay_grant`.
+hub: `POST /api/v1/devices` gains three fields: `push_key` (the phone's public key, base64 of the X9.63 uncompressed point), `relay_url`, `relay_grant`. For urgent calls three more: `voip_token` (the PushKit token), `voip_grant` (the relay's grant for it, topic `<bundle id>.voip`) and `voip_error` (why the phone got none, in its words); the answer's `call` says whether a ring can reach the phone. A ring (`call.ring`, `../protocol/protocol.md` "Bus") goes through the relay with `voip_grant`, renewed once with the PushKit token on a 401; when APNs calls the PushKit token dead, the hub forgets only that token and the phone keeps its other pushes.
 
 hub routing (`push.go`): with `apns.json` → direct (exactly as before); without → via the relay if the device sent `relay_url` + `relay_grant` + `push_key`; otherwise no push.
 
@@ -121,6 +121,7 @@ lost alerts and Live Activity updates. Live Activity pushes carry `aps.timestamp
   report `apns_token`, `push_key`, `relay_url`, `relay_grant` together to the hub.
 - Notification Service Extension `PersonaNotify`: if `e` is present, decrypt it and swap in the title / subtitle / body / category (the notification's buttons) / thread / interruption level / userInfo;
   without `e` (direct pushes never carry `mutable-content`, so the extension isn't invoked) the notification is shown as-is.
+- Urgent calls (`../assistant/urgent-call.md`): only while the owner has them on, the App registers with PushKit, gets a grant for that token with topic `<bundle id>.voip` (cached apart from the notifications' grant) and reports `voip_token` / `voip_grant` / `voip_error` with its other fields; turning calls off unregisters and reports none. A VoIP push is opened in the App process with the same key and reported as a LiveCommunicationKit call at once.
 - Silent pushes (`background`) are decrypted in the App process; `persona_wake` wakes the connection as before, and `resolved_interaction_ids` removes the notifications of cards that are over (#4349, only to apps that registered with `features: ["withdraw"]`).
 - MCP forms and links (`INTERACTION_ELICITATION`, no buttons) are pushed only to apps that registered with `features: ["elicitation"]`, sealed like any other alert. Their alert carries neither the link to open nor a form's values ([protocol.md](../protocol/protocol.md) "MCP elicitation", #2433).
 
