@@ -20,14 +20,14 @@ func TestDocumentIndexesVisibleTextIndependently(t *testing.T) {
 }
 
 func TestSearchDoesNotReturnHiddenInlineHTML(t *testing.T) {
-	raw := json.RawMessage(`{"machine_id":"machine","session_id":"session","title":"Example","state":"idle","last_text":"Visible <script>secretneedle</script> <style>cssneedle</style> **ordinaryneedle**"}`)
+	raw := json.RawMessage(`{"machine_id":"machine","session_id":"session","title":"Example","state":"idle","last_text":"Visible <script>secretneedle</script> <style>cssneedle</style> **ordinaryneedle**","work":{"phase":"blocked","line":"realblocker <script>blockedsecret</script> <style>blockedstyle</style>"}}`)
 	var index sessionlist.Index
 	index.Replace("machine", []sessionlist.Item{{ID: "session", Machine: "machine", Full: raw, Summary: raw}})
 	ctx := &sessionlist.SearchContext{Document: Document}
 	for _, tc := range []struct {
 		query string
 		want  int
-	}{{"secretneedle", 0}, {"cssneedle", 0}, {"ordinaryneedle", 1}} {
+	}{{"secretneedle", 0}, {"cssneedle", 0}, {"blockedsecret", 0}, {"blockedstyle", 0}, {"ordinaryneedle", 1}, {"realblocker", 1}} {
 		page, err := index.Query(sessionlist.Options{Search: tc.query, SearchContext: ctx, Limit: 10})
 		if err != nil || len(page.Sessions) != tc.want {
 			t.Fatalf("search %q: got %d results, err %v; want %d", tc.query, len(page.Sessions), err, tc.want)

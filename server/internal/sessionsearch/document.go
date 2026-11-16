@@ -156,7 +156,7 @@ func Document(item sessionlist.Item) (sessionlist.SearchDocument, error) {
 			}
 		}
 		if row.Work.Phase == "blocked" {
-			errors = append(errors, row.Work.Line)
+			errors = append(errors, textfmt.SearchMarkdown(row.Work.Line))
 			d.HasErrors = true
 		}
 	}

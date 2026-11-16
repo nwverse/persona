@@ -97,7 +97,16 @@ func oneLineTables(md string) string {
 // htmlText is an HTML fragment's visible words. hidden carries an inline script or style across Markdown AST nodes:
 // Goldmark represents its opening and closing tags separately, with the content parsed as ordinary Markdown.
 func htmlText(block string, hidden *string) string {
-	z := html.NewTokenizer(strings.NewReader(block))
+	// A fragment can start inside an element opened in an earlier AST node. Restore tokenizer raw-text mode so,
+	// for example, a closing </script> inside what Markdown calls an HTML comment still closes the HTML script.
+	prefix := ""
+	if *hidden != "" {
+		prefix = "<" + *hidden + ">"
+	}
+	z := html.NewTokenizer(strings.NewReader(prefix + block))
+	if prefix != "" {
+		z.Next() // the synthetic opener only restores the tokenizer's state
+	}
 	var b strings.Builder
 	for {
 		switch z.Next() {
@@ -118,8 +127,9 @@ func htmlText(block string, hidden *string) string {
 			name, _ := z.TagName()
 			if string(name) == *hidden {
 				*hidden = ""
+			} else if *hidden == "" {
+				b.WriteByte(' ')
 			}
-			b.WriteByte(' ')
 		}
 	}
 }
@@ -178,7 +188,11 @@ func plain(md string, dropDangling, htmlWords bool) string {
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
 			if entering && htmlWords {
-				_ = htmlText(string(n.Segments.Value(src)), &hidden)
+				wasHidden := hidden != ""
+				visible := htmlText(string(n.Segments.Value(src)), &hidden)
+				if wasHidden && hidden == "" && strings.TrimSpace(visible) != "" {
+					b.WriteString(visible)
+				}
 			}
 			return ast.WalkSkipChildren, nil
 		}

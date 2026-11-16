@@ -11,6 +11,7 @@ func TestSearchMarkdownHidesInlineScriptAndStyle(t *testing.T) {
 		{`Visible <STYLE media="screen">hidden_style_needle</STYLE> answer`, "Visible answer"},
 		{`Visible <script class="x">hidden **formatted** and ` + "`code`" + ` <b>body</b></script> answer`, "Visible answer"},
 		{`Visible <script/>hidden</script> answer`, "Visible answer"},
+		{`Visible <script><!-- </script> --> answer`, "Visible --> answer"},
 		{"Visible <script>hidden\n\nstill hidden\n\n</script> answer", "Visible\nanswer"},
 		{"Visible <script>hidden\n\nlast hidden", "Visible"},
 		{"Visible <script>hidden\n\n<div>\n</script>after\n</div>\n\nvisible", "Visible\nafter\nvisible"},
