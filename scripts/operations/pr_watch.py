@@ -9,7 +9,6 @@ import fcntl
 import json
 import os
 import queue
-import shutil
 import sys
 import tempfile
 import threading
@@ -26,11 +25,15 @@ from pr_watch_merge import linked_issue, merge as generic_merge
 import pr_watch_merge
 import pr_watch_common
 import pr_watch_repair
+import pr_watch_recovery
 from pr_watch_review import review as semantic_review
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
 VERIFICATION_POLICY_VERSION = 2
+REVIEW_POLICY_VERSION = 2
+REPAIR_LIMIT = 3
+INFRASTRUCTURE_ATTEMPT_LIMIT = 3
 
 
 def load_config(path):
@@ -65,6 +68,9 @@ def load_config(path):
     reviewer = raw.get("reviewer", {})
     if not isinstance(reviewer, dict):
         raise WatchError("reviewer config must be an object")
+    reviewer = dict(reviewer)
+    reviewer.setdefault("timeout_seconds", 3600)
+    reviewer.setdefault("repair_timeout_seconds", 3600)
     webhook = raw.get("webhook", {})
     if not isinstance(webhook, dict):
         raise WatchError("webhook config must be an object")
@@ -104,6 +110,10 @@ class State:
             if item.get("head") != head or (evidence_key and item.get("evidence_key") != evidence_key):
                 item.clear()
                 item["head"] = head
+            # Incomplete infrastructure outcomes must not suppress the last
+            # completed review failure or finding evidence on a later retry.
+            if not fields.get("failure"):
+                fields.pop("failure", None)
             item.update(fields)
             item["updated_at"] = int(time.time())
             atomic_json(self.path, self.data)
@@ -161,8 +171,9 @@ class Watcher:
         digest = fingerprint("configuration", 0, "0" * 40, "config", self.config)
         marker = Path(self.config["state"]).with_suffix(".config")
         marker.parent.mkdir(parents=True, exist_ok=True)
-        if marker.exists() and marker.read_text(encoding="utf-8").strip() != digest:
-            raise WatchError("watcher configuration changed; use a fresh state file or an explicit migration")
+        previous = self.state.data.get("config_fingerprint", digest)
+        if previous != digest:
+            raise WatchError("watcher configuration changed; use a fresh state file or --migrate-config while the service is stopped")
         marker.write_text(digest + "\n", encoding="utf-8")
         os.chmod(str(marker), 0o600)
         path = Path(self.config["state"]).with_suffix(".lock")
@@ -172,6 +183,61 @@ class Watcher:
             fcntl.flock(self.instance.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise WatchError("another watcher instance already holds the service lock")
+        self.migrate_policy(digest)
+
+    def migrate_policy(self, digest):
+        """Explicitly opt in to the approved policy without resetting budgets."""
+        migration = "review-policy-v2:" + digest
+        with self.state.lock:
+            if self.state.data.get("policy_migration") == migration:
+                return
+            for item in self.state.data["prs"].values():
+                if item.get("head") and not item.get("base"):
+                    evidence_key = item.get("evidence_key", "")
+                    if "@" in evidence_key and ".." in evidence_key.split("@", 1)[1]:
+                        item["base"] = evidence_key.split("@", 1)[1].split("..", 1)[0]
+                    elif item.get("outcome") not in ("merged", "continuation"):
+                        item["outcome"] = "retry"
+                        item["retry_after"] = 0
+                        item.pop("semantic", None)
+                        item.pop("verification", None)
+                        item.pop("review_posted", None)
+                if item.get("review_policy", 1) >= REVIEW_POLICY_VERSION:
+                    continue
+                item["review_policy"] = REVIEW_POLICY_VERSION
+                item["policy_migration"] = migration
+                item.setdefault("success_posted", bool(item.get("review_posted") and item.get("outcome") in
+                                                       ("passed", "passed_with_base_failures", "merged")))
+                if item.get("outcome") in ("merged", "continuation"):
+                    continue
+                if item.get("repair_exhausted") and not item.get("failure"):
+                    item["failure"] = "The previous repair budget was exhausted without a recorded diagnostic; the new three-round budget permits one more attempt."
+                if item.get("outcome") == "repair_exhausted":
+                    item["failure_posted"] = False
+                if item.get("outcome") == "findings":
+                    item["published_findings"] = list(item.get("findings", []))
+                    item["review_posted"] = False
+                    item.pop("review_fingerprint", None)
+                if item.get("outcome") == "failed" and item.get("semantic") == "passed":
+                    item["outcome"] = "retry"
+                    item["retry_after"] = 0
+                    item["review_attempts"] = 0
+                    item["repair_attempts"] = 0
+                if item.get("outcome") in ("reviewing", "repairing", "base_updated", "repair_published"):
+                    item["outcome"] = "retry"
+                    item["retry_after"] = 0
+                elif item.get("outcome") == "findings" and any(
+                        finding.get("severity") in ("P0", "P1") for finding in item.get("findings", [])):
+                    item["outcome"] = "retry"
+                    item["retry_after"] = 0
+                if item.get("repair_rounds", 0) < REPAIR_LIMIT:
+                    item.pop("repair_exhausted", None)
+                    if item.get("outcome") == "repair_exhausted":
+                        item["outcome"] = "retry"
+                        item["retry_after"] = 0
+            self.state.data["policy_migration"] = migration
+            self.state.data["config_fingerprint"] = digest
+            atomic_json(self.state.path, self.state.data)
 
     def discover(self):
         try:
@@ -248,7 +314,28 @@ class Watcher:
     def worktree(self, repo, number, pr):
         config = self.repositories[repo]
         root = config["checkout"]
-        state_root = Path(self.config["state"]).resolve().parent / "worktrees"
+        with self.git_lock:
+            pr_watch_recovery.recover_object_debris(root)
+            result = run(["git", "worktree", "prune", "--expire", "now"], cwd=root, timeout=90)
+            if result.returncode:
+                raise WatchError("cannot prune stale watcher worktree metadata: " + bounded(result.stderr, 800))
+        for attempt in range(2):
+            try:
+                return self.prepare_worktree(repo, number, pr)
+            except WatchError as error:
+                if attempt or "moved while preparing" in str(error):
+                    raise
+                with self.git_lock:
+                    recovered = pr_watch_recovery.recover_worktree_failure(root, self.config["state"], error)
+                if not recovered:
+                    raise
+                self.log("%s#%s repaired a watcher-owned Git failure; retrying the same head" % (repo, number))
+        raise WatchError("Git recovery exhausted before preparing the PR")
+
+    def prepare_worktree(self, repo, number, pr):
+        config = self.repositories[repo]
+        root = config["checkout"]
+        state_root = pr_watch_recovery.owned_root(self.config["state"])
         state_root.mkdir(parents=True, exist_ok=True)
         worktree = Path(tempfile.mkdtemp(prefix="%s-%s-" % (repo.split("/")[1], number), dir=state_root))
         try:
@@ -269,21 +356,42 @@ class Watcher:
                 checked(["git", "worktree", "add", "--detach", str(worktree), pr["headRefOid"]], cwd=root, timeout=180)
             return worktree
         except BaseException:
-            shutil.rmtree(str(worktree), ignore_errors=True)
+            with self.git_lock:
+                pr_watch_recovery.remove_worktree(root, self.config["state"], worktree)
             raise
 
     def remove_worktree(self, repo, worktree):
         if not worktree:
             return
         with self.git_lock:
-            result = run(["git", "worktree", "remove", "--force", str(worktree)],
-                         cwd=self.repositories[repo]["checkout"], timeout=90)
-            if result.returncode:
-                self.log("temporary worktree cleanup failed: " + bounded(result.stderr, 300))
+            try:
+                pr_watch_recovery.remove_worktree(self.repositories[repo]["checkout"], self.config["state"], worktree)
+            except (OSError, WatchError) as error:
+                self.log("temporary worktree cleanup failed: " + bounded(error, 300))
+
+    def active_worktrees(self):
+        with self.queue_lock:
+            active = []
+            for (repo, number), item in self.active.items():
+                if item["phase"] != "queued":
+                    prefix = repo.split("/", 1)[1] + "-" + str(number) + "-"
+                    for candidate in pr_watch_recovery.owned_root(self.config["state"]).glob(prefix + "*"):
+                        if candidate.is_dir() and not candidate.is_symlink():
+                            active.append(str(candidate))
+            return active
+
+    def recover_infrastructure(self, repo, worktree, error):
+        with self.git_lock:
+            return pr_watch_recovery.recover_worktree_failure(
+                self.repositories[repo]["checkout"], self.config["state"], error,
+                protected=self.active_worktrees())
 
     def comment_findings(self, repo, number, pr, findings):
-        body = "Automated semantic review at `%s` found %d issue(s). This head was not merged.\n\nFix the findings and push a new commit for a fresh review." % (
-            pr["headRefOid"][:9], len(findings))
+        blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
+        body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
+            pr["headRefOid"][:9], len(findings),
+            "P0/P1 findings block this head; the watcher will use its bounded repair flow." if blocking else
+            "These P2 findings are non-blocking under the maintainer-approved policy. Verification and exact-head merging continue.")
         comments = [{"path": f["path"], "line": f["line"], "side": "RIGHT",
                      "body": "**%s** — %s\n\n**Suggestion:** %s" % (f["severity"], f["summary"], f["suggestion"])}
                     for f in findings]
@@ -306,17 +414,20 @@ class Watcher:
             raise WatchError("could not post PR comment: " + bounded(result.stderr, 1000))
 
     def success_review(self, repo, number, pr, results, base_failures=None):
+        visual_missing = any(result.get("name", "").startswith("Visual acceptance not performed:") for result in results)
+        checks = "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes"
         if base_failures:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
                     "Some failed checks were independently reproduced on clean main and are not attributed to this PR. They are not claimed as passing tests:\n\n```text\n%s\n```\n\n"
                     "Checks that actually passed:\n%s") % (
-                pr["headRefOid"][:9], bounded(public_base_evidence(base_failures), 6000),
-                "\n".join("- `%s`" % r["name"] for r in results if r.get("ok")) or "- No additional successful lanes")
+                pr["headRefOid"][:9], bounded(public_base_evidence(base_failures), 6000), checks)
         else:
             body = ("Automated independent semantic review at `%s` found no blocking defects.\n\n"
-                    "Local checks completed successfully:\n%s\n\n"
+                    "Local checks completed:\n%s\n\n"
                     "This records only the checks listed above; it does not claim unrun device or visual acceptance.") % (
-                pr["headRefOid"][:9], "\n".join("- `%s`" % r["name"] for r in results))
+                pr["headRefOid"][:9], checks)
+        if visual_missing:
+            body += "\n\nScreenshot acceptance was not performed: no UI evidence adapter is configured."
         result = run(["gh", "pr", "review", str(number), "--repo", repo, "--comment", "--body", body], timeout=90)
         if result.returncode:
             raise WatchError("could not post successful review: " + bounded(result.stderr, 1000))
@@ -353,17 +464,60 @@ class Watcher:
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
         return True
 
+    def exhaust_repair(self, repo, number, pr, evidence_key, failure):
+        """Persist a terminal reason before its exactly-once best-effort comment."""
+        reason = bounded(str(failure) or "The repair worker did not provide a diagnostic.", 12000)
+        previous = self.state.get(repo, number)
+        current = self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                                 outcome="repair_exhausted", repair_exhausted=True, failure=reason,
+                                 repair_rounds=max(int(previous.get("repair_rounds", 0)), REPAIR_LIMIT))
+        if not current.get("failure_posted") or current.get("published_failure") != reason:
+            if not self.dry_run:
+                self.comment(repo, number, "Automatic repair stopped after %d rounds. The last failure was:\n\n```text\n%s\n```" % (
+                    REPAIR_LIMIT, reason))
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           outcome="repair_exhausted", repair_exhausted=True, failure=reason,
+                           failure_posted=True, published_failure=reason)
+        return False
+
+    def repair_findings(self, config, pr, worktree, findings):
+        """Repair P0/P1 findings with the same sandbox, publication and budget as test failures."""
+        repo, number = config["name"], pr["number"]
+        old = self.state.get(repo, number)
+        evidence_key = old.get("evidence_key")
+        rounds = int(old.get("repair_rounds", 0))
+        reason = "\n".join("%s %s:%s\n%s\nCorrection: %s" % (
+            finding["severity"], finding["path"], finding["line"], finding["summary"], finding["suggestion"])
+            for finding in findings)
+        if rounds >= REPAIR_LIMIT:
+            return self.exhaust_repair(repo, number, pr, evidence_key, reason)
+        latest = pr_snapshot(repo, number)
+        if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
+            return False
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                       outcome="repairing", repair_rounds=rounds + 1, failure=reason,
+                       findings=findings, semantic="findings", base=pr["baseRefOid"])
+        checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
+        pr_watch_repair.repair_with_model(repo, pr, str(worktree), reason, self.config["reviewer"])
+        new_number, checks = pr_watch_repair.commit_and_push_repair(
+            repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                       repair_rounds=rounds + 1, outcome="repair_published", failure=reason,
+                       checks=checks)
+        self.comment(repo, number, "The watcher pushed an automated repair for the P0/P1 semantic findings. The new head will receive a fresh semantic review and verification.")
+        if new_number != number:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           outcome="continuation", continuation=new_number)
+            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+        return False
+
     def repair_verification(self, config, pr, worktree, error):
         """Attribute a failure, update a stale base, or perform one repair round."""
         repo, number = config["name"], pr["number"]
         old = self.state.get(repo, number)
         rounds = int(old.get("repair_rounds", 0))
-        if rounds >= 2:
-            self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" %
-                         bounded(str(error), 12000))
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                           outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
-            return False
+        if rounds >= REPAIR_LIMIT:
+            return self.exhaust_repair(repo, number, pr, old.get("evidence_key"), error)
         comparison = pr_watch_repair.main_failure_comparison(repo, pr, str(worktree), getattr(error, "output", "") or str(error),
                                                              git_root=config["checkout"], command=getattr(error, "command", None),
                                                              failures=getattr(error, "failures", None), environ=verification_env())
@@ -484,7 +638,7 @@ class Watcher:
                                  base=pr["baseRefOid"], format=FORMAT_VERSION)
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
-        if old.get("outcome") == "continuation":
+        if old.get("outcome") in ("continuation", "repair_published", "base_updated"):
             return
         if old.get("outcome") == "base_comment_pending":
             if not self.dry_run:
@@ -496,12 +650,27 @@ class Watcher:
                                  base_failures=old.get("base_failures"), base_comment_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures"):
-            if self.dry_run or old.get("review_posted") or old.get("outcome") == "merged":
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings"):
+            if old.get("outcome") == "merged":
+                return
+            if self.dry_run:
+                return
+            if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
+                                                and old.get("semantic") == "passed"):
                 return
             # A dry run keeps semantic/test evidence but has no external side
             # effects. A live run resumes publication and the merge gate.
-            if old.get("semantic") == "findings":
+            if old.get("semantic") == "findings" and not any(
+                    finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])):
+                if not old.get("review_posted"):
+                    self.comment_findings(repo, number, pr, old.get("findings", []))
+                    self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
+                # P2 comments do not invalidate a passing verification or turn
+                # a completed exact-head gate into a new review every poll.
+                if old.get("verification") not in ("passed", "base_failure"):
+                    return
+                old = self.state.get(repo, number)
+            elif old.get("semantic") == "findings":
                 self.comment_findings(repo, number, pr, old.get("findings", []))
                 self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
                 return
@@ -519,12 +688,10 @@ class Watcher:
                 worktree = None
                 try:
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
-                    if rounds >= 2:
+                    if rounds >= REPAIR_LIMIT:
                         if not self.state.get(repo, number).get("repair_exhausted"):
-                            self.state.put(repo, number, head, evidence_key=evidence_key,
-                                           repair_exhausted=True, outcome="repair_exhausted")
-                            if not self.dry_run:
-                                self.comment(repo, number, "The automatic repair limit was reached while updating the base; no merge was attempted.")
+                            self.exhaust_repair(repo, number, pr, evidence_key,
+                                                "The PR still conflicts with main after %d repair rounds; no further base update was attempted." % REPAIR_LIMIT)
                         return
                     worktree = self.worktree(repo, number, pr)
                     updated_head = pr_watch_repair.update_branch_with_main(
@@ -550,11 +717,21 @@ class Watcher:
                                            repair_rounds=rounds + 1, outcome="base_updated")
                             self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
+                    self.recover_infrastructure(repo, worktree, error)
                     attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
-                    if attempts >= 3:
-                        self.comment(repo, number, "Automatic base update failed after three attempts. No merge was attempted.\n\n```text\n%s\n```" % bounded(str(error), 6000))
+                    rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
+                    if rounds >= REPAIR_LIMIT:
+                        return self.exhaust_repair(repo, number, pr, evidence_key, error)
+                    if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                         self.state.put(repo, number, head, evidence_key=evidence_key,
-                                       outcome="failed", review_attempts=attempts, failure=str(error))
+                                       outcome="retry", review_attempts=attempts,
+                                       retry_after=time.time() + 3600,
+                                       retry_reason="base_update", failure=str(error))
+                        if not self.state.get(repo, number).get("failure_posted") and not self.dry_run:
+                            self.comment(repo, number, "Automatic base update could not complete after three attempts. No merge was attempted.\n\n```text\n%s\n```" % bounded(str(error), 6000))
+                            self.state.put(repo, number, head, evidence_key=evidence_key,
+                                           outcome="retry", review_attempts=attempts, retry_after=time.time() + 3600,
+                                           retry_reason="base_update", failure=str(error), failure_posted=True)
                     else:
                         self.state.put(repo, number, head, evidence_key=evidence_key,
                                        outcome="retry", review_attempts=attempts,
@@ -592,21 +769,52 @@ class Watcher:
                                          repair_rounds=rounds)
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
-                findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
-                semantic = "findings" if findings else "passed"
+                review_attempts = int(current.get("review_attempts", 0))
+                findings = None
+                for attempt in range(INFRASTRUCTURE_ATTEMPT_LIMIT - review_attempts):
+                    try:
+                        findings = semantic_review(repo, pr, str(worktree), self.config["reviewer"])
+                        break
+                    except WatchError as error:
+                        attempt_number = review_attempts + attempt + 1
+                        current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                                 outcome="retry", review_attempts=attempt_number,
+                                                 retry_after=0, failure=str(error),
+                                                 retry_reason="semantic_review")
+                        if attempt_number >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+                            raise
+                        self.log("%s#%s retrying semantic review after infrastructure failure: %s" % (
+                            repo, number, bounded(error, 500)))
+                if findings is None:
+                    raise WatchError(current.get("failure") or "semantic review exhausted its attempts without a valid answer")
+                blocking = [finding for finding in findings if finding["severity"] in ("P0", "P1")]
+                semantic = "findings" if blocking else "passed"
+                review_fingerprint = fingerprint(repo, number, head, "semantic", findings)
+                published = current.get("published_findings", [])
+                published_fingerprint = (fingerprint(repo, number, head, "semantic", published)
+                                         if published else current.get("review_fingerprint"))
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          semantic=semantic, findings=findings,
-                                         review_fingerprint=fingerprint(repo, number, head, "semantic", findings))
+                                         review_fingerprint=review_fingerprint,
+                                         outcome="reviewed",
+                                         review_posted=bool(current.get("review_posted") and
+                                                            published_fingerprint == review_fingerprint))
             findings = current.get("findings", [])
+            if not current.get("review_posted") and findings:
+                self.phase(key, "posting actionable findings")
+                if not self.dry_run:
+                    self.comment_findings(repo, number, pr, findings)
+                current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         review_posted=not self.dry_run)
             if current.get("semantic") == "findings":
-                if not current.get("review_posted"):
-                    self.phase(key, "posting actionable findings")
-                    if not self.dry_run:
-                        self.comment_findings(repo, number, pr, findings)
-                    current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                             review_posted=not self.dry_run, outcome="findings")
-                self.log("%s#%s has %d semantic finding(s); not merged" % (repo, number, len(findings)))
-                return
+                if self.dry_run:
+                    self.log("%s#%s has blocking semantic findings; repair is disabled in dry-run" % (repo, number))
+                    return False
+                phase = "semantic_repair"
+                return self.repair_findings(config, pr, worktree, findings)
+            if current.get("findings") and not current.get("outcome") == "findings":
+                current = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         outcome="passed_with_findings")
             if current.get("verification") not in ("passed", "base_failure"):
                 self.phase(key, "repository verification")
                 phase = "verification"
@@ -615,11 +823,8 @@ class Watcher:
                 except pr_watch_common.VerificationError as error:
                     if self.dry_run:
                         raise
-                    if self.state.get(repo, number).get("repair_rounds", 0) >= 2:
-                        self.comment(repo, number, "Automatic verification repair stopped after two rounds.\n\n```text\n%s\n```" % bounded(str(error), 12000))
-                        self.state.put(repo, number, head, evidence_key=evidence_key,
-                                       outcome="repair_exhausted", repair_exhausted=True, failure=str(error))
-                        return
+                    if self.state.get(repo, number).get("repair_rounds", 0) >= REPAIR_LIMIT:
+                        return self.exhaust_repair(repo, number, pr, evidence_key, error)
                     repaired = self.repair_verification(config, pr, worktree, error)
                     if repaired != "base_failure":
                         return
@@ -645,41 +850,59 @@ class Watcher:
                     return
                 if not linked_issue(current_pr["body"], repo):
                     raise WatchError("PR has no linked issue; not merged")
-                if not current.get("review_posted"):
+                if not current.get("success_posted"):
                     self.phase(key, "posting successful review")
                     if not self.dry_run:
                         self.success_review(repo, number, current_pr, current.get("checks", []),
                                             current.get("base_failures"))
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                             review_posted=not self.dry_run)
+                                             review_posted=not self.dry_run,
+                                             success_posted=not self.dry_run)
                 self.finish_merge(config, current_pr, current)
         except WatchError as error:
+            if phase in ("verification", "semantic_repair"):
+                self.recover_infrastructure(repo, worktree, error)
             if phase == "verification":
                 attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
                 latest = self.state.get(repo, number)
+                failure_fingerprint = fingerprint(repo, number, head, "repair-infrastructure", str(error))
+                publish = latest.get("infrastructure_fingerprint") != failure_fingerprint
                 self.state.put(repo, number, head, evidence_key=evidence_key,
-                               outcome="retry" if attempts < 3 else "failed",
+                               outcome="retry" if attempts < INFRASTRUCTURE_ATTEMPT_LIMIT else "failed",
                                review_attempts=attempts,
                                repair_attempts=attempts,
                                repair_rounds=int(latest.get("repair_rounds", 0)),
                                verification=latest.get("verification"), checks=latest.get("checks", []),
                                base_failures=latest.get("base_failures"),
-                               retry_after=time.time() + 300, failure=str(error))
-                if not self.dry_run:
+                               retry_after=time.time() + 300, failure=str(error),
+                               retry_reason="verification_repair")
+                if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+                    # An unavailable repair worker is not a successfully
+                    # completed repair round. Keep its budget intact but leave
+                    # a durable diagnostic and a bounded later retry.
+                    self.state.put(repo, number, head, evidence_key=evidence_key,
+                                   outcome="retry", review_attempts=attempts,
+                                   repair_attempts=attempts, repair_rounds=int(latest.get("repair_rounds", 0)),
+                                   retry_after=time.time() + 3600, retry_reason="verification_repair",
+                                   failure=str(error))
+                if not self.dry_run and publish:
                     self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
                                  bounded(str(error), 12000))
+                    self.state.put(repo, number, head, evidence_key=evidence_key,
+                                   infrastructure_fingerprint=failure_fingerprint)
                 return
             # A missing semantic answer never becomes approval. Verification
             # Infrastructure failures remain retryable with capped backoff;
             # verification failures and semantic findings stay terminal for
             # this exact base/head until the PR changes.
-            attempts = int(old.get("review_attempts", 0)) + 1
-            retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
-            outcome = "retry" if retry else ("merge_failed" if phase == "merge" else "failed")
+            retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
+            attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + (0 if phase == "semantic" else 1)
+            outcome = ("retry" if retry or phase == "verification" else
+                       "merge_failed" if phase == "merge" else "failed")
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
                            review_attempts=attempts, retry_after=time.time() + min(1800, 30 * (2 ** min(attempts - 1, 6))),
                            failure=str(error))
-            if not retry and not old.get("failure_posted"):
+            if not retry and phase != "verification" and not old.get("failure_posted") and phase != "semantic_repair":
                 if not self.dry_run:
                     self.comment(repo, number, "Automated review at `%s` could not complete. Not merged.\n\n```text\n%s\n```" %
                                  (head[:9], bounded(error, 14000)))
@@ -788,10 +1011,19 @@ def main(argv=None):
     parser.add_argument("--config", default=os.environ.get("PR_WATCH_CONFIG", str(Path.home() / ".config" / "persona" / "pr-watch.json")))
     parser.add_argument("--once", action="store_true", help="one discovery round, then wait for its queued work")
     parser.add_argument("--dry-run", action="store_true", help="review and test locally, but never comment, notify or merge")
+    parser.add_argument("--migrate-config", action="store_true",
+                        help="with the service stopped, preserve evidence and migrate the reviewed configuration, then exit")
     parser.add_argument("--repository", action="append", help="restrict this run to a configured owner/name; repeatable")
     parser.add_argument("--pr", type=int, action="append", help="restrict this run to PR numbers; requires --repository")
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.migrate_config:
+        if args.repository or args.pr or args.dry_run or args.once:
+            raise WatchError("--migrate-config is an exclusive offline operation")
+        watcher = Watcher(config)
+        watcher.single_instance()
+        watcher.instance.close()
+        return 0
     if args.repository:
         unknown = set(args.repository) - {r["name"] for r in config["repositories"]}
         if unknown:

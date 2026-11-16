@@ -21,6 +21,7 @@ import pr_watch_common
 import pr_watch_events
 import pr_watch_merge
 import pr_watch_repair
+import pr_watch_recovery
 import pr_watch_review
 import pr_watch_verify
 
@@ -48,6 +49,7 @@ class WatcherTests(unittest.TestCase):
                        "reviewer": {}, "webhook": {}, "poll_seconds": 60, "workers": 1,
                        "state": str(self.root / "state.json")}
         self.watcher = pr_watch.Watcher(self.config, verbose=False)
+        self.original_success_review = self.watcher.success_review
         @contextmanager
         def no_file_lock(root):
             yield
@@ -58,7 +60,10 @@ class WatcherTests(unittest.TestCase):
         self.watcher.worktree = lambda *args: self.root / "checkout"
         self.comments = []
         self.watcher.comment = lambda repo, number, body: self.comments.append(body)
-        self.watcher.success_review = lambda *args: self.comments.append("passed")
+        self.watcher.success_review = lambda *args, **kwargs: self.original_success_review(*args, **kwargs)
+        self.github = patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+        self.github = self.github.start()
+        self.addCleanup(self.github.stop)
 
     def test_clean_head_runs_both_gates_then_merges(self):
         calls = []
@@ -71,21 +76,192 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(merge.call_count, 1)
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
 
-    def test_findings_are_published_once_and_never_merge(self):
+    def test_p1_findings_are_published_then_repaired_instead_of_merging(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=findings), \
                 patch.object(pr_watch, "verify") as verify, \
                 patch.object(self.watcher, "merge") as merge, \
+                patch.object(pr_watch_repair, "repair_with_model") as worker, \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])), \
                 patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as api:
             self.watcher.process("example/one", 7)
             self.watcher.process("example/one", 7)
         verify.assert_not_called()
         merge.assert_not_called()
+        worker.assert_called_once()
         self.assertEqual(api.call_count, 1)
         self.assertEqual(api.call_args.args[0][:2], ["gh", "api"])
+        self.assertEqual(len(self.comments), 1)
+        self.assertIn("pushed an automated repair", self.comments[0])
 
-    def test_base_change_invalidates_same_head_evidence(self):
+    def test_p2_findings_are_published_and_do_not_block_verification_or_merge(self):
+        findings = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "possible edge case", "suggestion": "handle it"}]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "command": ["true"], "ok": True, "summary": ""}]) as verify, \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as api, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            self.watcher.process("example/one", 7)
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.assertEqual(api.call_count, 2)
+        self.assertIn("P2 findings are non-blocking", api.call_args_list[0].kwargs["input_text"])
+        self.assertIn("Automated independent semantic review", api.call_args_list[1].args[0][-1])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
+
+    def test_p2_findings_are_published_and_do_not_block_verification_or_merge(self):
+        findings = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "possible edge case", "suggestion": "handle it"}]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "command": ["true"], "ok": True, "summary": ""}]) as verify, \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as api, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            self.watcher.process("example/one", 7)
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.assertEqual(api.call_count, 2)
+        self.assertIn("P2 findings are non-blocking", api.call_args_list[0].kwargs["input_text"])
+        self.assertIn("Automated independent semantic review", api.call_args_list[1].args[0][-1])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
+
+    def test_missing_visual_adapter_is_recorded_not_claimed_as_acceptance(self):
+        names = "web/src/views/ChatView.tsx\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"web": True}
+            commands = pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1, {})
+        self.assertEqual(commands[-1][0], "Visual acceptance not performed: no UI evidence adapter is configured")
+        with patch.object(self.watcher, "success_review", wraps=self.watcher.success_review), \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as execute:
+            self.watcher.success_review("example/one", 7, pr(), [{"name": commands[-1][0], "ok": True}])
+        self.assertIn("Screenshot acceptance was not performed", execute.call_args.args[0][-1])
+        self.assertNotIn("completed successfully", execute.call_args.args[0][-1])
+
+        for severity in ("P0", "P1"):
+            with self.subTest(severity=severity):
+                self.watcher.state.data["prs"].clear()
+                findings = [{"path": "x.py", "line": 2, "severity": severity, "summary": "wrong", "suggestion": "fix it"}]
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                        patch.object(pr_watch, "semantic_review", return_value=findings), \
+                        patch.object(self.watcher, "repair_findings", return_value=False) as repair, \
+                        patch.object(pr_watch, "verify") as verify, \
+                        patch.object(self.watcher, "merge") as merge:
+                    self.watcher.process("example/one", 7)
+                repair.assert_called_once()
+                self.assertEqual(repair.call_args.args[3], findings)
+                verify.assert_not_called()
+                merge.assert_not_called()
+
+    def test_blocking_findings_repair_consumes_one_round_and_reviews_new_head(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=1)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model") as worker, \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])) as publish:
+            self.watcher.repair_findings(self.config["repositories"][0], pr(), self.root,
+                                         [{"path": "x.py", "line": 1, "severity": "P1",
+                                           "summary": "wrong", "suggestion": "fix"}])
+        worker.assert_called_once()
+        publish.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "repair_published")
+
+    def test_three_round_exhaustion_persists_and_publishes_the_last_reason(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)
+        self.watcher.exhaust_repair("example/one", 7, pr(), "one", "the exact failed assertion")
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "repair_exhausted")
+        self.assertEqual(state["failure"], "the exact failed assertion")
+        self.assertIn("after 3 rounds", self.comments[-1])
+        self.assertIn("the exact failed assertion", self.comments[-1])
+
+    def test_conflict_exhaustion_retains_the_final_reason_without_starting_another_repair(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3,
+                               failure="original conflict resolution failed")
+        with patch.object(pr_watch_repair, "update_branch_with_main") as update:
+            with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")):
+                self.watcher.process("example/one", 7)
+        update.assert_not_called()
+        self.assertIn("after 3 repair rounds", self.watcher.state.get("example/one", 7)["failure"])
+
+    def test_review_infrastructure_is_retried_immediately_then_backed_off(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", side_effect=[pr_watch_common.WatchError("timeout"), []]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(review.call_count, 2)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "passed")
+
+    def test_review_deadline_is_shared_by_all_diff_chunks(self):
+        clock = iter([0.0, 0.0, 70.0])
+        with patch.object(pr_watch_review, "checked", side_effect=["diff", "stat", "a.py\nb.py"]), \
+                patch.object(pr_watch_review, "changed_lines", return_value={}), \
+                patch.object(pr_watch_review, "split_diff", return_value=["a", "b"]), \
+                patch.object(pr_watch_review.time, "monotonic", side_effect=lambda: next(clock)), \
+                patch.object(pr_watch_review, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(
+                    {"subtype": "success", "structured_output": {"findings": []}}), "")) as execute:
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_review.review("example/one", pr(), ".", {"timeout_seconds": 60})
+        self.assertEqual(execute.call_count, 1)
+
+    def test_explicit_policy_migration_recovers_interrupted_work_without_resetting_repairs(self):
+        key = "example/one#7"
+        self.watcher.state.data["prs"][key] = {
+            "head": SHA_A, "base": SHA_BASE, "outcome": "reviewing", "review_policy": 1,
+            "repair_rounds": 2, "evidence_key": key + "@" + SHA_BASE + ".." + SHA_A,
+        }
+        self.watcher.state.data["prs"]["example/one#8"] = {
+            "head": SHA_B, "base": SHA_BASE, "outcome": "repair_exhausted", "repair_exhausted": True,
+            "repair_rounds": 2, "failure": "", "review_policy": 1,
+        }
+        self.watcher.state.data["prs"]["example/one#9"] = {
+            "head": SHA_A, "outcome": "merged", "review_policy": 1,
+        }
+        self.watcher.migrate_policy("new")
+        self.assertEqual(self.watcher.state.data["prs"][key]["outcome"], "retry")
+        self.assertEqual(self.watcher.state.data["prs"][key]["repair_rounds"], 2)
+        exhausted = self.watcher.state.data["prs"]["example/one#8"]
+        self.assertEqual(exhausted["repair_rounds"], 2)
+        self.assertNotIn("repair_exhausted", exhausted)
+        self.assertTrue(exhausted["failure"])
+        self.assertEqual(self.watcher.state.data["prs"]["example/one#9"]["outcome"], "merged")
+        self.assertNotIn("base", self.watcher.state.data["prs"]["example/one#9"])
+        self.assertIn("config_fingerprint", self.watcher.state.data)
+
+    def test_offline_configuration_migration_preserves_state_and_is_idempotent(self):
+        path = self.root / "config.json"
+        path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root / "checkout"),
+                                                      "verify": {"commands": [["true"]]}}],
+                                    "state": str(self.root / "state.json")}))
+        pr_watch.atomic_json(self.root / "state.json", {"version": 1, "prs": {
+            "example/one#7": {"head": SHA_A, "outcome": "reviewing", "repair_rounds": 2}}})
+        with patch.object(pr_watch.Watcher, "run") as run:
+            self.assertEqual(pr_watch.main(["--config", str(path), "--migrate-config"]), 0)
+            run.assert_not_called()
+            self.assertEqual(pr_watch.main(["--config", str(path), "--migrate-config"]), 0)
+        state = pr_watch.State(self.root / "state.json")
+        self.assertEqual(state.data["prs"]["example/one#7"]["repair_rounds"], 2)
+        self.assertEqual(state.data["prs"]["example/one#7"]["outcome"], "retry")
+        self.assertIn("config_fingerprint", state.data)
+
+    def test_migrate_config_requires_an_exclusive_offline_invocation(self):
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])
+
+        digest = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", self.config)
+        self.watcher.single_instance()
+        self.addCleanup(self.watcher.instance.close)
+        self.assertTrue(self.watcher.state.data["policy_migration"].startswith("review-policy-v2:"))
+        self.assertEqual(digest, self.watcher.state.data["policy_migration"].split(":", 1)[1])
+        self.watcher.config["workers"] = 2
+        with self.assertRaises(pr_watch_common.WatchError):
+            self.watcher.single_instance()
+
         new_base = "d" * 40
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(baseRefOid=new_base), pr(baseRefOid=new_base)]), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
@@ -129,7 +305,8 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         live_review.assert_not_called()
         merge.assert_called_once()
-        self.assertEqual(self.comments, ["passed"])
+        self.assertEqual(self.github.call_count, 1)
+        self.assertEqual(self.github.call_args.args[0][:2], ["gh", "pr"])
 
     def test_prepare_failures_retry_with_bounded_backoff(self):
         for attempt in range(3):
@@ -536,13 +713,22 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(commands[0], ("CI web", ["bash", "scripts/ci/web.sh"]))
         self.assertEqual(commands[1][0], "Exact-head privacy scan")
 
-    def test_feature_ui_change_still_requires_visual_adapter(self):
+    def test_feature_ui_change_without_adapter_records_the_limitation(self):
         names = "web/src/views/ChatView.tsx\n"
         with patch.object(pr_watch_verify, "checked", return_value=names), \
                 patch.object(pr_watch_verify, "load_paths") as selector:
             selector.return_value.select.return_value = {"web": True, "scripts": True}
-            with self.assertRaises(pr_watch_common.WatchError):
-                pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1, {})
+            commands = pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1, {})
+        self.assertEqual(commands[-1][0], "Visual acceptance not performed: no UI evidence adapter is configured")
+
+    def test_feature_ui_change_with_adapter_still_requires_visual_evidence(self):
+        names = "web/src/views/ChatView.tsx\n"
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "load_paths") as selector:
+            selector.return_value.select.return_value = {"web": True, "scripts": True}
+            commands = pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1,
+                                                      {"ui_evidence_command": ["visual", "{head}"]})
+        self.assertIn(("visual evidence", ["visual", SHA_A]), commands)
 
     def test_superseded_prerequisite_failure_retries_only_verification(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
@@ -570,12 +756,16 @@ class WatcherTests(unittest.TestCase):
                 ("passed", {"verification": "passed", "verification_policy": 1, "review_posted": True}),
                 ("passed_with_base_failures", {"verification": "base_failure", "verification_policy": 1, "review_posted": True}),
                 ("findings", {"semantic": "findings", "review_posted": True}),
-                ("repair_exhausted", {"repair_exhausted": True, "repair_rounds": 2}),
+                ("repair_exhausted", {"repair_exhausted": True, "repair_rounds": 3}),
         ):
             with self.subTest(outcome=outcome):
                 self.watcher.state.data["prs"].pop("example/one#7", None)
                 self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
                                        format=1, base=SHA_BASE, outcome=outcome, **fields)
+                if outcome == "findings":
+                    self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                                           findings=[{"path": "x.py", "line": 1, "severity": "P2",
+                                                      "summary": "note", "suggestion": "consider it"}])
                 with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                         patch.object(pr_watch, "semantic_review") as review, \
                         patch.object(pr_watch, "verify") as verify, \
@@ -594,15 +784,15 @@ class WatcherTests(unittest.TestCase):
         repair.assert_called_once()
         self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
 
-    def test_repair_stops_after_two_rounds(self):
-        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=2)
+    def test_repair_stops_after_three_rounds(self):
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)
         with patch.object(self.watcher, "comment") as comment, \
                 patch.object(pr_watch_repair, "main_failure_comparison") as compare:
             result = self.watcher.repair_verification(self.config["repositories"][0], pr(), self.root, pr_watch_common.WatchError("still failing"))
         self.assertFalse(result)
         compare.assert_not_called()
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "repair_exhausted")
-        self.assertIn("two rounds", comment.call_args.args[2])
+        self.assertIn("after 3 rounds", comment.call_args.args[2])
 
     def test_main_owned_failure_is_not_a_passed_test(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=0)
@@ -886,7 +1076,7 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(len(self.comments), 1)
         self.assertIn("worker unavailable", self.comments[0])
 
-    def test_terminal_verification_failure_is_published_once(self):
+    def test_terminal_infrastructure_failure_is_published_once_and_retried_later(self):
         clock = [1000.0]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
@@ -895,17 +1085,18 @@ class WatcherTests(unittest.TestCase):
             for now in (1000.0, 1301.0, 1602.0):
                 clock[0] = now
                 self.watcher.process("example/one", 7)
-            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "failed")
-            self.assertEqual(len(self.comments), 3)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+            self.assertEqual(len(self.comments), 1)
 
             for now in (1903.0, 1904.0):
                 clock[0] = now
                 self.watcher.process("example/one", 7)
 
-        terminal = [body for body in self.comments if "did not pass" in body]
-        self.assertEqual(1, len(terminal), "an already-published terminal failure was posted again")
-        self.assertEqual(len(self.comments), 4)
-        self.assertTrue(self.watcher.state.get("example/one", 7)["failure_posted"])
+        terminal = [body for body in self.comments if "could not complete" in body]
+        self.assertEqual(1, len(terminal), "an identical infrastructure failure was posted again")
+        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["failure"], "infrastructure unavailable")
+        self.assertFalse(self.watcher.state.get("example/one", 7).get("failure_posted", False))
         self.assertEqual(verify.call_count, 3)
         self.assertEqual(review.call_count, 1)
 
@@ -917,6 +1108,8 @@ class WatcherTests(unittest.TestCase):
                 self.watcher.process("example/one", 7)
             merge.assert_not_called()
             self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+            self.assertEqual(self.watcher.state.get("example/one", 7)["review_attempts"], 3)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["failure"], "invalid output")
             self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
         self.assertEqual(self.comments, [])
 
@@ -1132,7 +1325,7 @@ class WatcherTests(unittest.TestCase):
         path = HERE / "pr-watch.persona.example.json"
         config = pr_watch.load_config(path)
         self.assertEqual(config["workers"], 10)
-        self.assertEqual(config["reviewer"]["timeout_seconds"], 2700)
+        self.assertEqual(config["reviewer"]["timeout_seconds"], 3600)
         self.assertEqual([item["name"] for item in config["repositories"]],
                          ["nwverse/persona", "nwverse/persona-extensions"])
         self.assertEqual([item["verify"]["profile"] for item in config["repositories"]],

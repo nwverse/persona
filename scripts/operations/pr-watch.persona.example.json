@@ -23,7 +23,8 @@
   ],
   "reviewer": {
     "command": "claude",
-    "timeout_seconds": 2700
+    "timeout_seconds": 3600,
+    "repair_timeout_seconds": 3600
   },
   "poll_seconds": 60,
   "workers": 10,

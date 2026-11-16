@@ -105,6 +105,18 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
     result = run(argv, cwd=cwd, timeout=timeout, environ=environ, input_text=input_text)
     if result.returncode:
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
+        if argv[:2] == ["git", "fetch"]:
+            # Fetch rejects an up-to-date refspec when a newer object triggers
+            # rename detection, then exits 2 without changing that ref. This is
+            # a refused ref update, not permission to use an unverified SHA.
+            refreshed = run(["git", "ls-remote", "origin", *argv[4:]], cwd=cwd,
+                            timeout=60, environ=environ)
+            if refreshed.returncode == 0:
+                remote = [line.split()[0] for line in refreshed.stdout.splitlines() if line.strip()]
+                if len(remote) == 1 and SHA.fullmatch(remote[0]):
+                    checked(["git", "cat-file", "-e", remote[0] + "^{commit}"], cwd=cwd,
+                            timeout=60, environ=environ)
+                    return remote[0] + "\n"
         raise WatchError("%s failed (%s): %s" % (Path(argv[0]).name, result.returncode, detail))
     return result.stdout
 

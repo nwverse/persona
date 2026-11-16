@@ -1,0 +1,115 @@
+"""Real-Git recovery tests using only temporary watcher-owned directories."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import pr_watch_common
+import pr_watch_recovery
+
+
+class RecoveryIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="pr-watch-recovery-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.checkout = self.root / "checkout"
+        self.checkout.mkdir()
+        self.state = self.root / "state.json"
+        self.worktrees = pr_watch_recovery.owned_root(self.state)
+        self.worktrees.mkdir()
+        env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+        subprocess.run(["git", "init", "-q"], cwd=self.checkout, env=env, check=True, capture_output=True)
+
+    def test_owned_path_rejects_external_and_symlinked_directories(self):
+        (self.root / "outside").mkdir()
+        for path in (self.root, self.root / "outside", self.worktrees, self.root / "state.json"):
+            with self.subTest(path=path):
+                if not path.exists():
+                    path.touch()
+                try:
+                    pr_watch_recovery.owned_path(self.state, path)
+                except pr_watch_common.WatchError:
+                    pass
+                else:
+                    self.fail("accepted unsafe cleanup path: %s" % path)
+        link = self.root / "link"
+        link.symlink_to(self.worktrees, target_is_directory=True)
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_recovery.owned_path(self.state, link / "entry")
+
+    def test_disk_pressure_reclaims_only_inactive_watcher_worktrees(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        (stale / "file").write_text("old")
+        os.utime(stale, (1, 1))
+        active = self.worktrees / "persona-8-active"
+        active.mkdir()
+        outside = self.root / "outside"
+        outside.mkdir()
+        with patch.object(pr_watch_recovery, "run", side_effect=[
+                subprocess.CompletedProcess([], 1, "", "missing administrative entry"),
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "", "")]):
+            self.assertTrue(pr_watch_recovery.recover_worktree_failure(
+                self.checkout, self.state, "fatal: Out of diskspace", protected=[active]))
+        self.assertFalse(stale.exists())
+        self.assertTrue(active.exists())
+        self.assertTrue(outside.exists())
+
+    def test_missing_worktree_registration_is_pruned_before_fallback_cleanup(self):
+        broken = self.worktrees / "persona-7-broken"
+        broken.mkdir()
+        (broken / "file").write_text("orphan")
+        with patch.object(pr_watch_recovery, "run", side_effect=[
+                subprocess.CompletedProcess([], 128, "", "not a working tree"),
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "", "")]):
+            pr_watch_recovery.remove_worktree(self.checkout, self.state, broken)
+        self.assertFalse(broken.exists())
+
+    def test_only_empty_loose_objects_and_old_temporary_packs_are_removed(self):
+        loose = self.checkout / ".git/objects/ab"
+        loose.mkdir(parents=True)
+        empty = loose / ("c" * 38)
+        empty.touch()
+        nonempty = loose / ("d" * 38)
+        nonempty.write_bytes(b"do-not-remove")
+        pack = self.checkout / ".git/objects/pack"
+        pack.mkdir(exist_ok=True)
+        temporary = pack / "tmp_pack_test"
+        temporary.touch()
+        old = 1
+        os.utime(temporary, (old, old))
+        self.assertEqual(pr_watch_recovery.recover_object_debris(self.checkout), 2)
+        self.assertFalse(empty.exists())
+        self.assertTrue(nonempty.exists())
+        self.assertFalse(temporary.exists())
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_recovery.recover_object_debris(self.worktrees)
+
+    def test_rename_refusal_can_be_resolved_from_the_exact_remote_ref(self):
+        with patch.object(pr_watch_common, "run", side_effect=[
+                subprocess.CompletedProcess([], 2, "", "exhaustive rename detection was skipped"),
+                subprocess.CompletedProcess([], 0, "a" * 40 + "\trefs/heads/main\n", ""),
+                subprocess.CompletedProcess([], 0, "", "")]):
+            self.assertEqual(pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"]),
+                             "a" * 40 + "\n")
+        with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 128, "", "fatal: corrupt")):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
+
+    def test_repair_commit_message_has_no_tool_attribution(self):
+        source = (HERE / "pr_watch_repair.py").read_text()
+        self.assertNotIn("Co-Authored-By:", source)
+        self.assertNotIn("Kimi", source)
+        self.assertNotIn("Moonshot", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
