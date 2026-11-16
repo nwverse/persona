@@ -1020,7 +1020,7 @@ static void check_turns(const char *fixtures) {
         "structure.json", "tasks.json", "wakes.json", "work.json",
     };
     size_t replayed = 0, turn_objects = 0, corpus = 0;
-    const JValue *plain = NULL;
+    JValue *plain_input = NULL; /* cloned: the fixture documents are freed after each file */
     for (size_t f = 0; f < sizeof(files) / sizeof(files[0]); f++) {
         snprintf(path, sizeof(path), "%s/lines/%s", fixtures, files[f]);
         JValue *doc = load_json(path);
@@ -1039,7 +1039,10 @@ static void check_turns(const char *fixtures) {
                 fail("turns", name, "static case is not in the exact 57-case manifest");
                 continue;
             }
-            if (strcmp(name, "plain_exchange") == 0) plain = c;
+            if (strcmp(name, "plain_exchange") == 0) {
+                jfree(plain_input);
+                plain_input = jclone(input);
+            }
             JValue *actual = project_case(persona_core_project_turns, jget(c, "input"));
             if (!actual) { fail("turns", name, "empty projection"); continue; }
             int ok = 0;
@@ -1066,13 +1069,14 @@ static void check_turns(const char *fixtures) {
     if (turn_objects != 62) fail("turns", "manifest", "the 54 non-empty cases must hold 62 complete turn objects");
     printf("c-abi: turns %zu/57 static cases, %zu complete turn objects, overlay applied client-side\n", replayed, turn_objects);
 
-    if (plain) {
-        JValue *actual = project_case(persona_core_project_turns, jget(plain, "input"));
+    if (plain_input) {
+        JValue *actual = project_case(persona_core_project_turns, plain_input);
         JValue *wrong = jnew(J_ARRAY);
         if (actual && jequal(actual, wrong)) fail("turns", "wrong_expectation", "a wrong expected array compared equal");
         jfree(wrong);
         jfree(actual);
     }
+    jfree(plain_input);
     expect_empty(persona_core_project_turns, "turns", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_turns, "turns", "invalid_json", "not JSON");
     jfree(overlay);
@@ -1093,7 +1097,7 @@ static void check_task_index(const char *fixtures) {
     char path[4096];
     size_t replayed = 0;
     int receipt_checked = 0;
-    const JValue *first = NULL;
+    JValue *first_input = NULL; /* cloned: the fixture documents are freed after each file */
     for (size_t f = 0; f < sizeof(files) / sizeof(files[0]); f++) {
         snprintf(path, sizeof(path), "%s/lines/%s", fixtures, files[f]);
         JValue *doc = load_json(path);
@@ -1111,7 +1115,10 @@ static void check_task_index(const char *fixtures) {
                 fail("task_index", name, "case is not in the exact five-case manifest");
                 continue;
             }
-            if (strcmp(name, "task_notices_find_calls") == 0) first = c;
+            if (strcmp(name, "task_notices_find_calls") == 0) {
+                jfree(first_input);
+                first_input = jclone(jget(c, "input"));
+            }
             JValue *actual = project_case(persona_core_project_task_index, jget(c, "input"));
             if (!actual) { fail("task_index", name, "empty projection"); continue; }
             if (receipt) {
@@ -1139,8 +1146,8 @@ static void check_task_index(const char *fixtures) {
     if (!receipt_checked) fail("task_index", "background_running_badge", "background receipt case not replayed");
     printf("c-abi: task_index %zu/5 complete expected objects plus the background receipt\n", replayed);
 
-    if (first) {
-        JValue *actual = project_case(persona_core_project_task_index, jget(first, "input"));
+    if (first_input) {
+        JValue *actual = project_case(persona_core_project_task_index, first_input);
         JValue *wrong = jnew(J_OBJECT);
         jset(wrong, "started", jnew(J_ARRAY));
         jset(wrong, "calls", jnew(J_OBJECT));
@@ -1151,6 +1158,7 @@ static void check_task_index(const char *fixtures) {
         jfree(wrong);
         jfree(actual);
     }
+    jfree(first_input);
     expect_empty(persona_core_project_task_index, "task_index", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_task_index, "task_index", "invalid_json", "not JSON");
 }
