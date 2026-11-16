@@ -2137,10 +2137,8 @@ final class AppModel {
             guard shouldApply?() ?? true else { return }
             let response = try? await api.items(key, afterSeq: store.covered)
             guard shouldApply?() ?? true else { return }
-            guard let r = response else {
-                received = true
-                return
-            }
+            guard let r = response else { return }
+            received = true
             guard shouldApply?() ?? true else { return }
             switch applyBatch(store, kind: .after, items: r.items, span: r.span, moreAfter: r.moreAfter == true) {
             case .none: return
@@ -2176,9 +2174,6 @@ final class AppModel {
             return
         }
         let task = Task { try await api.foldedWork(key, fold) }
-        #if DEBUG
-        ProductionContinuityShadow.shared.noteNativeRequest("fold", store: chat(key))
-        #endif
         // The transport helper returns the concatenated pages. One range event applies the same complete work to
         // both implementations, so a final empty page cannot erase the previous page in the mirror.
         #if DEBUG
@@ -2205,7 +2200,6 @@ final class AppModel {
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
         store.isLoadingOlder = true
         #if DEBUG
-        ProductionContinuityShadow.shared.noteNativeRequest("older", store: store)
         ProductionContinuityShadow.shared.loadOlder(store)
         #endif
         defer { store.isLoadingOlder = false }
@@ -2263,7 +2257,6 @@ final class AppModel {
         connection.startCatchUp(group, plan.refetch ? [Self.interactionsPart(group)] + mine.map(Self.catchUpPart) : [])
         for key in mine {
             #if DEBUG
-            ProductionContinuityShadow.shared.noteNativeRequest("reconnected", store: chat(key))
             _ = chat(key).apply(.event(.reconnected))
             #endif
             deltas.drop(key)

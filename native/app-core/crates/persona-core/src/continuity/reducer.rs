@@ -303,11 +303,12 @@ impl Reducer {
         self.ids.extend(fresh.iter().map(|item| item.id.clone()));
         let incoming_ids: HashSet<&str> = fresh.iter().map(|item| item.id.as_str()).collect();
         self.items.retain(|item| !incoming_ids.contains(item.id.as_str()));
+        let existing_first = self.first_seq();
         for item in fresh {
             self.insert_shared(item);
         }
         self.items.sort_by_key(|item| item.key());
-        let reaches_start = new_min.is_some_and(|min| min <= self.items.first().map_or(i64::MAX, |item| item.seq));
+        let reaches_start = new_min.is_some_and(|min| min <= existing_first.unwrap_or(i64::MAX));
         if let Some(more) = has_more
             && backlog
             && (!self.loaded_once || self.items.len() <= new_len)

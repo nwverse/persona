@@ -86,12 +86,6 @@ extension ChatStore: ChatContinuityAdapting {
         Self.shadowHook?(self, input, .init(snapshot: snapshot, native: result, gap: gap))
     }
 
-    private func mergeForAdapter(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
-        initialContinuitySnapshot = nativeSnapshot()
-        merge(new, backlog: backlog, hasMore: hasMore)
-        initialContinuitySnapshot = nativeSnapshot()
-    }
-
     func apply(_ input: NativeContinuityInput) -> ChatStore.Gap? {
         switch input.kind {
         case .latest, .pushed:

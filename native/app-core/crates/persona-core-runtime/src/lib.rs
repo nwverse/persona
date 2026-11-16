@@ -533,6 +533,7 @@ impl Worker {
         }
         let wake = {
             let mut patches = lock(&self.shared.patches);
+            let previous_version = patches.drained.get(chat).map_or(0, |previous| previous.version);
             let patch = patches.chats.entry(chat.to_owned()).or_default();
             let state_changed = patch.covered != reducer.covered()
                 || patch.history.as_deref() != reducer.history()
@@ -550,6 +551,9 @@ impl Worker {
                 patch.loaded_once = reducer.loaded_once();
                 patch.verified = state.session.verified();
                 patch.acked = state.acked;
+                if patch.version == 0 {
+                    patch.version = previous_version;
+                }
                 patches.version += 1;
                 patches.woken.insert(chat.to_owned());
                 let version = patches.version;

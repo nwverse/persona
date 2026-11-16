@@ -50,9 +50,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "Persona.ContinuityShadow", qos: .utility)
     private let effects = Effects()
+    private var enabled = true
     private var client: PersonaCoreClient?
     private var chats: [UInt: Chat] = [:]
-    private var requestLog: [UInt: [String]] = [:]
     private var generations: [UInt: UInt] = [:]
     private var nextGeneration: UInt = 1
     private var reportSink: @Sendable (Report) -> Void
@@ -64,7 +64,11 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     @MainActor func install() {
         #if os(iOS)
-        guard UserDefaults.standard.object(forKey: "showContinuityShadow") as? Bool ?? true else { return }
+        guard UserDefaults.standard.object(forKey: "showContinuityShadow") as? Bool ?? true else {
+            enabled = false
+            return
+        }
+        enabled = true
         #endif
         ChatStore.installContinuityShadowForTests { [weak self] store, input, observation in
             self?.accept(input, into: store, snapshot: observation.snapshot, native: observation.native, gap: observation.gap)
@@ -73,6 +77,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     @MainActor func accept(_ input: NativeContinuityInput, into store: ChatStore, native: NativeContinuityResult,
                 gap: ChatStore.Gap?) {
+        guard enabled else { return }
         accept(input, into: store, snapshot: store.nativeSnapshot(), native: native, gap: gap)
     }
 
@@ -97,18 +102,14 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         guard chats[id] == nil else { return }
         chats[id] = Chat()
         try core().dispatch(.openChat(chat: chatID(id), snapshot: Self.snapshot(snapshot)))
-        try core().flush()
+        try core().flush(timeoutMilliseconds: 16)
         try applyInitialSnapshot(id, input: Input(snapshot: snapshot, value: .event(.reconnected), native: .init(
             items: snapshot.items, covered: snapshot.covered, history: snapshot.history,
             hasMore: snapshot.hasMore, loadedOnce: snapshot.loadedOnce), gap: nil, fold: nil))
     }
 
-    @MainActor func noteNativeRequest(_ kind: String, store: ChatStore) {
-        let id = generation(for: store)
-        requestLog[id, default: []].append(kind)
-    }
-
     @MainActor func loadOlder(_ store: ChatStore) {
+        guard enabled else { return }
         let id = generation(for: store)
         let snapshot = store.nativeSnapshot()
         enqueue { [weak self] in
@@ -124,6 +125,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     @MainActor func failed(_ kind: NativeContinuityInput.Kind, in store: ChatStore, fold: Item? = nil) {
+        guard enabled else { return }
         let id = generation(for: store)
         let snapshot = store.nativeSnapshot()
         let event: ChatEvent = switch kind {
@@ -140,6 +142,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
     }
     @MainActor func close(_ store: ChatStore) {
+        guard enabled else { return }
         let id = generation(for: store)
         enqueue { [weak self] in self?.removeChat(id) }
     }
@@ -212,9 +215,6 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private func compareQueued(_ id: UInt, input: Input? = nil, shape: String) throws {
         guard var chat = chats[id], !chat.failed else { return }
-        if let kind = input?.value.kind, kind == .older || kind == .openFold || kind == .reconnected {
-            requestLog[id] = []
-        }
         let patch = try core().drain(chat: chatID(id))
         if input != nil, patch.version == 0, !patch.ops.isEmpty {
             report(id, rule: "patch-state", shape: shape)
@@ -242,17 +242,14 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             default: break
             }
             if input.value.kind == .older,
-               !requestLog[id, default: []].contains("older"),
                !effects.values.withLock({ $0.contains { $0.id == id && Self.isOlder($0.effect) } }) {
                 report(id, rule: "older-request", shape: shape)
             }
             if input.value.kind == .reconnected,
-               !requestLog[id, default: []].contains("reconnected"),
                !effects.values.withLock({ $0.contains { $0.id == id && Self.isSubscribe($0.effect) } }) {
                 report(id, rule: "reconnect-request", shape: shape)
             }
             if input.value.kind == .openFold,
-               !requestLog[id, default: []].contains("fold"),
                !effects.values.withLock({ $0.contains { $0.id == id && Self.isRange($0.effect) } }) {
                 report(id, rule: "fold-request", shape: shape)
             }
@@ -292,6 +289,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private func removeChat(_ id: UInt) {
         generations = generations.filter { $0.value != id }
+        effects.values.withLock { $0.removeAll { $0.id == id || $0.id == nil } }
         guard chats.removeValue(forKey: id) != nil else { return }
         do { try core().dispatch(.closeChat(chat: chatID(id))) }
         catch { fail(id, rule: "core-close", shape: "kind=close items=0") }
