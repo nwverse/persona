@@ -220,9 +220,9 @@ from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong
 21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
 conditional next-page, picks and display fields. The receipt retains its description and started call with empty
 notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
-The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
-`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
-label, while the other three take JSON documents.
+The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAnswer`, `coreDisplayAnswer`,
+`coreProjectStreamChunks`, `coreProjectTaskIndex` and `coreProjectTurns`; their generated declarations are checked
+for drift. `coreDisplayAnswer` takes a bare option label, while the other five take JSON documents.
 `harmony/tests/core-host/turns.test.mjs` (#9235) adds `coreProjectTurns` and its host JSON projection. It compares
 all 57 unchanged static cases after applying the checked-in current-iOS overlay: 54 nonempty cases hold 62 complete
 turn objects, and three explicitly named cases compare empty arrays rather than establishing layout coverage. The
