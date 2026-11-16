@@ -809,6 +809,10 @@ struct RecordingsPage: View {
                 } else if defaults.string(forKey: "showMeetingSample") == "overview" {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.overviewMeeting)
+                } else if defaults.string(forKey: "showMeetingSample") == "untitled-page" {
+                    // The unnamed meeting's page (#8873): its name from the hub, Rename under the transcript.
+                    Self.sampleOpened = true
+                    debugPage = .recording(RecordingSamples.untitledMeeting)
                 }
                 #if os(iOS)
                 // `-openDayRecap YES` with `-showDaySample …`: the made-up past day's page, once it is in place.
