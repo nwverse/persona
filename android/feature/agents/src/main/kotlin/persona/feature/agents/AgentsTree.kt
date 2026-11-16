@@ -392,3 +392,18 @@ internal val AgentListGroup.sectionCounts: List<Pair<Status, Int>>
  */
 internal val AgentListGroup.headingCounts: List<Pair<Status, Int>>
     get() = sectionCounts + (Status.Idle to (agentsIn(AgentState.Idle) + agentsIn(AgentState.Unknown)))
+
+/**
+ * By Machine section header counts (#9319): from the group's [AgentListGroup.rows] (and [AgentListGroup.waitingInBackground]),
+ * not from [AgentListGroup.stateCounts]. The shared agents_list fixtures / Rust / iOS / Harmony leave `state_counts` null for
+ * Machine groups; the feature layer counts here for `MachineSectionHeader`.
+ */
+internal fun machineHeadingCounts(group: AgentListGroup): List<Pair<Status, Int>> {
+    fun inState(state: AgentState) = group.rows.count { !it.isNestedSubtask && it.state == state }
+    val waiting = group.waitingInBackground
+    val section = listOf(AgentState.NeedsYou, AgentState.Working, AgentState.Unread).map { state ->
+        val count = inState(state)
+        state.designStatus to if (state == AgentState.Working) (count - waiting).coerceAtLeast(0) else count
+    }
+    return section + (Status.Idle to (inState(AgentState.Idle) + inState(AgentState.Unknown)))
+}
