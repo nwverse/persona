@@ -273,7 +273,7 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 				Code    string `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningCeilingCode(object.Code) {
+				if chatReasoningCeilingCode(object.Code) || strings.Contains(strings.ToLower(object.Message), "reasoning_effort_above_ceiling") {
 					return false
 				}
 				if chatReasoningValueCode(object.Code) {

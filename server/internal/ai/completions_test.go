@@ -172,6 +172,7 @@ func TestChatRejectsNoEffortValue(t *testing.T) {
 		{"generic invalid value code for the field", `{"error":{"code":"invalid_value","message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"different named level without field association", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, false},
 		{"ceiling still wins", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"ceiling message wins over a value code", `{"error":{"code":"unsupported_value","message":"reasoning_effort_above_ceiling","param":"reasoning_effort"}}`, false},
 		{"other field", `{"error":{"message":"Unsupported value: 'none'","param":"max_tokens"}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
