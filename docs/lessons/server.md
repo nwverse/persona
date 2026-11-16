@@ -1447,7 +1447,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
