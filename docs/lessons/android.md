@@ -301,6 +301,8 @@ Pitfalls in the new multi-module Android App (`android/`, `docs/android/android.
   with `JChip` / `JChipTokens`, add an optional parameter for what is missing (`dot`), and assert the rendered height
   against `JChipTokens.height` in a Robolectric test.
 - A settings sheet must register every settings child, including Assistant configuration (#2589). Otherwise that row closes the sheet and returns to the home instead of Settings. Accepted external links must dismiss shell overlays before navigating, so their destination is actually visible. A drawer's accessibility semantics fence does not block hardware-keyboard focus; prevent focus from entering the obscured main content as well.
+- **A closed focus fence must stay neutral** (#9170). An ancestor's `focusProperties { canFocus = true }` overrides a descendant overlay's restriction. A closed drawer must leave that property unset; write `false` only while it obscures the page. Test the production drawer → column nesting, including clearing existing page focus, explicit focus requests and `FocusDirection.Next` traversal under the scrim.
+- **A list's replacement navigator belongs only to its list entry** (#9170). Wrapping all of `agentsEntries` also wraps shared to-do pages opened on Persona; a stale overlay flag then discards the earlier Agents detail. Clear transient overlays on tab changes, give only `AgentsRoute` the list navigator, and replace the detail only for detail destinations. Other actions push normally, so Back still reaches the earlier chat. Test the cross-tab path through the real shell.
 - System-font TextStyle can leave lineHeight unspecified (#2589). Converting it directly through Density throws before the composer renders. Measure the actual font line with TextMeasurer when no Sp line height is provided; retain explicit style line heights where present, and test normal and large system text. Do not invent a global content line-height multiplier merely to satisfy a layout calculation.
 - Same navigation labels do not establish iPhone visual parity (#2589). Pin the iPhone default style, language, appearance, text size and source revision; distinguish custom app chrome from system List, sheet, font and icon behavior. Own the side drawer and settings sheet at shell scope, and distinguish closing Settings from popping a settings child. Keep Android's legal assets and contrast floors; adjust text hues rather than weakening tests to copy a lower-contrast system accent.
 - Native reference capture must prove which page is visible (#2589). Retained off-screen pages can expose matching accessibility controls; `exists` and `isHittable` alone are not page-state evidence. Use the shell's actual-page probe and observed visible control coordinates, drive the welcome-to-Demo transition explicitly, and inspect the exported image before labeling it as a home/sidebar/settings reference. A successful compile or an incorrectly named image is not screenshot acceptance.
@@ -832,3 +834,14 @@ cover intentionally different verification semantics with explicit real-JNI test
 state machine locally. Rejection is driver-level and uncorrelated: signal it without payloads, preserve it across
 multiple synchronous applies in one accept, and check it even when creation or accept also throws. A private shadow
 may stop on that signal without affecting Kotlin or another chat's work.
+
+## An offline computer can still have a readable workspace catalog (#9317)
+
+The workspace catalog is read from the hub, which persists its last successful node inventory. Skipping the hub read
+when a computer is offline loses pinned empty workspaces on a cold app launch. Read the hub and mark those rows
+unavailable using the computer's current state. A complete response replaces the old rows, including an empty list.
+
+An HTTP success may still carry per-machine discovery errors alongside useful cached rows. Preserve that partial
+status through service wrappers: merge returned rows into the prior list by machine/source/source ID, keeping missing
+prior rows until a complete refresh. Translate the identities in partial results just as in successful ones. A malformed
+or missing workspace list is a failure, not evidence that every workspace disappeared.

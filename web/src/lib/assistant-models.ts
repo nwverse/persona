@@ -7,7 +7,7 @@
 // code: the panel's own data is lib/assistant-panel.ts, loaded with the panel.
 import { agentId, sessionAgent } from "./agent-kind";
 import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
-import { modelName, modelSupportsFast } from "./launcher-models";
+import { modelName, modelSupportsFast, type LauncherDefault } from "./launcher-models";
 import { providerTitle } from "./provider-names";
 import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
@@ -26,6 +26,9 @@ export interface AssistantChat {
   /** Without a pick, the next message runs on Model configuration › Main chat rather than on what the conversation ran
    *  before: the main conversation, a leader and the background supervisor (hub: sendModel). Absent: the main one only. */
   followsDefault?: boolean;
+  /** The default it follows when that is not Main chat's: the background supervisor's own model purpose (`assistant.supervise`,
+   *  which follows Main chat until it is set apart). Absent: the one `?purpose=assistant` gave. */
+  def?: LauncherDefault | null;
   /** The hub keeps picks (ASSISTANT_MODEL_PICK_FEATURE). */
   kept: boolean;
   /** The assistant's own launcher (AssistantInfo.launcher), for when nothing else says. */
@@ -97,7 +100,7 @@ export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | unde
   if (pick) return { provider: pick.launcher, model: pick.model, effort: pick.effort ?? s?.effort, ...(fast ? { fast: true } : {}), source: "pick" };
   const mismatch = mainChatAgentMismatch(c, info);
   if (s && mismatch) return { provider: mismatch.actualLauncher, model: s.model, effort: s.effort, ...(fast ? { fast: true } : {}), source: "own" };
-  const def = info?.def;
+  const def = c.def === undefined ? info?.def : c.def;
   if (!s || (c.followsDefault ?? c.isMain)) {
     const provider = def?.provider || c.config || s?.launcher || "claude";
     return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
