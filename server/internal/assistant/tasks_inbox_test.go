@@ -311,7 +311,11 @@ func TestTaskPlanInboxConcurrentWriteCannotLeaveADeletedTarget(t *testing.T) {
 		newer := beginWrite(it)
 		it.Summary = "A newer user edit must survive"
 		s.inbox.settle(newer)
+		id := it.Agent.TodoID
 		s.inbox.mu.Unlock()
+		if _, err := s.reusableTodo(ctx, conversation, id, false); err == nil {
+			t.Error("unadmitted source task was reusable during an in-flight Inbox write")
+		}
 	}
 	st.failInbox.Store(true)
 	p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
@@ -408,6 +412,12 @@ func TestTaskPlanInboxFailedAdmissionLeavesNoDanglingLink(t *testing.T) {
 				if row.InboxItem != "" {
 					t.Fatalf("failed source write changed the reused task: %+v", row)
 				}
+			}
+			s.tasks.mu.Lock()
+			holds := len(s.tasks.reusing)
+			s.tasks.mu.Unlock()
+			if holds != 0 {
+				t.Fatal("failed admission retained its task reservation")
 			}
 		})
 	}
