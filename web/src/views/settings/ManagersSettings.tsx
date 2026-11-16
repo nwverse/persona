@@ -169,7 +169,7 @@ function SwitcherSwitch({ m, ownMachines, onChanged }: { m: Manager; ownMachines
           <Switch on={on} label={t("settings-managers.in_switcher")} disabled={busy || (on && inUse)} onChange={save} />
         </Row>
       </div>
-      <p className="px-1 text-[11.5px] leading-snug text-ink-3">
+      <p className="px-1 text-submeta leading-snug text-ink-3">
         {t(inUse ? "settings-managers.in_switcher_in_use" : "settings-managers.in_switcher_note")}
       </p>
     </div>
