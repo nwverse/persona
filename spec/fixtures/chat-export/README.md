@@ -8,7 +8,8 @@ dialog offers are in [web.md](../../../docs/web/web.md), "Exporting a conversati
 
 - First the title on one line (`# …`), then the agent, the computer, the folder and when it was exported, each as
   `- <word>: <value>` and left out when empty. `conversation`
-- A document that stops before the conversation's start (the reader's limit) says where it begins, as a quote. `partial`
+- A document whose history could not be read completely warns as a quote, with the earliest retained timestamp when
+  available. `partial`
 - Each part under `## <who> · <time>`: you, Persona for a message it typed in (`injected`: its line, then its detail),
   another session by its name (`from`), the agent for its replies. One message's items (its words and pictures, the same
   `client_msg_id`) share one heading; the agent's replies in a row share one. `conversation`

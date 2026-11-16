@@ -1,6 +1,10 @@
 package persona.feature.chat
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import persona.core.designsystem.text
+import persona.core.designsystem.stableAlpha
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,6 +35,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import persona.core.designsystem.LocalizedFormats
@@ -76,6 +82,7 @@ import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantLines
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.QuickResult
+import persona.core.domain.tasks.QuickResultUndo
 import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.InterruptBatch
 import persona.core.domain.tasks.InterruptLook
@@ -177,7 +184,7 @@ internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
     if (host == null) return
     when (payload) {
         is AssistantExtra.Day -> DayLine(payload.date)
-        is AssistantExtra.Quick -> QuickResultCard(payload.result)
+        is AssistantExtra.Quick -> QuickResultLine(payload.result, host)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
         is persona.core.domain.tasks.DispatchHint -> DispatchHandoffCards(payload, host)
     }
@@ -744,21 +751,58 @@ private fun InterruptBatchCard(batch: InterruptBatch, host: AssistantTaskHost, t
     }
 }
 
+/**
+ * What the assistant added on the phone, with Undo as on iOS `QuickResultCard`: the event comes off the phone and the
+ * card reads Undone, dimmed; Android has no reminders store, so reminder cards keep none (`TasksStore.canUndoQuickResult`).
+ */
 @Composable
-internal fun QuickResultCard(result: QuickResult) {
+private fun QuickResultLine(result: QuickResult, host: AssistantTaskHost) {
+    val undos by host.tasks.quickResultUndos.collectAsStateWithLifecycle()
+    val state = result.itemId?.let { undos[it] } ?: QuickResultUndo.Added
+    val feedback = persona.core.designsystem.LocalAppFeedback.current
+    val failed = stringResource(R.string.chat_tasks_quick_undo_failed)
+    val haptics = persona.core.designsystem.rememberHaptics()
+    val scope = rememberCoroutineScope()
+    QuickResultCard(result, state, onUndo = if (host.tasks.canUndoQuickResult(result)) ({
+        haptics(persona.core.designsystem.Haptic.Tap)
+        scope.launch {
+            // Success buzzes as iOS's `Haptics.success()`; a failure is the chat's error toast.
+            if (host.tasks.undoQuickResult(result)) haptics(persona.core.designsystem.Haptic.Success)
+            else feedback?.notice(failed, persona.core.designsystem.FeedbackStyle.Error)
+        }
+    }) else null)
+}
+
+/** The card itself; the chat passes its Undo state and what a tap on Undo does. */
+@Composable
+internal fun QuickResultCard(result: QuickResult, undoState: QuickResultUndo = QuickResultUndo.Added, onUndo: (() -> Unit)? = null) {
     val locale = currentLocale
     val time = AssistantLines.time(result.time)?.let { LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale) }
-    Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.sunken).padding(Tokens.Space.m),
+    val undone = undoState == QuickResultUndo.Undone
+    // Undone gives way, as the same card does on iOS.
+    val alpha by animateFloatAsState(if (undone) QuickResultUndoneAlpha else 1f,
+        if (PersonaTheme.reduceMotion) snap() else tween(PersonaTheme.motion.standard), label = "quick-result-undone")
+    Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(PersonaTheme.palette.sunken).padding(Tokens.Space.m)
+        .stableAlpha(alpha),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         JIcon(if (result.reminder) PhIcons.BellSimple else PhIcons.CalendarCheck, decorative = true,
             tint = if (result.reminder) PersonaTheme.palette.caution else PersonaTheme.palette.accent)
         Column(Modifier.weight(1f)) {
-            Text(stringResource(if (result.reminder) R.string.chat_tasks_quick_reminder else R.string.chat_tasks_quick_calendar), style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
+            Text(stringResource(when {
+                undone -> R.string.chat_tasks_quick_undone
+                result.reminder -> R.string.chat_tasks_quick_reminder
+                else -> R.string.chat_tasks_quick_calendar
+            }), style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
             Text(listOfNotNull(time, result.title, result.place).joinToString(" · "), style = PersonaTheme.type.caption,
                 color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (!undone && onUndo != null) JButton(stringResource(R.string.chat_tasks_quick_undo), onUndo,
+            kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = undoState != QuickResultUndo.Undoing)
     }
 }
+
+/** How far an undone quick result gives way (iOS's 0.6 on the same card). */
+private const val QuickResultUndoneAlpha = 0.6f
 
 // ── Today ──
 

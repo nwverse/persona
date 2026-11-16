@@ -21493,6 +21493,29 @@
       },
       "extractionState" : "manual"
     },
+    "Allow Persona Input on this Mac to use Phone Screen (Privacy & Security › Accessibility)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Persona Input on this Mac to use Phone Screen (Privacy & Security › Accessibility)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマホ画面を使うには、この Mac で Persona Input を許可してください（プライバシーとセキュリティ › アクセシビリティ）。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要用手机屏，请在这台 Mac 上允许 Persona Input（隐私与安全性 › 辅助功能）。"
+          }
+        }
+      }
+    },
     "Allow Persona to access %@ in Settings" : {
       "localizations" : {
         "en" : {
@@ -23338,6 +23361,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "別の会話"
+          }
+        }
+      }
+    },
+    "Another device is using this Mac's phone screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another device is using this Mac's phone screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別のデバイスがこの Mac のスマホ画面を使っています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另一台设备正在用这台 Mac 的手机屏。"
           }
         }
       }
@@ -91776,6 +91822,29 @@
       },
       "extractionState" : "manual"
     },
+    "Minimized" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minimized"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "しまってあります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已最小化"
+          }
+        }
+      }
+    },
     "Minutes" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -92396,24 +92465,24 @@
       },
       "extractionState" : "manual"
     },
-    "Model not connected: Claude Code isn't signed in" : {
+    "Model not connected: Claude Code CLI isn't signed in" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Model not connected: Claude Code isn't signed in"
+            "value" : "Model not connected: Claude Code CLI isn't signed in"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "モデル未接続：Claude Code にログインしていません"
+            "value" : "モデル未接続：Claude Code CLI にログインしていません"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "模型没接好：Claude Code 没登录"
+            "value" : "模型没接好：Claude Code 命令行没登录"
           }
         }
       },
@@ -98978,6 +99047,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "トピックはまだありません"
+          }
+        }
+      }
+    },
+    "No Windows" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Windows"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ウインドウがありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有窗口"
           }
         }
       }
@@ -109039,24 +109131,24 @@
       },
       "extractionState" : "manual"
     },
-    "On %@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:" : {
+    "Persona runs the Claude Code CLI on %@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "On %1$@, open Terminal, type this word, press Return, and sign in once in the browser as it asks:"
+            "value" : "Persona runs the Claude Code CLI on %1$@, and the Claude desktop app's sign-in doesn't count for it. Open Terminal there, run this command and sign in once in the browser:"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ でターミナルを開き、次の語を入力して Return キーを押し、案内に従ってブラウザで一度ログインしてください："
+            "value" : "Persona は %1$@ の Claude Code CLI を使い、Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータでターミナルを開き、次のコマンドを実行して、ブラウザで一度ログインしてください："
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 %1$@ 上打开终端，输入下面这个词，回车，按提示在浏览器里登录一次："
+            "value" : "Persona 用的是 %1$@ 上的 Claude Code 命令行，Claude 桌面版登录了也不算。在那台电脑上打开终端，运行下面这条命令，按提示在浏览器里登录一次："
           }
         }
       },
@@ -109728,6 +109820,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "On the phone screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the phone screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマホ画面に表示中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在手机屏上"
+          }
+        }
+      }
     },
     "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub." : {
       "localizations" : {
@@ -113114,6 +113229,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Open an app on %@, then pull down to refresh." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open an app on %1$@, then pull down to refresh."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ でアプリを開いてから、下に引いて更新してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %1$@ 上打开一个应用，再下拉刷新。"
+          }
+        }
+      }
     },
     "Open as Draft" : {
       "extractionState" : "manual",
@@ -120134,6 +120272,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Phone Screen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Phone Screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマホ画面"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机屏"
+          }
+        }
+      }
     },
     "Phone and FaceTime" : {
       "extractionState" : "manual",
@@ -143176,6 +143337,29 @@
       },
       "extractionState" : "manual"
     },
+    "Setting up the phone screen on %@…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Setting up the phone screen on %1$@…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ でスマホ画面を準備しています…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在 %1$@ 上准备手机屏…"
+          }
+        }
+      }
+    },
     "Settings" : {
       "localizations" : {
         "en" : {
@@ -146202,24 +146386,24 @@
       },
       "extractionState" : "manual"
     },
-    "Sign in once on that computer, or use an API key instead." : {
+    "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sign in once on that computer, or use an API key instead."
+            "value" : "The Claude desktop app's sign-in doesn't count for it. Run claude auth login in a terminal on that computer, or use an API key instead."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "そのコンピュータで一度ログインするか、代わりに API キーを使ってください。"
+            "value" : "Claude デスクトップアプリのログインはこれに含まれません。そのコンピュータのターミナルで claude auth login を実行するか、代わりに API キーを使ってください。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在那台电脑上登录一次，或者改用 API Key。"
+            "value" : "Claude 桌面版登录了也不算。在那台电脑的终端里运行 claude auth login，或者改用 API Key。"
           }
         }
       },
@@ -158277,6 +158461,29 @@
         }
       }
     },
+    "That app isn't responding. Pick another window." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That app isn't responding. Pick another window."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのアプリが応答していません。別のウインドウを選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那个应用没有响应，请换一个窗口。"
+          }
+        }
+      }
+    },
     "That commit isn't in this repository" : {
       "localizations" : {
         "en" : {
@@ -158387,6 +158594,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这个设置无效，没有保存。"
+          }
+        }
+      }
+    },
+    "That window is gone. Pick another." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That window is gone. Pick another."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのウインドウはもうありません。別のものを選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那个窗口已经不在了，请换一个。"
           }
         }
       }
@@ -158711,6 +158941,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The Mac couldn't set up the phone screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Mac couldn't set up the phone screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac でスマホ画面を準備できませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 没能准备好手机屏。"
+          }
+        }
+      }
     },
     "The Mac is locked. Showing VNC until it’s unlocked." : {
       "extractionState" : "manual",
@@ -165693,6 +165946,29 @@
         }
       }
     },
+    "The screen is still connecting. Try again in a moment." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The screen is still connecting. Try again in a moment."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面はまだ接続中です。少ししてからもう一度お試しください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏幕还在连接，请稍后再试。"
+          }
+        }
+      }
+    },
     "The selection changed on another device. Check it and try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -168151,6 +168427,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Mac can't show a phone screen yet. Update Persona Link on it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Mac can't show a phone screen yet. Update Persona Link on it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この Mac はまだスマホ画面を表示できません。Persona Link をアップデートしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 Mac 还不能显示手机屏，请在它上面更新 Persona Link。"
+          }
+        }
+      }
     },
     "This Mac connects to the hub with its own pairing credentials and can't be signed out here." : {
       "localizations" : {
@@ -187771,6 +188070,29 @@
       },
       "extractionState" : "manual"
     },
+    "Waiting for the phone screen's picture…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for the phone screen's picture…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマホ画面の映像を待っています…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待手机屏的画面…"
+          }
+        }
+      }
+    },
     "Waiting for this iPhone to allow it" : {
       "localizations" : {
         "en" : {
@@ -190937,6 +191259,29 @@
         }
       }
     },
+    "Where the Mac offers it, “…” › Phone Screen shows one of its windows on a display shaped like this iPhone, so text is readable without zooming. Pick the window from Windows at the bottom. Tap to click, drag with one finger to scroll, touch and hold then drag to select, and touch and hold to right-click. Switching back to another mode, or closing the screen, puts the Mac's windows back where they were." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Where the Mac offers it, “…” › Phone Screen shows one of its windows on a display shaped like this iPhone, so text is readable without zooming. Pick the window from Windows at the bottom. Tap to click, drag with one finger to scroll, touch and hold then drag to select, and touch and hold to right-click. Switching back to another mode, or closing the screen, puts the Mac's windows back where they were."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac が対応していれば、「…」› スマホ画面で、Mac のウインドウを1つこの iPhone と同じ形の画面に表示します。拡大しなくても文字が読めます。下の「ウインドウ」から表示するウインドウを選びます。タップでクリック、1本指のドラッグでスクロール、長押ししてからドラッグで文字を選択、長押しして離すと右クリックです。ほかのモードに戻すか画面を閉じると、Mac のウインドウは元の位置に戻ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 支持时，“…” › 手机屏会把它的一个窗口放到一块和这台 iPhone 一样形状的屏幕上，不用放大也看得清字。用底部的“窗口”挑选窗口。轻点即点击，单指拖动即滚动，按住后拖动可选择文字，按住松开即右键。换回其他模式或关闭屏幕时，Mac 上的窗口会回到原来的位置。"
+          }
+        }
+      }
+    },
     "Where to get a key" : {
       "localizations" : {
         "zh-Hans" : {
@@ -191845,6 +192190,52 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Windows" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ウインドウ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "窗口"
+          }
+        }
+      }
+    },
+    "Windows on %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Windows on %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ のウインドウ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 的窗口"
+          }
+        }
+      }
     },
     "With Docker" : {
       "localizations" : {
