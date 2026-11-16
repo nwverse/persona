@@ -1,0 +1,53 @@
+import XCTest
+import PersonaCore
+import PersonaCoreTestSupport
+
+final class PersonaCoreProjectionTests: XCTestCase {
+    func testEveryAgentsListFixtureThroughTheRealCBinding() throws {
+        let count = try ProjectionBindingReplay.sort()
+        XCTAssertEqual(count, 30)
+        print("PersonaCore Swift/C sort: \(count) agents_list cases, complete expected equality")
+    }
+
+    func testEveryAnswerFixtureThroughTheRealCBinding() throws {
+        let counts = try ProjectionBindingReplay.answers()
+        XCTAssertEqual(counts.questions, 15)
+        XCTAssertEqual(counts.recommendations, 8)
+        print("PersonaCore Swift/C answer: \(counts.questions) question + \(counts.recommendations) recommendation cases")
+    }
+
+    func testEveryStreamChunkFixtureThroughTheRealCBinding() throws {
+        let count = try ProjectionBindingReplay.streamChunks()
+        XCTAssertEqual(count, 21)
+        print("PersonaCore Swift/C stream_chunks: \(count) complete {done, tail} objects")
+    }
+
+    func testEveryStaticTurnFixtureThroughTheRealCBindingAndIOSOverlay() throws {
+        let result = try ProjectionBindingReplay.turns()
+        XCTAssertEqual(result.cases, 57)
+        XCTAssertEqual(result.turnObjects, 62)
+        print("PersonaCore Swift/C turns: \(result.cases) static cases, \(result.turnObjects) complete turn objects")
+    }
+
+    func testEveryTaskIndexFixtureThroughTheRealCBinding() throws {
+        let count = try ProjectionBindingReplay.taskIndex()
+        XCTAssertEqual(count, 5)
+        print("PersonaCore Swift/C task_index: \(count) complete objects plus the background receipt")
+    }
+
+    func testInvalidUTF8ResultIsNotAccepted() throws {
+        // Every malformed-input path must reach the adapter's explicit C failure mapping, not a JSON decoder's nil.
+        for projection in [
+            PersonaCoreProjections.sort,
+            PersonaCoreProjections.answer,
+            PersonaCoreProjections.displayAnswer,
+            PersonaCoreProjections.streamChunks,
+            PersonaCoreProjections.turns,
+            PersonaCoreProjections.taskIndex,
+        ] {
+            XCTAssertThrowsError(try projection("")) { error in
+                XCTAssertEqual(error as? PersonaCoreProjectionError, .emptyResult)
+            }
+        }
+    }
+}
