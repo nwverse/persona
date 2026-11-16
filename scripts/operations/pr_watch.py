@@ -211,7 +211,10 @@ class Watcher:
                 return
             policy_changed = self.state.data.get("repository_policy") not in (None, policy_fingerprint)
             for item in self.state.data["prs"].values():
-                if policy_changed:
+                # A repository mapping change never reopens terminal work.
+                # In particular, a fork's continuation belongs to its original
+                # PR and must not be created a second time by a migration.
+                if policy_changed and item.get("outcome") not in ("merged", "continuation"):
                     for field in ("semantic", "verification", "checks", "review_posted", "success_posted",
                                   "review_fingerprint", "published_fingerprint", "published_findings"):
                         item.pop(field, None)
@@ -227,6 +230,8 @@ class Watcher:
                         item.pop("semantic", None)
                         item.pop("verification", None)
                         item.pop("review_posted", None)
+                if item.get("outcome") in ("merged", "continuation"):
+                    continue
                 if item.get("review_policy", 1) >= REVIEW_POLICY_VERSION:
                     continue
                 item["review_policy"] = REVIEW_POLICY_VERSION
@@ -234,8 +239,6 @@ class Watcher:
                 item.setdefault("success_posted", bool(item.get("review_posted") and item.get("semantic") == "passed"
                                                        and item.get("format") == FORMAT_VERSION
                                                        and item.get("outcome") in ("passed", "passed_with_base_failures", "merged")))
-                if item.get("outcome") in ("merged", "continuation"):
-                    continue
                 if item.get("repair_exhausted") and not item.get("failure"):
                     item["failure"] = "The previous repair budget was exhausted without a recorded diagnostic; the new three-round budget permits one more attempt."
                 if item.get("outcome") == "repair_exhausted" and not item.get("failure_posted"):
@@ -785,6 +788,10 @@ class Watcher:
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, repair_attempts=0, retry_after=0)
         if old.get("outcome") == "continuation":
+            return
+        if (old.get("head") == head and old.get("evidence_key") == evidence_key
+                and old.get("outcome") == "findings" and old.get("review_posted")
+                and not config["merge"]):
             return
         if old.get("outcome") == "repair_comment_pending":
             if old.get("head") != head or old.get("evidence_key") != evidence_key:

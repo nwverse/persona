@@ -1287,6 +1287,38 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state["repair_rounds"], 1)
         self.assertEqual(state["verification_policy"], pr_watch.VERIFICATION_POLICY_VERSION)
 
+    def test_repository_policy_migration_preserves_merged_and_continuation_records(self):
+        records = {
+            "example/one#7": {"head": SHA_A, "base": SHA_BASE, "outcome": "merged",
+                              "semantic": "passed", "verification": "passed", "success_posted": True},
+            "example/one#8": {"head": SHA_B, "base": SHA_BASE, "outcome": "continuation",
+                              "continuation": 99, "semantic": "findings", "review_posted": True},
+            "example/one#9": {"head": SHA_A, "base": SHA_BASE, "outcome": "reviewing",
+                              "repair_rounds": 2},
+        }
+        self.watcher.state.data["prs"] = json.loads(json.dumps(records))
+        self.watcher.state.data["repository_policy"] = "old-mapping"
+        self.watcher.allow_config_migration = True
+        self.watcher.migrate_policy("new", allow_config_migration=True)
+        for key in ("example/one#7", "example/one#8"):
+            self.assertEqual(self.watcher.state.data["prs"][key], records[key])
+        self.assertEqual(self.watcher.state.data["prs"]["example/one#9"]["outcome"], "retry")
+        self.assertEqual(self.watcher.state.data["prs"]["example/one#9"]["repair_rounds"], 2)
+
+    def test_review_only_published_blocking_findings_stop_without_a_worktree(self):
+        self.watcher.repositories["example/one"]["merge"] = False
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="findings", semantic="findings",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "worktree") as worktree, \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        worktree.assert_not_called()
+        review.assert_not_called()
+
     def test_policy_migration_preserves_completed_gates_and_terminal_repairs(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
         for outcome, fields in (
