@@ -21,6 +21,7 @@
   "empty_people": "No people yet",
   "empty_docs": "No docs yet",
   "empty_meetings": "No meetings yet",
+  "empty_meetings_body": "Meetings and notes you record on your phone, and meetings from connected apps such as Lark, show up here.",
   "empty_events": "No events yet",
   "empty_body": "Persona sorts your Lark and email conversations into projects, people, docs and meetings on its own, and ranks them by importance and relevance.",
   "empty_events_body": "Events from a calendar you've connected, such as Lark, show up here.",

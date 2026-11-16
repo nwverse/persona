@@ -218,8 +218,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		out, err := call(method, params)
 		return out, err, true
 	case "session.watch":
-		n.runtimes.watch(h, p.SessionID, p.SinceSeq, rpc.ConnContext(ctx))
+		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, rpc.ConnContext(ctx))
 		_, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": p.SinceSeq})
+		if err != nil {
+			n.runtimes.watchFailed(h, p.SessionID, attempt.token)
+		}
 		return okResult(err), err, true
 	case "session.unwatch":
 		n.runtimes.unwatch(p.SessionID)
@@ -305,10 +308,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	case "session.screen":
 		return map[string]any{"text": "", "status": n.runtimeStatus(h, p.SessionID)}, nil, true
 	case "session.info":
-		// The counts a transcript gives are unknown here: zero, which the apps read as "none yet" (an iOS app older
-		// than this decodes them as required numbers).
+		// The counts a transcript gives are unknown here, and usage_unknown says so: the apps leave them out rather than
+		// show "0 tokens, 0 turns" (#8261). They stay zero for the apps older than that, which decode them as required
+		// numbers and read them as "none yet".
 		info := map[string]any{"session_id": p.SessionID, "agent": h.agent(), "context_tokens": 0, "output_tokens": 0,
-			"compactions": 0, "turns": 0}
+			"compactions": 0, "turns": 0, "usage_unknown": true}
 		for _, s := range h.sessionsCopy() {
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt

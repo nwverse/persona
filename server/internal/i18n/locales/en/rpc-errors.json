@@ -36,6 +36,11 @@
   "peer_unconfirmed": "The message was handed to this Claude session, but it hasn’t taken it yet: it may be waiting for approval on the computer, or it was dropped as a repeat. Check on the computer before sending it again.",
   "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer.",
   "desktop_open_failed": "Claude’s desktop app on the computer didn’t open this session in time (it may still be starting, or the computer may be locked). Open it there, then send again. Nothing was sent.",
+  "open_elsewhere_desktop": "This session is open in Claude’s desktop app on the computer, and Persona won’t start a second Claude writing to it. Continue it there, or close it there and send again. Nothing was sent.",
+  "open_elsewhere_terminal": "This session is open in a terminal on the computer, and Persona won’t start a second Claude writing to it. Continue it there, or close it there and send again. Nothing was sent.",
+  "open_elsewhere_program": "This session is open in another program on the computer, and Persona won’t start a second Claude writing to it. Continue it there, or close it there and send again. Nothing was sent.",
+  "open_elsewhere_other": "This session is open somewhere else on the computer, and Persona won’t start a second Claude writing to it. Continue it there, or close it there and send again. Nothing was sent.",
+  "open_elsewhere_agents_list": "This tab is on Claude Code’s agents list. Open the terminal, pick a session with the arrow keys and press Enter, then send. Nothing was sent.",
   "modes_on_computer": "This Claude session runs in Claude on the computer (its desktop app or another terminal). Change its mode, effort or model there.",
   "modes_not_running": "This agent isn’t running. Resume it from its terminal page, then change this.",
   "agent_stopped": "This agent has stopped. Its conversation and terminal stay; it doesn’t take messages, and nothing was sent. To run it again, use Resume on its terminal page.",
@@ -72,5 +77,8 @@
   "space_gone": "No engine on this computer lists this space any more. Refresh and try again.",
   "assistant_service_tier_start_only": "Fast can be chosen only when starting a new conversation. Change it in the existing conversation instead.",
   "assistant_service_tier_unsupported": "Fast from the first message is available only for Codex models that offer it. Nothing was sent.",
-  "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard."
+  "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard.",
+  "assistant_supervision_busy": "This conversation's task-follow-up role changed. Wait for its current work to finish, then try again. Nothing was sent.",
+  "assistant_supervision_runtime": "Use a Claude Code or Codex conversation for task follow-up. This Agent does not support its separate instructions. Nothing was started or sent.",
+  "assistant_supervision_node_outdated": "Update this computer's Persona Link before following up tasks here. Its current version cannot apply separate task instructions. Nothing was started or sent."
 }

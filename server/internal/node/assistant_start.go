@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/osproc"
@@ -232,7 +233,7 @@ func (n *Node) assistantCLICommand(shell, launcher, cwd string, args, env []stri
 	if _, managed := n.managedLauncher(launcher); !managed {
 		base := env
 		argv, env, _ = wrapAgent("assistant", n.home, n.dir, cwd, settingsArgs(args),
-			func() string { return claudeInner(args, base, cwd, n.home, n.claudeConfigDirs()) }, argv, env, n.logger.Printf)
+			func() *sandbox.StatusReason { return claudeInnerReason(args, base, cwd, n.home, n.claudeConfigDirs()) }, argv, env, n.logger.Printf)
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env = cwd, env
@@ -259,6 +260,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	}
 	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--include-partial-messages"}
+	if execution.SupervisionInstructions != "" && n.guestOf(id) == nil {
+		args = append(args, "--append-system-prompt", execution.SupervisionInstructions)
+	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(context.Background(), launcher, "assistant", cwd, configPath)
 	compaction := n.assistantCompactionPolicy(launcher, cwd, settings, execution)
@@ -390,7 +394,8 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 			}}}
 			compat.MCPRegistrationServers(mcpConfig["mcpServers"].(map[string]any), legacyMCP)
 			start := sdkStart{id: id, cwd: cwd, model: model, configDir: execution.ConfigDir, permissionMode: startMode, resume: resume, mcp: mcpConfig,
-				allowedTools: strings.Join(append([]string{n.assistantTools(legacyMCP)}, healthReportRules(cwd)...), ","), tools: assistantBuiltinTools, deny: n.healthDenyRules(cwd), settings: settings, plugin: hooks, compaction: &compaction}
+				supervisionInstructions: execution.SupervisionInstructions,
+				allowedTools:            strings.Join(append([]string{n.assistantTools(legacyMCP)}, healthReportRules(cwd)...), ","), tools: assistantBuiltinTools, deny: n.healthDenyRules(cwd), settings: settings, plugin: hooks, compaction: &compaction}
 			var err error
 			if cmd, first, err = n.sdkCommand(bridge, launcher, start, env); err != nil {
 				return nil, err

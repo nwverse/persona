@@ -92,7 +92,7 @@ func TestAStartWhoseTabIsKeptIsRemediedFirst(t *testing.T) {
 	waitFor(t, "the supervision message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
 	for _, want := range []string{"Agent 没开起来，它的启动标签在电脑上保留到", "停在一个提问上「[oh-my-zsh] Would you like to update? [Y/n]」",
-		"| Last login:", "还能重试 3 次", "task_start_screen"} {
+		"| Last login:", "还能重试 3 次", "signal=failed"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -226,7 +226,7 @@ func TestRemedyExpiresWithItsTab(t *testing.T) {
 	if err := s.patchPlanTask(ctx, p.ID, 0, func(pt *PlanTask) { pt.Start.Until = time.Now().Add(-time.Second) }); err != nil {
 		t.Fatal(err)
 	}
-	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now())
+	s.remedyWatch(ctx, todoNow(s, todo.ID), time.Now(), s.planHistoryOnce())
 	if got := todoNow(s, todo.ID); got.DoneAt == nil {
 		t.Fatalf("not failed: %+v", got)
 	}

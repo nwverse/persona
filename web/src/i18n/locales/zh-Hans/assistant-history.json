@@ -2,7 +2,7 @@
   "archived_toast": "已归档「{title}」",
   "unarchived_toast": "已取消归档「{title}」",
   "sidebar": "侧边栏",
-  "title": "Persona 的对话",
+  "scope_help": "这里列出与 Persona 的对话。总数不含已归档的对话，也不随搜索或筛选而变化。「已归档」显示符合当前条件的归档对话数量。",
   "refresh": "刷新",
   "new_chat": "新对话",
   "search_placeholder": "搜索标题或最后一句",
@@ -17,7 +17,7 @@
   "archived_footer": "归档只是不在列表里显示，对话还在。在归档的对话里再发消息，它会自动回到列表。",
   "via": "来自{name}",
   "rename_ellipsis": "重命名…",
-  "copy_session_id": "拷贝会话 ID",
+  "copy_session_id": "复制会话 ID",
   "unarchive": "取消归档",
   "archive": "归档",
   "main_chat": "主对话",
@@ -26,5 +26,6 @@
   "rename_title": "重命名对话",
   "title_placeholder": "对话标题",
   "rename_hint": "你起的标题不会再被自动标题覆盖。",
+  "built_in": "内置",
   "display_options": "显示选项"
 }

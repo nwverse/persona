@@ -36,6 +36,11 @@
   "peer_unconfirmed": "消息已交给这个 Claude 会话，但它还没有收下：可能在等电脑上批准，也可能因为重复被丢掉了。请先在电脑上看一眼再决定要不要重发。",
   "peer_command": "消息通道只送普通消息，不执行斜杠命令。请在电脑上输入命令。",
   "desktop_open_failed": "电脑上的 Claude 桌面版没有及时打开这个会话（它可能还在启动，或电脑在锁屏）。请在电脑上打开它再发。这次没有发送。",
+  "open_elsewhere_desktop": "这个会话正在电脑上的 Claude 桌面版里开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
+  "open_elsewhere_terminal": "这个会话正在电脑上的一个终端里开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
+  "open_elsewhere_program": "这个会话正在电脑上的另一个程序里开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
+  "open_elsewhere_other": "这个会话正在电脑上的另一个地方开着，Persona 不会再起一个 Claude 同时写它。在那边接着用，或者先在那边关掉它再发。这次没有发送。",
+  "open_elsewhere_agents_list": "这个标签停在 Claude Code 的 agents 列表上：打开终端，用方向键选中一个会话、回车进去后再发。这次没有发送。",
   "modes_on_computer": "这个 Claude 会话运行在电脑上的 Claude 里（桌面 App 或其他终端），它的模式、思考强度和模型请在那里改。",
   "modes_not_running": "这个 Agent 没在运行。先在它的终端页点「恢复」，再改这一项。",
   "agent_stopped": "这个 Agent 已经停了。对话和终端还在，它不再收消息，这次没有发送。要它接着做，在它的终端页点「恢复」。",
@@ -72,5 +77,8 @@
   "space_gone": "这台电脑上已经没有引擎列出这个空间了。刷新后再试。",
   "assistant_service_tier_start_only": "Fast 只能在新建对话时随第一条消息选择。已有对话请直接调整速度。",
   "assistant_service_tier_unsupported": "只有提供 Fast 的 Codex 模型才能从第一条消息起使用 Fast。这次没有发送。",
-  "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。"
+  "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。",
+  "assistant_supervision_busy": "这个对话的任务跟进职责变了。请等它当前的工作结束后再试，这次没有发送。",
+  "assistant_supervision_runtime": "请用 Claude Code 或 Codex 对话跟进任务。这个 Agent 不支持独立的跟进指令，这次没有启动或发送任何内容。",
+  "assistant_supervision_node_outdated": "请先更新这台电脑的 Persona Link，再在这里跟进任务。当前版本不能应用独立的任务指令，这次没有启动或发送任何内容。"
 }
