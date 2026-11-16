@@ -446,6 +446,17 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Nested-item Envelope fallback removal (#9187).**
+  - After #9082, an independent reviewer found that a valid `items` array could let a different bad scalar bypass the
+    shared Envelope gate and become `Frame::Other`. Production now refuses the shared error before Other routing;
+    there is no `NestedItems` shortcut and no additional full `ServerEvent` implementation.
+  - Mixed bad-scalar / malformed-history inputs assert the source-required refusal, with the exact Foundation error
+    priority marked `source-undetermined`. Isolated `rows` has `wrong_type: rows` from `Envelope.rows: Int?`;
+    `args:1e999` is `malformed_json` from `JSONValue` / swift-foundation's non-finite-number rejection, never a
+    payload-bearing error string. Expectations come from Swift sources, not from Rust output.
+  - Existing 17 accepted wire cases, 38 / 94 continuity steps, #8955's 64 source-derived cases, real host JNI,
+    ArkTS and independent C ABI replay all pass. This is host evidence only, not Swift/iOS or production-client proof.
+
 - **Production shared-envelope scalar checks (#8995).**
   - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
     raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
