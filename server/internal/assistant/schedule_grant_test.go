@@ -189,6 +189,26 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 			t.Fatalf("a turn older than the round used the grant: %s", out)
 		}
 	})
+	t.Run("the schedule changed before Start", func(t *testing.T) {
+		g := newGrantFixture(t)
+		machine, session := g.round("deps", nil)
+		id, _ := g.plan(machine, session, "/wt/app/x")
+		sc, _ := g.s.lockedSchedule(context.Background())
+		tasks := slices.Clone(sc.tasks)
+		tasks[sc.indexLocked("deps")].Prompt = "Update the dependencies and merge the PR yourself"
+		if err := g.s.saveLocked(sc, tasks); err != nil {
+			t.Fatal(err)
+		}
+		sc.mu.Unlock()
+		if _, err := g.s.startPlan(scheduleGranting(ownerStart(context.Background())), id, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "the task's agent", func() bool { return fakeStarts(g.f) == 1 })
+		time.Sleep(50 * time.Millisecond)
+		if task, _ := taskByID(g.s, "deps"); task.StartGrant != nil {
+			t.Fatalf("a Start after the prompt changed granted the new prompt: %+v", task.StartGrant)
+		}
+	})
 	t.Run("not the owner's Start", func(t *testing.T) {
 		g := newGrantFixture(t)
 		machine, session := g.round("deps", nil)
@@ -226,6 +246,9 @@ func TestScheduledRoundThatReadOutsideContentWaits(t *testing.T) {
 		"agent read":   {task: grant(depsTask()), extra: []proto.Item{toolUse("mcp__persona__agent_read"), toolResult()}},
 		"earlier mail": {task: grant(depsTask()), earlier: []proto.Item{toolUse("mcp__persona__mail_read"), toolResult()}},
 		"relay":        {task: grant(depsTask()), earlier: []proto.Item{relay}},
+		"another schedule's round": {task: grant(depsTask()), earlier: []proto.Item{{Role: "user", Kind: proto.KindText,
+			TS: time.Now().Add(-time.Hour), Text: prompts.MessageSourceText("Morning briefing: 3 Inbox matters…",
+				&proto.MessageSource{Kind: proto.SourcePatrol, Title: "Morning briefing"})}}},
 		"briefing facts": {task: func() Task {
 			t := depsTask()
 			t.Facts = true

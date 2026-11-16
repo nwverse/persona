@@ -76,6 +76,9 @@ type PlanTask struct {
 	// or an edit.
 	Schedule      string `json:"schedule,omitempty"`
 	ScheduleTitle string `json:"schedule_title,omitempty"`
+	// ScheduleBasis: the schedule's prompt and target when its round planned this (Task.grantBasis): a grant on Start
+	// applies only while they are the same.
+	ScheduleBasis string `json:"schedule_basis,omitempty"`
 	// Reroute is set once a flexible task has been moved to another machine; nil while it runs where it was asked.
 	// Repeated moves keep the original FromMachine and refresh ToMachine and Reason (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`

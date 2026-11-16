@@ -64,6 +64,12 @@ func grantFor(t Task, now time.Time) *StartGrant {
 		GrantedAt: now.UTC()}
 }
 
+// grantBasis names what a grant is given under: t's prompt and where its runs go. A plan keeps its round's
+// (PlanTask.ScheduleBasis), so a Start after the schedule changed grants nothing.
+func (t Task) grantBasis() string {
+	return promptDigest(t.Prompt + "\x00" + t.MachineID + "\x00" + t.SessionID + "\x00" + t.Space)
+}
+
 // liveGrant is t's grant while it still applies: given under t's current prompt and target, with a kind in it.
 func (t Task) liveGrant() *StartGrant {
 	g := t.StartGrant
@@ -100,14 +106,17 @@ func scheduleGrants(ctx context.Context) bool {
 // grantScheduleKind adds t's kind (trustKey, now that admission fixed the folder that runs) to schedule id's grant.
 // Only startPlan's owner Start reaches here. A schedule that is gone or in the health space gets nothing.
 func (s *Service) grantScheduleKind(ctx context.Context, id string, t PlanTask) {
+	if t.ScheduleBasis == "" {
+		return
+	}
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		s.logf("schedule grant: task %s: %v", id, err)
 		return
 	}
 	i := sc.indexLocked(id)
-	if i < 0 || sc.tasks[i].Space == SpaceHealth {
-		sc.mu.Unlock()
+	if i < 0 || sc.tasks[i].Space == SpaceHealth || sc.tasks[i].grantBasis() != t.ScheduleBasis {
+		sc.mu.Unlock() // gone, or no longer the schedule whose round the owner saw: nothing granted
 		return
 	}
 	tasks := slices.Clone(sc.tasks)
@@ -265,12 +274,16 @@ func (s *Service) scheduledRoundOf(ctx context.Context, machine, session string)
 	if !ok {
 		return "", nil
 	}
+	t, ok := s.scheduledTask(ctx, r.task)
+	if !ok {
+		return "", nil
+	}
 	items, read := s.lastTurnItems(ctx, machine, session)
 	if !read {
 		return "", nil
 	}
 	_, turn := splitLastTurn(items)
-	if !roundTurn(turn, r.at) {
+	if !roundTurn(turn, r.at, t.label()) {
 		return "", nil
 	}
 	return r.task, items
@@ -283,12 +296,12 @@ const roundEarly = 2 * time.Minute
 // roundTurn: turn (its items, prompt first) began with a scheduled prompt (the scheduler's message source, which an
 // app's or another conversation's message never carries: prompts.MessageSourceText, ProtectUserMessage) written no
 // earlier than the round, and nothing else came into it from outside the agent's own work.
-func roundTurn(turn []proto.Item, at time.Time) bool {
+func roundTurn(turn []proto.Item, at time.Time, label string) bool {
 	if len(turn) == 0 {
 		return false
 	}
 	prompt := turn[0]
-	if prompt.Role != "user" || prompt.Kind != proto.KindText || prompt.Queued || !scheduledPrompt(prompt) {
+	if prompt.Role != "user" || prompt.Kind != proto.KindText || prompt.Queued || !scheduledPrompt(prompt, label) {
 		return false
 	}
 	if prompt.TS.IsZero() || prompt.TS.Before(at.Add(-roundEarly)) {
@@ -302,10 +315,11 @@ func roundTurn(turn []proto.Item, at time.Time) bool {
 	return true
 }
 
-// scheduledPrompt: it is a scheduled task's run prompt (patrol or follow-up), by its message source.
-func scheduledPrompt(it proto.Item) bool {
+// scheduledPrompt: it is the run prompt of the scheduled task called label (patrol or follow-up), by its message
+// source. Another task's (which may carry the briefing's facts) is not.
+func scheduledPrompt(it proto.Item, label string) bool {
 	src := prompts.ItemSource(it)
-	return src != nil && (src.Kind == proto.SourcePatrol || src.Kind == proto.SourceFollowup)
+	return src != nil && (src.Kind == proto.SourcePatrol || src.Kind == proto.SourceFollowup) && src.Title == label
 }
 
 // ---- outside content ----
@@ -338,7 +352,7 @@ func grantSafeTool(name string) bool {
 // grantSafeItem: it carries nothing from outside into a conversation a schedule's grant may start work from. Turn
 // prompts are a scheduled task's or the owner's own words (no source, no relay, no injected notice); the rest is the
 // agent's own text, its safe tools and their results.
-func grantSafeItem(it proto.Item) bool {
+func grantSafeItem(it proto.Item, label string) bool {
 	switch it.Role {
 	case "assistant":
 		switch it.Kind {
@@ -353,7 +367,7 @@ func grantSafeItem(it proto.Item) bool {
 		case proto.KindToolResult:
 			return true // the result of a tool use checked above
 		case proto.KindText:
-			if scheduledPrompt(it) {
+			if scheduledPrompt(it, label) {
 				return true
 			}
 			return it.ClientMsgID != "" && it.From == "" && it.Injected == nil && !it.Wake && it.Source == nil &&
@@ -376,7 +390,7 @@ func (s *Service) roundReadsOutside(ctx context.Context, t Task, machine, sessio
 	}
 	safe := func(items []proto.Item) bool {
 		for _, it := range items {
-			if !grantSafeItem(it) {
+			if !grantSafeItem(it, t.label()) {
 				return false
 			}
 		}

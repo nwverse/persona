@@ -1067,10 +1067,11 @@ schedule to do that work (#8045). The owner's consent to a schedule is now recor
   itself" (`schedule_grant: true` on Start). Each task's kind, as "Start These Directly" names it (computer + repository
   or folder + read or edit, resolved once admission fixed the folder that runs), is added to the task's `start_grant`.
   No tool call (`schedule_routine`, `schedule_followup`, `task_plan`), no app body (`PUT` / `POST` on the task) and no
-  Start that is not the owner's sets or widens it. It is not added to `tasks.trust`.
+  Start that is not the owner's sets or widens it. It is not added to `tasks.trust`. The plan keeps the schedule's
+  prompt and target as its round had them (`schedule_basis`): a Start after either changed grants nothing.
 - **Used**: only by `task_plan` in a turn the hub can tell is a round it started for that schedule: it noted the round
   as it sent it (in memory, so not after a hub restart), the turn began with the scheduler's own prompt (its message
-  source, which no app or relayed message carries) written after that, nothing else came into the turn, and no other
+  source and the task's name, which no app or relayed message carries) written after that, nothing else came into the turn, and no other
   scheduled task has a round under way in that conversation. A writable task whose kind the grant covers (as a
   remembered kind covers its folder tree) then starts without the card; everything else keeps it: other scheduled
   tasks, follow-ups the assistant set up for itself, every other conversation and turn, and the health space.

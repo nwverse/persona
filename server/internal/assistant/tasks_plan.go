@@ -85,7 +85,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
 		// The hub's too: the scheduled round this plan comes from is the hub's to tell (scheduledRoundOf, #8045).
-		t.Schedule, t.ScheduleTitle = "", ""
+		t.Schedule, t.ScheduleTitle, t.ScheduleBasis = "", "", ""
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
 		// real health detour and its first-detour guard keeps the true original machine (#2271).
 		t.Reroute = nil
@@ -213,12 +213,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if scope == nil && !s.inHealth(ctx, sessionID) {
 		round, roundItems = s.scheduledRoundOf(ctx, machine, sessionID)
 		if round != "" {
-			title := ""
+			title, basis := "", ""
 			if st, ok := s.scheduledTask(ctx, round); ok {
-				title = st.labelIn(s.lang(ctx))
+				title, basis = st.labelIn(s.lang(ctx)), st.grantBasis()
 			}
 			for i := range a.Tasks {
-				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle = round, title
+				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round, title, basis
 			}
 		}
 	}
