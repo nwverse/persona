@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const taskStateMaxBytes = 4096
@@ -152,8 +153,7 @@ func (s *Service) toolScheduleStateSet(ctx context.Context, machine, session str
 		return "", err
 	}
 	items, ok := s.lastTurnItems(ctx, machine, session)
-	prompt, _ := turnExchange(items)
-	if !ok || !matchesTaskStateRun(prompt, input.RunKey) {
+	if !ok || !currentTurnHasTaskStateRun(items, input.RunKey) {
 		return "", fmt.Errorf("the run key must come from the current scheduled turn")
 	}
 	s.sched.mu.Lock()
@@ -167,6 +167,16 @@ func (s *Service) toolScheduleStateSet(ctx context.Context, machine, session str
 
 func matchesTaskStateRun(prompt, key string) bool {
 	return strings.Contains(prompt, "call schedule_state_set with run_key "+key+" and the updated state text")
+}
+
+// currentTurnHasTaskStateRun reports whether the prompt that started the latest turn in items carries key. The node's
+// one-turn page starts at the last prompt it counts as a user's, and a scheduled prompt is an injected one it does not
+// count, so in a conversation a task reuses the page reaches back into the previous run: the first user message there
+// belongs to an earlier turn, with that run's key. The turn's own prompt is the last user message that is not queued.
+func currentTurnHasTaskStateRun(items []proto.Item, key string) bool {
+	_, turn := splitLastTurn(items)
+	prompt, _ := turnExchange(turn)
+	return matchesTaskStateRun(prompt, key)
 }
 
 func (s *Service) finishTaskState(ctx context.Context, task Task, run ScheduleRun) {
