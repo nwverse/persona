@@ -23,6 +23,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.toggleableState
@@ -35,15 +38,46 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
 enum class MessageSource { Lark, Mail, Other }
 
+private const val STACK_TITLE_TIME_AT_FONT_SCALE = 1.5f
+
+/** An Inbox row's optional source-specific latest line, with its current state on a separate line below. */
+@Immutable
+data class MessageItemMeta(
+    val text: String,
+    val state: String? = null,
+    val status: Status = Status.Idle,
+    val problem: Boolean = false,
+    val key: String? = null,
+)
+
+@Composable
+private fun MessageItemState(meta: MessageItemMeta) {
+    val palette = PersonaTheme.palette
+    val icon = inboxNowIcon(meta.key)
+    when {
+        icon.icon != null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(icon.icon, null, size = Tokens.Space.m, tint = palette.ink2, decorative = true)
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        icon.tone == InlineTone.Busy -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JSpinner(Modifier.size(Tokens.Space.m))
+            Text(meta.state.orEmpty(), style = PersonaTheme.type.caption, color = palette.ink2, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+        }
+        else -> JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
+    }
+}
+
 /**
  * An inbox item. Items that need a reply ([status] NeedsYou) are cards of their own in glass and strips with
  * an amber holder on the board; the rest are rows of a group. [extra] holds the draft and its actions. [avatar] is the
- * chat's or sender's picture once it has loaded; until then (and without one) the avatar shows the initial.
+ * chat's or sender's picture once it has loaded; until then (and without one) the avatar shows the initial. With [meta],
+ * the content follows the event row: title, AI summary, then where and who without repeating either one.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -70,12 +104,16 @@ fun MessageItem(
     /** A small mark after the title (the translate icon on a translated mail); none draws the title as always. */
     titleIcon: PhIcon? = null,
     titleIconLabel: String? = null,
+    /** A small kind tag beside the title (a direct chat's "DM"), never a row of source and count chips. */
+    titleTag: String? = null,
     /** An event heading above the sender and source conversation. Other message rows keep their layout. */
     heading: String? = null,
     /** In a selection (#2576): picked or not, drawn as a check before the avatar; null outside one. */
     checked: Boolean? = null,
     /** In a selection, a row that can't be picked (an agent's card, a done item): faded. */
     dimmed: Boolean = false,
+    /** The event row's third content line; absent, every line keeps its existing meaning and placement. */
+    meta: MessageItemMeta? = null,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -84,7 +122,8 @@ fun MessageItem(
     val prominent = status == Status.NeedsYou
     val badge = when (source) { MessageSource.Lark -> PhIcons.ChatsCircle; MessageSource.Mail -> PhIcons.EnvelopeSimple; MessageSource.Other -> null }
     val badgeColor = if (style == AppStyle.Glass) (if (source == MessageSource.Mail) palette.needsYou.dot else palette.working.dot) else null
-    val click = Modifier.selectedRow(selected || checked == true).onSecondaryClick(onLongClick)
+    // The swipe around the row, if any, as the row's own actions for a screen reader (`swipeActionSemantics`).
+    val click = Modifier.selectedRow(selected || checked == true).onSecondaryClick(onLongClick).swipeActionSemantics()
         .then(if (checked != null) Modifier.semantics { toggleableState = androidx.compose.ui.state.ToggleableState(checked) } else Modifier)
         .combinedClickable(role = if (checked != null) Role.Checkbox else Role.Button, onClick = onClick, onLongClick = onLongClick)
     val body: @Composable ColumnScope.() -> Unit = {
@@ -94,33 +133,82 @@ fun MessageItem(
                 Spacer(Modifier.width(Tokens.Space.m))
             }
             JAvatar(group ?: sender, size = if (prominent) 42.dp else 38.dp, icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(12.dp.dense))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(heading ?: group ?: sender, style = type.headline, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    sourceLabel?.let { Spacer(Modifier.width(6.dp)); Text(it, style = type.caption, color = palette.ink3, maxLines = 1) }
-                    if (unread > 0) { Spacer(Modifier.width(6.dp)); JBadge(unread) }
-                    Spacer(Modifier.weight(1f))
-                    time?.let { Spacer(Modifier.width(8.dp)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }
+                val followed = meta != null
+                val prioritizeTitle = followed || heading != null
+                val titleText = if (followed) heading ?: title else heading ?: group ?: sender
+                val stackTitleTime = prioritizeTitle && time != null && LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
+                if (stackTitleTime) {
+                    Column {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(titleText, style = type.headline, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f))
+                            if (titleIcon != null) {
+                                Spacer(Modifier.width(Tokens.Space.xs))
+                                JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                            }
+                            titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
+                            if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }
+                        }
+                        time?.let {
+                            Spacer(Modifier.height(Tokens.Space.xs))
+                            Text(it, style = type.micro, color = palette.ink3, maxLines = 1)
+                        }
+                    }
+                } else Row(verticalAlignment = if (prioritizeTitle) Alignment.Top else Alignment.CenterVertically) {
+                    Text(titleText, style = type.headline, color = palette.ink, maxLines = if (prioritizeTitle) 2 else 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = prioritizeTitle))
+                    if (prioritizeTitle && titleIcon != null) {
+                        Spacer(Modifier.width(Tokens.Space.xs))
+                        JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                    }
+                    titleTag?.let { Spacer(Modifier.width(Tokens.Space.xs)); JTag(it) }
+                    // The source already has its avatar mark and tag; it never squeezes an event title off its own row.
+                    if (!prioritizeTitle) sourceLabel?.let { Spacer(Modifier.width(6.dp.dense)); Text(it, style = type.caption, color = palette.ink3, maxLines = 1) }
+                    if (unread > 0) { Spacer(Modifier.width(6.dp.dense)); JBadge(unread) }
+                    if (!prioritizeTitle) Spacer(Modifier.weight(1f))
+                    time?.let { Spacer(Modifier.width(8.dp.dense)); Text(it, style = type.micro, color = palette.ink3, maxLines = 1) }
                 }
-                if (group != null || heading != null) Text(sender, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1)
-                Spacer(Modifier.height(2.dp))
-                if (titleIcon == null) Text(title, style = if (prominent) type.bodyStrong else type.body, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                else Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, Modifier.weight(1f, fill = false), style = if (prominent) type.bodyStrong else type.body, color = palette.ink,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.width(Tokens.Space.xs))
-                    JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                if (!followed && (group != null || heading != null)) Text(sender, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink3, maxLines = 1)
+                if (!followed) {
+                    Spacer(Modifier.height(2.dp.dense))
+                    if (titleIcon == null) Text(title, style = if (prominent) type.bodyStrong else type.body, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    else Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, Modifier.weight(1f, fill = false), style = if (prominent) type.bodyStrong else type.body, color = palette.ink,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.width(Tokens.Space.xs))
+                        JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
+                    }
                 }
+                if (followed) Spacer(Modifier.height(Tokens.Space.xs))
                 preview?.let {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (status == Status.Working) { JSpinner(Modifier.size(12.dp), stroke = 1.6.dp); Spacer(Modifier.width(6.dp)) }
-                        Text(it, style = type.callout, color = if (status == Status.Working && style != AppStyle.Brief) palette.working.text else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (followed) {
+                            JIcon(PhIcons.Sparkle, null, size = Tokens.Space.m, tint = palette.accent, decorative = true)
+                            Spacer(Modifier.width(Tokens.Space.xs))
+                        } else if (status == Status.Working) {
+                            JSpinner(Modifier.size(12.dp), stroke = 1.6.dp)
+                            Spacer(Modifier.width(6.dp.dense))
+                        }
+                        Text(it, style = type.callout, color = if (!followed && status == Status.Working && style != AppStyle.Brief) palette.working.text
+                            else if (followed) palette.ink else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                meta?.let { line ->
+                    if (line.text.isNotBlank()) {
+                        if (preview != null) Spacer(Modifier.height(Tokens.Space.xs))
+                        Text(line.text, Modifier.fillMaxWidth(), style = if (preview == null) type.callout else type.caption,
+                            color = palette.ink2, maxLines = if (preview == null) 2 else 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    line.state?.let {
+                        Spacer(Modifier.height(Tokens.Space.xs))
+                        MessageItemState(line)
                     }
                 }
                 if (attachment != null || tags.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Spacer(Modifier.height(8.dp.dense))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp.dense)) {
                         attachment?.let { JChip(it, icon = PhIcons.Paperclip) }
                         tags.forEach { JTag(it) }
                     }
@@ -132,21 +220,22 @@ fun MessageItem(
     val modifier = if (dimmed) modifier.alpha(0.45f) else modifier
     when {
         style == AppStyle.Board -> {
-            val shape = RoundedCornerShape(10.dp)
+            val shape = RoundedCornerShape(10.dp.corner)
             Column(
-                modifier.fillMaxWidth().padding(bottom = if (position.last) 0.dp else 8.dp).clip(shape)
+                modifier.fillMaxWidth().padding(bottom = if (position.last) 0.dp else 8.dp.dense).clip(shape)
                     .background(palette.surface).holder(status?.let { palette.status(it).dot } ?: palette.idle.dot, Tokens.Space.xxs)
-                    .border(1.dp, palette.line, shape).then(click).padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+                    .border(1.dp, palette.line, shape).then(click).padding(start = 18.dp.dense, end = 12.dp.dense, top = 12.dp.dense, bottom = 12.dp.dense),
                 content = body,
             )
         }
         // JCard clips only inside this modifier: the clip here keeps the selection plate within the card's corners.
         prominent && style == AppStyle.Glass -> JCard(
-            modifier.padding(bottom = if (position.last) 0.dp else 12.dp).clip(PersonaTheme.shapes.cardShape).selectedRow(selected).onSecondaryClick(onLongClick),
-            onClick = onClick, onLongClick = onLongClick, padding = 16.dp, content = body,
+            modifier.padding(bottom = if (position.last) 0.dp else 12.dp.dense).clip(PersonaTheme.shapes.cardShape).selectedRow(selected).onSecondaryClick(onLongClick)
+                .swipeActionSemantics(),
+            onClick = onClick, onLongClick = onLongClick, padding = 16.dp.dense, content = body,
         )
         else -> JGroupItem(position, modifier) {
-            Column(click.padding(horizontal = if (style == AppStyle.Brief) 0.dp else 14.dp, vertical = 14.dp), content = body)
+            Column(click.padding(horizontal = if (style == AppStyle.Brief) 0.dp else 14.dp.dense, vertical = 14.dp.dense), content = body)
         }
     }
 }
@@ -156,32 +245,32 @@ fun MessageItem(
 fun DraftPreview(text: String, modifier: Modifier = Modifier, label: String = stringResource(R.string.designsystem_draft_ready), actions: (@Composable RowScope.() -> Unit)? = null) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    Column(modifier.fillMaxWidth().padding(top = 12.dp)) {
+    Column(modifier.fillMaxWidth().padding(top = Tokens.Space.m)) {
         when (PersonaTheme.style) {
             AppStyle.Brief -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     JIcon(PhIcons.Sparkle, null, size = 14.dp, tint = palette.ink, selected = true)
-                    Spacer(Modifier.width(2.dp))
+                    Spacer(Modifier.width(2.dp.dense))
                     MarkerText(label, type.micro.copy(fontWeight = FontWeight.Bold))
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp.dense))
                 Row(Modifier.height(IntrinsicSize.Min)) {
                     Box(Modifier.width(2.dp).fillMaxHeight().clip(CircleShape).background(palette.line))
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(12.dp.dense))
                     Text(text, style = type.callout, color = palette.ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
                 }
             }
-            else -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 6.dp else 18.dp)).background(palette.statusSurface).padding(12.dp)) {
+            else -> Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(if (PersonaTheme.style == AppStyle.Board) 6.dp.corner else 18.dp.corner)).background(palette.statusSurface).padding(12.dp.dense)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     JIcon(PhIcons.Sparkle, null, size = 14.dp, tint = palette.accent, selected = true)
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(6.dp.dense))
                     Text(label, style = type.caption.copy(fontWeight = FontWeight.SemiBold), color = palette.accent, maxLines = 1)
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(6.dp.dense))
                 Text(text, style = type.callout, color = palette.ink, maxLines = 5, overflow = TextOverflow.Ellipsis)
             }
         }
-        actions?.let { Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp), content = it) }
+        actions?.let { Spacer(Modifier.height(12.dp.dense)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp.dense), content = it) }
     }
 }
 
@@ -205,25 +294,25 @@ fun HubCard(
                 AppStyle.Glass -> JAppMark(HomeTokens.settingsGlyph)
                 AppStyle.Brief -> Box(Modifier.size(52.dp).clip(CircleShape).background(palette.action), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.designsystem_brand_persona).take(1), style = type.title.copy(fontSize = androidx.compose.ui.unit.TextUnit(22f, androidx.compose.ui.unit.TextUnitType.Sp), fontWeight = FontWeight.Bold), color = palette.onAction)
-                    Box(Modifier.align(Alignment.BottomEnd).size(14.dp).clip(CircleShape).background(palette.surface).padding(2.dp).clip(CircleShape).background(tone.dot))
+                    Box(Modifier.align(Alignment.BottomEnd).size(14.dp).clip(CircleShape).background(palette.surface).padding(2.dp.dense).clip(CircleShape).background(tone.dot))
                 }
                 AppStyle.Board -> Unit
             }
-            if (PersonaTheme.style != AppStyle.Board) Spacer(Modifier.width(14.dp))
+            if (PersonaTheme.style != AppStyle.Board) Spacer(Modifier.width(14.dp.dense))
             Column(Modifier.weight(1f)) {
                 Text(name, style = type.title, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (busy) { JSpinner(Modifier.size(12.dp), stroke = 1.6.dp); Spacer(Modifier.width(6.dp)) }
-                    else if (PersonaTheme.style == AppStyle.Brief) { Box(Modifier.size(8.dp).clip(CircleShape).background(tone.dot)); Spacer(Modifier.width(6.dp)) }
+                    if (busy) { JSpinner(Modifier.size(12.dp), stroke = 1.6.dp); Spacer(Modifier.width(6.dp.dense)) }
+                    else if (PersonaTheme.style == AppStyle.Brief) { Box(Modifier.size(8.dp).clip(CircleShape).background(tone.dot)); Spacer(Modifier.width(6.dp.dense)) }
                     Text(statusText, style = type.callout, color = if (PersonaTheme.style == AppStyle.Glass) tone.text else palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (onClick != null) JIcon(PhIcons.CaretRight, null, size = 18.dp, tint = palette.ink3)
         }
         if (facts.isNotEmpty()) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(14.dp.dense))
             if (PersonaTheme.style == AppStyle.Board) Fields(facts.map { "${it.second} ${it.first}".trim() })
-            else Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            else Row(horizontalArrangement = Arrangement.spacedBy(16.dp.dense)) {
                 facts.forEach { (label, value) ->
                     Column(Modifier.weight(1f)) {
                         Text(value, style = type.label, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -256,51 +345,266 @@ fun HomeNavigation(
     onSelectedMenu: (() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
+    // Felt only when it moves to another page, as iOS's switcher.
+    val haptics = rememberHaptics()
+    val select: (String) -> Unit = { key -> if (key != selected) haptics(Haptic.Tap); onSelect(key) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
     if (PersonaTheme.style != AppStyle.Glass) {
-        Row(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
-            .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            leading()
-            JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
-                items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { onSelect(items[it].key) }, Modifier.weight(1f))
-            trailing()
+        val switcher: @Composable (Boolean, Boolean) -> Unit = { compact, centered ->
+            Box(
+                Modifier.width(IntrinsicSize.Max),
+                contentAlignment = if (centered) Alignment.Center else Alignment.CenterStart,
+            ) {
+                JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
+                    items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
+                        val key = items[index].key
+                        if (key == selected && onSelectedMenu != null) onSelectedMenu() else select(key)
+                    }, Modifier.testTag("home-switcher"), compact = compact)
+            }
         }
+        HomeNavigationLayout(
+            modifier = modifier.fillMaxWidth().background(palette.background).statusBarsPadding(),
+            horizontalPadding = Tokens.Space.s,
+            verticalPadding = Tokens.Space.xs,
+            inlineSpacing = Tokens.Space.s,
+            trailingSpacing = Tokens.Space.s,
+            centerSwitcher = false,
+            centerInlineVertically = true,
+            endAccessory = null,
+            endAccessoryOffset = Tokens.Space.flush,
+            compactEndAccessoryOffset = Tokens.Space.flush,
+            leading = leading,
+            trailing = trailing,
+            fullSwitcher = { switcher(false, false) },
+            compactSwitcher = { switcher(true, false) },
+            stackedSwitcher = { switcher(true, true) },
+        )
         return
     }
-    val scale = (androidx.compose.ui.platform.LocalDensity.current.fontScale * HomeTokens.shellTextStep)
-        .coerceAtMost(HomeTokens.shellScaleMaximum)
+    val choose: (NavItem) -> Unit = { item ->
+        if (item.key == selected && onSelectedMenu != null) onSelectedMenu() else select(item.key)
+    }
+    val segmentWidth = HomeTokens.segmentWidth * scale + if (density.fontScale > 1f) Tokens.Space.s else Tokens.Space.flush
+    val waiting = items.lastOrNull()?.badge ?: 0
+    HomeNavigationLayout(
+        modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
+        horizontalPadding = Tokens.Space.l,
+        verticalPadding = Tokens.Space.xxs,
+        inlineSpacing = null,
+        trailingSpacing = null,
+        centerSwitcher = true,
+        centerInlineVertically = false,
+        endAccessory = if (waiting > 0) ({ GlassHomeBadge(waiting) }) else null,
+        endAccessoryOffset = Tokens.Space.s,
+        compactEndAccessoryOffset = Tokens.Space.flush,
+        leading = leading,
+        trailing = trailing,
+        fullSwitcher = {
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, onClick = choose)
+        },
+        compactSwitcher = {
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = Tokens.Space.flush, onClick = choose)
+        },
+        stackedSwitcher = { available ->
+            val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
+                .coerceIn(Tokens.Space.flush, segmentWidth)
+            GlassHomeSwitcher(items, selected, fittedWidth, scale,
+                textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
+                narrowText = fittedWidth < segmentWidth, onClick = choose)
+        },
+    )
+}
+
+/** Horizontal bounds relative to the capsule's left edge, including a badge aligned to its top end. */
+internal data class HomeSwitcherOccupiedBounds(val left: Int, val right: Int) {
+    val width: Int get() = right - left
+}
+
+internal fun homeSwitcherOccupiedBounds(capsuleWidth: Int, badgeWidth: Int?, badgeOffset: Int): HomeSwitcherOccupiedBounds {
+    if (badgeWidth == null) return HomeSwitcherOccupiedBounds(0, capsuleWidth)
+    val badgeLeft = capsuleWidth - badgeWidth + badgeOffset
+    return HomeSwitcherOccupiedBounds(
+        left = minOf(0, badgeLeft),
+        right = maxOf(capsuleWidth, badgeLeft + badgeWidth),
+    )
+}
+
+/**
+ * Measures real control widths, then tries centered full, centered compact, gap full, gap compact and stacked.
+ * Non-Glass styles start at gap full. Measurement candidates hide their semantics; only the selected one is placed.
+ */
+@Composable
+private fun HomeNavigationLayout(
+    modifier: Modifier,
+    horizontalPadding: Dp,
+    verticalPadding: Dp,
+    inlineSpacing: Dp?,
+    trailingSpacing: Dp?,
+    centerSwitcher: Boolean,
+    centerInlineVertically: Boolean,
+    endAccessory: (@Composable () -> Unit)?,
+    endAccessoryOffset: Dp,
+    compactEndAccessoryOffset: Dp,
+    leading: @Composable () -> Unit,
+    trailing: @Composable RowScope.() -> Unit,
+    fullSwitcher: @Composable () -> Unit,
+    compactSwitcher: @Composable () -> Unit,
+    stackedSwitcher: @Composable (Dp) -> Unit,
+) {
+    SubcomposeLayout(modifier) { constraints ->
+        val leadingPlaceable = subcompose(0) { Box { leading() } }.first().measure(androidx.compose.ui.unit.Constraints())
+        val trailingPlaceable = subcompose(1) {
+            Row(
+                horizontalArrangement = trailingSpacing?.let { Arrangement.spacedBy(it) } ?: Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) { trailing() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val full = subcompose(2) {
+            Box(Modifier.clearAndSetSemantics {}) { fullSwitcher() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val compact = subcompose(3) {
+            Box(Modifier.clearAndSetSemantics {}) { compactSwitcher() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val accessory = endAccessory?.let { content ->
+            subcompose(4) {
+                Box(Modifier.clearAndSetSemantics {}) { content() }
+            }.first().measure(androidx.compose.ui.unit.Constraints())
+        }
+        val fullBounds = homeSwitcherOccupiedBounds(full.width, accessory?.width, endAccessoryOffset.roundToPx())
+        val compactBounds = homeSwitcherOccupiedBounds(compact.width, accessory?.width, compactEndAccessoryOffset.roundToPx())
+        val horizontal = horizontalPadding.roundToPx()
+        val vertical = verticalPadding.roundToPx()
+        val gap = inlineSpacing?.roundToPx() ?: 0
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else {
+            horizontal * 2 + leadingPlaceable.width + fullBounds.width + trailingPlaceable.width + gap * 2
+        }
+        val contentWidth = (width - horizontal * 2).coerceAtLeast(0)
+        fun fitsCentered(capsuleWidth: Int, occupied: HomeSwitcherOccupiedBounds): Boolean {
+            if (!centerSwitcher) return false
+            val capsuleLeft = (contentWidth - capsuleWidth) / 2
+            return capsuleLeft + occupied.left >= leadingPlaceable.width &&
+                capsuleLeft + occupied.right <= contentWidth - trailingPlaceable.width
+        }
+        fun fitsGap(occupied: HomeSwitcherOccupiedBounds) =
+            leadingPlaceable.width + occupied.width + trailingPlaceable.width + gap * 2 <= contentWidth
+        val centeredFull = fitsCentered(full.width, fullBounds)
+        val centeredCompact = !centeredFull && fitsCentered(compact.width, compactBounds)
+        val gapFull = !centeredFull && !centeredCompact && fitsGap(fullBounds)
+        val gapCompact = !centeredFull && !centeredCompact && !gapFull && fitsGap(compactBounds)
+        val inline = centeredFull || gapFull
+        val compactInline = centeredCompact || gapCompact
+        val centeredInline = centeredFull || centeredCompact
+        val stacked = !inline && !compactInline
+        val level = when {
+            centeredFull -> "home-level-centered-full"
+            centeredCompact -> "home-level-centered-compact"
+            gapFull -> "home-level-gap-full"
+            gapCompact -> "home-level-gap-compact"
+            else -> "home-level-stacked"
+        }
+        val stackedWidth = (contentWidth - (fullBounds.width - full.width)).coerceAtLeast(0)
+        val switcher = when {
+            inline -> subcompose(6) { Box(Modifier.testTag(level)) { fullSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            compactInline -> subcompose(7) { Box(Modifier.testTag(level)) { compactSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            else -> subcompose(5) { Box(Modifier.testTag(level)) { stackedSwitcher(stackedWidth.toDp()) } }.first()
+                .measure(androidx.compose.ui.unit.Constraints(maxWidth = contentWidth))
+        }
+        val firstRowHeight = maxOf(leadingPlaceable.height, trailingPlaceable.height)
+        val stackGap = if (stacked) Tokens.Space.xs.roundToPx() else 0
+        val contentHeight = if (stacked) firstRowHeight + stackGap + switcher.height
+            else maxOf(firstRowHeight, switcher.height)
+        val desiredHeight = contentHeight + vertical * 2
+        val height = if (constraints.hasBoundedHeight) desiredHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
+            else maxOf(desiredHeight, constraints.minHeight)
+        val leadingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - leadingPlaceable.height) / 2f).roundToInt() else vertical
+        val trailingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - trailingPlaceable.height) / 2f).roundToInt() else vertical
+        val switcherY = if (stacked) vertical + firstRowHeight + stackGap
+            else if (centerInlineVertically) vertical + ((contentHeight - switcher.height) / 2f).roundToInt() else vertical
+        val switcherX = when {
+            stacked -> horizontal + (contentWidth - switcher.width) / 2
+            centeredInline -> horizontal + (contentWidth - switcher.width) / 2
+            centerSwitcher -> {
+                val occupied = if (compactInline) compactBounds else fullBounds
+                val gapStart = horizontal + leadingPlaceable.width + gap
+                val gapWidth = contentWidth - leadingPlaceable.width - trailingPlaceable.width - gap * 2
+                gapStart + (gapWidth - occupied.width) / 2 - occupied.left
+            }
+            else -> horizontal + leadingPlaceable.width + gap
+        }.coerceAtLeast(horizontal)
+        layout(width, height) {
+            switcher.placeRelative(switcherX, switcherY)
+            leadingPlaceable.placeRelative(horizontal, leadingY)
+            trailingPlaceable.placeRelative(width - horizontal - trailingPlaceable.width, trailingY)
+        }
+    }
+}
+
+@Composable
+private fun GlassHomeSwitcher(
+    items: List<NavItem>,
+    selected: String,
+    segmentWidth: Dp,
+    scale: Float,
+    textWidth: Dp = segmentWidth,
+    narrowText: Boolean = false,
+    surfacePadding: Dp = Tokens.Space.xs,
+    badgeOffset: Dp = Tokens.Space.s,
+    modifier: Modifier = Modifier,
+    onClick: (NavItem) -> Unit,
+) {
+    val palette = PersonaTheme.palette
     val density = androidx.compose.ui.platform.LocalDensity.current
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    Box(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight)
-        .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xxs)) {
-        Box(Modifier.align(Alignment.TopStart)) { leading() }
-        Box(Modifier.align(Alignment.TopCenter)) {
-            Row(Modifier.floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
-                items.forEach { item ->
-                    val chosen = item.key == selected
-                    val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
-                        fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
-                    val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
-                    val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
-                    val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                    val fittedSize = maxOf(Tokens.Type.Chip.size.value, labelStyle.fontSize.value * fit).sp
-                    Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
-                        .clip(CircleShape).background(if (chosen) {
-                            if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
-                        } else Color.Transparent)
-                        .clickable(role = Role.Tab) {
-                            if (chosen && onSelectedMenu != null) onSelectedMenu() else onSelect(item.key)
-                        }.semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
-                        Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
-                            color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Box(modifier) {
+        Row(Modifier.testTag("home-switcher").floatingSurface(CircleShape).padding(surfacePadding)) {
+            items.forEach { item ->
+                val chosen = item.key == selected
+                val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
+                    fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
+                val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+                val available = with(density) { textWidth.toPx() }
+                val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                val fittedSize = if (narrowText) {
+                    var candidate = baseFittedSize
+                    var result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
+                    while (result.isLineEllipsized(0) && candidate.value > Tokens.Type.Label.size.value) {
+                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
+                        result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
                     }
+                    candidate
+                } else baseFittedSize
+                Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
+                    .clip(CircleShape).background(if (chosen) {
+                        if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
+                    } else Color.Transparent)
+                    .clickable(role = Role.Tab) { onClick(item) }
+                    .semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
+                    Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
+                        color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            val waiting = items.lastOrNull()?.badge ?: 0
-            if (waiting > 0) Text("$waiting", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = palette.needsYou.text, modifier = Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs)
-                    .clip(CircleShape).background(palette.sunken).padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs), maxLines = 1)
         }
-        Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) { trailing() }
+        val waiting = items.lastOrNull()?.badge ?: 0
+        if (waiting > 0) GlassHomeBadge(waiting,
+            Modifier.align(Alignment.TopEnd).offset(x = badgeOffset, y = -Tokens.Space.xs).testTag("home-badge"))
     }
+}
+
+@Composable
+private fun GlassHomeBadge(count: Int, modifier: Modifier = Modifier) {
+    Text("$count", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+        color = PersonaTheme.palette.needsYou.text,
+        modifier = modifier.clip(CircleShape).background(PersonaTheme.palette.sunken)
+            .padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
+        maxLines = 1)
 }

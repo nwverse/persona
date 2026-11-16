@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct ExtensionSystemAPITests {
     @Test func widgetRequestsUseTheFamilyAndNewPath() async throws {
@@ -13,7 +14,7 @@ import Testing
         let data = try #require(hub.sent("POST", "/api/v1/extensions/sample/-/widget/today").first?.body)
         let body = try JSON.decoder.decode(JSONValue.self, from: data)
         #expect(body["context"]?["size"] == .string("small"))
-        #expect(body["context"]?["ui_version"] == .number(3))
+        #expect(body["context"]?["ui_version"] == .number(3), "a widget draws none of versions 4–6")
         #expect(body["context"]?["platform"] == .string("ios"))
         do {
             _ = try await hub.client.extensionWidget(place, family: "large")
@@ -282,6 +283,20 @@ import Testing
             let report = snapshot.reports([(other, "small"), (other, "small"), (other, "large"), (key, "small")])
             #expect(report[""] == [])
             #expect(report["g2"] == [ExtensionDeviceWidget(extension: "sample", id: "today", family: "small")])
+        }
+    }
+
+    @Test func progressRingIsExclusiveToTheCircularAccessory() {
+        #expect(ExtensionSurfaceContent.usesProgressRing(family: "accessory_circular"))
+        for family in ["small", "medium", "large", "accessory_rectangular", "accessory_inline", "", "circular"] {
+            #expect(!ExtensionSurfaceContent.usesProgressRing(family: family))
+        }
+    }
+
+    @Test func progressRingClampsRatiosAndRejectsNonfiniteValues() {
+        for (input, expected) in [(0.0, 0.0), (0.375, 0.375), (1.0, 1.0), (-1.0, 0.0), (2.0, 1.0),
+                                  (Double.nan, 0.0), (Double.infinity, 0.0), (-Double.infinity, 0.0)] {
+            #expect(ExtensionSurfaceContent.progressRatio(input) == expected)
         }
     }
 

@@ -258,3 +258,67 @@ func TestTaskPlansByID(t *testing.T) {
 		t.Fatalf("unknown ids: %+v, %v", rows, err)
 	}
 }
+
+// TaskPlansMadeSince is the plans made inside the window that were started or dismissed, oldest first; an open plan
+// is no answer yet.
+func TestTaskPlansMadeSince(t *testing.T) {
+	ctx := context.Background()
+	d := open(t)
+	prefix := fmt.Sprintf("plan_since_%d", time.Now().UnixNano()) // task_plans is not truncated between tests
+	// Far ahead of every other test's plans, so only these are in the window.
+	base := time.Now().UTC().Truncate(time.Microsecond).Add(24 * time.Hour)
+	for i, state := range []string{"started", "started", "open", "dismissed", "started"} {
+		at := base.Add(time.Duration(i-1) * time.Minute) // the first is a minute before the window
+		p := TaskPlanRow{ID: fmt.Sprintf("%s_%d", prefix, i), Conversation: prefix, State: state, CreatedAt: at, UpdatedAt: at.Add(time.Hour),
+			Tasks: json.RawMessage(fmt.Sprintf(`[{"title": "Task %d", "owner_started": true}]`, i))}
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := d.TaskPlansMadeSince(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rows {
+		if r.Conversation == prefix {
+			got = append(got, strings.TrimPrefix(r.ID, prefix+"_")+":"+r.State)
+		}
+	}
+	if strings.Join(got, ",") != "1:started,3:dismissed,4:started" {
+		t.Fatalf("since = %v", got)
+	}
+	for _, r := range rows {
+		if r.ID == prefix+"_1" && (!r.CreatedAt.Equal(base) || !strings.Contains(string(r.Tasks), `"owner_started"`)) {
+			t.Fatalf("row = %+v", r)
+		}
+	}
+
+	// The queue uses the update window plus durable queue records: the first plan was created before base but updated
+	// inside it. A stale serialized queue survives a long outage; a stale plan without one stays excluded. The open plan
+	// is still excluded, and MadeSince above retains its independent creation-window result.
+	for _, suffix := range []string{"stale_queued", "stale_plain"} {
+		tasks := json.RawMessage(`[{"title": "Stale"}]`)
+		if suffix == "stale_queued" {
+			tasks = json.RawMessage(`[{"title": "Stale", "queue": {}}]`)
+		}
+		p := TaskPlanRow{ID: prefix + "_" + suffix, Conversation: prefix, State: "started", CreatedAt: base.Add(-2 * time.Hour),
+			UpdatedAt: base.Add(-2 * time.Hour), Tasks: tasks}
+		if err := d.CreateTaskPlan(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err = d.TaskPlansQueued(ctx, base.Add(30*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	for _, r := range rows {
+		if r.Conversation == prefix {
+			got = append(got, strings.TrimPrefix(r.ID, prefix+"_")+":"+r.State)
+		}
+	}
+	if strings.Join(got, ",") != "stale_queued:started,0:started,1:started,3:dismissed,4:started" {
+		t.Fatalf("queue candidates = %v", got)
+	}
+}

@@ -32,21 +32,27 @@ const (
 	SuggestReply      = "reply"      // one message to send
 	SuggestAgent      = "agent"      // an instruction for a new Agent
 	SuggestConclusion = "conclusion" // done: just read it
+	SuggestTodo       = "todo"       // a to-do to add: Text its title, Due when (#6480)
 )
 
 // InboxSuggestion is the manager's one current suggestion on an event; Version bumps with every new one and a
 // confirmation must name it.
 type InboxSuggestion struct {
-	Version   int         `json:"version"`
-	Kind      string      `json:"kind"`
-	Text      string      `json:"text"`
-	Note      string      `json:"note,omitempty"`
-	Handback  bool        `json:"handback"`
+	Version  int    `json:"version"`
+	Kind     string `json:"kind"`
+	Text     string `json:"text"`
+	Note     string `json:"note,omitempty"`
+	Handback bool   `json:"handback"`
+	// Due is when a to-do suggestion is due: a day (2006-01-02, all day) or a moment (RFC 3339); "" none.
+	Due       string      `json:"due,omitempty"`
 	MachineID string      `json:"machine_id,omitempty"`
 	Changes   []DocChange `json:"changes,omitempty"`
 	At        time.Time   `json:"at"`
 	// Cwd is where an agent suggestion's Agent starts (the tool's cwd; "" home): kept, not listed.
 	Cwd string `json:"cwd,omitempty"`
+	// MailTarget is the message a reply suggestion answered when it was created: kept, not listed. Reading that mail
+	// can leave an older unread one as the item's newest; confirmation must not silently answer that different one (#5471).
+	MailTarget *inboxMailTarget `json:"mail_target,omitempty"`
 	// Conversation is the conversation the event was handed to that handed this suggestion in (Hand to AI, inbox_handoff.go);
 	// nil for the event's processing conversation. What the user does with it is told there, not to the processing one.
 	Conversation *SessionRef `json:"conversation,omitempty"`

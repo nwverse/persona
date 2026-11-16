@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -35,6 +36,7 @@ import (
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", h.health)
+	h.passwordLoginRoutes(mux)
 	api := http.NewServeMux()
 	h.apiMux = api
 	if h.upd != nil {
@@ -55,8 +57,11 @@ func (h *Hub) routes() http.Handler {
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if em := extensionManager(r); em != "" { // an extension's token: its manager's cards only
-			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool { return cmp.Or(ix.Manager, assistantwire.AssistantID) != em })
+		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+			em := extensionManager(r)
+			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
+				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
+			})
 		}
 		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
 	})
@@ -65,12 +70,14 @@ func (h *Hub) routes() http.Handler {
 	h.phoneWriteRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
+	h.webPushRoutes(api)
 	h.live.routes(api)
 	h.metricsRoutesRelayed(api) // the monitoring is the manager's (devices_routes.go)
 	h.lockTestRoutes(api)
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
+	h.lnRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
 	h.lookUploadRoutes(api)
@@ -210,7 +217,14 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		if ext {
 			p, ok, p.extOpens, p.extScope, sure = h.authorizeExtension(r.Context(), tok, r)
 		} else {
-			p, ok = h.authenticate(r.Context(), tok)
+			var err error
+			if p, ok, err = h.lookupToken(r.Context(), tok); err != nil {
+				// The token store did not answer: no verdict on the token. A 401 would tell the app its credential is
+				// revoked (Android then forgets the hub), so say "try again" and don't count it against the source.
+				retryAfter(w, 5*time.Second)
+				h.securityError(w, r, http.StatusServiceUnavailable, codeTokenStoreUnavailable, 0)
+				return
+			}
 		}
 		if !ok && ext && !sure && (!public || h.proofVouches(r, proof, tok)) {
 			// A manager did not answer (timed out, not ready yet): no verdict on the token, so neither counted nor
@@ -352,7 +366,7 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: 200, lang: lang}
 		next.ServeHTTP(sw, r)
 		// Auth and ingress refusals are logged by securityError (masked, rate limited), WebSocket ones included.
-		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r.URL.Path) && time.Since(start) > 2*time.Second)) {
+		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r) && time.Since(start) > 2*time.Second)) {
 			path := loggedPath(r.URL.Path)
 			if client.Platform != "" {
 				h.logf("[%s] %s %s -> %d (%s) client=%q", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), client.Platform+"/"+client.Version)
@@ -382,11 +396,13 @@ func loggedPath(p string) string {
 	return p
 }
 
-// longLived requests (WebSockets, a plugin's sockets and streams, a forwarded port's connections: ports.go) are not
-// slow requests however long they last.
-func longLived(path string) bool {
+// longLived requests (WebSockets, a plugin's sockets and streams, a meeting's audio socket, a forwarded port's
+// connections: ports.go) are not slow requests however long they last.
+func longLived(r *http.Request) bool {
+	path := r.URL.Path
 	return path == "/api/v1/ws" || path == link.Path || path == link.StreamPath || path == bus.Path ||
-		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect")
+		strings.HasPrefix(path, "/api/v1/plugins/") || strings.HasPrefix(path, "/api/v1/extensions/") || strings.HasSuffix(path, "/connect") ||
+		isAssistantSocket(r)
 }
 
 // requestID keeps a client's id if it is a short token (it lands in logs), else makes one.
@@ -444,6 +460,13 @@ func (h *Hub) withMachine(fn func(http.ResponseWriter, *http.Request, *Machine))
 		if m == nil {
 			writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 			return
+		}
+		if m.conversationDeleted(r.PathValue("sid")) {
+			writeErrCode(w, http.StatusGone, "conversation_deleted", i18n.Err("assistant-conversation_delete.deleted"))
+			return
+		}
+		if sid := r.PathValue("sid"); sid != "" {
+			w = &conversationResponseWriter{ResponseWriter: w, machine: m, id: sid, header: w.Header().Clone()}
 		}
 		fn(w, r, m)
 	}
@@ -665,7 +688,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
+		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -684,29 +707,28 @@ const sessionsFlushAt = 32 << 10
 // bytes writeJSON gives for the stamped lists put together, encoded a session at a time and written out every
 // sessionsFlushAt bytes, so neither a copy of the lists nor the whole answer is held. A session that fails to encode
 // is left out, as a push leaves it out (encodeRows). The lists are only read.
+//
+// Each row goes out bounded (sessions_list.go legacyListCut): long texts cut and the task arrays left out — a fleet
+// of hundreds of agents made the whole-list answer hundreds of KB a pull, and a row's whole detail stays in the chat
+// routes. The scratch copy keeps the kept list unchanged.
 func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	var buf bytes.Buffer
 	buf.Grow(sessionsFlushAt + 8<<10)
 	buf.WriteString(`{"sessions":[`)
 	enc := json.NewEncoder(&buf) // escapes HTML, as writeJSON does
-	var scratch *proto.Session
+	var scratch proto.Session
 	n := 0
 	for _, l := range lists {
 		for i := range l.list {
-			s := &l.list[i]
-			if s.Manager != l.manager {
-				if scratch == nil {
-					scratch = new(proto.Session)
-				}
-				*scratch = *s
-				scratch.Manager, s = l.manager, scratch
-			}
+			scratch = l.list[i] // a plain struct copy: the slices point into the kept list, only nilled here
+			scratch.Manager = l.manager
+			legacyListCut(&scratch)
 			mark := buf.Len()
 			if n > 0 {
 				buf.WriteByte(',')
 			}
-			if enc.Encode(s) != nil {
+			if enc.Encode(&scratch) != nil {
 				buf.Truncate(mark)
 				continue
 			}
@@ -730,6 +752,7 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		Cwd             string `json:"cwd"`
 		Launcher        string `json:"launcher"`
 		AgentType       string `json:"agent_type,omitempty"`
+		WorkSession     bool   `json:"work_session,omitempty"`
 		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
 		Prompt          string `json:"prompt"`
 		ResumeSessionID string `json:"resume_session_id"`
@@ -740,6 +763,9 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		PermissionMode string `json:"permission_mode,omitempty"`
 		Effort         string `json:"effort,omitempty"`
 		Ultracode      *bool  `json:"ultracode,omitempty"`
+		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
+		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
+		Goal string `json:"goal,omitempty"`
 		// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
 		// else agent-<n>.
 		TabName string `json:"tab_name,omitempty"`
@@ -756,6 +782,11 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeBodyErr(w, err, err)
+		return
+	}
+	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
+		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
+		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
 		return
 	}
 	r = h.captureHumanSubmission(r, p.Prompt)
@@ -825,10 +856,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async))
+	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
 	defer cancel()
 	var res struct {
-		Session proto.Session `json:"session"`
+		Session      proto.Session `json:"session"`
+		LauncherNote string        `json:"launcher_note,omitempty"` // a default it lacks gave way to another (#4661)
+		// Instead: what an engine that runs only its own launchers ran in place of what was asked (#8140, the node's
+		// answer passed on); launcher_note says it.
+		Instead *proto.StartInstead `json:"instead,omitempty"`
 	}
 	raw, _ := json.Marshal(p)
 	params := map[string]any{}
@@ -839,7 +874,8 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
-	if err := h.agentStartParams(ctx, m, params, name); err != nil {
+	note, err := h.agentStartParams(ctx, m, params, name)
+	if err != nil {
 		var refused *startRefused
 		if errors.As(err, &refused) {
 			writeErr(w, 400, err)
@@ -848,15 +884,39 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
 	}
-	if err := m.call(ctx, "session.start", params, &res); err != nil {
+	method := "session.start"
+	if p.WorkSession {
+		method = devicewire.MethodStartWorkSession // An old node must refuse, never silently ignore strict start options.
+		if params["launcher"] != p.Launcher || (strings.TrimSpace(p.Model) != "" && params["model"] != strings.TrimSpace(p.Model)) {
+			writeErrCode(w, http.StatusConflict, "work_target_changed", errors.New("The selected launcher or model changed."))
+			return
+		}
+		if strings.TrimSpace(p.Model) == "" {
+			// In this picker "Launcher default" is the launcher's own model,
+			// even if Models › Agents happens to configure the same launcher.
+			delete(params, "model")
+			delete(params, "model_fingerprint")
+		}
+		if p.Effort == "" {
+			delete(params, "effort")
+		}
+		setWorkLauncherConfig(m, p.Launcher, params)
+	}
+	if err := m.call(ctx, method, params, &res); err != nil {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
 	}
+	// An engine that runs only its own launchers may have started one of the same kind in place of the launcher asked
+	// for (#8140): its health and a model's use go to the launcher that ran, not to the one that did not.
+	if res.Instead != nil && res.Instead.Launcher != "" && res.Session.Launcher != "" {
+		params["launcher"] = res.Session.Launcher
+	}
 	if !async {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
-	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) {
+	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) &&
+		(res.Instead == nil || res.Instead.Model == "") { // a model the launcher that ran does not offer did not run
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
 		if async {
 			// Acknowledged before it ran: the launcher's check and the agent coming up are still to come.
@@ -886,6 +946,10 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			res.Session.Todo = &proto.TodoRef{ID: p.TodoID, Title: linked.Title}
 		}
 	}
+	m.mu.Lock()
+	engine := proto.EngineNames[cmp.Or(p.Host, startEngine(m.info))]
+	m.mu.Unlock()
+	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
 	if async && p.TabName == "" {
 		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
@@ -918,10 +982,24 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		r.Error = err.Error()
 		var re *rpc.Error
 		if errors.As(err, &re) {
+			// Work picker refusals happen before the launcher runs. Counting
+			// them as failures could hide a working launcher from the picker.
+			if strings.HasPrefix(re.Code, "work_") {
+				return
+			}
 			r.Code, r.Data = re.Code, re.Data
 		}
 	}
 	h.asstOf(h.machineOwner(mid)).notify(assistantwire.EventStartEnded, r)
+}
+
+// startEngine is the host a machine's starts open in when they name none (its default engine host), as its node
+// reports it; "" from a node that reports none.
+func startEngine(info proto.NodeInfo) string {
+	if info.EngineHosts != nil && info.EngineHosts.Default != "" {
+		return info.EngineHosts.Default
+	}
+	return info.Engine
 }
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
@@ -1027,6 +1105,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.deletedConversationEventLocked(typ, b) {
+		return
+	}
 	if h.events == nil {
 		h.events = newEventLog()
 	}
@@ -1053,6 +1134,9 @@ func (h *Hub) toSubscribers(machineID, sessionID string, v any) {
 // URL's ?features= or in client_hello. v is encoded only once some client follows the session: most streamed deltas
 // are for sessions no app has open.
 func (h *Hub) toSubscribersWith(machineID, sessionID, feature string, v any) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.toSubscribersLocked(machineID, sessionID, feature, v)
@@ -1106,6 +1190,9 @@ type (
 // itemsToSubscribers fans new items out, without image data to clients that load images on demand. moreAfter marks
 // a producer's capped replay batch, whose remaining items the client must fetch.
 func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item, span itemSpan, moreAfter bool) {
+	if h.conversationDeleted(machineID, sessionID) {
+		return
+	}
 	if items == nil {
 		items = []proto.Item{}
 	}
@@ -1226,7 +1313,9 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		c.mu.Unlock()
 		for k := range subs {
 			if m := h.localMachine(k[0]); m != nil {
-				m.removeWatcher(k[1])
+				// Each unwatch on its own: one node slow to answer holds up neither the others nor what follows here.
+				m.watcherLeft(k[1])
+				go m.syncUnwatch(k[1])
 			}
 		}
 		h.terminalDrop(c)
@@ -1276,7 +1365,10 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			if c.delta {
 				h.snapshotSessions(c, m)
 			} else {
-				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": h.shown(m.cfg.ID, h.decorated(m))})
+				// The kept list, not decorated's copy of every row the manager listed: the archived rows told apart are
+				// never shown (#6836), and stamped copies only when a row lacks the manager.
+				shown := h.shown(m.cfg.ID, stamped(m.keptSessions(), h.machineOwner(m.cfg.ID)))
+				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": shown})
 			}
 		}
 	}
@@ -1394,6 +1486,10 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if m == nil {
 			return
 		}
+		if m.conversationDeleted(msg.SessionID) {
+			c.sendJSON(deletedConversationEvent(m.cfg.ID, msg.SessionID))
+			return
+		}
 		// Kept under the computer's own id, which is what its pushes carry (a page may have asked by an absorbed one).
 		key := [2]string{m.cfg.ID, msg.SessionID}
 		c.mu.Lock()
@@ -1407,9 +1503,16 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		}
 		c.mu.Unlock()
 		if !already {
-			m.addWatcher(ctx, msg.SessionID)
+			m.watcherJoined(msg.SessionID)
 		}
-		go h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
+		// backlog still goes after it, so nothing falls between the two.
+		go func() {
+			if !already {
+				m.syncWatch(ctx, msg.SessionID)
+			}
+			h.sendBacklog(ctx, c, m, msg.SessionID, msg.SinceSeq)
+		}()
 	case "unsubscribe":
 		m := h.localMachine(msg.MachineID)
 		if m == nil {
@@ -1421,7 +1524,8 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		delete(c.subs, key)
 		c.mu.Unlock()
 		if had {
-			m.removeWatcher(msg.SessionID)
+			m.watcherLeft(msg.SessionID)
+			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":
 		if c.role != roleFull { // runs tools on behalf of claude: not for an answer-only device
@@ -1459,9 +1563,14 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			// calls still reach this connection, but nothing is saved under a credential about to disappear.
 			return
 		}
+		// Its app reaches the hub: what the hub push-starts there is answered again (#7641). Off the read loop, as the
+		// tools' write. By its push id, which starts are claimed under; not deviceID above, which falls back to the credential.
+		h.live.phoneConnectedLater(msg.DeviceID, c.device)
 		h.setPhoneTools(db.PhoneToolRegistration{DeviceID: deviceID, Platform: msg.Platform, CredentialID: c.device, Tools: tools})
 	case "register_desktop":
 		h.registerDesktop(c, msg.DeviceName, msg.DeviceID)
+	case "unregister_desktop":
+		h.unregisterDesktop(c)
 	case "seen":
 		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
 			h.markSeen(m.cfg.ID, msg.SessionID)
@@ -1523,7 +1632,10 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			more = false
 		}
 		if b, err := marshalItems(out); err == nil {
-			c.queue(b)
+			if !m.queueConversationBacklog(sid, func() { c.queue(b) }) {
+				c.sendJSON(deletedConversationEvent(m.cfg.ID, sid))
+				return
+			}
 		}
 		if !more {
 			h.sendLiveText(c, m.cfg.ID, sid)

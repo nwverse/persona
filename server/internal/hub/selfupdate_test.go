@@ -239,11 +239,11 @@ func TestUpdateConfirmRemovesStagedDownload(t *testing.T) {
 			os.WriteFile(target, p.script, 0o755)
 			staged := filepath.Join(h.upd.dir, "202611021700")
 			for name, body := range map[string]string{
-				"personad-" + runtime.GOOS + "-" + runtime.GOARCH:                 string(p.script),
-				"personad-" + runtime.GOOS + "-" + runtime.GOARCH + ".gz":         "the download",
-				"nodes/personad-darwin-arm64":                                     "node for macs",
-				"nodes/personad-darwin-arm64.gz":                                  "its download",
-				"programs/personad-wechat-" + runtime.GOOS + "-" + runtime.GOARCH: "a program",
+				"personad-" + runtime.GOOS + "-" + runtime.GOARCH:                     string(p.script),
+				"personad-" + runtime.GOOS + "-" + runtime.GOARCH + ".gz":             "the download",
+				"nodes/personad-darwin-arm64":                                         "node for macs",
+				"nodes/personad-darwin-arm64.gz":                                      "its download",
+				"programs/persona-examplechat-" + runtime.GOOS + "-" + runtime.GOARCH: "a program",
 			} {
 				path := filepath.Join(staged, filepath.FromSlash(name))
 				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -338,7 +338,7 @@ func TestUpdateConfirmOrRollBack(t *testing.T) {
 	update.Save(update.PendingPath(h.upd.dir), pending)
 	var told []string
 	h.upd.notify = func(title, body string) { told = append(told, title) }
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if h.upd.view().Confirmed {
 		t.Fatal("confirmed before checking")
 	}
@@ -397,7 +397,7 @@ func TestUpdateConfirmLeavesAClaimedUpdateToTheWatchdog(t *testing.T) {
 	h.upd.edgeConfirmed = func() { told++ }
 	pending := update.Pending{FromBuild: 202611021500, ToBuild: 202611021700, Target: target, Prev: target + ".prev", Online: []string{"box"}, Auto: true}
 	update.Save(update.PendingPath(h.upd.dir), pending)
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	os.Rename(update.PendingPath(h.upd.dir), update.PendingPath(h.upd.dir)+".watch") // the watchdog's claim
 	h.upd.confirm(context.Background(), pending)
 	if h.upd.view().Confirmed || len(h.upd.settings.History) != 0 || told != 0 {
@@ -416,7 +416,7 @@ func TestUpdateBootTakesBackAWatchdogsClaim(t *testing.T) {
 		h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
 		pending.Target, pending.Prev = target, target+".prev"
 		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
-		if !h.upd.boot() || len(execs()) != 0 {
+		if !bootUpdater(t, h.upd) || len(execs()) != 0 {
 			t.Fatalf("the new build has no update to confirm (execd %v)", execs())
 		}
 		var back update.Pending
@@ -432,7 +432,7 @@ func TestUpdateBootTakesBackAWatchdogsClaim(t *testing.T) {
 		h, _, target, _ := updatingHub(t, p, "release")
 		pending.Target, pending.Prev = target, target+".prev"
 		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
-		if h.upd.boot() {
+		if bootUpdater(t, h.upd) {
 			t.Fatal("the old build thinks it has an update to confirm")
 		}
 		var rb update.RolledBack
@@ -451,7 +451,7 @@ func TestUpdateDirectDeployIsNotARollback(t *testing.T) {
 	h, _, target, execs := updatingHub(t, p, "release")
 	h.build = update.Make("deployed-202611021800", "release", "202611021800", p.srv.URL+"/dl")
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{FromBuild: 202611021500, ToBuild: 202611021700, Target: target, Prev: target + ".prev"})
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if _, err := os.Stat(update.RolledBackPath(h.upd.dir)); !os.IsNotExist(err) {
 		t.Fatal("a direct deploy was recorded as a rollback (its release would be marked bad)")
 	}
@@ -468,11 +468,11 @@ func TestUpdateStartsCountedOnce(t *testing.T) {
 	os.WriteFile(target+".prev", []byte("old"), 0o755)
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{ToBuild: 202611021700, Target: target, Prev: target + ".prev"})
 	for i := 1; i <= updateMaxStarts; i++ {
-		if !h.upd.boot() || len(execs()) != 0 {
+		if !bootUpdater(t, h.upd) || len(execs()) != 0 {
 			t.Fatalf("start %d went back already", i)
 		}
 	}
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if len(execs()) != 1 {
 		t.Fatal("start 4 did not go back")
 	}
@@ -485,7 +485,7 @@ func TestUpdateCrashLoopGoesBack(t *testing.T) {
 	h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
 	os.WriteFile(target+".prev", []byte("old"), 0o755)
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{ToBuild: 202611021700, Target: target, Prev: target + ".prev", Starts: updateMaxStarts})
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if b, _ := os.ReadFile(target); string(b) != "old" || len(execs()) != 1 {
 		t.Fatal("a crash loop did not go back")
 	}
@@ -510,7 +510,7 @@ func TestUpdateUnsavedStartCountGoesBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(h.upd.dir, 0o700) })
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if b, _ := os.ReadFile(target); string(b) != "old" || len(execs()) != 1 {
 		t.Fatalf("an unsaved start count kept the new version (execd %v)", execs())
 	}
@@ -849,16 +849,19 @@ func TestUpdateDockerSaysNewImage(t *testing.T) {
 	}
 }
 
-// A release with a program the hub runs beside it (personad-wechat): the program is checked and put next to the
+// A release with a program the hub runs beside it (persona-examplechat): the program is checked and put next to the
 // hub's binary with it, and going back takes it away again (it was new here).
 func TestUpdateSwapsPrograms(t *testing.T) {
+	programs := update.ProgramNames
+	update.ProgramNames = append(append([]string(nil), programs...), "persona-examplechat")
+	t.Cleanup(func() { update.ProgramNames = programs })
 	plat := runtime.GOOS + "-" + runtime.GOARCH
 	prog := []byte("#!/bin/sh\necho v2-202611021700\necho 'channel release, build 202611021700'\n")
 	pgz := gz(prog)
 	outer, inner := sha256.Sum256(pgz), sha256.Sum256(prog)
-	pf := update.File{Name: "personad-wechat-" + plat + ".gz", Size: int64(len(pgz)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
+	pf := update.File{Name: "persona-examplechat-" + plat + ".gz", Size: int64(len(pgz)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
 	p := newPublisherWith(t, "v2-202611021700", 202611021700, func(m *update.Manifest) {
-		m.Programs = map[string]map[string]update.File{"personad-wechat": {plat: pf}}
+		m.Programs = map[string]map[string]update.File{"persona-examplechat": {plat: pf}}
 	})
 	p.extra = map[string][]byte{"/dl/" + pf.Name: pgz}
 	h, _, target, execs := updatingHub(t, p, "release")
@@ -870,7 +873,7 @@ func TestUpdateSwapsPrograms(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the restart", func() bool { return len(execs()) == 1 })
-	placed := filepath.Join(filepath.Dir(target), "personad-wechat")
+	placed := filepath.Join(filepath.Dir(target), "persona-examplechat")
 	if b, _ := os.ReadFile(placed); !bytes.Equal(b, prog) {
 		t.Fatal("the program is not next to the hub's binary")
 	}
@@ -889,13 +892,16 @@ func TestUpdateSwapsPrograms(t *testing.T) {
 
 // A program's download that is not the release's build stops the update before anything is swapped.
 func TestUpdateRefusesAWrongProgram(t *testing.T) {
+	programs := update.ProgramNames
+	update.ProgramNames = append(append([]string(nil), programs...), "persona-examplechat")
+	t.Cleanup(func() { update.ProgramNames = programs })
 	plat := runtime.GOOS + "-" + runtime.GOARCH
 	prog := []byte("#!/bin/sh\necho v1-old\necho 'channel release, build 1'\n") // says another build
 	pgz := gz(prog)
 	outer, inner := sha256.Sum256(pgz), sha256.Sum256(prog)
-	pf := update.File{Name: "personad-wechat-" + plat + ".gz", Size: int64(len(pgz)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
+	pf := update.File{Name: "persona-examplechat-" + plat + ".gz", Size: int64(len(pgz)), SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}
 	p := newPublisherWith(t, "v2-202611021700", 202611021700, func(m *update.Manifest) {
-		m.Programs = map[string]map[string]update.File{"personad-wechat": {plat: pf}}
+		m.Programs = map[string]map[string]update.File{"persona-examplechat": {plat: pf}}
 	})
 	p.extra = map[string][]byte{"/dl/" + pf.Name: pgz}
 	h, _, target, execs := updatingHub(t, p, "release")
@@ -911,7 +917,7 @@ func TestUpdateRefusesAWrongProgram(t *testing.T) {
 	if b, _ := os.ReadFile(target); string(b) != "#!/bin/sh\necho old\n" {
 		t.Fatal("the hub's binary was swapped")
 	}
-	if !strings.Contains(h.upd.view().Error, "personad-wechat") {
+	if !strings.Contains(h.upd.view().Error, "persona-examplechat") {
 		t.Fatalf("error %q", h.upd.view().Error)
 	}
 }

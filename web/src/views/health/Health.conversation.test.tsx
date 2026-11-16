@@ -21,7 +21,9 @@ vi.mock("./reports", async (orig) => ({
   ...(await orig<typeof import("./reports")>()),
   startHealthConversation: () => (hub.started++, new Promise(() => {})),
 }));
-vi.mock("../chat/ChatView", () => ({ ChatView: ({ mid, sid }: { mid: string; sid: string }) => <p data-chat>{`${mid}/${sid}`}</p> }));
+vi.mock("../chat/ChatView", () => ({
+  ChatView: ({ mid, sid, headerActions, placeholder }: { mid: string; sid: string; headerActions?: React.ReactNode; placeholder?: string }) => <div><p data-chat data-placeholder={placeholder}>{`${mid}/${sid}`}</p>{headerActions}</div>,
+}));
 
 import { Health } from "./Health";
 import { t } from "../../i18n";
@@ -53,13 +55,48 @@ describe("the health page's box", () => {
   it("takes no second message while a conversation is starting", async () => {
     hub.answers.push(listed);
     localStorage.setItem("draft:health-new", "first question");
-    act(() => root.render(<Health onToggleSidebar={() => {}} />));
+    act(() => root.render(<Health fresh onToggleSidebar={() => {}} />));
     await flush();
     const send = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-composer.send")}"]`)!;
     await act(async () => send.click());
     await flush();
     expect(hub.started).toBe(1);
     expect(host.querySelector("textarea")!.disabled).toBe(true);
+  });
+
+  it("keeps the home page alive when a suggestion's draft write hits a full localStorage", async () => {
+    hub.answers.push(listed);
+    localStorage.clear();
+    const quotaError = () => {
+      const err = new Error("QuotaExceededError");
+      err.name = "QuotaExceededError";
+      throw err;
+    };
+    const original = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key: string, value: string) {
+      if (key === "draft:health-new") quotaError();
+      return original.call(this, key, value);
+    });
+    const errors: string[] = [];
+    const onError = (e: ErrorEvent) => {
+      errors.push(e.message);
+      e.preventDefault(); // keep the jsdom console clean; the failure is asserted below
+    };
+    window.addEventListener("error", onError);
+    try {
+      act(() => root.render(<Health fresh onToggleSidebar={() => {}} />));
+      await flush();
+      const suggestion = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(t("health.suggestion_sleep")))!;
+      expect(suggestion).toBeTruthy();
+      expect(() => act(() => suggestion.click())).not.toThrow();
+      await flush();
+      expect(errors).toEqual([]); // a raw localStorage throw escapes React as a window error; the helper swallows it
+      expect(localStorage.getItem("draft:health-new")).toBeNull(); // the quota failure was swallowed, not surfaced
+      expect(host.querySelector("textarea")).not.toBeNull(); // the page and its composer stay mounted
+    } finally {
+      window.removeEventListener("error", onError);
+      spy.mockRestore();
+    }
   });
 });
 
@@ -75,6 +112,13 @@ describe("a health conversation", () => {
     expect(host.querySelector("[data-chat]")?.textContent).toBe("mac/h1");
   });
 
+  it("asks health questions in its box, as the space's home does, not the main chat's words", async () => {
+    hub.answers.push(listed);
+    act(() => root.render(<Health sid="h1" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-chat]")?.getAttribute("data-placeholder")).toBe(t("health.ask_placeholder"));
+  });
+
   it("reads the list again on the next hello", async () => {
     hub.answers.push(failing, listed);
     act(() => root.render(<Health sid="h1" onToggleSidebar={() => {}} />));
@@ -83,5 +127,39 @@ describe("a health conversation", () => {
     act(() => hub.listeners.get("hello")?.forEach((l) => l()));
     await flush();
     expect(host.querySelector("[data-chat]")?.textContent).toBe("mac/h1");
+  });
+});
+
+// Entering Health (#4329): back in the latest conversation, as Codex does; the new conversation page when there is none;
+// New in a conversation's header opens that page.
+describe("entering Health", () => {
+  const conv = (session_id: string, updated_at: string) => ({ session_id, updated_at, title: session_id, space: "health" });
+
+  beforeEach(() => history.replaceState(null, "", "/health"));
+
+  it("opens the latest health conversation, in place of /health", async () => {
+    const before = history.length;
+    hub.answers.push(() => Promise.resolve({ machine_id: "mac", conversations: [conv("old", "2026-11-01T08:00:00Z"), conv("latest", "2026-11-11T08:00:00Z")] }));
+    act(() => root.render(<Health onToggleSidebar={() => {}} />));
+    await flush();
+    expect(location.pathname).toBe("/health/latest");
+    expect(history.length).toBe(before); // replaced: Back does not come back to /health and bounce
+  });
+
+  it("opens the new conversation page when the space has none", async () => {
+    hub.answers.push(listed);
+    act(() => root.render(<Health onToggleSidebar={() => {}} />));
+    await flush();
+    expect(location.pathname).toBe("/health/new");
+  });
+
+  it("New in a health conversation opens the new conversation page; the clock lists the past ones", async () => {
+    hub.answers.push(() => Promise.resolve({ machine_id: "mac", conversations: [conv("h1", "2026-11-11T08:00:00Z"), conv("h2", "2026-11-10T08:00:00Z")] }));
+    act(() => root.render(<Health sid="h1" onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector(`button[aria-label="${t("health.history")}"]`)).not.toBeNull();
+    const fresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("health.new_chat")}"]`)!;
+    await act(async () => fresh.click());
+    expect(location.pathname).toBe("/health/new");
   });
 });

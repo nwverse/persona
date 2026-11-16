@@ -125,7 +125,7 @@ func TestAssistantCompactionRPCAndSpare(t *testing.T) {
 				t.Fatalf("stored scope %v", st.IsMain)
 			}
 			n.spare = p
-			if main && n.adoptSpare(p.cwd, p.launcher, modelExecution{}) != nil {
+			if main && n.adoptSpare(p.cwd, p.launcher, modelExecution{ConfigDir: p.model.ConfigDir}) != nil { // only the scope differs
 				t.Fatal("a main process was adopted for an ordinary conversation")
 			}
 		})
@@ -150,8 +150,20 @@ func TestAssistantCompactionSettingsAndSDK(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := s["env"].(map[string]any)
-	if env["KEEP"] != "yes" || env["LAUNCHER"] != "yes" || env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || s["hooks"] == nil || s["permissions"] == nil {
+	if env["KEEP"] != "yes" || env["LAUNCHER"] != "yes" || env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "400000" || env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] != "1000000" || env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] != "1" || s["hooks"] == nil || s["permissions"] == nil {
 		t.Fatalf("merged settings %v", s)
+	}
+	plugins, _ := s["enabledPlugins"].(map[string]any)
+	for _, name := range []string{"feature-dev@claude-plugins-official", "frontend-design@claude-plugins-official", "mattpocock-skills@claude-plugins-official", "gopls-lsp@claude-plugins-official", "context7@claude-plugins-official", "claude-hud@claude-hud"} {
+		if plugins[name] != false {
+			t.Errorf("development plugin %s is not disabled: %v", name, s["enabledPlugins"])
+		}
+	}
+	overrides, _ := s["skillOverrides"].(map[string]any)
+	for _, name := range []string{"design", "doctor", "plugin-authoring", "ui-ux-pro-max"} {
+		if overrides[name] != "off" {
+			t.Errorf("development skill %s is not hidden: %v", name, s["skillOverrides"])
+		}
 	}
 	start := sdkStart{settings: path, mcp: map[string]any{}, compaction: &c, env: map[string]string{"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200000", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}}
 	opts, err := start.options("claude")
@@ -212,7 +224,7 @@ func TestAssistantShellLauncherCompaction(t *testing.T) {
 	} {
 		for _, main := range []bool{true, false} {
 			t.Run(tt.name+"/main="+strconv.FormatBool(main), func(t *testing.T) {
-				fakeClaudeHome(t, "env > \"$HOME/claude-env\"\nread line\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+				fakeClaudeHome(t, "env > \"$HOME/claude-env.part\"\nmv \"$HOME/claude-env.part\" \"$HOME/claude-env\"\nread line\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
 				for _, k := range []string{"CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"} {
 					t.Setenv(k, "")
 					os.Unsetenv(k)
@@ -257,8 +269,65 @@ func TestAssistantShellLauncherCompaction(t *testing.T) {
 						t.Fatalf("claude saw %s=%q, want %q (the launcher's own)", k, got, want)
 					}
 				}
+				// Only Persona's own tools are eagerly loaded (mcpserver's alwaysLoad marker); other MCP servers
+				// keep the ordinary ToolSearch deferral instead of a process-wide disable (#5838).
+				if got := envValue(lines, "ENABLE_TOOL_SEARCH"); got != "" {
+					t.Fatalf("ToolSearch was disabled process-wide: %q", got)
+				}
 			})
 		}
+	}
+}
+
+// A launcher that writes its --settings to a temporary file for each start and removes it when claude exits: the
+// probe sees a path that is gone by the time the start reads it. The conversation still starts, on Persona's
+// settings, and claude gets the launcher's own file from the launcher as before. A launcher file that is there but
+// does not read still stops the start.
+func TestAssistantLauncherTemporarySettings(t *testing.T) {
+	fakeClaudeHome(t, "printf '%s\\n' \"$@\" > \"$HOME/claude-args.part\"\nmv \"$HOME/claude-args.part\" \"$HOME/claude-args\"\nread line\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	home := os.Getenv("HOME")
+	rc := `function testtemp { local f; f=$(mktemp "$HOME/launcher-XXXXXX"); printf '%s' '{"env":{"LAUNCHER":"yes"}}' > "$f"; ( trap 'rm -f -- "$f"' EXIT; command claude "$@" --settings "$f" ) }`
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(rc+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := codexTestNode(t)
+	n.dir = t.TempDir()
+	withFakeHub(t, n)
+	p, err := n.spawnClaude("11111111-2222-3333-4444-555555555555", t.TempDir(), "testtemp", false, false, modelExecution{Model: "opus", IsMain: true})
+	if err != nil {
+		t.Fatalf("a launcher whose --settings is a temporary file stopped the start: %v", err)
+	}
+	defer n.stopAssistant(p.id)
+	var seen []byte
+	waitFor(t, "claude to write its arguments", func() bool {
+		seen, _ = os.ReadFile(filepath.Join(home, "claude-args"))
+		return len(seen) > 0
+	})
+	if last := settingsArg(strings.Split(strings.TrimSpace(string(seen)), "\n")); !strings.HasPrefix(filepath.Base(last), "launcher-") {
+		t.Fatalf("claude's last --settings is %q, not the launcher's own file: %q", last, seen)
+	}
+
+	settings := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"env":{"KEEP":"yes"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := n.assistantCompactionSettings("test-id", n.home, settings, assistantCompaction{ownSettings: filepath.Join(t.TempDir(), "gone.json")})
+	if err != nil {
+		t.Fatalf("a launcher settings file that is gone: %v", err)
+	}
+	s, err := readLauncherSettings(path, n.home, n.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env, _ := s["env"].(map[string]any); env["KEEP"] != "yes" || env["CLAUDE_CODE_DISABLE_BUNDLED_SKILLS"] != "1" {
+		t.Fatalf("Persona's settings without the launcher's: %v", s)
+	}
+	broken := filepath.Join(t.TempDir(), "broken.json")
+	if err := os.WriteFile(broken, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.assistantCompactionSettings("test-id", n.home, settings, assistantCompaction{ownSettings: broken}); err == nil {
+		t.Fatal("a launcher settings file that does not read was ignored")
 	}
 }
 

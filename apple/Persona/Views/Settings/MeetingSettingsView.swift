@@ -4,28 +4,58 @@ import SwiftUI
 /// Settings › Meetings (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): the role every meeting recording
 /// starts with, kept on the hub (`meeting_attendance_default`, Off until changed), and what Persona may say in front of
 /// others. Each recording can still pick its own role and session (the Recordings page). Shown only by a hub that offers
-/// attending.
+/// attending. A hub with hub transcription (#3862 phase 5) adds how meetings are transcribed, its speech service, the
+/// glossary and this iPhone's Wi-Fi rule (`MeetingTranscriptionSettingsSections`).
 struct MeetingSettingsView: View {
     @Environment(AppModel.self) private var model
+    @State private var capturedAPI: APIClient?
+    @State private var role: MeetingAttendance?
+    @State private var saving = false
+    /// Hub transcription's settings, made once the page shows (its model reads this phone's Wi-Fi rule: P3).
+    @State private var transcription: MeetingTranscriptionSettings?
+    /// This phone's experiment (#8731 B2): echo cancellation turned on with the speaker mid-meeting.
+    @StoredValue(MeetingRecorder.echoWithSpeakerKey) private var echoWithSpeaker = false
 
     var body: some View {
         SettingsForm {
+            if MeetingAttendees.conversation(model) {
+                // Persona is someone a meeting invites (#8731, D3): one switch, off by default, the same hub field
+                // (off, or listener; a participant default stays one and reads as on).
+                Section {
+                    Toggle(isOn: Binding(get: { role?.answers ?? false }, set: { on in Task { await save(on ? .listener : .off) } })) {
+                        Text("Invite Persona Automatically")
+                    }
+                    .accessibilityIdentifier("settings-meeting-invite")
+                    .disabled(role == nil || saving)
+                } header: {
+                    Text("Persona in Meetings")
+                } footer: {
+                    Text(role?.answers == true
+                         ? String(localized: "Every meeting starts with Persona in it, answering on screen. Remove it from a meeting on the Meetings page.")
+                         : String(localized: "A meeting starts with only you. Invite Persona on the Meetings page when you need it; the minutes and highlights come either way."))
+                }
+            } else {
             Section {
                 Picker(String(localized: "Persona in Meetings"), selection: Binding(
-                    get: { MeetingAttendees.defaultRole(model) },
-                    set: { role in Task { await model.setMeetingAttendanceDefault(role) } })) {
-                    ForEach(MeetingAttendance.allCases, id: \.self) { Text($0.title).tag($0) }
+                    get: { role ?? .off },
+                    set: { role in Task { await save(role) } })) {
+                    ForEach(MeetingAttendance.choices, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
                 .accessibilityIdentifier("settings-meeting-attendance")
+                .disabled(role == nil || saving)
             } header: {
                 Text("Persona in Meetings")
             } footer: {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    Text(MeetingAttendees.defaultRole(model).detail)
+                    if let role { Text(role.detail) }
                     Text("Each meeting recording starts with this. To change it for one meeting, pick another on the Recordings page before you start.")
                 }
+            }
+            }
+            if let transcription, transcription.offered, let values = transcription.values {
+                MeetingTranscriptionSettingsSections(settings: transcription, values: values)
             }
             Section {
                 Label("Answers only from meeting material: earlier minutes, project progress and who owns a to-do.", systemImage: Theme.Icon.meeting)
@@ -37,11 +67,46 @@ struct MeetingSettingsView: View {
                 Text("The hub holds Persona to these limits in a meeting, whatever it is asked.")
             }
             .font(Theme.Font.secondary)
+            if MeetingAttendees.conversation(model) {
+                // Off until a phone has measured how long the microphone stops and how far-off voices sound with it.
+                Section {
+                    Toggle(isOn: $echoWithSpeaker) { Text("Echo Cancellation with the Speaker") }
+                        .accessibilityIdentifier("settings-meeting-echo-speaker")
+                } header: {
+                    Text("Experimental [Meeting Settings]")
+                } footer: {
+                    Text("Turning on the speaker during a meeting stops the microphone for a moment.")
+                }
+            }
         }
         .themedPage()
         .navigationTitle(String(localized: "Meetings"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { if model.assistantConfig == nil { await model.refreshAssistant() } }
+        .task {
+            await load()
+            if transcription == nil { transcription = MeetingTranscriptionSettings(deps: .live) }
+            await transcription?.load()
+        }
+    }
+
+    private func load() async {
+        if capturedAPI == nil { capturedAPI = model.api?.currentAssistantSettings() }
+        guard let api = capturedAPI else { return }
+        do {
+            let settings = try await api.assistant()
+            role = settings.meetingAttendanceDefault.flatMap(MeetingAttendance.init(rawValue:)) ?? .off
+        } catch { model.show(error) }
+    }
+
+    private func save(_ next: MeetingAttendance) async {
+        guard !saving, let api = capturedAPI else { return }
+        saving = true
+        defer { saving = false }
+        do {
+            _ = try await api.setAssistant(meetingAttendanceDefault: next.rawValue)
+            role = next
+            if api.sameSettingsScope(as: model.api) { await model.refreshAssistant() }
+        } catch { model.show(error) }
     }
 }
 #endif

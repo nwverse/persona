@@ -1,10 +1,13 @@
 package hub
 
 import (
+	"cmp"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -33,10 +36,65 @@ func (w pushWants) fn() func(NotifyPrefs) bool {
 // devices: a member's computers are the center's machines. owner is the manager that asked for it: the devices that
 // turned its pushes off get none (NotifyPrefs.MutedManagers).
 func (h *Hub) notifyDone(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants) {
-	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
+	h.notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text, wants, "", "", pushPolicy{level: levelFor(kind, "")})
+}
+
+// pushOutcome is where one push went: the devices it was handed to now (a push route, a ws_notify connection or a
+// browser's Web Push), the devices that could take this kind before their settings decided, the offline devices that
+// keep it for their next connection (notifyring.go), and the ln-mode reason the push was held ("" when it was not).
+// None of these is a delivery receipt.
+type pushOutcome struct {
+	devices, reachable, kept int
+	held                     string
+}
+
+// reason is why nothing took the push now ("" when a device did): "no_device" when no device could take it,
+// "filtered" when every one that could turned it off, as POST /api/v1/notify answers.
+func (o pushOutcome) reason() string {
+	switch {
+	case o.devices > 0:
+		return ""
+	case o.reachable > 0:
+		return "filtered"
+	}
+	return "no_device"
+}
+
+// notifyDoneUnder is notifyDone with the push's apns-collapse-id ("": one of its own) and the recording it is about
+// ("": none; assistantwire.Notification.RecordingID), which the push and the notify carry as `recording_id`. It returns
+// where the push went, with the ln-mode reason it was held, so the assistant can tell the model whether a notify_user
+// notice reached a device, the briefing or nothing.
+func (h *Hub) notifyDoneUnder(owner, kind, machineID, machine, sessionID, title, text string, wants pushWants, collapseID, recordingID string, policy pushPolicy) pushOutcome {
+	build := func(l i18n.Lang) map[string]any {
+		p := donePayloadIn(l, machineID, machine, sessionID, title, text)
+		if recordingID != "" {
+			p["recording_id"] = recordingID
+		}
+		return p
+	}
 	h.emitToExtensions(owner, "agent.finished", map[string]any{"machine_id": machineID, "machine": machine, "session_id": sessionID, "title": title})
-	h.push.sendFrom(owner, build, "", wants.fn(), wants.quiet(), nil)
-	h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	policy.manager, policy.title, policy.body = owner, title, text
+	pushSelected, pushReachable, heldReason := h.push.sendFromPolicy(owner, policy, build, collapseID, wants.fn(), wants.quiet(), nil, nil)
+	ws := h.notifyWSFrom(owner, kind, build, wants.fn(), wants.quiet())
+	return pushOutcome{devices: pushSelected + ws.selected, reachable: pushReachable + ws.reachable, kept: ws.kept, held: heldReason}
+}
+
+// managerPushCollapseID is the apns-collapse-id of manager's push with notification id (assistantwire.Notification.ID;
+// "" without one): the same push asked for again once the hub no longer remembers handing it over (handedOverFor)
+// takes the place of the one the phone shows instead of adding a second. A hash of the manager and the id, so it
+// replaces only that manager's push of that id: never a card's, a decision's (td_), a notify API alert, an extension's
+// push or the hub's own.
+func managerPushCollapseID(manager, id string) string {
+	if id == "" {
+		return ""
+	}
+	manager = cmp.Or(manager, assistantwire.AssistantID)
+	sum := sha256.New()
+	sum.Write([]byte("push\x00"))
+	sum.Write(binary.AppendUvarint(nil, uint64(len(manager))))
+	sum.Write([]byte(manager))
+	sum.Write([]byte(id))
+	return "push:" + hex.EncodeToString(sum.Sum(nil)[:16])
 }
 
 // notifyReply reminds the devices that take "needs you" pushes of an agent still waiting on the user's answer (#5096).
@@ -45,10 +103,28 @@ func (h *Hub) notifyDone(owner, kind, machineID, machine, sessionID, title, text
 // finished notifications of seen sessions when it starts, and a reminder is about a seen one). owner is the manager
 // that asked for it, as for notifyDone.
 func (h *Hub) notifyReply(owner, machineID, machine, sessionID, title, text string) {
+	h.notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, "")
+}
+
+// notifyReplyKeyed is notifyReply with the manager's related key for the question it waits on (low-distraction mode keeps one key
+// quiet for 12 hours after it rang): reminders of the same question merge, a new question of the same agent rings.
+// "" (an older manager) keys by the session and what it asks.
+func (h *Hub) notifyReplyKeyed(owner, machineID, machine, sessionID, title, text, key string) {
 	build := func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }
 	wants := pushWants{Kind: "input"}
-	h.push.sendFrom(owner, build, "", wants.fn(), wants.quiet(), nil)
+	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: replyKey(sessionID, text, key), title: title, body: text}
+	h.push.sendFromPolicy(owner, policy, build, "", wants.fn(), wants.quiet(), nil, nil)
 	h.notifyWSFrom(owner, "reply", build, wants.fn(), wants.quiet())
+}
+
+// replyKey is the related key of a reply reminder: the manager's when it named one, else the session and a digest of
+// the question, so one agent's second question is not taken for a repeat of its first.
+func replyKey(sessionID, text, given string) string {
+	if given = strings.TrimSpace(given); given != "" {
+		return given
+	}
+	sum := sha256.Sum256([]byte(sessionID + "\x00" + strings.TrimSpace(text)))
+	return "reply:" + sessionID + ":" + hex.EncodeToString(sum[:8])
 }
 
 // notifyDecide pushes a to-do whose conclusion waits for the owner's decision and recommends an option (#2056) to the
@@ -62,28 +138,52 @@ func (h *Hub) notifyDecide(owner, machineID, machine, sessionID, title, text str
 	}
 	wants := pushWants{Kind: "input"}
 	sum := sha256.Sum256([]byte("todo_decide\x00" + todo.ID))
-	h.push.sendFrom(owner, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil)
+	// One key a round: the same decision does not ring twice in 12 hours, but a new round of it (asked again) does.
+	policy := pushPolicy{level: assistantwire.LevelP0, relatedKey: "todo:" + todo.ID + "@" + todo.AskedAt.UTC().Format(time.RFC3339Nano),
+		title: title, body: text}
+	h.push.sendFromPolicy(owner, policy, build, "td_"+hex.EncodeToString(sum[:12]), wants.fn(), wants.quiet(), nil, nil)
 	h.notifyWSFrom(owner, "assistant", build, wants.fn(), wants.quiet())
 }
 
 // notifyInteraction pushes a new card. linkCovered: owner says its Persona Link summary rings for this card
 // (assistantwire.Notification.LinkCovered).
 func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine string, linkCovered bool) {
+	h.notifyInteractionAt(owner, ix, machine, linkCovered, "", "")
+}
+
+// notifyInteractionAt is notifyInteraction with the manager's push level and related key for low-distraction mode (push_quiet.go):
+// "" is a card's own, P0 keyed by the card. A supervisor's escalation names P1 when what it asks is not the owner's
+// alone, and low-distraction mode then holds it for the "Needs you" list instead of alerting.
+func (h *Hub) notifyInteractionAt(owner string, ix proto.Interaction, machine string, linkCovered bool, level, key string) {
+	switch level {
+	case assistantwire.LevelP0, assistantwire.LevelP1, assistantwire.LevelP2:
+	default:
+		level = assistantwire.LevelP0 // none, or one this hub does not know: a card interrupts
+	}
+	if key = strings.TrimSpace(key); key == "" {
+		key = "ix:" + ix.ID
+	}
 	build := func(l i18n.Lang) map[string]any { return interactionPayloadIn(l, ix, machine) }
+	summary := ix.Summary
+	if ix.Private { // a Just me turn's card: what it asks stays in the app
+		summary = ""
+	}
 	h.emitToExtensions(owner, "agent.needs_you", map[string]any{"machine_id": ix.MachineID, "machine": machine, "session_id": ix.SessionID,
-		"interaction_id": ix.ID, "kind": ix.Kind, "summary": ix.Summary})
+		"interaction_id": ix.ID, "kind": ix.Kind, "summary": summary})
 	wants := pushWants{Kind: "input"}
 	if ix.Kind == proto.IxElicitation {
 		// Only what can show an MCP form or link: the phones that registered for one (#2433; a tap opens the card,
 		// the push has no buttons) and the connections that declared it.
-		h.push.sendCard(owner, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
+		policy := pushPolicy{level: level, relatedKey: key, title: summary}
+		h.push.sendCard(owner, policy, build, ix.ID, wants.fn(), wants.quiet(), takesElicitation)
 		h.notifyWSFrom(owner, "interaction", build, wants.fn(), wants.quiet(), "elicitation")
 	} else {
 		// A card owner's Persona Link summary rings for: "Phone Muted" holds it back while one of owner's Persona Link
 		// desktops is there too (desktops.go); which cards those are is owner's to say. The desktop app's online check
 		// follows in sendCard and notifyWSFrom.
 		fn := alertWanted(wants.fn(), linkCovered && h.linkDesktopOnline(owner))
-		h.push.sendCard(owner, build, ix.ID, fn, wants.quiet(), nil)
+		policy := pushPolicy{level: level, relatedKey: key, title: summary}
+		h.push.sendCard(owner, policy, build, ix.ID, fn, wants.quiet(), nil)
 		h.notifyWSFrom(owner, "interaction", build, fn, wants.quiet())
 	}
 }
@@ -93,10 +193,10 @@ func (h *Hub) notifyInteraction(owner string, ix proto.Interaction, machine stri
 // hours do to it (quiethours.go): skipped, or marked "quiet" for the client to post without a sound. manager is the
 // one that asked for it: a device that turned that manager's pushes off (NotifyPrefs.MutedManagers) gets none, as with
 // its push (Pusher.sendFrom); "" is the hub's own, for every device wants takes. Returns the selected count and the
-// count of capable connections before preferences are applied; neither is a client delivery receipt. A device without a
-// push route and without a ws_notify socket now keeps what its settings take for its next connection (notifyring.go);
-// that is not counted.
-func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(NotifyPrefs) bool, rule quietRule, required ...string) (selected, reachable int) {
+// count of capable connections before preferences are applied, each with the browsers its Web Push went to (or could
+// go to); neither is a client delivery receipt. A device without a push route and without a ws_notify socket now keeps
+// what its settings take for its next connection (notifyring.go): kept counts those, apart from selected.
+func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(NotifyPrefs) bool, rule quietRule, required ...string) wsReach {
 	msgs := map[i18n.Lang]map[string]any{}
 	msgIn := func(l i18n.Lang) map[string]any {
 		if m, ok := msgs[l]; ok {
@@ -147,6 +247,7 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 		quiet = rule != quietNone && prefs.Quiet.activeAt(now, loc)
 		return !(quiet && rule == quietSkip), quiet
 	}
+	var reach wsReach
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	live := map[string]bool{} // the devices with a ws_notify socket now
@@ -158,7 +259,7 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 		if len(required) > 0 && !c.has(required[0]) {
 			continue
 		}
-		reachable++
+		reach.reachable++
 		ok, quiet := wantsOn(c.device)
 		if !ok {
 			continue
@@ -166,10 +267,19 @@ func (h *Hub) notifyWSFrom(manager, kind string, build localized, wants func(Not
 		if b := msgFor(c.lang(), quiet); b != nil {
 			c.queue(b)
 		}
-		selected++
+		reach.selected++
 	}
-	h.ringNotify(live, required, wantsOn, msgIn, msgFor)
-	return selected, reachable
+	reach.kept = h.ringNotify(live, required, wantsOn, msgIn, msgFor)
+	sent, capable := h.webPushNotify(kind, required, wantsOn, msgIn) // the browsers with no page open (webpush.go)
+	reach.selected += sent
+	reach.reachable += capable
+	return reach
+}
+
+// wsReach is where notifyWSFrom put one notify event: selected and reachable as it says, and kept, the offline
+// devices that keep it for their next connection.
+type wsReach struct {
+	selected, reachable, kept int
 }
 
 func notifyMessage(kind string, payload map[string]any) map[string]any {
@@ -192,6 +302,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	}
 	if td, ok := payload["todo"]; ok { // a decision's push (decidePayloadIn)
 		msg["todo"] = td
+	}
+	if id, ok := payload["recording_id"]; ok { // a meeting's minutes (notifyDoneUnder)
+		msg["recording_id"] = id
 	}
 	return msg
 }

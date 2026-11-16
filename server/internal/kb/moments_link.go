@@ -186,7 +186,7 @@ func (e *Engine) judgeMoments(ctx context.Context, p *Project, cands []*MomentPo
 	}
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.moments").JSONMax(cctx, prompts.RenderKBMomentsLink(prompts.KBOwner{Owner: e.Owner}),
+	if err := e.modelFor("kb.moments").JSONMax(cctx, prompts.RenderKBMomentsLink(prompts.KBOwner{Owner: e.ownerName()}),
 		prompts.RenderKBMomentsLinkInput(in), 3000, &d); err != nil {
 		return 0, err
 	}

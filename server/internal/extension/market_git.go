@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,11 +66,14 @@ func (m *Market) git(ctx context.Context, dir string, args ...string) error {
 	}
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false")
+	cmd.Env = m.gitEnvironment()
 	if m.Token != "" {
 		u, err := url.Parse(m.Spec.URL)
 		if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(m.Token, "\r\n") {
 			return i18n.Err("extension-market_security.git_token")
+		}
+		if err := gitReadsConfigEnv(ctx); err != nil {
+			return err
 		}
 		// Environment config avoids argv, clone URLs, and persisted .git/config secrets.
 		header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+m.Token))
@@ -93,10 +97,63 @@ func (m *Market) git(ctx context.Context, dir string, args ...string) error {
 		if ctx.Err() != nil {
 			msg = i18n.T(i18n.Default, "extension-status.git_timeout")
 		}
+		if m.UpstreamProxy != nil {
+			msg = strings.ReplaceAll(msg, m.UpstreamProxy.String(), m.UpstreamProxy.Redacted())
+			if m.UpstreamProxy.User != nil {
+				if password, ok := m.UpstreamProxy.User.Password(); ok && password != "" {
+					msg = strings.ReplaceAll(msg, password, "xxxxx")
+				}
+			}
+		}
 		if i := strings.LastIndex(msg, "\n"); i >= 0 {
 			msg = strings.TrimSpace(msg[i+1:])
 		}
 		return fmt.Errorf("git %s：%s", args[0], msg)
+	}
+	return nil
+}
+
+// gitEnvironment carries an explicit marketplace proxy to an HTTPS clone without changing the manager's own
+// environment. NO_PROXY is cleared so an explicit proxy cannot silently turn into a direct connection.
+func (m *Market) gitEnvironment() []string {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false")
+	if m.UpstreamProxy == nil || !strings.HasPrefix(m.Spec.URL, "https://") {
+		return env
+	}
+	proxy := m.UpstreamProxy.String()
+	return append(env,
+		"HTTP_PROXY="+proxy, "http_proxy="+proxy,
+		"HTTPS_PROXY="+proxy, "https_proxy="+proxy,
+		"NO_PROXY=", "no_proxy=")
+}
+
+// gitVersion reads "git version 2.30.2" (also "… (Apple Git-146)", "….windows.1").
+var gitVersion = lazyre.New(`^git version (\d+)\.(\d+)`)
+
+// gitVersionOutput runs `git version`; a variable so tests can stand in for an older git.
+var gitVersionOutput = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "git", "version").Output()
+}
+
+// gitReadsConfigEnv refuses a token clone on a git older than 2.31. A token's header, the refused redirects and the
+// cleared credential helper reach git only through GIT_CONFIG_COUNT, which an older git ignores without a word: the
+// clone would then run without them and fail with a misleading request error.
+func gitReadsConfigEnv(ctx context.Context) error {
+	out, err := gitVersionOutput(ctx)
+	if errors.Is(err, exec.ErrNotFound) {
+		return i18n.Err("extension-market_git.git_missing")
+	}
+	if err != nil {
+		return fmt.Errorf("git version: %w", err)
+	}
+	m := gitVersion.FindStringSubmatch(strings.TrimSpace(string(out)))
+	if m == nil {
+		return fmt.Errorf("git version: unexpected output %q", strings.TrimSpace(string(out)))
+	}
+	major, _ := strconv.Atoi(m[1]) // digits: the pattern matched them
+	minor, _ := strconv.Atoi(m[2])
+	if major < 2 || major == 2 && minor < 31 {
+		return i18n.Err("extension-market_git.git_too_old", i18n.Args{"version": m[1] + "." + m[2]})
 	}
 	return nil
 }

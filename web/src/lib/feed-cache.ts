@@ -1,7 +1,10 @@
+import { conversationDeleted, onConversationDeleted } from "./conversation-deleted";
 // One main conversation's newest page, for rendering before the hub answers. This is never a source of authority.
 import { BASE } from "./base";
-import type { Item } from "./types";
+import { credentialEpoch } from "./credential-epoch";
+import type { AssistantInfo, Item } from "./types";
 import { injectedOf } from "./injected";
+import { hasPrivateRefusal, publicRefusalItem } from "./refusal-public";
 import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
@@ -20,17 +23,17 @@ export interface FeedCache {
 // This 64-bit FNV-1a fingerprint avoids copying the token into another storage key; it is not a security
 // boundary, since persona.token already stores the credential in the same localStorage. feedCacheScope clears
 // all cached feeds when the hub or account identity changes, so cache partitioning needs no cryptographic hash.
-function fingerprint(value: string): string {
+export function fingerprint(value: string): string {
   let hash = 0xcbf29ce484222325n;
   for (const byte of new TextEncoder().encode(value)) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
   return hash.toString(16).padStart(16, "0");
 }
 
 /** Includes the proxy prefix: two hubs behind the same origin must not share their cached conversation. */
-export function feedCacheKey(hub: string, token: string, deviceID = ""): string | null {
+export function feedCacheKey(hub: string, token: string, deviceID = "", epoch = ""): string | null {
   if (!token) return null;
   // A saved device id can be stale after pasting a different jd_ token or pairing against an older hub.
-  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify([deviceID, token]))}`;
+  return `${PREFIX}${fingerprint(hub)}:${fingerprint(JSON.stringify(epoch ? [deviceID, token, epoch] : [deviceID, token]))}`;
 }
 
 let generation = 0;
@@ -43,11 +46,12 @@ export function feedCacheScope(): string | null {
     const token = localStorage.getItem("persona.token") ?? "";
     const deviceID = localStorage.getItem("persona.tokenId") ?? "";
     const hub = location.origin + BASE;
-    const now = JSON.stringify([hub, token, deviceID]);
+    const epoch = credentialEpoch();
+    const now = JSON.stringify([hub, token, deviceID, epoch]);
     if (identity !== now) {
       if (identity) clearFeedCache();
       identity = now;
-      key = feedCacheKey(hub, token, deviceID);
+      key = feedCacheKey(hub, token, deviceID, epoch);
     }
     return key ? `${key}.${generation}` : null;
   } catch {
@@ -68,6 +72,10 @@ export function clearFeedCache(): void {
 }
 
 const storageKey = (scope: string) => scope.slice(0, scope.lastIndexOf("."));
+
+/** Another cache's key under the same hub and sign-in (lib/extension-slots.ts, lib/extension-view-cache.ts), null once
+ *  `scope` is not the current one: it starts with the feed's, so signing out or new credentials remove it too. */
+export const scopedKey = (scope: string | null, name: string) => (scope && scope === feedCacheScope() ? `${storageKey(scope)}:${name}` : null);
 
 export function discardFeedCache(scope: string | null): void {
   if (!scope || scope !== feedCacheScope()) return;
@@ -104,6 +112,9 @@ function validItem(value: unknown): value is Item {
       && strings(task, ["replace", "source_item_id", "source_tool_use_id"]) && numbers(task, ["source_seq"])
       && Array.isArray(task.entries) && task.entries.every((entry) => object(entry) && typeof entry.id === "string"
         && strings(entry, ["subject", "description", "status"]))))) return false;
+    if (fold.changes != null && (!Array.isArray(fold.changes) || !fold.changes.every((change) => object(change) && typeof change.path === "string"
+      && typeof change.add === "number" && typeof change.del === "number" && Number.isFinite(change.add) && Number.isFinite(change.del)
+      && typeof change.exact === "boolean"))) return false;
   }
   return true;
 }
@@ -132,9 +143,10 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
     if (!raw) return null;
     if (new TextEncoder().encode(raw).length > FEED_CACHE_MAX_BYTES) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!validFeed(parsed)) return null;
+    if (!validFeed(parsed) || conversationDeleted(parsed.machineID, parsed.sessionID)) return null;
     // A record with embedded image bytes was not written by this version. Never hydrate an unsanitized record.
-    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw)) {
+    // Nor one an older version wrote with a refusal record's whole line in it (#2528): it is never shown again.
+    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw) || parsed.items.some(hasPrivateRefusal)) {
       discardFeedCache(scope);
       return null;
     }
@@ -144,7 +156,7 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
   }
 }
 
-function containsCredential(raw: string): boolean {
+export function containsCredential(raw: string): boolean {
   const token = localStorage.getItem("persona.token") ?? "";
   return !!token && [token, encodeURIComponent(token), JSON.stringify(token).slice(1, -1)].some((value) => raw.includes(value));
 }
@@ -174,11 +186,12 @@ function newestTurns(value: FeedCache): FeedCache {
   while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
   return {
     machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
-    items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
+    items: value.items.slice(start).map(publicRefusalItem), hasMore: value.hasMore || start > 0, history: value.history,
   };
 }
 
 export function writeFeedCache(scope: string | null, value: FeedCache): boolean {
+  if (conversationDeleted(value.machineID, value.sessionID)) return false;
   if (!scope || scope !== feedCacheScope()) return false;
   try {
     const page = newestTurns(value);
@@ -206,6 +219,7 @@ export function clearMemoryPages(): void {
 }
 
 export function readMemoryPage(scope: string | null, mid: string, sid: string): FeedCache | null {
+  if (conversationDeleted(mid, sid)) return null;
   if (!scope || scope !== feedCacheScope()) return null;
   const key = memoryKey(scope, mid, sid);
   const page = memory.get(key);
@@ -222,6 +236,7 @@ export function discardMemoryPage(scope: string | null, mid: string, sid: string
 
 /** An empty page is not kept: it would stand in for the loading state with nothing to show. */
 export function writeMemoryPage(scope: string | null, value: FeedCache): void {
+  if (conversationDeleted(value.machineID, value.sessionID)) return;
   if (!scope || scope !== feedCacheScope()) return;
   const key = memoryKey(scope, value.machineID, value.sessionID);
   memory.delete(key);
@@ -229,3 +244,23 @@ export function writeMemoryPage(scope: string | null, value: FeedCache): void {
   memory.set(key, newestTurns(value));
   if (memory.size > MEMORY_PAGES) memory.delete(memory.keys().next().value!);
 }
+
+/** A confirmed main stays on its routing node when the new-chat default changes. */
+export function mainConversationMachine(assistant: AssistantInfo | null | undefined): string | undefined {
+  if (!assistant?.main) return assistant?.machine_id;
+  return assistant.main_machine_id ||
+    assistant.conversations.find((c) => c.session_id === assistant.main)?.machine_id ||
+    assistant.machine_id;
+}
+
+// Do not retain a deleted transcript, including writes from an unmounting chat.
+onConversationDeleted((mid, sid) => {
+  for (const [key, page] of memory) if (page.machineID === mid && page.sessionID === sid) memory.delete(key);
+  const scope = feedCacheScope();
+  if (!scope) return;
+  try {
+    const raw = localStorage.getItem(storageKey(scope));
+    const page = raw ? JSON.parse(raw) as FeedCache : null;
+    if (page?.machineID === mid && page.sessionID === sid) discardFeedCache(scope);
+  } catch { /* A missing cache never blocks deletion. */ }
+});

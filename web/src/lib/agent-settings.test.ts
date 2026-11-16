@@ -105,8 +105,8 @@ describe("agent settings", () => {
     expect(settingDetail(recap)).toContain("离开 5 分钟");
     expect(optionText("effortLevel", "xhigh")).toBe("很高");
     expect(optionText("autoUpdatesChannel", "latest")).toBe("最新版");
-    expect(optionText("permissions.defaultMode", "auto")).toBe("自动");
-    expect(optionText("permissions.defaultMode", "default")).toBe("手动确认");
+    expect(optionText("permissions.defaultMode", "auto")).toBe("自动审批");
+    expect(optionText("permissions.defaultMode", "default")).toBe("默认权限");
     // An option or key the web does not know stays as the node wrote it.
     expect(optionText("effortLevel", "ultra")).toBe("ultra");
     expect(optionText("approval_policy", "later")).toBe("later");
@@ -142,6 +142,22 @@ describe("agent settings", () => {
     expect(AGENT_TEXT.codex.path).toBe("codex-settings");
     expect(AGENT_TEXT.claude.footer).toContain("~/.claude/settings.json");
   });
+
+  // #8353: the node sends English titles for Grok's table keys; the page's catalog names every row.
+  it("names Grok's rows in the page's language and says which ones approve every tool call", () => {
+    expect(AGENT_TEXT.grok).toMatchObject({ name: "Grok", path: "grok-settings", file: "~/.grok/config.toml" });
+    expect(AGENT_TEXT.grok.footer).toContain("~/.grok/config.toml");
+    expect(AGENT_TEXT.grok.footer).toContain("Grok");
+    const row = (key: string): AgentSetting => ({ key, title: "English", detail: "English", type: "string" });
+    for (const key of ["models.default", "models.default_reasoning_effort", "ui.permission_mode", "ui.yolo", "ui.compact_mode"]) {
+      expect(settingTitle(row(key)), key).not.toBe("English");
+      expect(settingDetail(row(key)), key).not.toBe("English");
+    }
+    expect(settingTitle(row("ui.permission_mode"))).toBe("权限模式");
+    expect(settingDetail(row("ui.permission_mode"))).toContain("always-approve");
+    expect(settingDetail(row("ui.permission_mode"))).toContain("批准每一次工具调用");
+    expect(settingDetail(row("ui.yolo"))).toContain("一律批准工具调用");
+  });
 });
 
 describe("mail account form", () => {
@@ -166,6 +182,22 @@ describe("mail account form", () => {
     expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "imap", email: "me" })).toBeNull();
     expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, kind: "feishu", email: "me@qq.com" })).toBeNull();
     expect(mailCodeGuide({ ...EMPTY_MAIL_FORM, email: "me@qq.com", imapHost: "imap.example.com" })).toBeNull();
+  });
+
+  it("chooses SMTP security from the parsed port (#4879)", () => {
+    const form = { ...EMPTY_MAIL_FORM, email: "me@example.com", password: "pw", smtpHost: "smtp.example.com" };
+    for (const smtpPort of ["0587", "587", " 0587 ", "587.0", "5.87e2"]) {
+      expect(mailErrors({ ...form, smtpPort })).toEqual({});
+      expect(mailRequest({ ...form, smtpPort })).toMatchObject({ smtp_port: 587, smtp_security: "starttls" });
+    }
+    for (const smtpPort of ["465", "0465", "2525"]) {
+      expect(mailErrors({ ...form, smtpPort })).toEqual({});
+      expect(mailRequest({ ...form, smtpPort })).toMatchObject({ smtp_port: Number(smtpPort), smtp_security: "tls" });
+    }
+    for (const smtpPort of ["abc", "", "0", "65536", "587.5"]) expect(mailErrors({ ...form, smtpPort }).smtpPort).toBeTruthy();
+    const omitted = { ...form, smtpHost: " ", smtpPort: "abc" };
+    expect(mailErrors(omitted)).toEqual({});
+    expect(mailRequest(omitted)).toEqual({ name: "me@example.com", email: "me@example.com", provider: "imap", auth: "password", password: "pw" });
   });
 
   it("builds the hub's request", () => {

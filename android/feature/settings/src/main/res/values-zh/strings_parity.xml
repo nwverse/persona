@@ -8,6 +8,8 @@
     <string name="settings_ext_themes_extension">扩展主题</string>
     <string name="settings_scheme">深浅色</string>
     <string name="settings_scheme_note">只对这台手机生效。跟随系统时随系统的深色模式切换。</string>
+    <string name="settings_density">布局密度</string>
+    <string name="settings_density_note">只对这台手机生效。紧凑会收窄边距和间距，一屏能看到更多；文字和图标大小不变。</string>
     <string name="settings_providers_title">模型供应商</string>
     <string name="settings_row_providers_subtitle">网关、Key 和 ~/.zshrc 里的 claude 函数</string>
     <string name="settings_providers_demo">体验模式没有 hub 的模型供应商。配对 hub 后再看。</string>
@@ -88,6 +90,12 @@
         <item quantity="other">导入 %d 个</item>
     </plurals>
     <string name="settings_claude_dirs">屏蔽的配置目录</string>
+    <string name="settings_live_replies">实时回复</string>
+    <string name="settings_live_replies_toggle">边写边发回复</string>
+    <string name="settings_live_replies_on">逐行收到回复，早几秒看到文字</string>
+    <string name="settings_live_replies_off">Claude 存下回复后才显示</string>
+    <string name="settings_live_replies_load_failed">读不到这台电脑的设置：%1$s</string>
+    <string name="settings_live_replies_note">开着时，Persona 在这台电脑上启动的 Claude Code 会话会边写边把回复发出来，App 和网页上更早看到文字；代价是这台电脑终端里的回复会按行显示（一次几行），而不是逐字出现。这个开关存在 hub 上，不改 ~/.claude/settings.json；打开上面的「同时改所有在线机器」时，其他在线的电脑也一起改。改动对之后启动的会话生效，已经开着的会话要等 Claude 重启后才变。</string>
     <string name="settings_claude_dirs_load_failed">读不到这台电脑的配置目录：%1$s</string>
     <string name="settings_claude_dirs_save_failed">没有改成：%1$s</string>
     <string name="settings_claude_dirs_block">屏蔽</string>

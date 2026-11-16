@@ -70,6 +70,9 @@ const (
 	// MethodCall {machine_id, method, params, timeout_ms?} → the node's result: the apps' and the hub's calls to a
 	// machine's node. session.watch / session.unwatch also tell the manager what to watch again after a reconnect.
 	MethodCall = "devices.call"
+	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
+	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
+	MethodFileCall = "devices.file_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -100,7 +103,18 @@ const (
 	MethodMachinesPut    = "devices.machines.put"
 	MethodMachinesRemove = "devices.machines.remove"
 	MethodMachinesGet    = "devices.machines.get"
+	// MethodEngineGet MachineRef → MachineEngine, MethodEnginePut MachineEngine → {}: a machine's engine choice as the
+	// manager keeps it in its own settings (Choice nil: never chosen). A move reads it from the manager the machine
+	// leaves and puts it in the one it goes to, so a change of owner does not change the engine (#3611).
+	MethodEngineGet = "devices.engine.get"
+	MethodEnginePut = "devices.engine.put"
 )
+
+// MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
+type MachineEngine struct {
+	MachineID string              `json:"machine_id"`
+	Choice    *proto.EngineChoice `json:"choice,omitempty"`
+}
 
 // CodeNotOwnList: the manager does not keep its own list of computers (the hub did not hand it MachinesOwn, or its
 // list was not taken over as its own): the hub edits hub.json for it instead.
@@ -372,6 +386,9 @@ type PairConnector struct {
 // Routes are the apps' routes on machines the manager answers itself (the hub relays them as http.request, as the
 // assistant's): its own settings of each machine and what only it can do.
 var Routes = []string{
+	"GET /api/v1/sessions/{mid}/{sid}/skills",
+	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",
+	"POST /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/reconnect",
 	"PUT /api/v1/machines/{mid}/engine",
 	"GET /api/v1/machines/{mid}/herdr",
@@ -382,6 +399,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
+	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
+	"GET /api/v1/machines/{mid}/diagnosis",
+	"POST /api/v1/machines/{mid}/cleanup",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
@@ -394,6 +414,8 @@ var Routes = []string{
 	// The file transfer switch (#3065, internal/devices transfer_settings.go).
 	"GET /api/v1/machines/{mid}/file-transfer/settings",
 	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+	// Pollable copy / zip progress (#6113, internal/devices fileoperation.go).
+	"GET /api/v1/machines/{mid}/files/operations/{oid}",
 }
 
 // TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
@@ -406,12 +428,15 @@ var TransferRoutes = []string{
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, and one machine's range).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
+// the history: the days, the last days by the hour).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
 	"GET /api/v1/machines/{id}/usage",
 	"GET /api/v1/usage",
+	"GET /api/v1/usage/days",
+	"GET /api/v1/usage/hours",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),
@@ -437,4 +462,7 @@ const (
 	CodeMachineOffline = "machine_offline" // its node is not connected
 	CodeNodeClosed     = "node_closed"     // the connection to its node dropped during the call
 	CodeDeadline       = "deadline"        // the call's time ran out with the node on it (it may have done it)
+	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
+	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
+	CodeHandoffRefused = "handoff_refused"
 )

@@ -15,7 +15,7 @@ import (
 var errBusy = errors.New("locked")
 
 // ErrRunning: another persona-link holds the run lock of this link.json.
-var ErrRunning = errors.New("这台电脑上已经有一个 Persona Link 在运行")
+var ErrRunning = newTextError("link-errors.running", nil)
 
 // LockRun takes the run lock of the link.json at path: one persona-link per computer, or two would keep taking the
 // link from each other. ErrRunning when another one has it; release gives it back (exiting does too).
@@ -43,6 +43,15 @@ var ErrLocked = errBusy
 // LockFile takes the exclusive lock of the file at path (made when missing), waiting for it when wait is true; ErrLocked
 // when another process holds it and wait is false. release gives it back; the process ending does too, however it ends.
 func LockFile(path string, wait bool) (release func(), err error) {
+	f, err := LockFileHandle(path, wait)
+	if err != nil {
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+// LockFileHandle holds the lock until the caller closes f. A duplicated descriptor retains the same lock during exec.
+func LockFileHandle(path string, wait bool) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -51,7 +60,7 @@ func LockFile(path string, wait bool) (release func(), err error) {
 		f.Close()
 		return nil, err
 	}
-	return func() { f.Close() }, nil
+	return f, nil
 }
 
 // Running says whether a persona-link is running with the link.json at path: whether its run lock is held. It takes the

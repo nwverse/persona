@@ -12,10 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // hostTextSlack: the transcript's words this long after the host's record of the answer still belong to that turn.
@@ -74,12 +74,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	for _, id := range slices.Sorted(maps.Keys(agents)) {
 		a := agents[id]
 		if !onList[id] { // a pane on Claude's agents list stays idle: the transcript is its parked session's (claudebg.go)
-			a.AgentStatus = n.claudeStatus(id, a, now)
+			a.AgentStatus = n.liveStatus(id, a, now)
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: a.Cwd, Status: a.AgentStatus, PaneID: a.PaneID, TabID: a.TabID,
 			WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent,
 			ExternalURL: a.ExternalURL, Chat: a.Chat, Topic: a.Topic, Dispatched: a.Dispatched,
+		}
+		if a.Agent == "codex" && isCodexWaitID(id) { // opened with no first message: no thread, no transcript yet (codex_waiting.go)
+			n.placeIn(&s, a)
+			codexWaitRow(&s, a)
+			if w := n.codexWaitByID(id); w != nil {
+				s.UpdatedAt = w.began.UTC()
+			}
+			n.decorateIn(&s, pass)
+			out = append(out, s)
+			seen[id] = true
+			continue
 		}
 		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
 		switch {
@@ -126,6 +137,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Status, s.AttentionReason = proto.StatusBlocked, head
 			}
 		}
+		// An allow its Claude did not take: the dialog it left holds the terminal, whatever herdr says (allowwatch.go).
+		if head := n.allowDialog(id); head != "" && !onList[id] && !n.isDriving(id) {
+			s.Status, s.AttentionReason = proto.StatusBlocked, head
+		}
 		if !onList[id] { // the list's prompt is no suggestion of its
 			s.Suggestion = n.noteStatus(id, a.Agent, a.PaneID, s.Status) // suggestion.go
 		}
@@ -140,7 +155,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if m.title != "" && a.Agent != "codex" && a.Agent != traexAgent {
 					s.Title = m.title
 				}
-				if s.Title == "" || s.Title == "Claude Code" {
+				if s.Title == "" || s.Title == "Claude Code" && !m.titleManual {
 					s.Title = ""
 					untitled(&s, m)
 				}
@@ -179,21 +194,27 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = transcript.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(a.LastText)
 			}
 			s.AsksRead = true
 		}
 		if a.Agent == "codex" {
+			if _, thread, err := n.codexOwner(id); err == nil && thread.model != "" {
+				s.Model = thread.model
+			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, rollout) // joined on its app-server: its effort (codex_effort.go)
 			n.codexSpeedRow(&s)
+			n.codexRewindRow(id, &s)
 		}
-		if a.Agent == piAgent {
+		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
 		}
 		switch {
 		case a.Agent == opencodeAgent:
 			s.Title = opencodeTitle(a.Title)
 			n.mergeOpencodeRow(&s) // its conversation is the plugin's (opencode.go)
+		case a.Agent == cursorAgent || a.Agent == agyAgent:
+			// herdr drives the pane (agent.prompt, the keys); Persona does not read the conversation (workagent.go).
 		case otherAgent(a):
 			s.ReadOnlyReason = otherNoReader(a.Agent)
 		}
@@ -205,9 +226,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		seen[id] = true
 	}
 
-	n.forgetDialogs(livePanes)
-
 	for _, s := range n.starts.listed(seen) { // starting.go
+		n.decorateIn(&s, pass)
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
+	for _, s := range n.switches().listed(seen) { // an agent moving to another launcher, between its two (switch_share.go)
 		n.decorateIn(&s, pass)
 		out = append(out, s)
 		seen[s.SessionID] = true
@@ -215,8 +239,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)
+	if pass != nil {
+		pass.runtimes = n.runtimes.codexThreads() // conversations that are Codex threads here: listed once (runtimecodex.go)
+	}
 	peak := len(out)
 	j := from
+	var rowIDs map[string]bool // the runtimes' rows, where the line of a fork stops (aliasesOf)
 	for i := from; i < len(out); i++ {
 		s := &out[i]
 		if seen[s.SessionID] {
@@ -228,9 +256,23 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.PermissionMode = m
 			}
 		}
-		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes.
+		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
+		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
 		if t := n.mergeRuntimeTranscript(s); t != "" {
 			seen[t] = true
+			if t != s.SessionID {
+				if rowIDs == nil {
+					rowIDs = make(map[string]bool, len(out)-from)
+					for k := from; k < len(out); k++ {
+						rowIDs[out[k].SessionID] = true
+					}
+				}
+				aliases := n.aliasesOf(s.SessionID, t, func(id string) bool { return rowIDs[id] })
+				for _, a := range aliases {
+					seen[a] = true
+				}
+				s.SetAliases(aliases)
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -246,10 +288,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[s.SessionID] = true
 		}
 	}
-	for _, s := range n.claudeSessions(n.liveClaudes(), seen) { // claudes outside Persona's panes (claudebg.go)
+	for _, s := range n.claudeSessions(n.liveClaudes(), seen, livePanes) { // claudes outside Persona's panes (claudebg.go)
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	n.forgetDialogs(livePanes) // after every row that reads a pane's dialog, the tmux claudes' too
 	for _, s := range n.codexSessionsIn(seen, pass) {
 		out = append(out, s)
 	}
@@ -260,17 +303,29 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	from = len(out)
 	out = n.appendOffline(out, seen)
 	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
+	// omp's stopped sessions (ompdisk.go)
+	out = append(out, n.ompOfflineRows(seen)...)
 	for i := from; i < len(out); i++ {
 		n.decorateIn(&out[i], pass)
+		n.markStopped(&out[i]) // read-only (stopped.go, #4754)
 	}
 	n.listRows.Store(int32(max(peak, len(out))))
 	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
 	resolveCodexHierarchy(out)
+	// A conversation that moved between Claude Code and Codex is one row, the session running it now: the sessions it
+	// ran in before are left out (engine_switch.go).
+	var earlier map[string]bool
+	if chains := n.state.engineHistories(); chains != nil {
+		earlier = joinStretches(out, chains)
+	}
 	// The rows kept move down over the dropped ones, in order.
 	j = 0
 	for i := range out {
 		s := &out[i]
-		if !n.sessionScopeAllows(s.Cwd) {
+		if !s.Assistant && s.PaneID != "" && s.Status != proto.StatusOffline && s.Status != proto.StatusInterrupted {
+			n.observedRunning(s.SessionID)
+		}
+		if earlier[s.SessionID] || !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
 		if s.Cwd != "" && n.cwdBlocked(s.Cwd) && !n.isAssistantSession(s.SessionID) && !n.keptSessions()[s.SessionID] {
@@ -294,6 +349,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
+	parents, origins := n.offlineDesktop()
+	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
+	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
 	sortNewestFirst(out)
 	return out
 }
@@ -337,6 +395,15 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	}
 	if st, ok := n.decorateState(s); ok {
 		s.Compaction = st.Compaction
+		s.PendingSwitch = st.PendingSwitch   // launcher_switch.go
+		s.SetEngineHistory(st.EngineHistory) // engine_switch.go
+	}
+	n.decorateModelRecovery(s) // node-owned recovery marker, and the shipped fallback-card projection (#7824)
+	if s.PendingSwitch == nil {
+		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
+	}
+	if ps := s.PendingSwitch; ps != nil && time.Since(ps.At) > switchMaxAge {
+		s.PendingSwitch = nil // dropped by the next message that would carry it out: not shown as waiting meanwhile
 	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
@@ -345,6 +412,7 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 		s.Title = filepath.Base(s.Cwd)
 	}
 	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
+	n.modeRestartRow(s)                                // mode_restart.go
 	n.ultracodeRow(s, pass)
 }
 

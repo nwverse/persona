@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The `brief` item of a routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed"): the facts of a run with facts on,
@@ -21,9 +22,12 @@ const feedBrief = "brief" // ref: the routine's task id; body: briefBody
 // to verify, and the newest of done (10) and failed (8), whose totals say how many there were. Texts the hub writes (a
 // waiting card's line) are in the bot's language.
 type briefBody struct {
-	Title string    `json:"title"` // the routine's name
-	At    time.Time `json:"at"`
-	Hours int       `json:"hours"` // how far back done / failed look
+	// NorthStar is what the report opens with: its lines and the numbers they say (north_star.go).
+	NorthStar     briefBodyNorthStar `json:"north_star"`
+	Confirmations briefConfirmations `json:"confirmations"`
+	Title         string             `json:"title"` // the routine's name
+	At            time.Time          `json:"at"`
+	Hours         int                `json:"hours"` // how far back done / failed look
 	// WaitingUnknown: the cards waiting were not read yet (the hub had just started): `waiting` is empty for want of knowing.
 	WaitingUnknown bool            `json:"waiting_unknown,omitempty"`
 	Waiting        []briefBodyRow  `json:"waiting"`
@@ -39,6 +43,23 @@ type briefBody struct {
 	// Progress are the tasks being worked on, the longest running first (at most 8); stage is plan / develop / review / merge / deploy / verify, "" when not known.
 	Progress      []briefBodyProgress `json:"progress"`
 	ProgressTotal int                 `json:"progress_total"`
+	// Setup is the recommended-setup block (setup_suggest.go): which mechanism that is off would have removed how many
+	// of the last 7 days' asks or background rounds. Only on the first briefing of a week, and only when it names
+	// something; left out otherwise (a client that does not draw it skips it).
+	Setup []setupSuggestion `json:"setup,omitempty"`
+}
+
+// briefBodyNorthStar is a `brief` item's north star: the lines as the report says them, and today's and yesterday's
+// (until the same time) numbers; a number is null when it is unknown.
+type briefBodyNorthStar struct {
+	Lines                  []string `json:"lines"`
+	Interruptions          *int     `json:"interruptions"`
+	InterruptionsYesterday *int     `json:"interruptions_yesterday"`
+	Partial                bool     `json:"partial,omitempty"`
+	Availability           *float64 `json:"availability"`
+	AvailabilityYesterday  *float64 `json:"availability_yesterday"`
+	Attempts               int      `json:"attempts"`
+	OK                     int      `json:"ok"`
 }
 
 // briefBodyRow is a row of what waits: a card (waiting) with its line, or a task to verify (accept) with its title.
@@ -80,11 +101,12 @@ type briefBodyProgress struct {
 
 // body is the facts as a `brief` item's body.
 func (f *briefFacts) body(s *Service, title string) briefBody {
-	b := briefBody{Title: title, At: f.At, Hours: int(briefWindow / time.Hour), WaitingUnknown: f.WaitingUnknown, DoneTotal: f.DoneTotal,
+	b := briefBody{Confirmations: f.Confirmations, Title: title, At: f.At, Hours: int(briefWindow / time.Hour), WaitingUnknown: f.WaitingUnknown, DoneTotal: f.DoneTotal,
 		Failed: f.Failed, FailedTotal: f.FailedTotal, Waiting: []briefBodyRow{}, Done: []briefBodyDone{}, Accept: []briefBodyRow{}, ProgressTotal: f.ProgressTotal, Progress: []briefBodyProgress{}}
 	if b.Failed == nil {
 		b.Failed = []todayFailed{}
 	}
+	b.NorthStar = f.NorthStar.body(f.NorthStarLines)
 	row := func(r boardRow) briefBodyRow {
 		return briefBodyRow{ID: r.id, Title: r.summary, From: r.from, Link: r.link, WaitedS: int64(r.waited / time.Second), Nudged: r.nudged}
 	}
@@ -117,6 +139,9 @@ func (f *briefFacts) body(s *Service, title string) briefBody {
 		b.Later = append(b.Later, chatRow(r))
 	}
 	b.LaterTotal = f.LaterTotal
+	if f.Setup != nil {
+		b.Setup = f.Setup.Suggestions
+	}
 	for _, d := range f.Done {
 		b.Done = append(b.Done, briefBodyDone{ID: d.ID, Title: d.Title, At: d.At})
 	}
@@ -159,7 +184,8 @@ func (s *Service) briefRoutes() {
 
 	// POST /api/v1/todos/{id}/accept {"asked_at"}: the Accept button of a `brief` item. It verifies the task when asked_at is
 	// the round that waits now; a button of an earlier round, or a task already verified, is 409. A decision whose
-	// recommendation could not be sent to the task's agent is 502, and asks that cannot be read or an acceptance that
+	// recommendation could not be sent to the task's agent is 502 (423 with the node's code when the node refused it, such
+	// as dialog_open, #7343), and asks that cannot be read or an acceptance that
 	// cannot be saved is 503; either way nothing was taken (conclusion.go, errAcceptStore). A decision also takes
 	// {"option"}: the label of the option chosen (the recommended one is what the plain press takes; no such option is
 	// 400), or {"response"}: decide_yourself, not_what_i_asked or explain_first, which takes nothing and goes to the
@@ -178,7 +204,7 @@ func (s *Service) briefRoutes() {
 			apierr.Write(w, http.StatusBadRequest, errors.New("asked_at is required"))
 			return
 		}
-		var ok bool
+		var result acceptResult
 		var err error
 		switch {
 		case in.Response != "" && in.Option != "":
@@ -189,11 +215,11 @@ func (s *Service) briefRoutes() {
 				apierr.Write(w, http.StatusBadRequest, errors.New("response must be decide_yourself, not_what_i_asked or explain_first"))
 				return
 			}
-			ok, err = s.ownerCannotAnswer(r.Context(), r.PathValue("id"), in.AskedAt, in.Response)
+			result.taken, err = s.ownerCannotAnswer(r.Context(), r.PathValue("id"), in.AskedAt, in.Response)
 		case in.Option != "":
-			ok, err = s.chooseOption(r.Context(), r.PathValue("id"), in.AskedAt, in.Option)
+			result, err = s.chooseOption(r.Context(), r.PathValue("id"), in.AskedAt, in.Option)
 		default:
-			ok, err = s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
+			result, err = s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
 		}
 		if errors.Is(err, errDecisionOption) {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -203,16 +229,44 @@ func (s *Service) briefRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
-		if err != nil { // a decision's recommendation that did not reach the agent: nothing taken, the button works again
+		if nodeRefusal(err) {
+			// The node refused with a code it words itself (a dialog open in the terminal, a draft in its input box):
+			// that code and the node's details, so the app can say what to do first instead of "try again later".
+			// Nothing was taken; the button works again (#7343). Not the 409 every other node call answers
+			// (apierr.Call): on this route the apps already installed (iOS, Android, older web pages) read any 409 as
+			// "this round is over" and lock the button, though nothing reached the agent. 423 Locked (the terminal is
+			// held by the dialog) is a failure to every one of them, which shows the hub's sentence and keeps the button.
+			apierr.CallStatus(w, http.StatusLocked, err)
+			return
+		}
+		if err != nil { // another delivery failure: nothing taken, the button works again
 			// In the request's language, the reason too when the hub words it (an offline computer, no agent).
-			apierr.Write(w, http.StatusBadGateway, i18n.Err("assistant-reports.accept_not_taken",
+			apierr.WriteCode(w, http.StatusBadGateway, "accept_not_taken", i18n.Err("assistant-reports.accept_not_taken",
 				i18n.Args{"error": clip(oneLine(i18n.Localize(err, s.requestCtxLang(r.Context()))), 120)}))
 			return
 		}
-		if !ok {
+		if !result.taken {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-feishu_cards.already_handled"))
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"ok": true})
+		body := map[string]any{"ok": true}
+		if result.undelivered != nil {
+			body["delivered"] = "none"
+		}
+		apierr.WriteJSON(w, body)
 	})
+}
+
+// nodeRefusal is err a node's coded refusal (*rpc.Error with a code other than a transport failure's): nothing was
+// typed, and its code says why.
+func nodeRefusal(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.Code {
+	case "", "internal", "node_unreachable", "timeout":
+		return false
+	}
+	return true
 }

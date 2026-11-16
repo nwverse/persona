@@ -40,8 +40,8 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 	look := func(p string, msgs bool) {
 		var raw []byte
 		var err error
-		if kind == KindRecording && filepath.Base(p) != "summary.md" && filepath.Base(p) != "minutes.md" {
-			raw = recording[filepath.Base(p)] // the uploaded files, as committed (summary and minutes are the hub's)
+		if base := filepath.Base(p); kind == KindRecording && base != "summary.md" && base != "minutes.md" && base != recapMarkdown && base != photosText {
+			raw = recording[base] // the uploaded files, as committed (summary, minutes, recap and photos are the hub's)
 		} else {
 			raw, err = os.ReadFile(p)
 		}
@@ -92,10 +92,19 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 			// without every word costs a stat there instead of a read and a fold, which for a rare word would be every
 			// day the chat has. The days that have them are read again by look, as before. Like Search, this leaves
 			// pruning to Find.
+			// The search index (search_index.go) rules out the days it read that cannot hold the words: a stat each.
 			gen := e.find.begin()
+			filter := e.searchFilter(ws)
 			days := e.Store.Days(id)
 			for i := len(days) - 1; i >= 0 && len(out) < limit; i-- {
 				p := e.Store.path(KindChat, id, "messages", days[i]+".md")
+				if filter != nil {
+					if rel, err := filepath.Rel(e.Store.Dir, p); err == nil {
+						if st := statFile(p); st.ok && filter.skip(filepath.ToSlash(rel), st) {
+							continue
+						}
+					}
+				}
 				if t, _, ok := e.find.text(p, gen); !ok || !hasAll(t.lower, ws) {
 					continue
 				}
@@ -103,7 +112,7 @@ func (e *Engine) Matches(kind, id, query string, limit int) []Match {
 			}
 		}
 	case KindRecording:
-		for _, f := range []string{"summary.md", "minutes.md", "transcript.md", "meta.json"} {
+		for _, f := range []string{"summary.md", "minutes.md", recapMarkdown, "transcript.md", photosText, "meta.json"} {
 			look(e.Store.path(kind, id, f), false)
 		}
 	case KindTopic:

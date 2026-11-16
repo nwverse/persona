@@ -12,6 +12,7 @@ The config lives outside the repository so clean worktrees (releases) see it too
 import json
 import os
 import plistlib
+import re
 import shlex
 import sys
 
@@ -69,6 +70,8 @@ def env(cfg: dict) -> dict:
         "PERSONA_SIM": cfg.get("simulator", ""),
         # Where scripts/release/publish.sh puts personad and install.sh (the site/ worker's domain), and the wrangler to run.
         "PERSONA_PUBLISH_URL": get(cfg, "publish.site_url", "").rstrip("/"),
+        # Where the personad built here looks for its updates (-X main.updateURL): publish.update_url, else <site_url>/dl.
+        "PERSONA_UPDATE_URL": update_url(cfg),
         "PERSONA_WRANGLER": os.path.expanduser(get(cfg, "publish.wrangler", "")),
         # Meta glasses (docs/apple/meta-glasses.md): the project.yml include that adds the Meta Wearables SDK is on only for YES.
         "PERSONA_META_WEARABLES": "YES" if get(cfg, "app.meta_wearables.enabled", False) is True else "NO",
@@ -81,6 +84,21 @@ def env(cfg: dict) -> dict:
         if key.startswith("PERSONA_"):
             out[LEGACY_PREFIX + key[8:]] = default
     return out
+
+
+def update_url(cfg: dict) -> str:
+    """The update source built into personad (-X main.updateURL, docs/operations/hub-update.md "Update source"):
+    publish.update_url as given (the directory latest.json is in, e.g. a GitHub repository's releases/latest/download),
+    else publish.site_url's dl/, else none. A hub's hub.json update.url still replaces it at run time."""
+    value = get(cfg, "publish.update_url", "")
+    if value in ("", None):
+        site = get(cfg, "publish.site_url", "")
+        return site.rstrip("/") + "/dl" if isinstance(site, str) and site.strip() else ""
+    if (not isinstance(value, str) or not re.fullmatch(r"(https://[^/\s?#@]+|file://)(/[^\s?#]*)?", value.strip())
+            or value.strip().rstrip("/").endswith("/latest.json")):
+        sys.exit("publish.update_url must be an https:// (or file:///) directory without a user, query or fragment: "
+                 "the one latest.json is in (docs/operations/config.md)")
+    return value.strip().rstrip("/")
 
 
 def app_group(cfg: dict) -> str:
@@ -125,23 +143,37 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
     return profiles
 
 
-# The app's entitlements. The CarPlay voice entitlement needs Apple's approval first (docs/apple/carplay.md); the generated copy
-# sits in apple/, outside the Persona/ source folder, so XcodeGen does not pick it up as a resource.
+# The app's entitlements. The opt-in ones need the capability on the App ID first (CarPlay voice: Apple's approval,
+# docs/apple/carplay.md; HealthKit background delivery, docs/assistant/health.md; HomeKit, docs/apple/phone-tools.md "Home"); the generated copy sits in apple/,
+# outside the Persona/ source folder, so XcodeGen does not pick it up as a resource.
 APP_ENTITLEMENTS = os.path.join("Persona", "Resources", "Persona.entitlements")
-CARPLAY_ENTITLEMENTS = "PersonaCarPlay.entitlements"
+OPT_IN_ENTITLEMENTS = "PersonaOptIn.entitlements"
+# config.json switch → the entitlement it adds.
+OPT_IN = {
+    "app.carplay_voice": "com.apple.developer.carplay-voice-based-conversation",
+    "app.health_background_delivery": "com.apple.developer.healthkit.background-delivery",
+    "app.homekit": "com.apple.developer.homekit",
+}
+
+
+def opted_in(cfg: dict, switch: str) -> bool:
+    # Only JSON true turns one on: a string like "false" is truthy in Python.
+    return get(cfg, switch, False) is True
 
 
 def app_entitlements(cfg: dict) -> str:
-    # Opt-in: an App ID without the approved entitlement cannot sign it, so signing without it must keep working.
-    # Returns the path relative to apple/. Only JSON true turns it on: a string like "false" is truthy in Python.
-    if get(cfg, "app.carplay_voice", False) is not True:
+    # Opt-in: an App ID without the capability cannot sign its entitlement, so signing without them must keep working.
+    # Returns the path relative to apple/.
+    added = [key for switch, key in OPT_IN.items() if opted_in(cfg, switch)]
+    if not added:
         return APP_ENTITLEMENTS
     with open(os.path.join(ROOT, "apple", APP_ENTITLEMENTS), "rb") as f:
         entitlements = plistlib.load(f)
-    entitlements["com.apple.developer.carplay-voice-based-conversation"] = True
-    with open(os.path.join(ROOT, "apple", CARPLAY_ENTITLEMENTS), "wb") as f:
+    for key in added:
+        entitlements[key] = True
+    with open(os.path.join(ROOT, "apple", OPT_IN_ENTITLEMENTS), "wb") as f:
         plistlib.dump(entitlements, f)
-    return CARPLAY_ENTITLEMENTS
+    return OPT_IN_ENTITLEMENTS
 
 
 def xcconfig(cfg: dict):
@@ -159,6 +191,10 @@ def xcconfig(cfg: dict):
         f.write("PERSONA_PUSH_RELAY = %s\n" % get(cfg, "app.push_relay", "").rstrip("/").replace("//", "/$()/"))
         # Which entitlements the app signs with (app_entitlements; docs/apple/carplay.md).
         f.write("PERSONA_APP_ENTITLEMENTS = %s\n" % app_entitlements(cfg))
+        # Workout reports right after a workout (Info.plist PersonaHealthBackgroundDelivery, with its entitlement above).
+        f.write("PERSONA_HEALTH_BACKGROUND_DELIVERY = %s\n" % ("YES" if opted_in(cfg, "app.health_background_delivery") else "NO"))
+        # Home's tools are offered only when the app signs with HomeKit (Info.plist PersonaHomeKit; docs/apple/phone-tools.md "Home").
+        f.write("PERSONA_HOMEKIT = %s\n" % ("YES" if opted_in(cfg, "app.homekit") else "NO"))
         # "No hub yet?" on the first screen opens this page (docs/operations/getting-started.md published; empty: the row is hidden).
         f.write("PERSONA_GETTING_STARTED_URL = %s\n" % get(cfg, "publish.getting_started_url", "").replace("//", "/$()/"))
         # Meta Wearables (docs/apple/meta-glasses.md): 0 means Developer Mode (no attestation), as Meta's docs say.

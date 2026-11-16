@@ -178,12 +178,13 @@ func TestRestoredWorkCardGainsCancellation(t *testing.T) {
 	s, f, ix := deferredCardFixture(t, st)
 	s.waitWorkEvents()
 	ix.CanCancel = false
+	ix.Questions[0].Options[1] = proto.QuestionOption{Label: answerSkip} // a built-in defer from before option actions
 	f.hubCards = []proto.Interaction{ix}
 	s = newServiceOn(t, f, st)
 	if !s.loadWork(context.Background()) {
 		t.Fatal("load failed")
 	}
-	if cards := s.workCards(); len(cards) != 1 || !cards[0].CanCancel {
+	if cards := s.workCards(); len(cards) != 1 || !cards[0].CanCancel || cards[0].Questions[0].Options[1].Action != proto.QuestionOptionDefer {
 		t.Fatalf("legacy card not upgraded: %+v", cards)
 	}
 }
@@ -213,9 +214,9 @@ func TestWorkCardTickCannotRestoreConcurrentlyCancelledCard(t *testing.T) {
 	s.work.mu.Lock()
 	delete(s.work.cards, ix.ID)
 	s.work.mu.Unlock()
-	s.hub = &workCardReadHookHub{fakeHub: f, beforeSessionRead: func() {
+	setHub(s, &workCardReadHookHub{fakeHub: f, beforeSessionRead: func() {
 		answerCard(t, s, ix.ID, proto.Resolution{Cancel: true})
-	}}
+	}})
 	s.cardTick(context.Background(), s.newWorkView(context.Background()), [2]string{"box", "s1"}, time.Now())
 	if len(s.workCards()) != 0 || entryOf(t, s, "s1").InteractionID != "" {
 		t.Fatal("an in-flight recovery restored the cancelled card")

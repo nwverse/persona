@@ -98,6 +98,11 @@ public struct ApprovalCardOptions: Sendable {
     public var drawsSurface = true
     /// The original's 320 pt; `nil` fills the host's width.
     public var maxWidth: CGFloat? = 320
+    /// A host's vertical cap. Set, the questions scroll while the footer stays outside that scroll; `nil` keeps the
+    /// card's original, wholly laid-out body. The cap includes the footer.
+    public var maxHeight: CGFloat?
+    /// Reject option activation after a drag. Off unless the host also guards the option action with this state.
+    public var rejectsDraggedPicks = false
     /// Picking a single-choice answer moves on (and on the last question, sends) after a beat. Off, the
     /// person sends with the button — for answers that are costly to get wrong, such as an approval.
     public var autoAdvance = true
@@ -121,6 +126,9 @@ public struct ApprovalCard<Context: View>: View {
     var sendLabel: String
     var customPlaceholder: String
     var sentMessage: String
+    /// Whole-card Skip, with the current answers so the host can restore them if it fails. `nil` keeps the original
+    /// per-question `skipLabel` behavior and layout.
+    var onSkip: ((ApprovalAnswers) -> Void)?
     var onSubmit: ((ApprovalAnswers) -> Void)?
     var onDismiss: (() -> Void)?
     var options: Options
@@ -131,6 +139,9 @@ public struct ApprovalCard<Context: View>: View {
     @State private var sent: Bool
     @State private var open = true
     @State private var forward = true
+    @State private var contentHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
+    @State private var dragged = false
     @State private var advanceTask: Task<Void, Never>?
     @FocusState private var customFocused: Bool
     @Environment(\.buiTheme) private var theme
@@ -164,6 +175,7 @@ public struct ApprovalCard<Context: View>: View {
         self.sendLabel = sendLabel
         self.customPlaceholder = customPlaceholder
         self.sentMessage = sentMessage
+        self.onSkip = nil
         self.onSubmit = onSubmit
         self.onDismiss = onDismiss
         _index = State(initialValue: min(max(0, startAt), max(0, questions.count - 1)))
@@ -193,19 +205,24 @@ public struct ApprovalCard<Context: View>: View {
     private var sentView: some View {
         HStack(spacing: 12) {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(theme.colors.green)
-                    .overlay { BUIIcon(.check, size: 11, lineWidth: 3).foregroundStyle(.white) }
-                    .frame(width: 18, height: 18)
+                // The host is still sending: a spinner, not the check, until it has the answer.
+                if options.isSending {
+                    BUISpinner(size: 14).frame(width: 18, height: 18)
+                } else {
+                    Circle()
+                        .fill(theme.colors.green)
+                        .overlay { BUIIcon(.check, size: 11, lineWidth: 3).foregroundStyle(.white) }
+                        .frame(width: 18, height: 18)
+                }
                 Text(sentMessage)
                     .buiFont(BUITextStyle(size: 12.5, weight: .medium))
-                    .foregroundStyle(theme.colors.green)
+                    .foregroundStyle(options.isSending ? theme.colors.ink2 : theme.colors.green)
             }
             .padding(.leading, 4)
             .padding(.trailing, 10)
             .padding(.vertical, 4)
-            .background(theme.colors.greenTint, in: Capsule())
-            if options.allowsStartOver {
+            .background(options.isSending ? Color.clear : theme.colors.greenTint, in: Capsule())
+            if options.allowsStartOver, !options.isSending {
             Button {
                 reset()
             } label: {
@@ -222,20 +239,21 @@ public struct ApprovalCard<Context: View>: View {
 
     private var card: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .topLeading) {
-                question(questions[index], at: index)
-                    .id(index)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: forward ? .bottom : .top).combined(with: .opacity),
-                        removal: .move(edge: forward ? .top : .bottom).combined(with: .opacity)
-                    ))
+            if let maxHeight = options.maxHeight {
+                ScrollView {
+                    questionArea.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: questionCap(maxHeight))
+            } else {
+                questionArea
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .clipped()
-            .padding(options.drawsSurface ? 12 : 0)
             footer
-                .padding(options.drawsSurface ? 0 : -10)
-                .padding(.top, options.drawsSurface ? 0 : 12)
+                .padding(.horizontal, options.drawsSurface ? 0 : -10)
+                .padding(.top, options.drawsSurface ? 0 : 2)
+                // A capped card includes the whole footer in its measured height; uncapped hosts keep the original bleed.
+                .padding(.bottom, options.drawsSurface || options.maxHeight != nil ? 0 : -10)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
         .disabled(options.isSending)
         .modifier(CardSurface(active: options.drawsSurface))
@@ -253,6 +271,26 @@ public struct ApprovalCard<Context: View>: View {
             }
         }
         .buiEntrance(.fadeUp, duration: 0.38)
+        .deliberateTap($dragged, enabled: options.rejectsDraggedPicks)
+    }
+
+    private var questionArea: some View {
+        ZStack(alignment: .topLeading) {
+            question(questions[index], at: index)
+                .id(index)
+                .transition(.asymmetric(
+                    insertion: .move(edge: forward ? .bottom : .top).combined(with: .opacity),
+                    removal: .move(edge: forward ? .top : .bottom).combined(with: .opacity)
+                ))
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .clipped()
+        .padding(options.drawsSurface ? 12 : 0)
+    }
+
+    private func questionCap(_ maxHeight: CGFloat) -> CGFloat {
+        let available = max(maxHeight - footerHeight, 0)
+        return min(contentHeight == 0 ? available : contentHeight, available)
     }
 
     private func question(_ question: ApprovalQuestion, at qIndex: Int) -> some View {
@@ -276,7 +314,7 @@ public struct ApprovalCard<Context: View>: View {
                 ForEach(Array(question.choices.enumerated()), id: \.offset) { option, choice in
                     let on = picked.contains(option)
                     Button {
-                        pick(option, question: question)
+                        if !dragged { pick(option, question: question) }
                     } label: {
                         HStack(alignment: choice.detail == nil ? .center : .top, spacing: 6) {
                             Indicator(kind: question.kind, on: on)
@@ -327,6 +365,21 @@ public struct ApprovalCard<Context: View>: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
+            if let onSkip, let skipLabel {
+                Button {
+                    guard !options.isSending else { return }
+                    advanceTask?.cancel()
+                    customFocused = false
+                    onSkip(answers)
+                } label: {
+                    Text(skipLabel).lineLimit(1)
+                }
+                .buttonStyle(.bui(.ghost, growsWithText: true))
+                // The original's compact pills are 27 pt; whole-card Skip keeps a full finger's target.
+                .frame(minHeight: 44 * max(1, theme.typeScale * 0.9))
+                .contentShape(.rect)
+                .accessibilityIdentifier("question-skip")
+            }
             if questions.count > 1 {
             HStack(spacing: 4) {
                 stepButton(.up, disabled: index <= 0) { go(to: index - 1) }
@@ -342,7 +395,7 @@ public struct ApprovalCard<Context: View>: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 6) {
-                if let skipLabel {
+                if let skipLabel, onSkip == nil {
                 Button(skipLabel) {
                     if isLast {
                         withAnimation(BUIMotion.standard) { open = false }
@@ -351,7 +404,7 @@ public struct ApprovalCard<Context: View>: View {
                         go(to: index + 1)
                     }
                 }
-                .buttonStyle(.bui(.ghost))
+                .buttonStyle(.bui(.ghost, growsWithText: options.maxHeight != nil))
                 }
                 Button { advance() } label: {
                     HStack(spacing: 6) {
@@ -359,7 +412,7 @@ public struct ApprovalCard<Context: View>: View {
                         Text(isLast ? sendLabel : continueLabel).lineLimit(1)
                     }
                 }
-                    .buttonStyle(.bui(.accent))
+                    .buttonStyle(.bui(.accent, growsWithText: options.maxHeight != nil))
                     .disabled(!answers.hasAnswer(index))
             }
             .padding(.trailing, -2)
@@ -444,6 +497,29 @@ public extension ApprovalCard where Context == EmptyView {
         self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
                   continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
                   sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss) { _ in EmptyView() }
+    }
+
+    /// Whole-card cancellation is a separate, explicitly labeled overload: adding it to the original initializer would
+    /// let an existing unlabeled trailing closure bind to Skip instead of Submit.
+    init(
+        questions: [ApprovalQuestion],
+        startAt: Int = 0,
+        answers: ApprovalAnswers = ApprovalAnswers(),
+        submitted: Bool = false,
+        skipLabel: String? = "Skip",
+        continueLabel: String = "Continue",
+        sendLabel: String = "Send",
+        customPlaceholder: String = "Something else…",
+        sentMessage: String = "Answers sent",
+        options: Options = Options(),
+        onSkip: ((ApprovalAnswers) -> Void)?,
+        onSubmit: ((ApprovalAnswers) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.init(questions: questions, startAt: startAt, answers: answers, submitted: submitted, skipLabel: skipLabel,
+                  continueLabel: continueLabel, sendLabel: sendLabel, customPlaceholder: customPlaceholder,
+                  sentMessage: sentMessage, options: options, onSubmit: onSubmit, onDismiss: onDismiss)
+        self.onSkip = onSkip
     }
 }
 

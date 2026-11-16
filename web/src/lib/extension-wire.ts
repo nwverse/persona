@@ -13,6 +13,11 @@ export interface Manifest {
   publisher?: string;
   homepage?: string;
   /**
+   * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+   * from packaged and runtime manifests for compatibility.
+   */
+  icon?: "assets/icon.png";
+  /**
    * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
    * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
    * instead.
@@ -54,6 +59,19 @@ export interface Manifest {
    */
   tools?: ToolSpec[];
   auth?: AuthSpec;
+  /**
+   * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+   * executable; writes and arbitrary command lines are not part of this contract.
+   */
+  host_integrations?: HostIntegrationSpec[];
+}
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+export interface HostIntegrationSpec {
+  id: string;
+  version: string;
 }
 
 /**
@@ -297,6 +315,8 @@ export interface StoragePermission {
 export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
+  transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -327,26 +347,49 @@ export interface Contributes {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 export interface SkillItem {
   id: string;
-  /** The directory, relative to the package. */
+  /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
+  source?: ContentSource;
 }
 
-export type PromptKind = "instructions" | "quick" | (string & {});
-export const PROMPT_KINDS = ["instructions", "quick"] as const;
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+export type ContentSource = "package" | "data" | (string & {});
+export const CONTENT_SOURCES = ["package", "data"] as const;
+
+export type PromptKind = "instructions" | "quick" | "project_context" | "inbox_context" | (string & {});
+export const PROMPT_KINDS = ["instructions", "quick", "project_context", "inbox_context"] as const;
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
-  /** instructions: the .md file. */
+  source?: ContentSource;
+  /**
+   * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+   * file (1 KB used).
+   */
   file?: string;
+  /** project_context: the directory of <project slug>.md files (1.5 KB of each used). */
+  dir?: string;
+  /**
+   * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+   * checked, never in a prompt.
+   */
+  never_quote?: string;
   /** quick: what the apps show. */
   title?: string;
   /** quick: what goes into the message box. */
@@ -582,7 +625,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -678,6 +721,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -820,11 +876,37 @@ export interface AuthPrompt {
   expires_at?: string;
 }
 
+/**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+export interface SettingsCheckParams {
+  /** The whole configuration as it would be saved, the schema's defaults filled in. */
+  config: unknown;
+  secrets: Record<string, string>;
+  /**
+   * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+   * permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+   * ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+   * ordinary proxy (an older hub sends none).
+   */
+  proxy?: string;
+}
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+export interface SettingsCheckResult {
+  ok: boolean;
+  error?: string;
+}
+
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -1019,6 +1101,8 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
 }
 
 export interface UIPlaces {
@@ -1411,8 +1495,9 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
 export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
@@ -1446,6 +1531,16 @@ export interface Section {
   items: Component[];
   more?: More;
   pane?: Pane;
+  span?: SectionSpan;
+  /** Drawn before the title. */
+  icon?: NavIcon;
+  icon_color?: Color;
+  link?: SectionLink;
+  /**
+   * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+   * screen and when absent. Other components keep the whole width.
+   */
+  columns?: number;
 }
 
 /**
@@ -1969,21 +2064,56 @@ export interface Tile {
   control?: RowControl;
   actions?: RowAction[];
   action?: Action;
+  /** Draws the tile as a ring (UI version 9): never with an image or a spark. */
+  gauge?: Gauge;
+}
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+export interface Gauge {
+  /** How full the ring is, 0 to 1. */
+  ratio: number;
+  /** A short word under the value (USD, GB, h), as a control's unit. */
+  unit?: string;
+  color?: Color;
 }
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
-export type Layout = "stack" | "split" | (string & {});
-export const LAYOUTS = ["stack", "split"] as const;
+export type Layout = "stack" | "split" | "columns" | (string & {});
+export const LAYOUTS = ["stack", "split", "columns"] as const;
 
 /**
  * Where a section of a split view goes.
  */
 export type Pane = "main" | "side" | (string & {});
 export const PANES = ["main", "side"] as const;
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+export type SectionSpan = "full" | (string & {});
+export const SECTION_SPANS = ["full"] as const;
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+export interface SectionLink {
+  title: string;
+  action: Action;
+}
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | (string & {});
 export const FILE_STATUSES = ["added", "modified", "deleted", "renamed"] as const;

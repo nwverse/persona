@@ -15,6 +15,16 @@ nonisolated enum PerfTrace {
         os_signpost(.event, log: log, name: name, "%{public}@", detail as NSString)
     }
 
+    /// The root's first appearance, immediately before SwiftUI hands its first frame to Core Animation. This is the
+    /// closest app-side launch boundary; XCTApplicationLaunchMetric supplies the actual displayed-frame timestamp.
+    /// Later root appearances (for example a look change) are not launches. The static Bool adds no allocation or IO.
+    @MainActor private static var firstFrameMarked = false
+    @MainActor static func firstFrame() {
+        guard !firstFrameMarked else { return }
+        firstFrameMarked = true
+        event("First frame (root appeared)")
+    }
+
     /// A view's body was evaluated: a signpost (Instruments' Points of Interest) and a count (`PerfCount`).
     @MainActor static func body(_ name: StaticString) {
         os_signpost(.event, log: log, name: "Body", "%{public}@", "\(name)" as NSString)
@@ -79,7 +89,14 @@ nonisolated enum PerfTrace {
         #else
         let scroll = ""
         #endif
-        return "{\"bodies\":{\(b)},\"events\":\(events),\"passes\":\(passes),\"ms\":\(String(format: "%.1f", totalMS)),\"max\":\(String(format: "%.1f", maxMS))\(scroll)}"
+        let blocks: String
+        if let data = try? JSONSerialization.data(withJSONObject: MainThreadWatchdog.shared.report, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            blocks = ",\"main_thread_blocks\":" + json
+        } else {
+            blocks = ""
+        }
+        return "{\"bodies\":{\(b)},\"events\":\(events),\"passes\":\(passes),\"ms\":\(String(format: "%.1f", totalMS)),\"max\":\(String(format: "%.1f", maxMS))\(blocks)\(scroll)}"
     }
 }
 

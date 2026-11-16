@@ -15,13 +15,13 @@ import (
 
 // newQuietService is newTaskService with the main conversation conv1 (idle, on machine server), a short notice
 // delay and supervision messages (supervise_digest.go) that come at once and often.
-func newQuietService(t *testing.T) (*Service, *fakeHub) {
+func newQuietService(t testing.TB) (*Service, *fakeHub) {
 	t.Helper()
 	return newQuietServiceOn(t, nil)
 }
 
 // newQuietServiceOn is newQuietService with st as its database (nil: none).
-func newQuietServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
+func newQuietServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	old := quietNoticeDelay
 	quietNoticeDelay = 30 * time.Millisecond
@@ -98,7 +98,7 @@ func TestQuietTaskTellsTheMainConversation(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "修好了，提了 https://github.com/o/r/pull/901", 0)
 	waitFor(t, "the notice", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "）：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
+	for _, want := range []string{"📋 督办", "任务「修登录崩溃」（" + todo.ID + "，signal=review）：hub 判断做完了，等你验收（修好了）；在 box", "修好了，提了 https://github.com/o/r/pull/901", "不是用户发的"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notice lacks %q:\n%s", want, n)
 		}
@@ -196,29 +196,38 @@ func TestQuietNoticeWaitsForTheTurn(t *testing.T) {
 	}
 }
 
-// Tasks from another conversation are neither quiet nor supervised: no messages (the hub pushes as always). With
-// the setting off a task from the main conversation is not quiet (the hub pushes) but is still supervised.
+// Tasks from another conversation are not quiet: the hub pushes as always, and the planning conversation supervises
+// them itself (a supervision message, not a quiet notice). With the setting off a task from the main conversation is
+// not quiet (the hub pushes) but is still supervised.
 func TestNotQuietTasksAreNotTold(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		set  func(*Settings)
-		told bool
+		name       string
+		set        func(*Settings)
+		supervisor string
+		told       bool
 	}{
-		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, false},
-		{"setting off", func(v *Settings) { v.MainTasksQuiet = new(false) }, true},
+		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv1", true},
+		{"setting off", func(v *Settings) { v.MainTasksQuiet = new(false) }, "conv1", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newQuietService(t)
 			f.judge = `{"verdict":"done","reason":"好了"}`
 			setSettings(t, s, c.set)
-			if todo := startedTask(t, s, f); todo.Quiet || (todo.Supervision != nil) != c.told {
-				t.Fatalf("todo = %+v", todo)
+			if todo := startedTask(t, s, f); todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != c.supervisor {
+				t.Fatalf("todo = %+v (supervision %+v)", todo, todo.Supervision)
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			agentTurn(s, f, proto.StatusDone, "好了", 0)
 			time.Sleep(4 * quietNoticeDelay)
 			if told := len(f.notices()) > 0; told != c.told {
 				t.Fatalf("told = %v: %q", told, f.notices())
+			}
+			if c.name == "side conversation" {
+				for _, n := range f.notices() {
+					if !strings.Contains(n, "📋 督办") {
+						t.Fatalf("a side conversation's message is not its supervision message:\n%s", n)
+					}
+				}
 			}
 		})
 	}
@@ -256,6 +265,10 @@ func TestAgentStartFromTheMainConversation(t *testing.T) {
 	}
 	if !strings.Contains(res, "a task of this conversation") || feedKinds(s, "conv1") != "task" {
 		t.Fatalf("result %q, feed %q", res, feedKinds(s, "conv1"))
+	}
+	// the task started its agent: its card has no wake (the clients' New, #5096)
+	if got := taskCardWake(s, "conv1", todo.ID); got != "" {
+		t.Fatalf("card wake %q", got)
 	}
 
 	for _, c := range []struct {
@@ -534,7 +547,7 @@ func TestQueuedDoneNoticeSurvivesAnsweredCard(t *testing.T) {
 	idleLark.Status = proto.StatusIdle
 	f.setSessions("server", idle1, idleLark)
 	s.drainRelays("server", []proto.Session{idleLark})
-	waitFor(t, "the done notice to go out", func() bool { return f.sentTo("lark1") == 1 })
+	waitFor(t, "the done notice to go out", func() bool { return f.sentTo("lark1") == 1 && s.queuedFor("lark1") == 0 })
 	if q := s.queuedFor("lark1"); q != 0 {
 		t.Fatalf("%d notice(s) still queued", q)
 	}

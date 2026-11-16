@@ -5,8 +5,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -90,9 +92,10 @@ func realOf(t *testing.T, p string) string {
 // command, its launcher settings readable, and the environment can turn it off again.
 func TestAssistantCLIInAgentSandbox(t *testing.T) {
 	agentSandboxFakes(t, macSandbox)
-	env := []string{"PATH=/usr/bin:/bin"}
+	profile := t.TempDir()
+	env := []string{"PATH=/usr/bin:/bin", "CLAUDE_CONFIG_DIR=" + profile}
 	plain := func(args []string) []string {
-		return append([]string{"/bin/zsh", "-ic", `claude "$@"`, "persona"}, args...)
+		return append([]string{"/bin/zsh", "-ic", "CLAUDE_CONFIG_DIR=" + shellQuote(profile) + ` claude "$@"`, "persona"}, args...)
 	}
 
 	n := agentNode(t, false)
@@ -201,6 +204,9 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 			if st.State != c.state || st.Why == "" {
 				t.Errorf("status %+v, want %s with why", st, c.state)
 			}
+			if st.State == sandbox.AgentSkipped && st.Reason == nil {
+				t.Errorf("Persona-owned inner reason has no metadata: %+v", st)
+			}
 		})
 	}
 	t.Run("off says nothing", func(t *testing.T) {
@@ -211,6 +217,35 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 			t.Errorf("sandbox.enabled false: not wrapped %q", cmd.Args)
 		}
 	})
+}
+
+func TestClaudeSandboxReasonKeepsLegacyText(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, key, want string
+	}{
+		{name: "invalid JSON", input: "{", key: "node-doctor.sandbox_claude_settings_invalid_json",
+			want: "Claude 的设置 --settings 不是合法的 JSON，判断不出它有没有开自带 sandbox"},
+		{name: "invalid sandbox", input: `{"sandbox":"unknown"}`, key: "node-doctor.sandbox_claude_settings_invalid_sandbox",
+			want: "Claude 的设置 --settings 里的 sandbox 看不懂，判断不出它有没有开自带 sandbox"},
+		{name: "enabled", input: `{"sandbox":{"enabled":true}}`, key: "node-doctor.sandbox_claude_own",
+			want: "Claude 在 --settings 里开了自带 sandbox（sandbox.enabled），和外层沙箱不能同时用"},
+		{name: "disabled", input: `{"sandbox":{"enabled":false}}`},
+		{name: "options only", input: `{"sandbox":{"autoAllowBashIfSandboxed":true}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := claudeSandboxInReason([]byte(tc.input), "--settings")
+			if got := claudeSandboxIn([]byte(tc.input), "--settings"); got != reason.Error() || got != tc.want {
+				t.Errorf("wrapper = %q, reason = %q, legacy text = %q", got, reason.Error(), tc.want)
+			}
+			if tc.key == "" {
+				if reason != nil {
+					t.Errorf("unexpected reason: %+v", reason)
+				}
+			} else if reason == nil || reason.Key != tc.key {
+				t.Errorf("reason = %+v, want key %q", reason, tc.key)
+			}
+		})
+	}
 }
 
 // A Codex is wrapped only when it surely runs its tools itself with no sandbox of its own: danger-full-access, in its
@@ -247,9 +282,10 @@ func TestCodexInner(t *testing.T) {
 			if c.config != "" {
 				writeFile(t, filepath.Join(home, ".codex", "config.toml"), c.config)
 			}
+			reason := codexInnerReason(c.argv, nil, filepath.Join(home, "proj"), home)
 			why := codexInner(c.argv, nil, filepath.Join(home, "proj"), home)
-			if (why == "") != c.wrap {
-				t.Errorf("wrap %v, why %q", c.wrap, why)
+			if (why == "") != c.wrap || (reason == nil) != c.wrap || why != reason.Error() {
+				t.Errorf("wrap %v, why %q, reason %+v", c.wrap, why, reason)
 			}
 		})
 	}
@@ -295,7 +331,7 @@ func TestCodexStartExec(t *testing.T) {
 	t.Chdir(proj)
 	for _, words := range [][]string{{"/x/personad", "launch", "codex-work"}, {"pi", "--session", "s1"}} {
 		path := "/bin/" + filepath.Base(words[0])
-		if p, argv, _, st := codexStartExec(path, words, nil); p != path || !slices.Equal(argv, words) || st.State != sandbox.AgentOff {
+		if p, argv, _, st := codexStartExec(path, words, nil, nil); p != path || !slices.Equal(argv, words) || st.State != sandbox.AgentOff {
 			t.Errorf("%v: %s %q %+v", words, p, argv, st)
 		}
 	}
@@ -303,12 +339,25 @@ func TestCodexStartExec(t *testing.T) {
 		t.Errorf("recorded %v", readAgentSandboxStatus(dir))
 	}
 	words := []string{"codex", "-c", `sandbox_mode="danger-full-access"`, "--", "hello"}
-	p, argv, env, st := codexStartExec("/opt/bin/codex", words, []string{"A=1"})
-	if st.State != sandbox.AgentActive || p != argv[0] || !inSandbox(argv) || argv[3] != "/opt/bin/codex" || !slices.Equal(argv[4:], words[1:]) || !slices.Contains(env, sandbox.AgentEnv+"=1") {
+	command := func(words []string) []string {
+		if runtime.GOOS != "windows" {
+			if shell, err := exec.LookPath(loginShellProgram()); err == nil {
+				return append([]string{shell, "-ic", codexNativeStartScript, "persona-codex-start", proj, "--"}, words...)
+			}
+		}
+		return append([]string{"/opt/bin/codex"}, words[1:]...)
+	}
+	p, argv, env, st := codexStartExec("/opt/bin/codex", words, []string{"A=1"}, nil)
+	if st.State != sandbox.AgentActive || p != argv[0] || !inSandbox(argv) || !slices.Equal(argv[3:], command(words)) || !slices.Contains(env, sandbox.AgentEnv+"=1") {
 		t.Errorf("danger-full-access: %s %q %q %+v", p, argv, env, st)
 	}
 	words = []string{"codex", "--", "hello"}
-	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil); p != "/opt/bin/codex" || !slices.Equal(argv, words) || st.State != sandbox.AgentSkipped || st.Why == "" {
+	want := command(words)
+	wantPath := want[0]
+	if wantPath == "/opt/bin/codex" {
+		want = words
+	}
+	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil, nil); p != wantPath || !slices.Equal(argv, want) || st.State != sandbox.AgentSkipped || st.Why == "" {
 		t.Errorf("plain codex: %s %q %+v", p, argv, st)
 	}
 	if st := readAgentSandboxStatus(dir)["codex-start"]; st.State != sandbox.AgentSkipped {

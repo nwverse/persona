@@ -14,6 +14,15 @@ import (
 // NodeEvent takes a node's event before the hub does (devices.Options.Event); false: the hub does not get it (the
 // manager tells it what follows instead).
 func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool {
+	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
+		return false
+	}
+	var hook map[string]any
+	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
+		if sid, _ := hook["session_id"].(string); sid != "" {
+			s.agentDecisionPrompt(machine, sid, hook)
+		}
+	}
 	if !s.fleetOn() {
 		return true
 	}
@@ -63,8 +72,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 		s.syncCodexInteractions(machine, params)
 		return false
 	case "hook.event":
-		var p map[string]any
-		if json.Unmarshal(params, &p) == nil {
+		if p := hook; p != nil {
 			if sid, _ := p["session_id"].(string); sid != "" {
 				// A report-only hook (node/globalhooks.go) is not Persona's hooks running in the session: it asks for
 				// no card, so it must not hold the screen's back (hasHooks). Its Stop still counts for stopDuplicate.
@@ -87,6 +95,9 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
 func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+	if err := s.conversationParamsAvailable(ctx, machine, params); err != nil {
+		return nil, true, err
+	}
 	if !s.fleetOn() {
 		return nil, false, nil
 	}
@@ -95,6 +106,13 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		if s.ext == nil {
 			return map[string]any{"action": "cancel"}, true, nil
 		}
+		var p struct {
+			CallID json.RawMessage `json:"call_id"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitElicitContext(ctx, callID)
 		out, err := s.ext.AnswerComputerElicit(ctx, machine, params)
 		return out, true, err
 	case "interaction.create":
@@ -142,25 +160,42 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		return out, true, err
 	case "mcp.tools":
 		var p struct {
-			Assistant bool   `json:"assistant"`
-			SessionID string `json:"session_id"`
-			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Assistant  bool   `json:"assistant"`
+			SessionID  string `json:"session_id"`
+			Guest      bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision   string `json:"revision"`
+			LeaderOnly bool   `json:"leader_only"`
 		}
 		_ = json.Unmarshal(params, &p)
-		return map[string]any{"tools": s.sessionMCPTools(ctx, machine, p.SessionID, p.Assistant, p.Guest)}, true, nil
+		if p.LeaderOnly {
+			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
+		}
+		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
 	case "mcp.call":
 		var p struct {
-			Name      string          `json:"name"`
-			Args      json.RawMessage `json:"args"`
-			SessionID string          `json:"session_id"`
-			Assistant bool            `json:"assistant"`
-			Guest     bool            `json:"guest"`
+			Name        string          `json:"name"`
+			Args        json.RawMessage `json:"args"`
+			SessionID   string          `json:"session_id"`
+			Assistant   bool            `json:"assistant"`
+			Guest       bool            `json:"guest"`
+			WaitUpdates bool            `json:"wait_updates"`
+			CallID      json.RawMessage `json:"call_id"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, true, err
 		}
+		var callID string
+		_ = json.Unmarshal(p.CallID, &callID)
+		ctx = s.mcpWaitContext(ctx, machine, callID, p.WaitUpdates)
+		defer s.endMCPWait(ctx)
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
+		}
+		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			return s.roomToolCall(ctx, rec, p.Name, p.Args), true, nil // bound to its own recording
 		}
 		return s.mcpCall(ctx, machine, p.SessionID, p.Name, p.Args, p.Assistant), true, nil
 	}
@@ -176,7 +211,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleetStart(context.WithoutCancel(ctx))
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
-	s.fleet.sent = nil
+	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
 	for _, m := range s.fleetMachines() {

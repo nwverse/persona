@@ -96,14 +96,23 @@ struct AgentListRows {
         }
     }
 
-    /// By App: per app, its rows (running and offline, the latest first) while its section is open.
+    /// By App: per app, its projects' rows (running and offline, the latest first) while the section and the project are open.
     func apps(_ groups: [AppGroup]) -> [Session] {
-        groups.flatMap { folded($0.id) ? [] : $0.sessions }
+        groups.flatMap { app in
+            folded(app.id) ? [] : app.showsProjects ? app.projects.flatMap { folded($0.id) ? [] : $0.sessions } : app.sessions
+        }
     }
 
     /// By To-do: a section per todo, Unassigned last; `isFolded` per group (Unassigned has its own default, `TodoAgentGroup.folded`).
     func todos(_ groups: [TodoAgentGroup], isFolded: (TodoAgentGroup) -> Bool) -> [Session] {
         groups.flatMap { g in !searching && isFolded(g) ? [] : g.sessions }
+    }
+
+    /// By Pinned (#4352): per direction while its section is open, its to-dos' Agents in the tree's order (those the list
+    /// has), then By To-do's last sections; `isOther` per one of those, as `todos` takes it.
+    func directions(_ sections: DirectionAgentSections, isOther: (TodoAgentGroup) -> Bool) -> [Session] {
+        sections.entries.flatMap { e in folded(e.key) ? [] : e.tasks.flatMap { $0.lines.compactMap(\.session) } }
+            + todos(sections.others, isFolded: isOther)
     }
 
     static func hostID(_ ref: MachineRef) -> String { "machine/" + ref.path }

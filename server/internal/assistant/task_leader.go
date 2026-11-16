@@ -37,15 +37,12 @@ const (
 	// leader's task id), as sourceReview marks a reviewer.
 	sourceLeader = "leader"
 	sourceWorker = "worker"
-	// permBypass is the only permission a task that changes files may be planned with: it starts at once, with nobody
-	// there to answer a permission prompt.
-	permBypass = "bypassPermissions"
 	// leaderWorkersMost bounds the workers of one leader that are open at a time.
 	leaderWorkersMost = 8
 )
 
-// leaderListWait bounds how long a tool list asked for by an agent that is no task's yet waits for a task leader being
-// started: its agent asks for its tools before the start returns and it is linked.
+// leaderListWait bounds only legacy one-shot/direct discovery while a leader start reaches its link. Revision-aware
+// watches use their cursor and heartbeat instead.
 var leaderListWait = 8 * time.Second
 
 func (a TodoAgent) active() bool { return a.ReleasedAt == nil && a.DismissedAt == nil }
@@ -201,6 +198,22 @@ func leaderToolList() []proto.Tool {
 	return []proto.Tool{leaderPlanTool(), {Name: "task_review", Description: r.Description, InputSchema: r.InputSchema}}
 }
 
+// runtimeLeaderTools supplies plugin registration schemas and checks individual sessions at tool activation.
+func (s *Service) runtimeLeaderTools(ctx context.Context, machine, session string, guestHint bool) []proto.Tool {
+	if s.isWorkMachine(machine) || guestHint {
+		return nil
+	}
+	if session != "" {
+		if _, guest, err := s.guestOf(ctx, machine, session); err != nil || guest {
+			return nil
+		}
+		if _, _, ok := s.leaderTask(ctx, machine, session); !ok {
+			return nil
+		}
+	}
+	return leaderToolList()
+}
+
 // leaderTools are the tools only a task leader's agent gets, on top of any agent's: none for any other agent.
 func (s *Service) leaderTools(ctx context.Context, machine, session string) []proto.Tool {
 	if session == "" {
@@ -209,9 +222,11 @@ func (s *Service) leaderTools(ctx context.Context, machine, session string) []pr
 	if _, _, ok := s.leaderTask(ctx, machine, session); ok {
 		return leaderToolList()
 	}
-	// An agent asks for its tools as it starts, before the start that made it returns and it is linked: with a leader
-	// being started, an agent that is no task's yet waits for it (bounded), so a leader is not left without its tool
-	// for the whole session. A worker, or an agent in any other task, is known and does not wait.
+	if revision, _ := ctx.Value(revisionDiscoveryKey{}).(bool); revision {
+		return nil // a revision-aware peer recovers through its cursor, never through the legacy startup wait
+	}
+	// A legacy one-shot peer asks before the start returns and has no cursor with which to recover later. Wait only
+	// while a leader is actually starting, and only until that leader's real link grants the tools.
 	if _, ok := s.taskOf(ctx, s.canonical(machine), session); ok {
 		return nil
 	}
@@ -444,6 +459,14 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	if err := s.sendToLeader(ctx, lead, prompts.RenderWorkerSupervise(sortEntries(entries)), kept); err != nil {
+		var escalated leaderEscalated
+		if errors.As(err, &escalated) {
+			// The current process's escalation/retry owns this message. Do not restore its pending entry and escalate it
+			// twice, but release dedup and leave the turn untold so a manager restarted without either can deliver it.
+			rollback()
+			s.logf("supervise: %d signal(s) for stopped task leader %s escalated; keeping them recoverable", len(entries), short(lead.SessionID))
+			return false
+		}
 		s.logf("supervise: %d signal(s) for task leader %s: %v; trying again", len(entries), short(lead.SessionID), err)
 		rollback()
 		s.restoreDigest(kept, now, prev)
@@ -451,6 +474,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
 	s.parkedDueTold(ctx, kept)
+	s.turnsTold(ctx, kept) // how a turn ended is told once, to a leader too (task_turns.go)
 	return true
 }
 
@@ -461,10 +485,19 @@ type leaderUnreachable struct{ err error }
 func (e leaderUnreachable) Error() string { return e.err.Error() }
 func (e leaderUnreachable) Unwrap() error { return e.err }
 
+// leaderEscalated is a refused send whose escalation and process-local retry are already running. It is not delivery:
+// the original turn stays untold and its dedup reservation is released so a restarted manager can recover it.
+type leaderEscalated struct{ err error }
+
+func (e leaderEscalated) Error() string { return e.err.Error() }
+func (e leaderEscalated) Unwrap() error { return e.err }
+
 // sendToLeader sends text, the supervision message for signals kept, into the leader agent's session. A closed agent is
 // resumed in the background (that takes minutes): when that fails the signals are escalated and retried
-// (escalateLeaderMessage). A session its computer does not list, or a failed send, is a leaderUnreachable for the
-// caller, which puts the signals back for the next digest.
+// (escalateLeaderMessage). A send the node refuses because the agent has stopped (agent_stopped: read-only until the
+// user's Resume, node stopped.go) goes the same way at once (#8518): another digest would only be refused again. A
+// session its computer does not list, or a send that failed otherwise, is a leaderUnreachable for the caller, which
+// puts the signals back for the next digest.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
 	c, ok := s.session(ctx, lead.MachineID, lead.SessionID)
 	if !ok {
@@ -482,25 +515,30 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
 	if err := s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil); err != nil {
+		if refusedWith(err, proto.CodeAgentStopped) {
+			s.logf("task leader %s: it has stopped: %v", short(lead.SessionID), err)
+			s.escalateLeaderMessage(lead, kept, text)
+			return leaderEscalated{err}
+		}
 		return leaderUnreachable{err}
 	}
 	return nil
 }
 
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
-// leaderResumeWait. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
+// leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
 func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string) error {
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaderResumeWait)
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.leaderResumeTime())
 	defer cancel()
 	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
 }
 
 // escalateLeaderMessage handles supervision message text for signals kept that could not be put into the leader's
-// session (a closed agent's resume failed). Each worker's signal becomes a decision for the conversation above the
-// leader, naming the worker (so that conversation can review it) and saying the leader could not be reached; and in any
-// case, with or without a conversation above, the message is tried again on the leader itself with a growing wait, until
-// it is taken or the leader's task is closed (its workers are then rehomed). The retry runs on its own context: it must
-// outlive the call that started it.
+// session (a closed agent's resume failed, or the node refused it because the agent has stopped). Each worker's signal
+// becomes a decision for the conversation above the leader, naming the worker (so that conversation can review it) and
+// saying the leader could not be reached; and in any case, with or without a conversation above, the message is tried
+// again on the leader itself with a growing wait, until it is taken or the leader's task is closed (its workers are then
+// rehomed). The retry runs on its own context: it must outlive the call that started it.
 func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, text string) {
 	ctx := context.Background()
 	for _, g := range kept {
@@ -513,7 +551,7 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 		}
 	}
 	go func() {
-		wait, deadline := leaderResumeWait, time.Now().Add(24*time.Hour)
+		wait, deadline := s.leaderResumeTime(), time.Now().Add(24*time.Hour)
 		for time.Now().Before(deadline) {
 			time.Sleep(wait)
 			if _, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID); !ok {
@@ -595,7 +633,13 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 	}
 	verdict, note, over := a.Verdict, clip(a.Note, 2000), false
+	var criteriaErr error
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		if verdict == reviewAccepted {
+			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
+				return false
+			}
+		}
 		if verdict == reviewRework && v.Round >= maxReworkRounds {
 			verdict, over = reviewNeedsUser, true
 		}
@@ -614,8 +658,14 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if err != nil {
 		return "", err
 	}
+	if criteriaErr != nil {
+		return "", criteriaErr
+	}
 	if verdict == reviewNeedsUser && up == "" {
 		up = s.settings(ctx).Main // reworked too often with nobody above the leader: the main conversation
+	}
+	if verdict != reviewAccepted { // by the leader's model and effort; an acceptance once it closed the worker (below)
+		s.leaderTaskReviewed(lead, t.ID, verdict, v)
 	}
 	if verdict == reviewRework || verdict == reviewNeedsUser {
 		s.setTaskStageKind(ctx, t.ID, "unverified", "", "", false)
@@ -633,16 +683,24 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
 		}
-		if t.DoneAt == nil {
-			if _, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted); err != nil {
+		if t.DoneAt == nil || t.StartError != "" {
+			wasOpen := t.DoneAt == nil
+			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
+			if err != nil {
 				return "", err
 			}
+			if wasOpen && closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
+				s.leaderTaskReviewed(lead, t.ID, verdict, v)
+			}
+		}
+		if verdict == reviewAccepted {
+			s.sendsAccepted(ctx, t.ID, time.Now()) // what was sent its agent before is answered: closed already, too (#7539)
 		}
 		if verdict == reviewCancelled {
 			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being closed and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
 		}
-		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is closed once it stays still.", t.ID), nil
+		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
 		why := cmp.Or(clip(oneLine(a.Reason), 200), clip(oneLine(note), 200))
 		if over && a.Reason == "" {
@@ -752,7 +810,12 @@ func (s *Service) leaderOpen(t Todo) bool { return t.ID != "" && t.DoneAt == nil
 // worker (a decision the leader sent up). The worker's supervisor stays the leader's agent: this never takes it over.
 func (s *Service) mayReviewForLeader(ctx context.Context, self string, t Todo) bool {
 	up, _ := s.supervisorAboveTask(ctx, t)
-	return up != "" && up == self
+	if up == "" {
+		return false
+	}
+	// The background supervisor stands in for the main conversation above a task leader no leader conversation
+	// supervises: the leader's decisions come to it (digestTo).
+	return up == self || s.isBackground(ctx, self) && !s.isLeader(ctx, up)
 }
 
 // leaderTaskOf is the open task leader agent lead leads.
@@ -762,8 +825,17 @@ func (s *Service) leaderTaskOf(ctx context.Context, lead TodoAgent) (Todo, bool)
 }
 
 // leaderResumeWait bounds how long resuming a closed leader agent may take before the message goes up to the conversation
-// above it instead.
-var leaderResumeWait = 3 * time.Minute
+// above it instead (Service.leaderResume shortens it in tests).
+const leaderResumeWait = 3 * time.Minute
+
+// leaderResumeTime is s's own leaderResumeWait. Tests set it on their Service, so a retry goroutine left over from one
+// test (it may run for a day) never reads what another test's cleanup writes.
+func (s *Service) leaderResumeTime() time.Duration {
+	if s.leaderResume > 0 {
+		return s.leaderResume
+	}
+	return leaderResumeWait
+}
 
 // leaderTaskIDOf is the task leader agent lead belongs to ("" if none).
 func (s *Service) leaderTaskIDOf(lead TodoAgent) string {

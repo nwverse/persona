@@ -46,7 +46,7 @@ const (
 )
 
 // meetingTurnTools are the hub's tools a meeting turn may call: they only read.
-var meetingTurnTools = []string{"kb_search", "kb_list", "kb_get", "todo_list", "todo_get", "agents_list", "agent_read",
+var meetingTurnTools = []string{"kb_search", "kb_list", "kb_get", "todo_list", "todo_get", "todo_repositories_get", "agents_list", "agent_read",
 	"conversations_list", "conversation_read", "machines_list", "list_followups"}
 
 // meetingTurn is one session's mark.
@@ -158,6 +158,9 @@ func (s *Service) meetingTurnUnsent(machine, session string, at time.Time) {
 // meetingTurnStarted: machine's session is seen working, a new turn when newTurn (it was seen stopped before);
 // whether this turn is a meeting turn. Called once per start, where starts are observed (setSessions, TurnStarted).
 func (s *Service) meetingTurnStarted(machine, session string, newTurn bool) bool {
+	if s.isRoom(session) {
+		return true // a meeting's room: every turn of it is a side exchange (meeting_room.go)
+	}
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -185,6 +188,9 @@ func (s *Service) meetingTurnStarted(machine, session string, newTurn bool) bool
 // meetingTurnEnded: machine's session stopped; whether the turn that ended is a meeting turn. A mark whose turn was
 // not seen starting is left as it is: the end is an earlier turn's. Called again for the same end, it says the same.
 func (s *Service) meetingTurnEnded(machine, session string) bool {
+	if s.isRoom(session) {
+		return true
+	}
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -284,6 +290,9 @@ func (s *Service) meetingTurnUserSpoke(machine, session string) {
 // (pushes, triage, tasks, mirrors). A batch sent whose turn has not been seen starting is not: the hooks of the turn
 // before it may still be running.
 func (s *Service) meetingTurnNow(machine, session string) bool {
+	if s.isRoom(session) {
+		return true
+	}
 	b := &s.attend.turns
 	b.mu.Lock()
 	defer b.mu.Unlock()

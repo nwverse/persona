@@ -91,7 +91,9 @@ fun InboxItemExtensionScreen(
             record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
                 item("item-summary") { JNotice(summary, Modifier.padding(bottom = Tokens.Space.s), title = stringResource(R.string.inbox_ai_summary), icon = PhIcons.Sparkle) }
             }
-            item("item-ai") { InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }) }
+            item("item-ai") {
+                InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }, showHandOff = !record.isAssistantRow)
+            }
             if (!record.item.isDone) item("item-agent-draft") {
                 AgentDraftCard(record, composers, navigator, repository = repository, onEdit = { drafting = true }, keepComposer = true)
             }
@@ -102,7 +104,7 @@ fun InboxItemExtensionScreen(
         item("item-gap") { Spacer(Modifier.padding(top = Tokens.Space.m)) }
         if (loading) item("item-body-loading") { JLoading() }
         body()
-        item("item-end") { Spacer(Modifier.padding(top = Tokens.Space.xxl)) }
+        item("item-end") { Spacer(Modifier.padding(top = Tokens.Space.xl)) }
     } }
     if (drafting && record != null) InboxDraftSheet(repository, record,
         composers.get(ReplyTarget.Inbox(record.item.id), record.agent?.takeIf { it.state == "drafted" }?.draft.orEmpty()),

@@ -94,9 +94,11 @@ internal interface NotifyDependencies {
     fun sessions(): SessionsRepository
     fun pairing(): PairingService
     fun notifier(): Notifier
+    fun notificationPreferences(): NotificationPreferencesSource
     fun actionJournal(): NotificationActionJournal
     fun journal(): ExitJournal
     fun runtime(): NotificationRuntime
+    fun extensionNotifications(): ExtensionNotificationEnvironment
 }
 
 @Singleton

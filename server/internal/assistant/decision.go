@@ -87,7 +87,7 @@ func neverDefault(why string) bool { return why == whyIrreversible || why == why
 // decisionElse is what a refused needs_user is told to do instead.
 const decisionElse = "When nothing needs the user, don't use needs_user: decide it yourself and send the agent on (agent_send), " +
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
-	"decision either: park it (parked, with reason, waiting_on and until), and it comes back to you at that time."
+	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
@@ -290,44 +290,110 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 }
 
 // chooseOption: the owner chose option label of task id's decision (asked: its round). The recommended one is taken as
-// "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's agent, which ends
-// the decision. False: the round is over. errDecisionOption: no such option; else acceptTry's errors, or the send's.
-func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bool, error) {
+// "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's Agent, which ends
+// the decision. With no Agent that can receive it, the choice is still recorded and handed to the supervisor. A zero
+// result means the round is over. errDecisionOption: no such option; another delivery error leaves the round retryable.
+func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
-		return false, err
+		return acceptResult{}, err
 	}
 	label = strings.TrimSpace(label)
 	i := slices.IndexFunc(a.Options, func(o DecisionOption) bool { return o.Label == label })
 	switch {
 	case label == a.Recommend && label != "":
-		return s.acceptTry(ctx, id, "")
+		return s.acceptTryAsDismissalLocked(ctx, id, "", false)
 	case i < 0:
-		return false, errDecisionOption
+		return acceptResult{}, errDecisionOption
 	}
 	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return acceptResult{}, err
+	}
 	l := s.botLang(ctx)
 	s.deadlineAnswered(ctx, id, a.AskedAt) // their own answer: no default at its deadline, even if the send fails
 	msg := i18n.T(l, "assistant-reports.decision_chosen_to_agent", i18n.Args{"option": label, "leads_to": a.Options[i].LeadsTo})
+	var sendErr error
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 		return cur.DoneAt == nil && !acceptAskStale(a, cur)
 	}); err != nil {
 		s.logf("task %s: decision to agent: %v", id, err)
-		return false, err
+		if !noAgentCanTake(err) {
+			return acceptResult{}, err
+		}
+		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
-		at := decisionNow()
-		if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
+		at, dec := decisionNow(), "dec_"+randomHex(8)
+		if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: dec, TodoID: id,
 			Question: cmp.Or(a.Reason, i18n.T(l, "assistant-reports.verdict_decide")), Choice: decisionText(label),
 			Source: db.DecisionManual, CreatedAt: at}); err != nil {
 			s.logf("task %s: decision: %v", id, err)
 		} else if ok {
+			s.ownerDecided(id, dec, a.WhyOwner)
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
-	s.userDecided(ctx, id)
+	result := acceptSucceeded()
+	if sendErr != nil {
+		result = s.decisionNotDelivered(ctx, id, a.AskedAt, label, sendErr)
+	} else {
+		s.userDecided(ctx, id)
+	}
 	s.endAsk(ctx, id, a.AskedAt, "", label)
-	return true, nil
+	completeDismissal()
+	return result, nil
+}
+
+// routeDecisionAnswer is an explicitly addressed chat answer, not an inference from arbitrary conversation text.
+// The original round fences stale tabs; only a delivered, recorded answer ends the pending decision.
+func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, asked, text string) (FeedItem, error) {
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
+	st := s.todoDB()
+	if st == nil {
+		return FeedItem{}, errAcceptStore
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return FeedItem{}, err
+	}
+	t, ok := s.todoNow(id)
+	if !ok || t.Origin != conversation {
+		return FeedItem{}, i18n.Err("assistant-tasks.route_no_task")
+	}
+	a, err := s.askRound(id, asked)
+	if err != nil {
+		return FeedItem{}, err
+	}
+	if a == nil {
+		return FeedItem{}, i18n.Err("assistant-feishu_cards.already_handled")
+	}
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return FeedItem{}, err
+	}
+	s.deadlineAnswered(ctx, id, a.AskedAt)
+	item, err := s.routeToTaskChecked(ctx, conversation, id, text, func(cur Todo) bool {
+		return cur.DoneAt == nil && !acceptAskStale(a, cur)
+	})
+	if err != nil {
+		return FeedItem{}, err
+	}
+	at := decisionNow()
+	row := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
+		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
+		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
+	if _, err := s.insertDecision(ctx, st, row); err != nil {
+		return FeedItem{}, err
+	}
+	completeDismissal()
+	s.decisionsChanged(ctx, id, at)
+	s.userDecided(ctx, id)
+	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
+	return item, nil
 }
 
 // askCardNow: card is one of the cards of task id's ask as it is now ("" when Feishu does not say: taken as one), so a
@@ -368,6 +434,8 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 //
 // False: the round is over, or response is none of them.
 func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response string) (bool, error) {
+	s.reviewDismissals.actions.acquire(id)
+	defer s.reviewDismissals.actions.release(id)
 	if !slices.Contains(ownerResponses, response) {
 		return false, nil
 	}
@@ -376,6 +444,10 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 		return false, err
 	}
 	t, _ := s.todoNow(id)
+	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
+	if err != nil {
+		return false, err
+	}
 	now := time.Now().UTC()
 	stays := response == respondExplainFirst || response == respondDecideYourself && neverDefault(a.WhyOwner)
 	v, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
@@ -395,6 +467,7 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", errAcceptStore, err)
 	}
+	completeDismissal()
 	if response == respondExplainFirst {
 		s.deadlineAnswered(ctx, id, a.AskedAt) // they asked for more first: its default is not taken meanwhile
 		b := &s.accept
@@ -470,7 +543,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 	defer cancel()
 	for _, w := range s.awaitingAcceptance(ctx) {
 		a := w.ask
-		if !decideAsk(&a) {
+		if !decideAsk(&a) || a.AgentReply != nil {
 			continue
 		}
 		// One that recommends nothing goes back as undecidable instead (undecidableSignal): not both.
@@ -483,7 +556,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		b := &s.accept
 		b.mu.Lock()
 		cur := b.asks[w.todo]
-		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() {
+		if cur == nil || !cur.AskedAt.Equal(a.AskedAt) || !cur.AcceptedAt.IsZero() || cur.AgentReply != nil {
 			b.mu.Unlock()
 			continue
 		}

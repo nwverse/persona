@@ -6,6 +6,262 @@ Implemented in 4 steps; after each step, the corresponding "Plan" is rewritten a
 
 ## Automatic private Hub releases
 
+### Web development updates
+
+For operators running the Web client with the built-in child manager, Settings › hub offers
+**Update source › Web development**. This feature is scoped to the Web development UI and
+its Hub/Node backend update chain. It does not add or validate native macOS, iOS, Android,
+or other client update flows. A Linux/macOS **Hub host** and registered computers' service
+binaries are backend installation targets, distinct from native client adaptation.
+
+This uses the existing update endpoints, hourly scheduler,
+idle checks, binary verification, blue-green switch/watchdog, confirmation and node deployment
+transactions. Public release updates keep their existing gates. Development automation is
+off until explicitly enabled and is turned off whenever the source changes. An update already
+accepted keeps its fixed candidate; source changes are refused until it ends. Repeated triggers
+join that attempt. A rolled-back development commit is never automatically tried again.
+
+Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
+Configure `update.development` in the installation's private `hub.json`, then start the Hub
+through its original installation channel. The Web settings cannot supply a shell command,
+credential or arbitrary path:
+
+```json
+{
+  "update": {
+    "development": {
+      "backup": {
+        "quiesce": ["/absolute/path/to/pause-persona-writers"],
+        "resume": ["/absolute/path/to/resume-persona-writers"],
+        "extra_roots": [],
+        "extra_databases": []
+      }
+    }
+  }
+}
+```
+
+These hook paths are placeholders, not installed programs. The operator must implement and
+verify them for that installation. `quiesce` must return only after **all** writers of the
+inventoried databases and files have paused at a consistent boundary, including background
+ingestion, extensions, uploads and manager/node children. Keep the Hub updater itself running.
+`resume` must safely release even a partially completed pause. Hooks have a 60-second deadline;
+every failure attempts resume, and a failed resume blocks adoption and subsequent attempts.
+Stopping a service that the Hub immediately respawns does not establish this contract. Do not
+use no-op hooks on real data. Missing coordination disables installation and automatic opt-in.
+
+The host needs Git, Python 3.11+, Node matching `web/package.json`, Go matching `server/go.mod`,
+and compatible `pg_dump`/`pg_restore` tools with access to every included database. Their libpq
+shared library must be discoverable by Python. The helper parses URI and keyword connections
+with libpq, then passes their explicit fields through libpq environment variables. It does not
+put connection strings or passwords in process arguments or receipts. Invalid connections and
+parameters without a safe environment binding fail before pausing writers. Existing private
+`PGPASSFILE`/`PGSERVICE` settings remain usable; credentials in a URI are kept in the private
+child environment, which is not protection from the installation user or privileged processes.
+Git uses the
+installation user's existing HTTPS credential mechanism, with interactive prompts disabled.
+Updates execute build code from this project's repository.
+Docker Hubs and Windows Hubs retain their original update paths.
+
+The helper resolves the full commit of `refs/heads/main`; a missing `main` branch is an error.
+Settings shows `main` and the installed/target commits. A detached private checkout fetches that
+exact object even if the remote advances while building. There are no repository/branch overrides
+or default-branch mappings.
+
+For Web development only, **Update version** combines the latest `main` candidate and retained
+program backup versions in one selector. **Current commit** and **Latest commit** remain two rows,
+each with its update date in `yyyy-mm-dd` before the hash. The current/backup date comes from
+successful installation; the latest date is the pinned Git commit's committer date, not check time.
+Unknown dates stay unknown. Backup creation time is shown separately. Selecting a backup exposes **Apply backup**:
+after confirmation it disables development auto-update and installs the saved programs and embedded
+Web, keeping the **current database, configuration, keys and history data**. It does not check out
+Git, rebuild, extract the history archive or restore a database dump. Preparation verifies the
+snapshot, stages private program copies, then reuses the ordinary idle wait, fresh pre-install
+backup, binary checks, service switch and confirmation/rollback. A snapshot rotated during the new
+backup does not invalidate those staged copies. Missing/damaged selections fail before adoption.
+`GET /api/v1/hub/update/backups` lists program-version metadata;
+`POST /api/v1/hub/update/backups/{id}/apply` accepts an owned retained ID, never an arbitrary path.
+Only snapshots with complete program version/build/commit/platform metadata are selectable.
+Startup recovery errors stop both standalone and edge-slot startup before configuration/database
+initialization. Failed program restoration or exec retains the development journal and staging
+for operator repair; the attempted build cannot continue as an ordinary startup.
+Edge restoration also stops on a failed program/Web restore, retaining both pending and
+adoption journals and required staging. The callback distinguishes a failed restore from no
+matching update; activation and confirmation-timeout paths never restart a fallback executable
+after partial restoration. Repair the retained preimage/conflict before retrying. The backup
+list/apply endpoints are Hub installation administration, declared with the other owned routes.
+Listing validates the full manifest schema, typed hashes and exact artifact mappings, without
+rehashing payloads. Verification and preparation additionally check the physical inventory,
+compressed and native program hashes and history members. Staged programs get an independent
+native-hash check after copying. Malformed metadata is rejected as `ValueError`; unknown or
+damaged snapshots stay on disk for manual inspection and are not pruned as verified material.
+Invalid schemas are omitted from listings; payload damage is checked before application.
+
+Source settings accept only the exact values `release` and `web-dev`; invalid supplied values
+are rejected before changing any preference or selection. A manual request overtaken while
+probing services is rejected without transferring its interruption consent to the accepted
+operation. Explicit Update now for an already accepted waiting attempt still requires confirmation.
+The install script's independent release-checksum refresh loads the saved source first;
+a late release response cannot overwrite a development selection or active install progress.
+
+Ordinary automatic/manual updates wait for the shared Hub idle check before backup and switching:
+working turns, conversations awaiting blocking user input, and active redeploys can hold the update.
+Non-waiting `ask_user` cards alone do not hold it; running turns and blocked terminals still do.
+A manual attempt stops waiting after two hours; it does not force a restart at that deadline.
+Choosing **Update now** explicitly bypasses this Hub wait and can interrupt local or connection-owned
+conversations. Independent remote resident-node conversations can survive a Hub reconnection.
+The idle check is not a lock against new turns: a turn starting during the subsequent backup/switch
+can still overlap the restart. This path does not guarantee interruption-free session execution.
+Link/connector node updates retain their own idle and commit checks; direct SSH deployment instead
+replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
+
+The compile gate runs `npm ci` and `npm run build:development` for Web, builds the Agent SDK bridge as a
+runtime asset, generates runtime packages, then runs tagged `go build` for `personad` on the
+Hub's platform and each registered computer's last-reported OS/architecture, deduplicated, plus
+`persona-hub`/`persona-manager` on the Hub's platform. Web assets
+are embedded and precompressed. No full tests, vet, mobile builds, release publication or hosted
+CI are required. The development command retains TypeScript, Vite, WebAssembly, localization
+and asset-graph checks, but skips the release's first-screen/idle performance budgets. The
+normal `npm run build` budgets are unchanged. Bootstrap and target source must contain this
+development build command; an older target without it fails before adoption. All components
+share the same commit, version and build identity; automatic
+adoption also retains the existing ancestry guard. Fetch depth and the returned ancestor list
+are capped at 1024; if the installed commit cannot be proved within that window, automatic
+adoption stops and a manual update is required. An unknown/dirty installed commit also requires
+a manual first update. Verified programs and Node packages are copied into independent updater
+staging before the disposable checkout is removed; staging survives the idle wait and process
+switch until confirmation or rollback. The binaries retain the `release` ABI/channel for existing self-checks;
+the independent persisted `source: web-dev` identifies this update channel.
+
+After compilation and the existing idle wait, before changing executables, the helper makes
+a recovery point under `<runtime>/update/development-backups`. It includes:
+
+- Custom-format PostgreSQL dumps of the Hub database and every local manager database found
+  in `managers/*/manager.json` (shared databases deduplicated), plus `extra_databases`.
+- The runtime tree's configuration, encryption keys, knowledge/history, attachments and other
+  ordinary data files, plus configured external knowledge directories and `extra_roots`.
+  Only `update`, `bin`, `cache`, `logs`, sockets and FIFOs are excluded. Escaping/absolute
+  symlinks fail closed; they need an explicit storage layout change before this path is usable.
+- Separate compressed copies of the current `personad` and existing Hub/Manager programs,
+  with hashes, original paths, installed version/build/commit and installation/backup times.
+  All matching locally available Node packages are saved, including platforms with no currently
+  registered computer; symlinks and packages marked as another version are excluded. Each snapshot
+  retains its own matching programs rather than depending on the single latest `.prev`.
+
+Writers remain paused across **all** database dumps and the file archive. A dump must have its
+PostgreSQL header and pass `pg_restore --list`; archives and dumps have SHA-256 checksums.
+Each private snapshot directory is synced, published and verified before cleanup. Credentials
+remain inside private config/key backups (0700 directories, 0600 files), never in receipts or
+the API. `database-0.dump` is the Hub; subsequent dumps follow sorted manager config paths,
+then configured extra databases, with identical URLs deduplicated. The archived configuration
+preserves that mapping. `effective-databases.json` privately retains the effective DSNs,
+including `PERSONA_DATABASE_URL` overrides; no DSN is written into the manifest or API.
+The built-in manager's shared database remains included until its own-database move commits.
+After that move, `database_name` selects a database on the effective Hub server before a
+saved `database_url`, matching the built-in manager's startup selection. Other managers use
+their own configured URLs. A stale URL cannot replace the named manager database in a snapshot.
+Protect these snapshots like the original data.
+
+Only verified directories with this helper's exact name and ownership manifest are rotated,
+oldest timestamp/name first, retaining the newest **three**. Unknown directories, changed
+manifests, symlinks, additional user files, damaged archives and other backup systems are left
+alone. A failed/incomplete snapshot is not counted and removes no valid recovery point. Cleanup
+failure stops adoption; it can temporarily leave more than three valid snapshots rather than
+discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
+lists available program versions. Private phase logs are `update/development/<operation>.log`.
+
+The data archive intentionally captures the existing standalone `web/` override before it is
+set aside in the same update transaction so the new embedded UI actually serves. Failed adoption
+restores that override and all swapped programs. Explicit **Apply backup** installs saved programs
+and their embedded Web only; it never extracts this data archive or its standalone override. After
+Hub confirmation, compiled node packages are installed locally even with automatic fleet updates
+off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
+`auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
+for all currently known platforms; otherwise it stops before adoption. With fleet updates off,
+remote Nodes keep their current programs and available saved packages are installed locally.
+A backup replaces only its staged platforms. Other regular local packages remain usable at
+their normal paths; an unlabelled retained package receives its **pre-rollback** `.version`
+identity, while an existing valid explicit identity is preserved. An invalid retained version
+marker stops package adoption and keeps staging for inspection.
+Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
+fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
+There is no platform configuration or fixed platform matrix. Offline computers with a known
+platform are included. A computer that has never reported its platform supplies no build target;
+once it connects, the next development update includes its platform. With no known remote
+platforms, only the Hub's platform is built. For a freshly compiled development update, old
+unversioned packages are set aside before installation so omitted platforms are not mistaken
+for the new version. A saved-version application instead retains and labels omitted packages
+as described above. Any set-aside or version-label failure stops fleet deployment.
+Independent/remote managers have their own binaries, data and package sources: this local build
+path refuses their machine ownership instead of claiming those computers were upgraded. Use
+their original update channel. A publisher-owned `bin/nodes` symlink is likewise an explicit
+unsupported installation boundary; no immutable release pointer is rewritten.
+
+#### Development recovery
+
+Build, backup and known adoption failures leave the running build unchanged or restore it
+through the existing transaction. A migration/startup failure uses the existing binary rollback;
+**it never automatically overwrites databases with a snapshot**. Database migrations may require
+the following operator recovery. **Apply backup** is program-only and does not perform this data
+recovery procedure; use the offline procedure only when data recovery is actually intended.
+
+1. Disable development automation. Stop every data writer and the Hub through their original
+   service controls (including its socket/edge), and preserve the failed attempt's markers/logs.
+2. Verify the chosen snapshot offline:
+   `python3 server/internal/update/webdev.py verify /absolute/path/to/snapshot-<id>`.
+   Do not continue on a failed checksum or archive check.
+3. Extract history offline with
+   `python3 server/internal/update/webdev.py extract-history /absolute/path/to/snapshot-<id> /absolute/path/to/empty-recovery-directory`.
+   The destination must be absent or empty and cannot be a symlink. This command verifies the
+   snapshot and applies the same canonical member/link checks before extraction on Python 3.9+.
+   A restricted writer creates private directories, exclusively creates regular files, then
+   creates validated symlinks after all file writes. It preserves timestamps and safe file
+   permissions, removes special and group/other write bits, and never applies archive ownership.
+   It rejects absolute, drive/UNC, backslash, noncanonical
+   and duplicate paths, hard links and non-directory parents. A relative symlink must point
+   directly to a file or directory actually inside this archive; dangling links, link chains
+   and links used as parent directories are rejected. Snapshot creation also refuses hard links.
+   `manifest.json` maps `root-0`, `root-1`, etc. to their original roots.
+   Inspect the archived configs privately to identify each database. Restore the dumps with
+   `pg_restore` into fresh, empty databases, using a private `PGSERVICE`/`PGPASSFILE`; then select
+   those databases in the restored configuration. Preserve the failed databases until recovery
+   is confirmed. Put the matching config, encryption keys, history and attachments back together.
+4. Decompress the snapshot's `program-*.gz` files to the recorded program paths, verifying
+   their native hashes in `manifest.json`; the immediate previous transaction also retains
+   `.prev` files. Restore `web_prev` when present; do not overwrite a subsequently changed Web
+   directory. Start the original version, check history/data and node connectivity, then enable
+   only the automation you want.
+
+`coordination-pending.json` means a pause/resume outcome needs inspection: run the original
+resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
+directories remain for inspection. Normal cancellation signals the helper and its active child
+group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
+its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
+A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks
+adoption. An interrupted snapshot is never published or rotated, even after successful resume.
+
+`update/development/adopting.json` reserves an attempt, then records every program preimage
+before replacement (`recovery_ready: true`). The Web rename intent is synced there before moving
+the override. Startup of the previous or attempted build restores this journal when `pending.json`
+is absent; recovery can repeat after a partial restore. Failed recovery retains the journal,
+pending marker when present, and independent staged programs/Node packages across startup cleanup.
+Only a complete restore permits cleanup; the standalone watchdog also retains the development
+journal until restarting the restored program succeeds. A failed restart leaves the journal
+and staged packages available to the next startup. An incomplete reservation (including a crash while
+preparing preimages), unreadable journal or older fence remains blocked for manual inspection;
+no live replacement occurs before the new journal is ready. Inspect the installed binaries,
+`.prev`, Web recovery directory and backup, complete rollback
+or confirmation, and only then clear the matching fence. Regular confirmation/rollback clears
+its own matching fence. Never delete these records merely to make Retry available.
+
+Local evidence: `scripts/test/test_web_development_update.py` uses controlled Git, compiler/DB
+tool fixtures and a real synthetic writer process; `TestDevelopment*` exercises the existing
+HTTP settings, shared install/confirmation, failure rollback and local node staging without
+touching a running Persona installation. Database-tool fixtures do not prove restoration on a
+particular deployment's PostgreSQL version or validate its operator-supplied coordination hooks.
+
+### Private release worker
+
 `scripts/release/hub_release.py --config <private-config.json>` can run from a
 systemd user timer on a dedicated Linux build machine. It fetches the configured `source_branch` (default `main`) into an
 exclusive checkout (never a developer checkout), runs server vet/tests and race checks, script suites, web
@@ -40,7 +296,10 @@ from a vault at runtime rather than stored in the environment file.
 Enable the timer only after the bootstrap and publication checks below pass. The publisher is
 `scripts/release/publish_hub_release.py --config <ssh-config.json>`; its config
 supplies `remote_root` and `credentials_command`, which returns SSH credentials
-as JSON (`host`, `port`, `username`, `password`, or a fields array keyed by id).
+as JSON (`host`, `port`, `username` and either `password` or `key_filename`, or a
+fields array keyed by id). `key_filename` is the path of a private key file on the
+build machine, for hosts that only accept key logins; exactly one of the two must be
+set, and no other key or SSH agent is tried.
 SSH host keys must already be trusted. Credentials are never written to release
 artifacts. The publisher needs Python and Paramiko; the remote needs Python.
 The optional `release_namespace` defaults to `hub` and selects a feed below
@@ -58,6 +317,9 @@ set `PERSONA_TEST_DOCKER_CONFIG` to a credential-free directory containing
 `cli-plugins/docker-compose`; deployment tests only render configuration offline.
 The worker passes its Python interpreter through to every script suite.
 The SSH publisher uses Paramiko 4.0.0 in the same private environment.
+The remote runs the publication program with Python 3.11 or later: `python3`, unless the
+publisher config's optional `remote_python` names another interpreter (one program name or
+absolute path, for hosts whose `python3` is older). The node and manager publishers use it too.
 
 Build with `update_url=file://<remote_root>/releases/hub` for a private source.
 By default, SSH uploads only the Hub platform and atomically promotes its manifest. The
@@ -69,9 +331,17 @@ it never overrides a disabled setting or retries a marked bad build.
 The worker holds a local lock for the whole cycle, and publication holds a remote
 lock through confirmation. Build numbers must increase and new source must contain
 the previous source. Files have immutable checksum names. Interrupted attempts
-reuse the same build and artifact, with a 15-minute failure backoff; they cannot
-turn a rolled-back build into a new version just by retrying. Recent local attempts
-and remote artifacts have bounded retention. Failure leaves the updater in charge
+reuse the same build and artifact, with a failure backoff; they cannot
+turn a rolled-back build into a new version just by retrying. The backoff applies to
+every new head of the followed branch, not only the failed commit, so a red `main`
+is not rebuilt in full at every timer firing: 15 minutes after the first failure in a row,
+doubling with each further failure up to 2 hours; `last.json` keeps the `failures` count
+and a success resets it. `--retry` and a pinned `--commit` run immediately. Recent local attempts
+(the last five, failed ones included) and remote artifacts have bounded retention. After each
+attempt the worker runs `go clean -cache` when `go env GOCACHE` is larger than
+`go_cache_limit_gib` from the worker config (default 20): Go itself only drops entries
+unused for five days, which a worker validating every new head outgrows by tens of GB a day.
+Failure leaves the updater in charge
 of rollback; the publisher never restarts the host or the Hub service.
 
 Bootstrap once with a verified binary containing the private update source, set
@@ -221,7 +491,7 @@ releases retain their separate publishing workflow.
 ## Current state (verified 2026-11-02)
 
 - Version: `personad version` is a string written in with `-X main.version`.
-  - `deploy.sh`, `publish.sh`: `git describe --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`;
+  - `deploy.sh`, `publish.sh`: `git describe --tags --match 'v[0-9]*' --always --dirty` plus a minute-resolution timestamp, like `v0.1.1-23-gabc1234-202611021530`. The nearest `vX.Y.Z` tag names it, a lightweight one too (a GitHub release's tag is one; plain `git describe` skipped v0.4.0, #7201), and `testflight/<build>` never does;
   - Docker image: built by CI when a `v*` tag is pushed; the version is the tag without `v`.
 - hub:
   - `GET /api/v1/health` returns `{ok, version, features}`; the WebSocket `hello` carries `server_version`;
@@ -252,7 +522,8 @@ releases retain their separate publishing workflow.
 ## 1. Skills move out of the binary
 
 - **The user's skill space**: `~/.persona/skills/<name>/` on the machine that runs the assistant.
-  - Each directory is one skill (with a `SKILL.md` inside); the user adds and edits them, and personad only reads, never writes;
+  - Each directory is one skill (with a `SKILL.md` inside); users can add and edit them. Updates never overwrite them;
+    an explicitly confirmed Web ZIP import can add a new name, with a narrow Undo for that new installation.
   - The machine that runs the assistant is usually the hub machine's local node; when the assistant is configured on another machine, it is that one.
 - **Syncing into the assistant directory**: every time node starts the assistant process (both Claude and Codex assistants; `/agent` and the AI twin also use the assistant directory):
   1. For each skill under `~/.persona/skills/`, create a symlink at `<assistant dir>/.claude/skills/<name>`.
@@ -270,8 +541,139 @@ releases retain their separate publishing workflow.
 - **Drop `-tags public`**: there is no difference between the two anymore; `files_public.go` / `files_bundled.go` merge into one embed holding only built-in skills.
   - The privacy scan before release stays, and also checks that every skill in the binary is registered as redistributable (`assistantskills.Redistributable`);
   - A test guards it: the built-in skills directory may only contain skills registered as redistributable.
-- **App**: Settings › Assistant › Skills, a read-only list (name, the description from `SKILL.md`, whether it comes from "my skills" or **Built-in**).
-  API `GET /api/v1/skills`; the hub asks the node that runs the assistant. Management (add / delete / edit) comes later.
+- **App**: Settings › Assistant › Skills lists name, description and user / built-in / plugin source.
+  `GET /api/v1/skills` remains read-only and compatible with older clients; the hub asks the current assistant's node.
+  The Web additionally offers **Upload ZIP**, described below. Native clients are unchanged.
+
+### Web skill ZIP installation
+
+For people adding a trusted skill package, Settings › Assistant › Skills has one **Upload ZIP** action.
+Choose a file, wait for checks, review the plain-text name, description, actual destination and computer, then
+**Install skill** or **Cancel**. Selecting a file never installs it. No shell, dependency installer, HTML renderer
+or model is used to check a package. The feature changes no model/profile setting.
+
+The manager authorizes the current assistant and its execution computer using the existing full-access route,
+then sends `skills.import` to that node. The browser cannot select another machine or supply a path.
+The node uses `assistantskills.UserDir`: normally `~/.persona/skills/<name>/`, respecting `PERSONA_SKILLS_DIR`
+and the existing `PERSONA_HOME` resolver. This store is shared by assistants running as that machine's user;
+it is not silently changed to a private manager store. A changed computer, root identity, expired reference,
+offline machine or old node fails explicitly. Open the page again after changing environments.
+
+Package contract:
+
+- One ZIP with exactly one uppercase `SKILL.md`, either at the root or inside one enclosing directory; all
+  resources must be in that same package. Nested skills, several manifests and outside-wrapper files are refused.
+- The entire manifest is UTF-8, at most 64 KiB, with YAML frontmatter between `---` lines. `name` and `description`
+  are non-empty YAML strings. The name (not the ZIP filename) is at most 64 ASCII lowercase letters/digits with
+  single separating hyphens, not a reserved device name. Description is at most 4096 UTF-8 bytes.
+  Duplicate YAML keys, aliases/anchors and custom tags are refused.
+- At most 4 MiB compressed, 16 MiB expanded, 4 MiB per file, 512 archive entries and 12 path levels; maximum
+  expansion ratio 200 per entry. Both declared and actually read sizes/CRC are checked. Only Store/Deflate,
+  ordinary files/directories are accepted. No links, special files, traversal, absolute/drive/UNC/backslash paths,
+  reserved names, duplicate entries, case/Unicode-normalization collisions or internal provisioning stamps.
+- Preview extracts into a private temporary sibling and removes it before replying; only bounded, expiring metadata
+  receipts remain (32 operations per node, ten minutes, with lookup aliases for completed installs). Install rechecks the exact same ZIP, current environment and conflicts,
+  then publishes by an exclusive atomic rename. No existing directory, built-in, plugin or local runtime skill is
+  overwritten or shadowed. Unsupported exclusive-rename platforms fail closed. Failure/cancellation removes staging.
+
+After installation the existing list refreshes. A ten-minute **Undo installation** receipt exists only on this
+connected page/node lifetime; reloading, switching assistant or node restart can invalidate it. Undo only detaches the
+same unchanged new directory, with identity/content/mode checks; modified or replaced packages are refused. It moves
+files to a hidden `.undone-…` sibling and reports that recovery path, rather than deleting them. This also protects a
+local writer holding an open file during the move. There is no arbitrary-path delete or edit API. Recovery is retained
+for the user; no background job deletes it or reinstalls an undone package.
+
+A canceled preview has no durable staged files. Cancellation before the atomic publish cleans staging; a lost response
+after publish may mean the whole installation completed, so refresh the list before retrying. Writes are never
+automatically retried. Repeated/concurrent installation cannot replace the winning name.
+
+Assistant-only MCP `skill_import` exposes `preview`, `install`, `status`, `cancel` and `undo` through that same manager
+service and importer. It accepts base64 ZIP bytes, not download URLs or local paths. Preview returns an environment
+and receipt; install sends the identical bytes with both. Before install or undo, the manager reads the exact node
+receipt and shows a localized permission card naming the validated skill, computer and shared-account impact.
+Only the user's own approval counts; no archive bytes or skill instructions appear in the card. The settings lock
+is released while waiting and reacquired to recheck the target before the node call. New tools remain subject to
+existing assistant/meeting restrictions; ordinary coding Agents do not receive them.
+
+`status` accepts the original preview or install reference and environment. It records `previewed`, `installed` or
+`undone` and recovers the installation's undo receipt or retained recovery location after a lost response. It does
+not replay the effect or claim to be a live inventory. Receipt metadata survives only for its ten-minute node
+lifetime; expiration or node restart requires inspecting Settings › Skills instead of assuming failure. Older
+nodes without receipt status require an update before MCP installation. HTTP clients keep their existing flow and
+may also query status; the additive result fields are backward compatible.
+
+Discovery uses existing provisioning: `assistantLarkEnv` links the user store into `.claude/skills`, and
+`assistantRuntimeSkills` links it into `.agents/skills`. Claude reads the existing assistant directory; Codex's
+existing `skills/extraRoots/set` points at `.claude/skills`. No new discovery engine or `@skill` behavior is added.
+The settings list is the Persona-provisioned inventory, not every skill a runtime might discover. Refresh lists
+immediately; start a new chat to safely pick up installation/Undo, as already-running sessions may retain old context.
+Tests exercise actual import/list/provisioning entry points and resource reads, not a paid Claude/Codex turn.
+
+`TestImport*`, `TestSkillImport*` and `web/src/views/settings/Skills.test.tsx` cover archive safety, atomic races,
+environment/credential changes, strict server-derived targeting and the confirmation/Undo states. The opt-in
+`TestSkillImportBrowserHarness` uses the real manager handler and archive store with synthetic device transport
+and a temporary directory; unrelated routes use `scripts/mock/mock_hub.py`. It is UI integration evidence, not a
+production or live-model test. Its header documents loopback ports and shutdown; run with `SKILL_IMPORT_QA=1`.
+
+The Skills group keeps only the list in its card; where the skills live, who shares them and when changes apply are
+its one footer line. The upload dialog reuses existing web patterns: LookUpload's drop zone (choose or drop a ZIP, the
+check's progress in its place), ProviderImport's preview card and Cancel/primary footer, and `ErrorNotice` for a refused
+package.
+
+Curated synthetic captures, actually inspected in a browser (not production assets):
+
+| Capture | Light | Dark |
+| --- | --- | --- |
+| Desktop, standard text | [Light](../web/screenshots/skill-zip/preview-light.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/preview-dark.png) |
+| 390 px, largest supported text setting | [Light](../web/screenshots/skill-zip/narrow-light-large.png) | [Dark, keyboard focus](../web/screenshots/skill-zip/narrow-dark-large.png) |
+| 390 px, Simplified Chinese | [Light](../web/screenshots/skill-zip/zh-preview.png) | [Dark](../web/screenshots/skill-zip/zh-preview-dark.png) |
+| 390 px, Japanese | [Light](../web/screenshots/skill-zip/ja-preview.png) | [Dark](../web/screenshots/skill-zip/ja-preview-dark.png) |
+| Skills group, Simplified Chinese | [Light](../web/screenshots/skill-zip/zh-group-light.png) | [Dark](../web/screenshots/skill-zip/zh-group-dark.png) |
+| Choosing a ZIP | [Light](../web/screenshots/skill-zip/zh-choose-light.png) | [Dark, a file dragged over](../web/screenshots/skill-zip/zh-drop-dark.png) |
+| Checking the ZIP | [Light](../web/screenshots/skill-zip/zh-checking-light.png) | [Dark](../web/screenshots/skill-zip/zh-checking-dark.png) |
+| Refused package | [Light](../web/screenshots/skill-zip/zh-refused-light.png) | [Dark](../web/screenshots/skill-zip/zh-refused-dark.png) |
+| Installed | [Light](../web/screenshots/skill-zip/zh-installed-light.png) | [Dark](../web/screenshots/skill-zip/zh-installed-dark.png) |
+| Undone, recovery retained | [Light](../web/screenshots/skill-zip/zh-undone-light.png) | [Dark](../web/screenshots/skill-zip/zh-undone-dark.png) |
+| Post-install Undo row, 390 px Large | [Light](../web/screenshots/skill-zip/zh-undo-row-light.png) | [Dark](../web/screenshots/skill-zip/zh-undo-row-dark.png) |
+
+The 2026-11-15 capture run uses `web/e2e/skill-zip-visual.py` through Browser Use against the opt-in Go fixture above
+and Vite. Its 22 captures were opened and visually inspected by Codex: text and status marks remain readable in both
+appearances, the long install and recovery paths wrap, localized buttons stay on one line, and the dark preview has a
+visible keyboard focus ring. `docs/web/screenshots/skill-zip/verification.json` records the source commit, source and
+PNG hashes, viewport checks and inspection observations. The evidence commit changes no application source.
+
+All Skills actions use `touch-hit`: the drawn buttons remain 32 px tall while their targets expand to at least
+44 x 44 px on coarse-pointer devices. The browser run measures the pseudo-element's target bounds and hit-tests
+points across that area, including the separate post-install Undo row. Native touch events below the painted button
+activate Upload ZIP, Choose ZIP, Cancel, Install, Close and both Undo actions. The file input's click is intercepted
+to keep the operating-system picker out of the automated run; CDP supplies the real ZIP afterwards.
+
+To reproduce, start an exclusively owned mock on `<mock port>`, run the fixture from `server/` with
+`SKILL_IMPORT_QA=1 SKILL_IMPORT_QA_ADDR=127.0.0.1:<manager port> SKILL_IMPORT_QA_MOCK=http://127.0.0.1:<mock port>
+go test ./internal/assistant -run '^TestSkillImportBrowserHarness$' -count=1 -v -timeout=30m`, and start Vite with
+`PERSONA_HUB_URL=http://127.0.0.1:<manager port>`. Then, from the repository root:
+
+```sh
+PERSONA_SKILL_ZIP_ORIGIN=http://127.0.0.1:<web port> \
+PERSONA_SKILL_ZIP_SHOTS=<evidence directory> \
+PERSONA_SKILL_ZIP_WORK=<scratch directory> \
+browser-use < web/e2e/skill-zip-visual.py
+```
+
+After inspecting the PNGs, record the observations in `verification.json`; the capture script initially marks visual
+inspection pending. POST `/_qa/stop` to the manager fixture, then stop the owned Vite and mock processes. The browser
+check delays one real preview response to exercise the busy state; native CDP file drag events must still cancel the
+browser defaults without another preview request. The real importer supplies all validation, install and Undo replies.
+Native link and plain-text drags also cancel `dragover` and `drop` without navigating, highlighting the zone or
+starting an upload; only file drags can highlight it.
+The screenshot report is evidence for review, not an automated-review credential: the maintainer's watcher still needs
+its trusted `ui_evidence_command` adapter (`docs/operations/pr-review-automation.md`, "Configure").
+
+Browser observations: Cancel initially owns preview focus; Tab reaches Install with a visible ring; Escape closes
+and restores Upload ZIP focus. No horizontal overflow at 390 px, including Large. An empty description shows an
+actionable validation error. Installation creates `example-visual` in the real fixture store/list; Undo removes its
+list entry and retains its resources in the reported recovery sibling. These are local fixture results, not live
+Claude/Codex discovery.
 
 ## 2. Build channels
 
@@ -281,7 +683,7 @@ The binary gets three more `-X` variables (`cmd/personad`):
 | --- | --- |
 | `main.channel` | `release` (published, updates automatically), `docker` (in the image, only suggests pulling a new image), `dev` (default when unset: local builds, tests) |
 | `main.build` | A monotonic build number, see "Version numbers" |
-| `main.updateURL` | `dl/` at the publish address (`publish.site_url`, already public). If unset, no checks |
+| `main.updateURL` | Where the build looks for releases: the config's `publish.update_url` (e.g. a GitHub repository's `releases/latest/download`), else `dl/` at the publish address (`publish.site_url`, already public). If unset, no checks. A hub's `hub.json` `update.url` replaces it at run time ("Update source") |
 
 - Only `release` swaps its own binary; `docker` tells the user to pull the image; `dev` only shows the version.
 - Direct deploys (`deploy.sh` and the main session's deploy script) also stamp `release` and use the build time as the build number: newer than the public release at the time, so they are not downgraded; once the publisher releases a newer version, the hub takes over on its own (section 6).
@@ -322,15 +724,22 @@ The binary gets three more `-X` variables (`cmd/personad`):
 ```
 
 - `ancestors`: all commits reachable from this commit (`git rev-list <commit>`), the first 6 bytes of each, sorted, then base64 ("no regression").
-- `programs`: programs published together with personad that the hub runs alongside (`update.ProgramNames`: `personad-wechat`, `docs/extensions/wechat.md`; `persona-hub` and `persona-manager`, [../server/server.md](../server/server.md) ("Programs");
-  Telegram's `personad-telegram` was also here up to #1704; after that it is an extension and goes through the extension market):
-  `{"personad-wechat": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`. Old hubs ignore this field and still only swap personad.
+- `programs`: programs published together with personad that the hub runs alongside (`update.ProgramNames`:
+  `persona-hub` and `persona-manager`, [../server/server.md](../server/server.md) ("Programs")):
+  `{"persona-manager": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`. Old hubs ignore this field
+  and still only swap personad. Messaging extensions, including WeChat and Telegram, are published through the
+  extension marketplace, not bundled program downloads.
 
 - `nodes`: the other programs a node can run, published with personad (`update.NodePrograms`: `persona-node`, the device's own): `{"persona-node": {"linux-amd64": {name, size, sha256, binary_sha256}, …}}`.
   `node_protocol`, `node_protocol_min`, `node_capabilities`: what the release's nodes announce in `node.info` (`docs/protocol/protocol.md` ("Node handshake")), so a manager of another build sends one only when it drives it (`docs/operations/node-update.md` ("Node packages")). Old hubs ignore all three.
+- `helpers`: native programs a node installs on demand, by name then platform (`persona-iphone-bridge`: `{"persona-iphone-bridge": {"darwin-arm64": {name, size, sha256, binary_sha256}, …}}`, [iphone-bridge.md](../extensions/iphone-bridge.md) "Releases"). Each has its own version, so no build number is checked in it; a platform the release could not build is left out. Hub and manager updates never swap them. Old hubs ignore this field.
+- `links`: independently installed persona-link downloads: `{"linux-amd64": {name, size, sha256, binary_sha256}, …}`. Windows names keep `.exe` before `.gz`, for example `persona-link-windows-amd64.exe.gz`. The publisher verifies these downloads like the others, but hub and manager updates never install or swap them. Old hubs ignore this field.
 - Every release is also kept at `dl/<version>/` (its node builds, `personad-*` and `persona-node-*`, and this manifest as `manifest.json`; also `dl/X.Y.Z/` for the tag `vX.Y.Z`), where managers fetch the node build of their hub's version; `dl/latest.json` and `dl/*.gz` stay the newest release.
 - A downloaded file must match both `sha256` (archive) and `binary_sha256` (decompressed), and the new binary's `version -v` must report the version and build number in the manifest.
   `SHA256SUMS` stays for install.sh.
+- The publisher checks the same before anything goes up (#4522): v0.2.1's `latest.json` said build 202611110749 while every binary beside it was 202611110745. A later run had written the manifest over an earlier run's binaries, so every hub downloaded the release and then refused it.
+  `personad release manifest` now refuses to describe binaries of another build, and `personad release verify --dir <dir>` reads a written `latest.json` back against its downloads: sizes and sha256s; the binaries this machine runs (its own platform's) must report the version and build in `version -v`; every other binary must hold the build number (the `-X main.build` value is kept in each binary as it is, whatever its platform).
+  `publish.sh` runs it right before uploading. The tag publisher (`scripts/operations/tag_release.py`) checks a receipt that carries `latest.json` the same way before attaching it to a GitHub Release (running this machine's `personad version -v`), and uploads `latest.json` after the files it lists.
 - `min_app_build`: Apps below it cannot use this hub version. For `protocol`, see "Compatibility".
 - There is no minimum node build: a node reports a version string, and the hub redeploys any node whose version differs from its own. That redeploy runs after the new hub has confirmed
   (section 8, step 9 "Update nodes along with it"), not before the new hub starts; a machine that fails to update keeps the reason.
@@ -343,7 +752,7 @@ Public releases use `publish.sh` manually on the publisher's dev machine, and th
 - Tests must still pass before publishing, plus `publish.sh`'s own checks (if any fails, nothing is published):
   1. Read the live `latest.json` (if any): the new build number must be larger, and the live version's commit must be an ancestor of this one (`git merge-base --is-ancestor`);
   2. Build the four platforms (with `channel=release`, `build`, `updateURL` written in), privacy scan (the binary may only contain redistributable skills);
-  3. Generate `latest.json` (version, build number, commit, the commits it contains `ancestors`, release time, sha256 of each platform's archive and decompressed binary, `min_app_build`, `protocol`);
+  3. Generate `latest.json` (version, build number, commit, the commits it contains `ancestors`, release time, sha256 of each platform's archive and decompressed binary, `min_app_build`, `protocol`), refused when a binary is not that build, then read it back with `release verify` before any upload ("Version manifest");
      do not publish when the working tree has uncommitted changes in server/ or web/ (`NO_DEPLOY=1` still builds, and the commit in the binary carries `-dirty`): whatever commit the manifest names, the binary must be exactly it;
   4. After publishing, read back `VERSION`, `SHA256SUMS`, `latest.json` and compare them with the local ones.
 
@@ -369,8 +778,7 @@ The existing path of building from the default branch and deploying directly (`d
 - The main session's deploy script lives outside the repo and must add the same four `-X` flags to its `go build` (the report gives the line to add).
 - **Deploy only from a working tree that contains the default branch**: `deploy.sh` first fetches the remote's default branch (how it finds the branch: the comment above the check); if the current HEAD does not contain it, nothing is deployed and it exits 2 (same if it cannot be fetched);
   deploying a branch that is behind would swap changes someone else just deployed (hub and web) back to old ones. For a deliberate rollback, use `PERSONA_DEPLOY_ANY_COMMIT=1`. See `docs/lessons/server.md` ("Deploying from a stale branch").
-- The hub machine also needs `personad-wechat` (the WeChat bot program, `docs/extensions/wechat.md`): `deploy.sh` builds the same version for the hub and puts it next to personad; nodes do not need it.
-  Telegram is not here: it is an extension (#1704), installed and upgraded on the hub from the extension market.
+- WeChat and Telegram are installed and upgraded from the extension marketplace; `deploy.sh` does not build their programs.
 - **Update a hub with `deploy.sh <hub machine id>`, not by copying a binary and running `personad hub switch` by hand.** `deploy.sh` first puts this build's node packages for every platform in the hub's `bin/nodes/`, then switches the hub blue-green (no restart while the socket units are unchanged, `docs/operations/hub-restart.md`).
   A hand switch leaves `bin/nodes/` on the previous build: the hub hands out a `personad-<os>-<arch>` there as its own version (it has no version file), so **Redeploy** in the app puts the old node back on a computer.
   To check: every `bin/nodes/persona-node-*.version` on the hub machine equals the hub's `/api/v1/health` version.
@@ -395,7 +803,7 @@ Comparing only build numbers can go backwards: a directly deployed hub runs comm
 
 ### Programs swapped together with personad (2026-11-03, #533)
 
-The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `persona-hub` and `persona-manager`, the hub's and the manager's own programs ([../server/server.md](../server/server.md) ("Programs")).
+The programs (`update.ProgramNames`): `persona-hub` and `persona-manager`, the hub's and the manager's own programs ([../server/server.md](../server/server.md) ("Programs")).
 
 - When the manifest has `programs` for this hub's platform, they are downloaded and verified (same sha256, and `version -v` must be this version), then swapped in together with personad: placed next to personad,
   existing ones kept as `.prev`, and ones that did not exist before recorded as newly installed. If any one fails to download or verify, the whole update is skipped. A program whose swap fails midway is left as it was, and going back leaves it too.
@@ -429,6 +837,36 @@ The programs (`update.ProgramNames`): `personad-wechat` (the WeChat bot), and `p
 - **dev**: no checks, only shows the version.
 - Network unavailable or bad manifest: show the reason under **Check for Updates** in the App when no install or confirmation is in progress; otherwise keep the update's progress and error. Do not hammer retries (keep the hourly interval).
 
+### Update source
+
+Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's binaries were built pointing at a publish site that stayed on an older release, and nothing short of a new build could change that.
+
+- **Which source**: `hub.json`'s `update.url` when set (`docs/operations/config.md`), else the URL the build was made with (`main.updateURL`). The value is the directory `latest.json` is in. A GitHub repository's release base works as it is:
+  `https://github.com/<owner>/<repo>/releases/latest/download` redirects `latest.json` and `personad-<os>-<arch>.gz` to the newest release's assets, and the client follows the redirects. A release build made without an update URL updates itself once `update.url` gives one.
+- **A release published between a check and the update** (#9263): the update installs the release it checked, and takes every file of it (the hub's binary, the programs beside it, the node builds) from where that release stays. From a GitHub repository's `releases/latest/download` that is the release's own tag, `releases/download/v<version>/` (the tags releases are published under, `docs/operations/release.md`); a repository whose tags are not `v<version>` has no such tag, and its files come from the base as before. Any other source (a publish site's `dl/`, a mirror, a `file://` copy) has the files only beside `latest.json`, where a newer release replaces them, so a download there that does not match its manifest is followed by one more read of `latest.json`. When that names another release, the update stops saying a newer release was published while the checked one was downloading, the hub offers the newer release from then on as a check would, and the next **Update** (or automatic update) installs it. When it names the same release the download is broken, and the update fails with the mismatch as before. Nothing is downloaded again either way. Before this, a hub on the GitHub source failed every **Update** with "the download does not match the release's manifest" from the moment a newer release was published until it checked again.
+- **What follows it**: everything the hub fetches as "the release": its checks, downloads and node binaries for every platform; the node builds the manager fetches when `node_packages.url` is empty; the manager install script's download address (its sha256s come from the same `latest.json`); and the `install.sh` line for a new computer (the source without its `/dl`).
+  GitHub's base has no `<version>/manifest.json` or `<version>/` builds, so a manager there takes the node builds `latest.json` lists, from beside it: the hub's own version's when the newest release is the hub's, else the newest release's when it drives them (`docs/operations/node-update.md` ("Node packages")).
+- **What it may be**: `https://`, `http://` only to this machine (nothing is signed, "Security"), or `file:///<directory>` (a private publisher's copy), with no user, password, query or fragment, and not `latest.json` itself. One that does not read leaves the hub with no source rather than the build's: Settings › hub says why (`why_not`), and the log says so at the start. The error never shows the address.
+- **Proxy**: `update.proxy` (`http://[user:pass@]host:port`, `internal/netproxy`) carries these requests alone (manifest, downloads and a Docker hub's registry checks). It is also the node builds' proxy when they come from the update source and `node_packages.proxy` is empty. Everything else the hub talks to goes as before: a proxy in the service's environment (`HTTPS_PROXY`) would carry all of it.
+  Without `update.proxy`, these requests use the environment's proxies, as before. One that does not read fails every check with the reason rather than going around it. The log, `GET /api/v1/hub/update` and the errors show the proxy as `http://host:port`, never its user and password.
+- **Seeing it**: `GET /api/v1/hub/update` carries `update_url` (the source in effect), `update_url_from` (`hub.json` or `build`) and `update_proxy`. hub.json is read at the hub's start: a change takes effect at the next start or update.
+- **A source that stopped** (#8108): when the newest release a check reads is older than the hub's own build and older than the release its code contains (the `vX.Y.Z` its version starts with: `git describe` names a build after the newest tag in it), the source no longer takes releases, and the hub would otherwise find itself up to date at every check while its phones get no newer Android app. `GET /api/v1/hub/update` then carries `source_behind: true` (`latest` is the source's newest release), Settings › hub says so in place of "Up to date", naming the source and `update.url`, and the log says it once per source and release, not at every check. A source as new as the hub, newer, or holding the release the hub's code starts from (GitHub Releases for a hub deployed from `main` after that release) reports nothing. A version that names no release (`dev-…`, `master-<commit>-…`) cannot tell a stopped source from a quiet one, and reports nothing either.
+- **A hub deployed with `deploy.sh`** carries the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
+- **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
+
+### The Android app
+
+A hub with an update source offers its phones the Android app of the newest stable release that carries one, with no setup (#5563). The phones update from their hub (`GET /api/v1/app/android/latest`), which serves what is in `apps/android/` (`docs/protocol/protocol.md` ("Android packages")); until now only a publisher copying an APK over SSH put anything there.
+
+- **What a release carries**: a version-tag release has `android.json` beside `latest.json`, naming its signed APK (`Persona-<version>-android.apk`, `docs/operations/release.md`). It holds the fields of the hub's `latest.json` for the app (package, version code and name, minimum SDK, the signing certificate's SHA-256, size, SHA-256, source commit, notes) plus `version` (the release) and `name` (the APK's file name). For the official GitHub `releases/latest/download` source, a latest release without `android.json` makes the hub read the Release list and use the newest earlier stable release with both `android.json` and its named APK; drafts, prereleases and incomplete entries are skipped. It checks at most 10,000 releases and reports an error if more remain unchecked. A custom source without `android.json` changes nothing.
+- **When**: at every update check (a minute after start, then hourly), before the hub's own update so an install's restart cannot cut the download short, from the same source and through `update.proxy`. A Docker hub checks too, but has a source only when `update.url` gives one (`docs/operations/docker.md` ("Upgrading")).
+- **What it writes**: it downloads the APK, checks its size and SHA-256, and writes `<sha256>.apk`, its gzip copy and then `latest.json` under `.publish.lock`: the layout and lock of `scripts/release/android_apk_atomic.py`, so an SSH publisher and the sync never write at the same time, and the endpoints and the app need no change. It keeps the APK it replaced (a phone may still be downloading it) and removes older ones.
+- **What it never does**: go back to a lower or equal version code (a publisher building every commit on main stays ahead of the releases); put an APK of another package, or signed with another key, over the published one (the phones could not install it over the app they have, so a hub publishing its own builds keeps them); overwrite a `latest.json` it cannot read. A refusal or failure is logged once, not at every check, and the phones keep the app they have.
+- **On the phone**: the app finds the version at launch or in the foreground. Settings shows the last check, its hub and the result: update available, up to date, no APK, check failed, or an incompatible package or signing key. The system still asks before installing an update.
+- **Security**: as for the hub's own binaries ("Security"), the publisher signs no manifest; the SHA-256 guards against a broken download. The phone itself refuses an APK signed with another key than the app it has.
+
+Code: `server/internal/update/android.go`, called from `server/internal/hub/selfupdate_check.go`.
+
 ## 8. Updating (release build; automatic and manual use the same flow)
 
 ```
@@ -444,6 +882,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      now a missing platform is one that should have been in the release, and installing cannot recover it later. The release script uploads every `.gz` first, then switches the site serving `latest.json`
      (`scripts/release/publish.sh`), so "listed in the manifest but not uploaded yet" cannot happen;
    - Restart interrupted downloads, at most 3 attempts; rename the temporary file only after the download finishes.
+   - Every file comes from where the release checked stays, its tag on GitHub, so a release published since the check cannot serve its files in its place; another source is read once more when a download does not match, to tell a newer release from a broken download ("Update source", #9263).
    - The downloads live only as long as the update: `<build>/` is removed when the update fails (download, check, swap or restart), once it is confirmed and its node binaries are in place, and when it goes back. A hub start also removes every other `<build>/` (one that went back through the watchdog or the entry process, which run the old build, or one an older build left), keeping only the one it is confirming.
 2. **Verify**:
    - Continue only if both sha256 values match the manifest; otherwise delete the download and report an error, leaving the current binary untouched;
@@ -455,6 +894,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      Update history and bad versions still go into Postgres.
 4. **Wait for idle** (check every 30 seconds; also do not restart while redeploying a machine): automatic and manual are the same: **restart only when the assistant and every Agent are idle**, with no time-of-day restriction (user, 2026-11-02).
    - Idle = no session working or waiting for the user's answer (both assistant chats and Agents in herdr count). If they never become idle, never install; keep the download ready.
+   - A chat that waits only on the assistant's `ask_user` cards asked without waiting (`wait: false`, or a question that let go of its turn) is idle for this: no turn waits on them and they outlive a restart, so a card that is up for two hours does not hold the update (`hub/selfupdate_install.go` `updateBusy`, #7392; `docs/assistant/assistant.md`, "Asking without holding the turn"). A running turn, a blocked terminal, any other card of that chat, or a card the hub was not shown still holds it.
    - For a manual update, the App shows "what is still busy" (which chats, on which machine), and offers **Update Now** in a second confirmation:
      the confirmation states, "This interrupts anything waiting on the hub (the assistant's current turn, uploads in progress, terminal connections). Agents in herdr aren't affected and reconnect on their own."
      After confirmation, skip waiting for idle; all other steps (verification, rollback) stay the same.
@@ -561,7 +1001,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check}` |
+| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?, source_behind?}` (the last four: "Update source"; `source_behind` only when true) |
 | POST | `/api/v1/hub/update/check` | Check immediately |
 | POST | `/api/v1/hub/update` | Start update (409 with a reason for non-release builds); `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
 | PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}`; `{auto_update_nodes: true\|false}` |
@@ -615,7 +1055,11 @@ does not satisfy that contract.
   - Skills: symlink creation and cleanup, automatic migration of old installs, user precedence on a name collision, gate command only present with its skill; built-in skill directory contains only redistributable skills;
   - dev / docker channels never install, however new the manifest is (API 409);
   - **No downgrade** (`TestNoDowngrade`): a directly deployed binary (build number = build time) does not install a manifest with a smaller or equal build number; only larger ones install;
+  - **A release published between check and update** (`server/internal/update/pin_test.go`, `server/internal/hub/selfupdate_pin_test.go`, `server/internal/devices/packages_pin_test.go`): with a source that publishes a newer release (its `latest.json` and files) after the check, the update installs the release checked from its GitHub tag, hub binary, programs and node builds alike; another source is read once more and the update stops naming the newer release, which it offers and installs next; the node build a manager looked up is fetched the same way; a broken download still fails with the mismatch, and no file is fetched twice;
+  - **Update source** (`selfupdate_source_test.go`): `hub.json`'s `update.url` replaces the build's for checks, install scripts and node builds, and the view says which; a URL that does not read (plain http elsewhere, a password, a query, `latest.json` itself) leaves no source and never shows the password; `update.proxy` carries the update's requests with its credentials and nothing else, and one that does not read fails checks without a direct request;
+  - **Release manifest** (`update/verify_test.go`, `cmd/personad/release_test.go`): a manifest over binaries of another build (this platform's runs and says so, another's lacks the build number), another version, a changed or missing download is refused, and `release manifest` writes nothing then;
 - publish.sh: no publishing if the build number does not increase or the live commit is not an ancestor.
+- tag_release.py: a receipt whose `latest.json` is not its binaries' build is never uploaded; `latest.json` goes up after the files it lists (`scripts/operations/test_tag_release.py`).
 - App: FakeHub tests for the hub row in Settings, first-time notice, banner (appears, dismissed with × and not shown again, progress, explanation while disconnected, both incompatibility notices), update history and Skills list.
   Screenshots: two styles × light/dark.
 

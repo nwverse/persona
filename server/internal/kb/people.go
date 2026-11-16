@@ -29,6 +29,18 @@ func (s *Store) updatePerson(id string, manual bool, create func() *Person, f fu
 	return p, true, nil
 }
 
+// externalPeople is a roster view; it never removes historical associations from metadata.
+func (e *Engine) externalPeople(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		p, ok := e.Store.Person(id)
+		if !ok || (p.Status != "ignored" && p.Status != "self") {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func (e *Engine) notePersonNote(c *Chat, name, note string) {
 	name, note = strings.TrimSpace(name), strings.TrimSpace(note)
 	if name == "" || note == "" {
@@ -37,6 +49,9 @@ func (e *Engine) notePersonNote(c *Chat, name, note string) {
 	for _, pid := range c.People {
 		named := false
 		p, written, _ := e.Store.updatePerson(pid, false, nil, func(p *Person) bool {
+			if p.Status == "ignored" {
+				return false
+			}
 			if named = p.Name == name; named {
 				p.Note = oneLine(note)
 			}
@@ -55,7 +70,7 @@ func (e *Engine) notePersonNote(c *Chat, name, note string) {
 // and the DM's context.
 func (e *Engine) WritePersonSummary(pid string) {
 	p, ok := e.Store.Person(pid)
-	if !ok {
+	if !ok || p.Status == "ignored" {
 		return
 	}
 	var b strings.Builder
@@ -66,6 +81,7 @@ func (e *Engine) WritePersonSummary(pid string) {
 	if p.Note != "" {
 		fmt.Fprintf(&b, "%s\n\n", p.Note)
 	}
+	b.WriteString(e.Store.profilesMarkdown(pid)) // the writers' profiles, each part under its own heading (profile.go)
 	if p.Importance != "" {
 		fmt.Fprintf(&b, "重要级 %s · 与我相关性 %d · %s\n\n", p.Importance, p.Relevance, strings.Join(p.Tags, " "))
 	}

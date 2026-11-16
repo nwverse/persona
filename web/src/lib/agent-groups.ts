@@ -7,8 +7,10 @@ import { stateName } from "./state-labels";
 
 export type AgentGrouping = "repo" | "space" | "state" | "machine" | "todo";
 // "By to-do" leads and is the default for a browser that never picked one (#2812); a grouping picked before stays. The
-// sidebar shows them in this order as segments, and the switch-grouping shortcut goes round them in it. "By machine" is
-// herdr's own layout (machine → workspace → tab, lib/herdr-tree.ts). `short` is the segment's label, `label` the full name.
+// sidebar shows them in this order as segments, the paged list and the complete list alike (#6662), and the
+// switch-grouping shortcut goes round them in it. "By machine" is herdr's own layout (machine → workspace → tab,
+// lib/herdr-tree.ts). `short` is the segment's label, `label` the full name. "By pinned" (#4352) is gone (#6662): the
+// sidebar's 常驻 rows unfold to the same tree, so a picked one reads as By to-do.
 export const AGENT_GROUPINGS: { key: AgentGrouping; label: string; short: string }[] = [
   { key: "todo", label: t("lib-agent-groups.by_todo"), short: t("lib-agent-groups.seg_todo") },
   { key: "machine", label: t("lib-agent-groups.by_machine"), short: t("lib-agent-groups.seg_machine") },
@@ -80,12 +82,13 @@ export interface AgentGroup {
   hint?: string;
 }
 
-export function splitAgentSessions(all: Session[], machines: Machine[]) {
+export function splitAgentSessions(all: Session[], machines: Machine[], keepOffline?: (s: Session) => boolean) {
   const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
   const agents = all.filter((s) => !s.assistant);
-  const live = agents.filter((s) => stateOf(s) !== "offline" && online.has(s.machine_id));
+  const live = agents.filter((s) => (stateOf(s) !== "offline" && online.has(s.machine_id)) || keepOffline?.(s));
+  const listed = new Set(live);
   const recent = agents
-    .filter((s) => stateOf(s) === "offline" || !online.has(s.machine_id))
+    .filter((s) => !listed.has(s))
     .sort((a, b) => byTime(b.updated_at, a.updated_at) || a.machine_id.localeCompare(b.machine_id) || a.session_id.localeCompare(b.session_id))
     .slice(0, 40);
   return { live, recent };

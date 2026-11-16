@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -273,6 +275,42 @@ func TestScreenCardUpgradeAbortedWhenCardEnded(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if list := s.pendingInteractions(); len(list) != 0 {
 		t.Fatalf("expected no replacement card created after card was ended, got: %+v", list)
+	}
+}
+
+// Cancellation stops future polls, but an accepted upgrade whose notification window already expired still rings its
+// current card once. Earlier cancellation, an earlier ring, or a replaced card stays silent.
+func TestScreenCardUpgradeCancellationRingsOnlyDueCurrentCard(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		window             time.Duration
+		announced, current bool
+		want               int
+	}{
+		{"due current card", -time.Second, false, true, 1},
+		{"already announced", -time.Second, true, true, 0},
+		{"window still open", time.Hour, false, true, 0},
+		{"card replaced", -time.Second, false, false, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ft, _ := newCardFleet(t, false)
+			s := ft.s
+			s.fleet.upgradeEvery, s.fleet.upgradeFor = time.Hour, c.window
+			runCtx, cancel := context.WithCancel(context.Background())
+			s.running.Store(&runCtx)
+			p := &pending{ix: proto.Interaction{ID: "scr_mac_s1", MachineID: "mac", SessionID: "s1", Kind: proto.IxScreen}, announced: c.announced}
+			s.fleet.mu.Lock()
+			s.ixMapLocked()[p.ix.ID] = p
+			if !c.current {
+				s.ixMapLocked()[p.ix.ID] = &pending{}
+			}
+			s.fleet.mu.Unlock()
+			cancel()
+			s.upgradeScreenCard("mac", "s1", p.ix.ID, p)
+			if got := ft.pushesOf(assistantwire.NotifyInput, c.want, 50*time.Millisecond); len(got) != c.want {
+				t.Fatalf("pushes after cancellation = %d, want %d", len(got), c.want)
+			}
+		})
 	}
 }
 
@@ -734,6 +772,47 @@ func TestScreenCardRebuiltAfterPromptChanged(t *testing.T) {
 	}
 	if got, _ := waitCards(ft.s, 1, 5*time.Second); len(got) != 1 || got["scr_mac_s1_"+second] != proto.IxScreen {
 		t.Fatalf("after prompt_changed: %v", got)
+	}
+}
+
+// #5265, #5266: Claude Code's safety check with a countdown makes one card, whose dialog says what the apps lay it out
+// from: the command, the agent's words for it, what the warning is about, and when the countdown runs out by the hub's
+// clock. The countdown moving (and the pane narrowed by a phone) is the same card: no new one, no second push.
+func TestScreenCardForASafetyCheckWithACountdown(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile("../screen/testdata/claude-2.1.322-danger-shell-" + name + ".txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	ft, n := newCardFleet(t, false)
+	n.setScreen(read("120"))
+	before := time.Now()
+	blockSession(ft, proto.Session{SessionID: "s1"})
+	got, _ := waitCards(ft.s, 1, 5*time.Second)
+	if len(got) != 1 {
+		t.Fatalf("cards %v", got)
+	}
+	ix := ft.s.pendingInteractions()[0]
+	d := ix.Dialog
+	if d == nil || !strings.HasPrefix(d.Command, "cd ./dist && F=(") || d.Description != "Count the example names in first-screen chunks" ||
+		d.Risk != screen.RiskDelete || d.DeadlineAction != screen.DeadlineDeny {
+		t.Fatalf("dialog %+v", d)
+	}
+	if left := d.DeadlineAt.Sub(before); left < time.Duration(d.DeadlineIn-2)*time.Second || left > time.Duration(d.DeadlineIn+2)*time.Second {
+		t.Fatalf("deadline_at %v, %d s left at the read", d.DeadlineAt, d.DeadlineIn)
+	}
+	b, _ := json.Marshal(d)
+	if !strings.Contains(string(b), `"deadline_at":"`) || !strings.Contains(string(b), `"command":"cd ./dist`) {
+		t.Fatalf("json %s", b)
+	}
+	for _, later := range []string{"later-120", "later-57"} {
+		n.setScreen(read(later))
+		blockSession(ft, proto.Session{SessionID: "s1"})
+		if now := pendingIDs(ft.s); len(now) != 1 || now[ix.ID] == "" {
+			t.Fatalf("%s: cards %v, want only %s", later, now, ix.ID)
+		}
 	}
 }
 
@@ -1620,5 +1699,33 @@ func TestCodexCardPromptChangedAskedAgainIsAnnounced(t *testing.T) {
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 2, time.Second); len(got) != 2 {
 		t.Fatalf("asked again after prompt_changed: pushed %d times", len(got))
+	}
+}
+
+// Claude Code's Bypass Permissions confirmation on a fresh pane (blank rows under it down to the bottom) is a card
+// with its two choices, answered with the keys that pick each, and nothing is pressed until the user picks one.
+// Before, no dialog was read off that screen, so the card offered nothing to choose.
+func TestScreenCardOffersTheBypassConfirmationsChoices(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", "claude-2.1.322-bypass-confirm-160.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, n := newCardFleet(t, false)
+	n.setScreen(string(b))
+	blockSession(ft, proto.Session{SessionID: "s1"})
+	if got, _ := waitCards(ft.s, 1, 5*time.Second); len(got) != 1 {
+		t.Fatalf("cards %v", got)
+	}
+	ix := ft.s.pendingInteractions()[0]
+	if ix.Kind != proto.IxScreen || ix.Dialog == nil || len(ix.Dialog.Options) != 2 ||
+		ix.Dialog.Options[0].Label != "No, exit" || ix.Dialog.Options[1].Label != "Yes, I accept" {
+		t.Fatalf("card %+v dialog %+v", ix, ix.Dialog)
+	}
+	p, err := screenAnswer("s1", ix.Dialog, proto.Resolution{Option: ix.Dialog.Options[1].Key})
+	if err != nil || !slices.Equal(p["keys"].([]string), []string{"down", "enter"}) {
+		t.Fatalf("answer %v %v", p, err)
+	}
+	if !strings.HasPrefix(ix.ID, "scr_mac_s1_") || ix.Dialog.Rev == "" {
+		t.Errorf("id %s rev %q", ix.ID, ix.Dialog.Rev)
 	}
 }

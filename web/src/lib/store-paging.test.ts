@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyCompleteSessions, connect, getSession, getState, rememberSessionRow, reset, upsertSession } from "./store";
+import { archiveAgent, appArchiveDeps } from "./agent-archives";
 import { runtimeSessions } from "./runtime-list";
 import { isWaiting } from "./agent-groups";
 import { backgroundCount, workflowShortLine } from "./workflows";
@@ -53,6 +54,8 @@ beforeEach(() => {
 });
 afterEach(() => { reset(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const settle = () => vi.advanceTimersByTimeAsync(0);
+/** Past the invalidation window (session-list.ts INVALIDATE_THROTTLE_MS): a hint's trailing read has gone out. */
+const settleThrottled = () => vi.advanceTimersByTimeAsync(2_100);
 function hello(features: string[]) {
   connect();
   Socket.last.push({ type: "hello", features });
@@ -70,7 +73,7 @@ describe("negotiated bounded runtime lists", () => {
     expect(getState().sessionSummaries).toHaveLength(50);
     expect(getState().sessionCounts?.total).toBe(8000);
     expect(getState().sessions).toEqual({});
-    expect(Socket.last.url).toContain("features=sessions_list,sessions_delta,session_live");
+    expect(Socket.last.url).toContain("features=sessions_list,sessions_list_changes,sessions_delta,session_live");
   });
 
   it("keeps chat details separate and consumes title-only invalidations via since", async () => {
@@ -93,12 +96,12 @@ describe("negotiated bounded runtime lists", () => {
     const sid = "row/<&>/with/slashes";
     changed = [session(sid, { updated_at: "2027-01-01T00:00:00Z" })];
     Socket.last.push({ type: "sessions_list", revision: "r2" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(true);
     changed = [];
     removed = [JSON.stringify(["demo", sid])];
     Socket.last.push({ type: "sessions_list", revision: "r3" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(false);
   });
 
@@ -170,4 +173,48 @@ describe("summary-aware background state", () => {
     expect(backgroundCount(s)).toBe(2);
     expect(workflowShortLine(s)).toBe(t("lib-workflows.running_in_background"));
   });
+});
+
+describe("archive failure rollback with negotiated lists", () => {
+ it.each([
+  ["delta", ["sessions_delta"], "legacy"],
+  ["paged", ["sessions_list", "sessions_delta", "sessions_lookup"], "s0"],
+ ] as const)("restores the removed detail immediately with a %s hub and real refresh", async (_, features, id) => {
+  hello([...features]);
+  await settle();
+  const snapshot = session(id, { title:"Waiting for confirmation", status:"blocked", state:"needs_you", waiting:undefined });
+  upsertSession(snapshot);
+  const summaries = getState().sessionSummaries;
+  let reject!: (error: Error) => void;
+  const operation = archiveAgent(snapshot,true,{
+   ...appArchiveDeps,
+   archive:() => new Promise((_,fail) => { reject=fail; }),
+   notify:() => {},
+  });
+  expect(getState().sessions.demo).toEqual([]);
+  reject(new Error("close refused"));
+  await settle();
+  expect(await operation).toEqual({ok:false});
+  expect(getState().sessions.demo).toEqual([snapshot]);
+  expect(getSession("demo",id)?.title).toBe("Waiting for confirmation");
+  if (features.some(feature => feature === "sessions_list")) {
+   expect(getState().sessionSummaries).toEqual(summaries);
+   expect(requests.some(r => r.pathname === "/api/v1/sessions" && !r.search)).toBe(false);
+  }
+ });
+
+ it("does not replace a newer pushed detail when a failed archive rolls back", async () => {
+  hello(["sessions_list", "sessions_lookup"]);
+  await settle();
+  const snapshot = session("s0",{title:"Before close",waiting:undefined});
+  upsertSession(snapshot);
+  let reject!: (error:Error) => void;
+  const operation = archiveAgent(snapshot,true,{...appArchiveDeps,archive:() => new Promise((_,fail) => {reject=fail;}),notify:() => {}});
+  const newer: Session = {...snapshot,title:"New work",status:"working",state:"working"};
+  upsertSession(newer);
+  reject(new Error("close refused"));
+  await settle();
+  expect(await operation).toEqual({ok:false});
+  expect(getState().sessions.demo).toEqual([newer]);
+ });
 });

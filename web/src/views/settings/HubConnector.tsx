@@ -8,13 +8,14 @@
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { otherManager, ownedSub, pinManagerAt, sameManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { isOpenBeside } from "./open-beside";
 import {
   canSendStep, CI_MODES, deleteIMessageData, imessageAIFooter, imessageStatus, setIMessageAI, connectorBrand, connectorLogin, connectorLogout, connectorState, connectorSummary, connectorTone, deleteConnectorArchive,
-  deleteConnectorData, deletedLine, feedsFooter, fieldInput, githubAuth, githubInboxFooter, githubMachineLine, githubMachineWarns, githubOptions,
+  deleteConnectorData, deletedLine, feedsFooter, fieldInput, githubAuth, githubInboxFooter, githubMachineLine, githubMachineWarns, githubOptions, larkcliOptions,
   githubScopeAdvice, isEnabled, isPolledStep, isSignedIn, isStarting, listConnectors, logoutMessage, mutableRepo, otherConnectors, setConnector, setGitHubAuth,
   signInFooter, signsInHere, stepView, storesData, switchFooter, switchLabel, undescribed,
-  type ConnectorPrompt, type ConnectorTone, type GitHubAuth, type GitHubInboxOptions, type HubConnector, type IMessageStatus,
+  type ConnectorPrompt, type ConnectorTone, type GitHubAuth, type GitHubInboxOptions, type LarkCLIInboxOptions, type HubConnector, type IMessageStatus,
 } from "../../lib/connectors";
 import { useChannels } from "../../lib/channels";
 import { ago } from "../../lib/format";
@@ -25,7 +26,7 @@ import { BrandMark } from "../../ui/BrandMark";
 import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 import { ChannelLink } from "./Channels";
-import { QRLinkStep, QRStep, UnsupportedStep, useStepPolling } from "./LoginSteps";
+import { QRCode, QRLinkStep, QRStep, UnsupportedStep, useStepPolling } from "./LoginSteps";
 import { Group, Row, Switch } from "./SettingsParts";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { OfflineState, useShownOffline } from "../ManagerParts";
@@ -52,10 +53,13 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 // ── the rows on Settings › Connectors ────────────────────
 
-export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void }) {
+/** `openBeside`: the connector open beside the list (Settings' two columns): its row is marked current, and every row
+ *  puts its state under its name, so the narrow column shows the name whole. */
+export function ConnectorList({ onOpen, onLarkCli, openBeside }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void; openBeside?: string | null }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
+  const picked = useChosenManager();
   useEffect(() => {
     listConnectors()
       .then((l) => {
@@ -85,17 +89,35 @@ export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => v
     <Group title={t("settings-hubconnector.more_title")} footer={t("settings-hubconnector.more_footer")}>
       {!list && !error && <div className="px-4 py-3"><Loading /></div>}
       {error && <p className="px-4 py-3 text-[12.5px] text-red">{t("settings-hubconnector.list_failed", { error })}</p>}
-      {(list ?? []).map((c) => (
-        <button key={`${c.manager ?? ""}:${c.id}`} type="button" data-connector-row={c.id} data-manager={c.manager ?? ""} onClick={() => onOpen(ownedSub(c.id, c.manager))} className="flex w-full items-center gap-3 px-4 py-2.5 text-left whitespace-nowrap transition-colors hover:bg-hover">
-          <Mark id={c.id} size={32} />
-          <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{c.name}</span>
-          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-2">
+      {(list ?? []).map((c) => {
+        // a route without @manager opens the current assistant's copy
+        const current = isOpenBeside(openBeside, c.id, c.manager, picked);
+        const state = (
+          <span className={cx("flex min-w-0 items-center gap-1.5 text-ink-2", openBeside !== undefined ? "mt-0.5 text-submeta" : "text-[12.5px]")}>
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[connectorTone(c)])} />
             <span className="truncate">{connectorSummary(c)}</span>
           </span>
-          <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
-        </button>
-      ))}
+        );
+        const name = <span className={cx("min-w-0 truncate text-[13px] text-ink", openBeside !== undefined ? "block" : "flex-1")}>{c.name}</span>;
+        return (
+          <button key={`${c.manager ?? ""}:${c.id}`} type="button" data-connector-row={c.id} data-manager={c.manager ?? ""} aria-current={current || undefined} onClick={() => onOpen(ownedSub(c.id, c.manager))}
+            className={cx("flex w-full items-center gap-3 px-4 py-2.5 text-left whitespace-nowrap transition-colors", current ? "bg-accent-tint" : "hover:bg-hover")}>
+            <Mark id={c.id} size={32} />
+            {openBeside !== undefined ? (
+              <span className="min-w-0 flex-1">
+                {name}
+                {state}
+              </span>
+            ) : (
+              <>
+                {name}
+                {state}
+              </>
+            )}
+            <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+          </button>
+        );
+      })}
     </Group>
   );
 }
@@ -104,7 +126,8 @@ export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => v
 
 /** `manager`: whose connector (another manager's, opened from its extension's page, docs/assistant/managers.md "Clients"): the
  *  merged list's copy of that manager, and every request of the page names it while it is open; none: the current assistant's (Connectors fills it in). */
-export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string; manager?: string; onBack: () => void; onChannel?: (id: string, manager?: string) => void }) {
+/** `onBack`: none where the page's top bar has the way back (a phone). */
+export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string; manager?: string; onBack?: () => void; onChannel?: (id: string, manager?: string) => void }) {
   useLayoutEffect(() => pinManagerAt(id === "imessage" ? [`/connectors/${encodeURIComponent(id)}`, "/imessage"] : [`/connectors/${encodeURIComponent(id)}`], otherManager(manager)), [id, manager]);
   const [c, setC] = useState<HubConnector | null>(null);
   const [failure, setFailure] = useState("");
@@ -167,7 +190,7 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
-        <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-hubconnector.back")}</Button>
+        {onBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-hubconnector.back")}</Button>}
         <OwnerMark manager={manager} />
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-hubconnector.recheck")} onClick={() => void load()} disabled={loading} />
@@ -215,6 +238,8 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
       )}
 
       {c && id === "github" && githubOptions(c.options) && <GitHubInbox key={JSON.stringify(c.options)} options={githubOptions(c.options)!} onSaved={setC} />}
+      {c && id === "larkcli" && larkcliOptions(c.options) && <LarkCLITriage key={`t:${JSON.stringify(c.options)}`} options={larkcliOptions(c.options)!} onSaved={setC} />}
+      {c && id === "larkcli" && larkcliOptions(c.options) && <LarkCLIDocuments key={JSON.stringify(c.options)} options={larkcliOptions(c.options)!} onSaved={setC} />}
     </div>
   );
 }
@@ -527,7 +552,7 @@ function SignInSections({ c, reload }: { c: HubConnector; reload: () => Promise<
   );
 }
 
-export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent", bare }: {
+export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent", bare, autoStart }: {
   c: HubConnector;
   reload: () => Promise<void>;
   footer?: string;
@@ -536,6 +561,8 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
   startTone?: "accent" | "quiet";
   /** Draw only the step content so a caller can place it inside its own section. */
   bare?: boolean;
+  /** Start signing in once, as soon as this is drawn: the step that follows another the user just finished (#5818). */
+  autoStart?: boolean;
 }) {
   const [prompt, setPrompt] = useState<ConnectorPrompt | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -573,6 +600,12 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
     }
     return false;
   }, [c.id, c.name, reload]);
+  const started = useRef(false);
+  useEffect(() => {
+    if (!autoStart || started.current) return;
+    started.current = true;
+    void send("", {});
+  }, [autoStart, send]);
 
   // A code on screen (GitHub's device flow) or a QR code to scan (WeChat): ask again every interval the hub gave
   // until the user has entered / scanned it.
@@ -628,6 +661,14 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
       )}
       {view === "device_code" ? (
         <div className="flex flex-col gap-3 px-4 py-3">
+          {prompt.qr?.rows.length ? (
+            // The link carries the code (Lark's, #5818): scanning it on the phone needs nothing typed; the code and
+            // the link stay below for doing it on this computer.
+            <div className="flex flex-col items-center gap-2 pb-1">
+              <QRCode rows={prompt.qr.rows} label={t("settings-hubconnector.qr_label")} />
+              <p className="text-center text-[12.5px] text-ink-2">{t("settings-hubconnector.scan_to_authorize")}</p>
+            </div>
+          ) : null}
           <div className="flex items-center gap-3">
             <span className="min-w-0 flex-1 truncate font-mono text-[26px] font-semibold tracking-[0.12em] text-ink select-all">{prompt.user_code}</span>
             <IconButton
@@ -639,7 +680,7 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
           <p className="flex items-center gap-2 text-[12.5px] text-ink-3"><Spinner size={11} />{t("settings-hubconnector.waiting_auth", { name })}</p>
           {prompt.url && (
             <div>
-              <Button tone="accent" icon="external" onClick={() => window.open(prompt.url, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
+              <Button tone={prompt.qr?.rows.length ? "secondary" : "accent"} icon="external" onClick={() => window.open(prompt.url, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
             </div>
           )}
         </div>
@@ -815,6 +856,95 @@ function GitHubInbox({ options, onSaved }: { options: GitHubInboxOptions; onSave
         <Button type="submit" tone="secondary" icon="plus" disabled={!mutableRepo(repo, o.muted_repos) || saving}>{t("settings-hubconnector.add")}</Button>
       </form>
       {error && <p className="px-4 py-2.5 text-[12px] text-red">{error}</p>}
+    </Group>
+  );
+}
+
+/** lark-cli's watched documents (PUT …/larkcli/settings {options}, sent whole so the chat options stay): links and Wiki
+ * spaces whose comments that mention you come in, and whether every comment on a document you own does. */
+function LarkCLIDocuments({ options, onSaved }: { options: LarkCLIInboxOptions; onSaved: (c: HubConnector) => void }) {
+  const [o, setO] = useState(options);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const save = async (next: LarkCLIInboxOptions) => {
+    const before = o;
+    setO(next);
+    setSaving(true);
+    try {
+      onSaved(await setConnector("larkcli", { options: next }));
+      setError("");
+    } catch (e) {
+      setO(before);
+      setError(t("settings-hubconnector.save_failed", { error: errorText(e) }));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Group title={t("settings-hubconnector.lark_docs")} footer={t("settings-hubconnector.lark_docs_footer")}>
+      <LinkList label={t("settings-hubconnector.lark_docs_links")} placeholder={t("settings-hubconnector.lark_docs_link_placeholder")} values={o.documents} disabled={saving} onChange={(documents) => void save({ ...o, documents })} />
+      <LinkList label={t("settings-hubconnector.lark_docs_spaces")} placeholder={t("settings-hubconnector.lark_docs_space_placeholder")} values={o.wiki_spaces} disabled={saving} onChange={(wiki_spaces) => void save({ ...o, wiki_spaces })} />
+      {error && <p className="px-4 py-2.5 text-[12px] text-red">{error}</p>}
+    </Group>
+  );
+}
+
+/** A list of links with a remove button each and a field to add one. */
+function LinkList({ label, placeholder, values, disabled, onChange }: { label: string; placeholder: string; values: string[]; disabled: boolean; onChange: (next: string[]) => void }) {
+  const [value, setValue] = useState("");
+  const link = value.trim();
+  const canAdd = link !== "" && !values.includes(link);
+  return (
+    <>
+      {values.map((v) => (
+        <div key={v} className="flex items-center gap-3 px-4 py-2">
+          <Icon name="link" size={14} className="shrink-0 text-ink-3" />
+          <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink">{v}</span>
+          <IconButton icon="trash" label={t("settings-hubconnector.lark_docs_remove", { link: v })} disabled={disabled} onClick={() => onChange(values.filter((x) => x !== v))} />
+        </div>
+      ))}
+      <form
+        className="flex items-center gap-2 px-4 py-2.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!canAdd) return;
+          setValue("");
+          onChange([...values, link]);
+        }}
+      >
+        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} aria-label={label} spellCheck={false} autoCapitalize="off" className={cx(fieldClass, "font-mono")} />
+        <Button type="submit" tone="secondary" icon="plus" disabled={!canAdd || disabled}>{t("settings-hubconnector.add")}</Button>
+      </form>
+    </>
+  );
+}
+
+/** lark-cli's triage rules: what counts as Needs you for its items, in the user's words (sent with the other options). */
+function LarkCLITriage({ options, onSaved }: { options: LarkCLIInboxOptions; onSaved: (c: HubConnector) => void }) {
+  const [text, setText] = useState(options.triage_rules);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const changed = text.trim() !== options.triage_rules.trim();
+  const save = async () => {
+    setSaving(true);
+    try {
+      onSaved(await setConnector("larkcli", { options: { ...options, triage_rules: text } }));
+      setError("");
+    } catch (e) {
+      setError(t("settings-hubconnector.save_failed", { error: errorText(e) }));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Group title={t("settings-hubconnector.lark_triage")} footer={t("settings-hubconnector.lark_triage_footer")}>
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={4000} rows={4} placeholder={t("settings-hubconnector.lark_triage_placeholder")} aria-label={t("settings-hubconnector.lark_triage")} disabled={saving} className={cx(fieldClass, "min-h-24 resize-y py-2")} />
+        <div className="flex justify-end">
+          <Button tone="primary" busy={saving} disabled={!changed || saving} onClick={() => void save()}>{t("settings-hubconnector.lark_triage_save")}</Button>
+        </div>
+        {error && <p className="text-[12px] text-red">{error}</p>}
+      </div>
     </Group>
   );
 }

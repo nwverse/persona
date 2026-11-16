@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // A runtime that runs Claude Code through its SDK (Paseo, docs/integrations/paseo.md) has sessions whose conversation is an
@@ -74,8 +75,9 @@ func (h *runtimeConn) setTranscripts(m map[string]string) (changed []string) {
 	return changed
 }
 
-// transcriptOf is the Claude session holding the conversation of session id, as the runtime answering for it lists it;
-// "" for any other session. A subagent of such a session ("<session>@<agent>") is not one: callers split it.
+// transcriptOf is the Claude session holding the conversation of session id, as the runtime answering for it lists it,
+// or as a runtime that left listed it last (runtimeaway.go); "" for any other session. A subagent of such a session
+// ("<session>@<agent>") is not one: callers split it.
 func (b *runtimeRegistry) transcriptOf(id string) string {
 	if b == nil || id == "" {
 		return ""
@@ -84,7 +86,7 @@ func (b *runtimeRegistry) transcriptOf(id string) string {
 	defer b.mu.Unlock()
 	h := b.owner[id]
 	if h == nil {
-		return ""
+		return b.awayTranscript(id)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -116,13 +118,15 @@ func (n *Node) runtimeTranscriptCall(ctx context.Context, h *runtimeConn, method
 	switch {
 	case method == "session.watch":
 		// The transcript's lines from the node, the live text from the runtime (it pushes no items for this session).
-		if err := n.watch(p.SessionID, p.SinceSeq); err != nil {
+		connCtx := rpc.ConnContext(ctx)
+		if err := n.watchFor(connCtx, p.SessionID, p.SinceSeq); err != nil {
 			return nil, err, true
 		}
 		if !sub {
-			n.runtimes.watch(h, p.SessionID, 0)
+			attempt := n.runtimes.watch(h, p.SessionID, 0, connCtx)
 			if _, err := call("session.watch", map[string]any{"session_id": p.SessionID, "since_seq": 0, "transcript": true}); err != nil {
 				n.logf("runtime %s: watch %s: %v", h.id(), p.SessionID, err)
+				n.runtimes.watchFailed(h, p.SessionID, attempt.token)
 			}
 		}
 		return okResult(nil), nil, true
@@ -161,12 +165,21 @@ func (n *Node) transcriptMoved(h *runtimeConn, id string) {
 		return
 	}
 	n.unwatch(id)
+	parent := n.runtimes.watchParent(id)
+	if parent == nil {
+		return
+	}
 	if n.runtimeTranscript(id) != "" {
-		if err := n.watch(id, 0); err != nil {
+		if err := n.watchFor(parent, id, 0); err != nil {
 			n.logf("runtime %s: watch %s's transcript: %v", h.id(), id, err)
 		}
 	}
-	go n.runtimeWatch(h, id, 0)
+	attempt := n.runtimes.watch(h, id, 0, parent)
+	go func() {
+		if err := n.runtimeWatch(h, id, attempt.since); err != nil {
+			n.runtimes.watchFailed(h, id, attempt.token)
+		}
+	}()
 }
 
 // forgetFile drops what was read of session id's transcript (it moved to another file).
@@ -191,8 +204,10 @@ func (b *runtimeRegistry) isWatched(id string) bool {
 
 // mergeRuntimeTranscript completes the row of a runtime session whose conversation is a transcript on this machine
 // with what the transcript says, as for an agent in a terminal: the last words, what it is doing, background tasks,
-// subagents, the revision the apps pull on. The runtime's status, title, model and modes stay. Returns the Claude
-// session id the transcript is (its own row is left out of the list), "" when the row has none here.
+// subagents, the revision the apps pull on. The runtime's status, title, model and modes stay, and so does the
+// background work it lists itself, beside the transcript's: what the runtime started for the session outside Claude
+// Code (Paseo: the agents this one created, #4494). Returns the Claude session id the transcript is (its own row is
+// left out of the list), "" when the row has none here.
 func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 	t := n.runtimes.transcriptOf(s.SessionID)
 	if t == "" {
@@ -216,7 +231,7 @@ func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 	if s.PermissionMode == "" && s.Effort == "" {
 		s.PermissionMode, s.Effort = n.currentModes(s.SessionID, m)
 	}
-	setContext(s, m)
+	setRuntimeContext(s, m)
 	s.ModelFallback = m.modelFallback
 	s.LastText, s.Rev = snippet(m.lastText), st.Size()
 	if u := lastUsed(m, st); u.After(s.UpdatedAt) {
@@ -227,7 +242,9 @@ func (n *Node) mergeRuntimeTranscript(s *proto.Session) string {
 	if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 		s.Queued = m.queue
 	}
+	own := s.Background
 	n.setBackground(s, m) // as for a pane's session: its workflows, and the background tasks not shown as them
+	s.Background = append(s.Background, own...)
 	s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 	s.Subagents = n.subagents(s.SessionID)
 	return t

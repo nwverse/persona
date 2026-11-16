@@ -26,6 +26,9 @@ export const ZOOM_MAX = 6;
 /** A double tap on a picture that is not much bigger than its fit (Android's 2.5×). */
 const DOUBLE_TAP_SCALE = 2.5;
 
+// fitIn and fitRect live in lib/image-fit.ts, which the image editor shares without the viewer's zoom and pan.
+export { fitIn, fitRect } from "./image-fit";
+
 /** Zoomed in at all (past rounding): drags pan, swipes do not page, a click beside it does not close. */
 export function isZoomed(v: View): boolean {
   return v.scale > 1.001;

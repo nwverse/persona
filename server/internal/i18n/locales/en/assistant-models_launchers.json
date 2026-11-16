@@ -3,7 +3,7 @@
   "err_kind": "Unsupported connection type",
   "err_api": "Unsupported API protocol",
   "err_chat_protocol_change": "This Chat Completions provider cannot be changed to another protocol. Use a client that supports Chat Completions or add a separate provider.",
-  "err_chat_launch_settings": "Chat Completions providers do not support environment variables, timeout, context limits, default effort, tier models, or subagent settings. Clear these fields to save.",
+  "err_chat_launch_settings": "Chat Completions providers do not support environment variables, timeout, context limits, tier models, or subagent settings. Clear these fields to save.",
   "err_api_transport": "Direct API providers do not support custom headers, proxy, or no_proxy. Clear these fields to continue.",
   "err_chat_transport": "Chat Completions providers do not support custom headers, proxy, or no_proxy. Clear these fields to continue.",
   "err_chat_launcher": "Chat Completions connections cannot run as launchers",
@@ -41,6 +41,7 @@
   "err_model_no_id": "A model in the list has no ID",
   "err_model_duplicate": "Model {model} is listed twice",
   "err_model_context_negative": "The context window of model {model} can’t be negative",
+  "err_model_output_negative": "The output limit of model {model} can’t be negative",
   "err_model_effort_empty": "Model {model} has an empty thinking effort",
   "err_model_default_effort_unlisted": "The default thinking effort of model {model} isn’t one it supports",
   "err_timeout_negative": "Timeout can’t be negative",
@@ -51,7 +52,6 @@
   "err_tier_model_long": "A tier model name is too long",
   "role_default": "Default model",
   "role_optional": "Optional model",
-  "err_builtin_hide": "The built-in claude is every machine's default launcher and cannot be hidden",
   "err_scope_none": "{provider} stays with the hub: no computer gets its key. Change its Devices in Settings › Model providers, or pick another provider",
   "err_scope_machine": "{provider} is not set up for {machine}. Add this computer to its Devices in Settings › Model providers, or pick another provider",
   "err_scope_work": "{machine} is a work computer: {provider} reaches it only when it is chosen in the provider's Devices (Settings › Model providers)",
@@ -61,5 +61,7 @@
   "err_delivery": "Delivery must be on_demand or push",
   "err_own_service_value": "own_service must be skip or use",
   "err_scope_empty": "Choose at least one computer for this provider",
-  "err_scope_unknown_machine": "{machine} is not one of your computers"
+  "err_scope_unknown_machine": "{machine} is not one of your computers",
+  "err_via_kind": "Only a direct API connection can send through a computer",
+  "err_via_machine": "{machine} is not one of this assistant’s computers"
 }

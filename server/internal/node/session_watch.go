@@ -17,8 +17,11 @@ type watch struct {
 	cancel context.CancelFunc
 
 	ctx context.Context // ends with session.unwatch or the hub connection (watchFor)
-	id  string
-	f   *transcript.File
+	// parent is the hub connection's context the watch was made under (watchFor's): a runtime that takes the session
+	// over is asked to watch it for as long as that connection lasts (watchTakenOver).
+	parent context.Context
+	id     string
+	f      *transcript.File
 	// armed: the watch's first read and catch-up are done, so the pump may read it (the first read of a file is the
 	// subscriber's backlog, not news to push).
 	armed atomic.Bool
@@ -125,7 +128,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 		return fmt.Errorf("too many subagent conversations followed (%d): close one first", maxSubagentWatches)
 	}
 	ctx, cancel := context.WithCancel(parent)
-	w := &watch{cancel: cancel, ctx: ctx, id: id, f: f, codex: codex}
+	w := &watch{cancel: cancel, ctx: ctx, parent: parent, id: id, f: f, codex: codex}
 	n.watches[id] = w
 	if !n.pumping {
 		n.pumping = true
@@ -173,6 +176,7 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	n.mu.Lock()
 	f := n.files[id]
 	n.mu.Unlock()
+	agentUsage(f, items) // finished subagents' results carry what they used (agent_usage.go)
 	items = n.echoed(id, f, items)
 	_ = n.peer.Notify("session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(items)}, span, true))
 	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)

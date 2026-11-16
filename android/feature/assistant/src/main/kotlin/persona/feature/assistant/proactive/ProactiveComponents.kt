@@ -39,9 +39,9 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private val WheelRow = Tokens.Space.xxxl + Tokens.Space.s
-private val DayButton = Tokens.Space.xxxl + Tokens.Space.s
-private val TimeColumn = Tokens.Space.xxxl * 2 + Tokens.Space.s
+private val WheelRow = Tokens.Space.Standard.xxl + Tokens.Space.Standard.s
+private val DayButton = Tokens.Space.Standard.xxl + Tokens.Space.Standard.s
+private val TimeColumn = Tokens.Space.Standard.xxl * 2 + Tokens.Space.Standard.s
 
 /** A caption under a section, in the page's quiet ink. */
 @Composable
@@ -70,8 +70,8 @@ internal fun UpcomingRow(item: Upcoming, now: Instant, zone: ZoneId, position: G
 }
 
 /**
- * A repeating task: its rule in words, the next and last run, what it runs with when that is not the default, "Push alerts only"
- * when "Push when done" is only its alerts, who set it up, and its switch. The picture carries a mark when the last run failed (danger) or when Persona made it.
+ * A repeating task: its rule in words, the next and last run, what it runs with when that is not the default, its push and Inbox choices,
+ * who set it up, and its switch. The picture carries a mark when the last run failed (danger) or when Persona made it.
  */
 @Composable
 internal fun TaskRow(
@@ -82,11 +82,12 @@ internal fun TaskRow(
     val failed = lastRun?.failed == true
     val title = task.displayTitle(say)
     val lines = listOfNotNull(
-        say.rule(task, now, zone),
+        listOfNotNull(say.rule(task, now, zone),
+            stringResource(R.string.assistant_proactive_push_asked_mark).takeIf { task.pushesOnlyAsked },
+            taskInboxMark(task)).joinToString(" · "),
         task.nextLine(say, now, zone),
         lastRun?.line(say, now, zone),
         task.runsWith(say),
-        stringResource(R.string.assistant_proactive_push_asked_mark).takeIf { task.pushesOnlyAsked },
         stringResource(R.string.assistant_proactive_made_by_assistant).takeIf { task.byAssistant },
     )
     JGroupItem(position) {
@@ -101,7 +102,7 @@ internal fun TaskRow(
                 }
             },
             trailing = {
-                if (busy) JSpinner(Modifier.size(Tokens.Space.xxl))
+                if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.xl))
                 else {
                     val description = stringResource(R.string.assistant_proactive_auto_run, title)
                     JSwitch(task.enabled, onToggle, Modifier.semantics { contentDescription = description })
@@ -110,6 +111,14 @@ internal fun TaskRow(
             onClick = onOpen, onLongClick = onMore,
         )
     }
+}
+
+/** The Inbox setting beside the push mark; null for Don't or a value this app does not know. */
+@Composable
+private fun taskInboxMark(task: ScheduledTask): String? = when (task.inbox) {
+    ScheduledTask.INBOX_WORTHY -> stringResource(R.string.assistant_proactive_inbox_worthy_mark)
+    ScheduledTask.INBOX_EVERY -> stringResource(R.string.assistant_proactive_inbox_every_mark)
+    else -> null
 }
 
 /** A one-off Persona scheduled (or the user did): when, where it goes, what it will do. ⋯ holds "Run now" and "Delete". */
@@ -126,6 +135,7 @@ internal fun OneOffRow(
         task.prompt.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.takeIf { it != title },
         task.runsWith(say),
         stringResource(R.string.assistant_proactive_push_asked_mark).takeIf { task.pushesOnlyAsked },
+        taskInboxMark(task),
     )
     JGroupItem(position) {
         JRow(
@@ -136,7 +146,7 @@ internal fun OneOffRow(
                 }
             },
             trailing = {
-                if (busy) JSpinner(Modifier.size(Tokens.Space.xxl))
+                if (busy) JSpinner(Modifier.size(Tokens.Space.Standard.xl))
                 else JIconButton(PhIcons.DotsThree, stringResource(R.string.assistant_proactive_actions_for, title), onMore)
             },
             onClick = onOpen, onLongClick = onMore, chevron = false,
@@ -161,7 +171,7 @@ internal fun RunRow(
     JGroupItem(position) {
         JRow(
             title, subtitle = listOf(time, run.detail(say)).filter { it.isNotBlank() && it != title }.joinToString("\n"), subtitleLines = 3,
-            leading = { JIcon(icon, stringResource(outcome.word), size = Tokens.Space.xxl, tint = tint, selected = true) },
+            leading = { JIcon(icon, stringResource(outcome.word), size = Tokens.Space.xl, tint = tint, selected = true) },
             onClick = conversation?.let { key -> { onOpen(key) } },
         )
     }

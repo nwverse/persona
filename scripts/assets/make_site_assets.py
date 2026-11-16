@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""The website home page's generated assets (site/public, docs/operations/site.md "Home page"):
+"""The website's generated assets (site/public, docs/operations/site.md "Home page"):
   python3 scripts/assets/make_site_assets.py                 # all three
   python3 scripts/assets/make_site_assets.py serif           # only the headline font, after editing headline text
   python3 scripts/assets/make_site_assets.py --serif-font /path/NotoSerifCJKsc-Bold.otf serif
 
 - img/paper.webp: the mascot alone, cut from Apple Vision Pro's front icon layer (the drawing without its paper).
-- img/recording.webp: the README's demo-mode recording (docs/assets/readme/hero-dark.zh-CN.webp), copied as is.
-- fonts/persona-serif.woff: Noto Serif CJK SC Bold, subset to the characters the page sets in it (h1, h2 and .hello),
+- img/recording.webp: the Chinese README's demo-mode recording (docs/assets/readme/hero-dark.zh-CN.webp), copied as is.
+- img/recording-en.webp: the English README's demo-mode recording (docs/assets/readme/hero-dark.webp), copied as is.
+- fonts/persona-serif.woff: Noto Serif CJK SC Bold, subset to the characters the pages set in it (h1, h2 and .hello
+  of the home page, the extensions page and the releases page),
   so the headlines look the same on every system for about 20 KB. The source font is not in the repository: pass it
   with --serif-font (an .otf, or a .ttc with --font-number), or let the script find a system copy.
 """
@@ -18,10 +20,14 @@ from html.parser import HTMLParser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SITE = os.path.join(ROOT, "site", "public")
-PAGE = os.path.join(SITE, "index.html")
+# Chinese pages whose headlines use the subset. English headings use a system serif stack instead, so translating
+# them never grows this CJK font or requires another font download.
+PAGES = [os.path.join(SITE, "index.html"), os.path.join(SITE, "extensions", "index.html"),
+         os.path.join(SITE, "releases", "index.html")]
 FRONT = os.path.join(ROOT, "apple/Persona/Resources/Assets.xcassets/AppIcon-Vision.solidimagestack",
                      "Front.solidimagestacklayer/Content.imageset/front.png")
 RECORDING = os.path.join(ROOT, "docs/assets/readme/hero-dark.zh-CN.webp")
+RECORDING_EN = os.path.join(ROOT, "docs/assets/readme/hero-dark.webp")
 # (path, font number) of system copies of Noto Serif CJK SC Bold, tried in order
 SERIF_CANDIDATES = [
     ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc", 2),
@@ -48,9 +54,10 @@ def mascot():
 
 
 def recording():
-    out = os.path.join(SITE, "img", "recording.webp")
-    shutil.copyfile(RECORDING, out)
-    print(f"recording: {out} ({os.path.getsize(out)} bytes)")
+    for name, source in [("recording.webp", RECORDING), ("recording-en.webp", RECORDING_EN)]:
+        out = os.path.join(SITE, "img", name)
+        shutil.copyfile(source, out)
+        print(f"recording: {out} ({os.path.getsize(out)} bytes)")
 
 
 class SerifText(HTMLParser):
@@ -86,8 +93,9 @@ def serif(font, number):
     if not font or not os.path.exists(font):
         sys.exit("serif: Noto Serif CJK SC Bold not found; pass --serif-font (and --font-number for a .ttc)")
     grab = SerifText()
-    with open(PAGE, encoding="utf-8") as f:
-        grab.feed(f.read())
+    for page in PAGES:
+        with open(page, encoding="utf-8") as f:
+            grab.feed(f.read())
     chars = set("".join(grab.text)) | set(" 。，、？！：；「」…·")
     text = "".join(sorted(c for c in chars if c == " " or not c.isspace()))
     out = os.path.join(SITE, "fonts", "persona-serif.woff")

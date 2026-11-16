@@ -161,6 +161,14 @@ describe("a brief item", () => {
     expect([...host.querySelectorAll("button")].some((b) => b.textContent === "通过")).toBe(false);
   });
 
+  it("says when the decision is recorded for the supervisor because no Agent can take it", async () => {
+    api.mockResolvedValueOnce({ ok: true, delivered: "none" });
+    drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
+    const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "按推荐来")!;
+    await act(async () => take.click());
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
+  });
+
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {
     draw(item());
     api.mockRejectedValueOnce(new ApiError(409, "已经处理过了", {}));
@@ -260,5 +268,39 @@ describe("a brief item", () => {
   it("has no Accept button for a task that has no round to name", () => {
     draw(item(body({ accept: [{ id: "todo_v3", title: "没有轮次", waited_s: 60 }] })));
     expect([...host.querySelectorAll("button")].find((b) => b.textContent === "通过")?.disabled).toBe(true);
+  });
+
+  it("draws the week's recommended setup as the hub worded it, and only opens settings", () => {
+    draw(item(body({ setup: [
+      { id: "triage_wake", setting: "agents.triage.wake", count: 3, text: "Session triage, \"Wake on schedule\": 3 times …" },
+      { id: "leaders", setting: "assistant.leaders", count: 12, minutes: 31, text: "Leader conversations: 12 of the main chat's rounds (31 min) …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual([
+      "Session triage, \"Wake on schedule\": 3 times …",
+      "Leader conversations: 12 of the main chat's rounds (31 min) …",
+    ]);
+    // Only a mechanism with a settings page in this app gets a button, and the button calls nothing on the hub.
+    expect(setup.map((r) => r.querySelectorAll("button").length)).toEqual([1, 0]);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=persona");
+  });
+
+  it("opens the background supervisor's model purpose from the lower-tier line, and changes nothing", () => {
+    draw(item(body({ setup: [
+      { id: "supervisor_tier", setting: "assistant.supervise", count: 24, text: "A lower tier for the background supervisor: … 24 acceptances on big-model …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual(["A lower tier for the background supervisor: … 24 acceptances on big-model …"]);
+    expect(setup[0].querySelectorAll("button").length).toBe(1);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=models&purpose=assistant.supervise");
+  });
+
+  it("has no setup section on a briefing without the block", () => {
+    draw(item(body()));
+    expect(rows("setup")).toEqual([]);
   });
 });

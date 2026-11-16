@@ -43,14 +43,17 @@ nonisolated struct AgentListOrder {
         }
     }
 
-    /// By rank, then the most recently updated (working: most recently started) first, then by id so equal times
-    /// never swap between renders.
+    /// By rank, then the most recently updated (working: most recently started) first, then by session id and, for the
+    /// same session id on two machines, by the complete id (hub group, machine, session), so equal times never swap
+    /// between renders or with the order the machines answered in: the core's last key too (#9064).
     func ordered(_ list: [Session]) -> [Session] {
         list.map { session -> (session: Session, rank: Int, sortDate: Date) in
             (session: session, rank: byRank ? rank(session) : 0, sortDate: session.sortDate)
         }.sorted { a, b in
             if a.rank != b.rank { return a.rank < b.rank }
-            return a.sortDate != b.sortDate ? a.sortDate > b.sortDate : a.session.sessionID < b.session.sessionID
+            if a.sortDate != b.sortDate { return a.sortDate > b.sortDate }
+            if a.session.sessionID != b.session.sessionID { return a.session.sessionID < b.session.sessionID }
+            return a.session.id < b.session.id
         }
         .map(\.session)
     }
@@ -99,8 +102,11 @@ nonisolated struct AgentListOrder {
 nonisolated enum AgentRowCap {
     #if os(iOS)
     static let rows = 20
+    /// A By App project's: several projects share a section (`AppGroups.projects`).
+    static let projectRows = 8
     #else
     static let rows = Int.max
+    static let projectRows = Int.max
     #endif
     /// How many to show of `count`; nil: all of them. A run only a few over the cap shows them all (no "Show All 22").
     static func capped(_ count: Int, cap: Int = rows) -> Int? {

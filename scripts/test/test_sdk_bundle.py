@@ -51,6 +51,7 @@ class SDKBundle(unittest.TestCase):
                       "sdk/ts/src/index.ts", "sdk/ts/src/wire.ts", "sdk/VERSION",
                       "sdk/ts/package-lock.json", "sdk/ts/tsconfig.ui.json", "sdk/ts/tsconfig.negative.json",
                       "sdk/ts/scripts/check-portable.ts", "sdk/ts/scripts/portable-ui.mjs",
+                      "sdk/ts/.gitignore",
                       "sdk/ts/scripts/check-negative-types.ts", "sdk/ts/typechecks/native.tsx",
                       "sdk/ts/scripts/check-source-bundle.mjs", "sdk/ts/scripts/source-authoring-worker.mjs",
                       "sdk/ts/scripts/source-authoring-tests.mjs", "sdk/ts/README.md",
@@ -125,6 +126,16 @@ class SDKBundle(unittest.TestCase):
                     self.assertTrue(os.path.isfile(os.path.join(dest, "sdk/ts/scripts/check-portable.ts")))
                 else:
                     self.assertTrue(os.path.isfile(os.path.join(dest, "sdk/go/ext/ext.go")))
+
+
+    def test_sync_refuses_an_unknown_selector_without_touching_the_destination(self):
+        for selected in ("golang", "go,ts"):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as dest:
+                r = subprocess.run(["sh", os.path.join(ROOT, "scripts", "gen", "sync-sdk.sh"), dest, selected],
+                                   capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("usage: scripts/gen/sync-sdk.sh", r.stderr)
+                self.assertEqual(os.listdir(dest), [])
 
 
 if __name__ == "__main__":

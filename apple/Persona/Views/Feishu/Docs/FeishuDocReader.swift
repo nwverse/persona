@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // The native document reader: Markdown export first (fast, faithful tables and lists); when the owner forbids export,
 // the JSON node tree rendered natively. Around the text: title, where it lives, who edited it, read count, the cached
@@ -429,8 +430,8 @@ struct FeishuDocReader: View {
                 Button { showComments = true } label: {
                     Image(systemName: Theme.Icon.conversation)
                         .overlay(alignment: .topTrailing) {
-                            if let n = model.info?.comments, n > 0 {
-                                Text(n > 99 ? "99+" : "\(n)")
+                            if let n = model.info?.comments, let text = CountBadge.text(n) {
+                                Text(text)
                                     .font(.system(size: 9, weight: .bold).monospacedDigit()) // type-scale: glyph (a count on an icon)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, Theme.Space.xs)

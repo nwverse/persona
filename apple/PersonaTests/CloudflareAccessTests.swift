@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Answers requests to access.invalid as a hub behind Cloudflare Access would (docs/operations/network.md "Behind
 /// Cloudflare Access"), and keeps the headers each one carried.
@@ -68,7 +69,7 @@ struct CloudflareAccessTests {
 
     @Test func webSocketRequestsToTheHubCarryBothHeaders() {
         let config = ServerConfig(url: hub, token: "fixture-token", access: token)
-        let forward = PortForwarder.connectRequest(.init(machine: "example-node", port: 3000), config: config)
+        let forward = PortForwarder.connectRequest(.init(group: "default", machine: "example-node", port: 3000), config: config)
         #expect(forward.url?.scheme == "wss")
         #expect(forward.value(forHTTPHeaderField: CloudflareAccess.idHeader) == "example-id.access")
         #expect(forward.value(forHTTPHeaderField: CloudflareAccess.secretHeader) == "example-secret-value")

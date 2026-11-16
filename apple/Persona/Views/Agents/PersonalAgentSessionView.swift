@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// One personal agent session: its messages (oldest at the top, "Load Earlier" for older pages), tool calls as compact
 /// rows, and a send box. A send carries a fresh clientId; a retry reuses it, so the hub never sends twice. The bridge
@@ -92,6 +93,7 @@ struct PersonalAgentSessionView: View {
             }
         }
         .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+        .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
         .background(.bar)
     }
 

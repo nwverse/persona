@@ -123,7 +123,7 @@ func TestIMessageThroughTheHub(t *testing.T) {
 		list[0].(map[string]any)["account"] != "示例 Mac" || list[0].(map[string]any)["name"] != "信息" {
 		t.Fatalf("connectors: %v", out)
 	}
-	if caps := list[0].(map[string]any)["capabilities"].([]any); fmt.Sprint(caps) != "[status tools events inbox archive]" {
+	if caps := list[0].(map[string]any)["capabilities"].([]any); fmt.Sprint(caps) != "[status tools catalog events inbox archive]" {
 		t.Errorf("capabilities %v", caps)
 	}
 	if n := len(h.connectors.Tools(context.Background())); n != 3 {
@@ -233,6 +233,7 @@ func TestIMessageAISwitch(t *testing.T) {
 // number: no number in an id; the cursor moves on.
 func TestIMessageArchive(t *testing.T) {
 	h := newTestManager(t)
+	h.store = newMemStore()
 	h.connectors = connector.NewRegistry(nil)
 	imessageNode(t, h, func(method string, _ json.RawMessage) (any, error) {
 		switch method {
@@ -265,7 +266,7 @@ func TestIMessageArchive(t *testing.T) {
 		t.Fatalf("archives %+v", archives)
 	}
 	var res assistantwire.ChangesResult
-	_ = json.Unmarshal(ask(assistantwire.ConnectorsChanges, map[string]any{"id": imessage.ID, "cursor": ""}), &res)
+	_ = json.Unmarshal(ask(assistantwire.ConnectorsChanges, map[string]any{"id": imessage.ID, "cursor": "", "fence_version": assistantwire.ArchiveFenceV1}), &res)
 	if res.Next != "9" || len(res.Batches) != 1 {
 		t.Fatalf("changes %+v", res)
 	}

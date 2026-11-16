@@ -127,6 +127,13 @@ func (s *Service) applyScope(ctx context.Context, t Todo, c scopeChange) (TaskBr
 		}
 		if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 			v.DoneWhen, v.ExpectMinutes = slices.Clone(brief.Criteria), brief.ExpectNow
+			if len(added)+len(dropped) > 0 && (v.State == reviewAccepted || v.State == reviewCancelled) {
+				// The terminal review covered the old criteria, not this new scope (#6880).
+				v.State = ""
+				if v.Round > 0 {
+					v.State = reviewRework
+				}
+			}
 			return true
 		}); err != nil {
 			s.logf("task %s: scope: ledger: %v", id, err)
@@ -197,8 +204,9 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	if t.Supervision != nil && t.Supervision.Supervisor != "" {
 		supervisor = t.Supervision.Supervisor
 	}
-	// Its supervisor only; the main conversation also for a task an earlier main conversation supervised (as task_review).
-	if supervisor != self && !(s.isMain(ctx, self) && !s.isLeader(ctx, supervisor)) {
+	// Its supervisor only; the main conversation also for a task an earlier main conversation supervised (as task_review),
+	// and the background supervisor for the tasks no leader supervises (supervise_background.go).
+	if supervisor != self && !(s.isMain(ctx, self) && !s.isLeader(ctx, supervisor)) && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is supervised by another conversation: only its supervisor changes its scope", t.ID)
 	}
 	c := scopeChange{By: self, Change: a.Change, Why: a.Why, Expect: a.ExpectMinutes}
@@ -220,9 +228,22 @@ func (s *Service) toolTaskScope(ctx context.Context, self string, args json.RawM
 	}
 	s.clearOverdue(t.ID)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Logged on task %s's brief (the owner sees it in the next digest); the brief itself is unchanged. done_when now: %s; expect_minutes %d; its clock restarts and runs to %s.",
-		t.ID, criteriaWords(brief.Criteria, nil), brief.ExpectNow, brief.DueAt.In(s.location(ctx)).Format("2006-01-02 15:04"))
-	b.WriteString(" The agent was not told: send it what changed with agent_send.")
+	fmt.Fprintf(&b, "Logged on task %s's brief (the owner sees it in the next digest). Scope revision: %s. "+
+		"Original brief goal: %q. Original criteria: %s. Effective criteria: %s. Dropped criteria: ",
+		t.ID, brief.ClockAt.Format(time.RFC3339Nano), brief.Goal, criteriaWords(brief.DoneWhen, nil), criteriaWords(brief.Criteria, nil))
+	dropped := (&taskBrief{rec: brief.briefRecord, st: briefState{Log: brief.Log}}).dropped()
+	for i, criterion := range dropped {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "%q", criterion.Criterion)
+	}
+	if len(dropped) == 0 {
+		b.WriteString("none")
+	}
+	fmt.Fprintf(&b, ". expect_minutes %d; the clock restarts and runs to %s.", brief.ExpectNow,
+		brief.DueAt.In(s.location(ctx)).Format("2006-01-02 15:04"))
+	b.WriteString(" To replace the agent against this scope, pass scope_revision to task_plan with continues. To notify the same live agent, send the change with agent_send.")
 	return b.String(), nil
 }
 

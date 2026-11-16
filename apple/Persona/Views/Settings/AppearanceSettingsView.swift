@@ -3,7 +3,8 @@ import SwiftUI
 
 // Settings › Appearance (2026-11-01): laid out like Connectors, one row per thing that changes how the app looks
 // (Avatar, Theme Color, Interface Style, Light & Dark on iPhone and iPad), each opening its own page; the first three are apart (docs/apple/ios.md「设计语言」).
-// Glow While Replying is a switch in place, not a page: it is one on/off choice (iOS only, `ComposerGlow`).
+// Glow While Replying is a switch in place, not a page: it is one on/off choice (iOS only, `ComposerGlow`); so is
+// Return Key Sends beside it, the composer's other choice (iOS only, `ReturnSends`, #8178).
 // The home screen icon is the Avatar's, not a row of its own (#3203). Picking anything
 // there rebuilds the whole tree (`AppModel.look`); the settings path lives in AppModel, so the
 // rebuilt app is back on the same page.
@@ -11,19 +12,26 @@ import SwiftUI
 /// The Appearance section of Settings: one row per scene with what it is set to now.
 struct AppearanceSection: View {
     @Environment(AppModel.self) private var model
+    var settingsHome = true
     #if os(iOS)
     private let layoutDisplay = AgentListDisplayChoice()
+    @StoredValue(NavigationLayout.key) private var navigation = ""
     #endif
     @StoredValue(ComposerGlowPrefs.enabledKey) private var composerGlow = false
+    #if os(iOS)
+    @StoredValue(ReturnSends.enabledKey) private var returnSends = false
+    #endif
 
     var body: some View {
         Section {
             Group {
-                NavigationLink(value: SettingsPage.persona) {
-                    SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.persona) {
+                        SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.persona)
+                    .accessibilityIdentifier("settings-persona")
                 }
-                .settingsListRow(SettingsPage.persona)
-                .accessibilityIdentifier("settings-persona")
                 NavigationLink(value: SettingsPage.themeColor) {
                     SettingsRow(title: String(localized: "Theme Color"), symbol: Theme.Icon.themeColor, tint: Theme.accent, value: model.themeColor.title, look: .oneLine)
                 }
@@ -34,15 +42,26 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.style)
                 .accessibilityIdentifier("settings-style")
-                NavigationLink(value: SettingsPage.language) {
-                    SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
-                                value: AppLanguage.settingsSummary, look: .oneLine)
+                if settingsHome {
+                    NavigationLink(value: SettingsPage.language) {
+                        SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
+                                    value: AppLanguage.settingsSummary, look: .oneLine)
+                    }
+                    .accessibilityIdentifier("settings-language")
                 }
-                .accessibilityIdentifier("settings-language")
                 #if os(iOS)
+                // Merged or Separate (#6332, #4206): where the sidebar layout is built (`NavigationLayout.offered`).
+                if NavigationLayout.offered {
+                    NavigationLink(value: SettingsPage.navigation) {
+                        SettingsRow(title: String(localized: "Sidebar [Appearance]"), symbol: Theme.Icon.sidebar, tint: Theme.Hue.teal,
+                                    value: NavigationLayout.effectiveNow(picked: navigation).title, look: .oneLine)
+                    }
+                    .settingsListRow(SettingsPage.navigation)
+                    .accessibilityIdentifier("settings-navigation")
+                }
                 // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
                 NavigationLink(value: SettingsPage.layout) {
-                    SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
+                    SettingsRow(title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
                                 value: layoutDisplay.display.title, look: .oneLine)
                 }
                 .settingsListRow(SettingsPage.layout)
@@ -62,6 +81,12 @@ struct AppearanceSection: View {
                                       symbol: Theme.Icon.composerGlow, tint: Theme.Hue.purple,
                                       accessibilityID: "settings-composer-glow", isOn: $composerGlow)
                 }
+                #if os(iOS)
+                SettingsSwitchRow(title: String(localized: "Return Key Sends"),
+                                  detail: String(localized: "Send with Return; Shift-Return starts a new line"),
+                                  symbol: Theme.Icon.enter, tint: Theme.Hue.blue,
+                                  accessibilityID: "settings-return-sends", isOn: $returnSends)
+                #endif
             }
             .bareListRow()
         } header: {
@@ -164,7 +189,10 @@ struct StyleSettingsPage: View {
                 }
                 .accessibilityIdentifier("text-size")
             } footer: {
-                Text("One step smaller or larger than the system's Text Size.")
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    Text("One step smaller or larger than the system's Text Size.")
+                    Text("Buttons and bars stop growing at the system's Extra Extra Extra Large size; messages and other reading text keep growing.")
+                }
             }
         }
         .themedGroupedPage()

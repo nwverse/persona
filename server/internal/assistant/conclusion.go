@@ -101,7 +101,13 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	if r := recommendText(l, &a); r != "" {
 		c.Markdown(feishubot.EscapeMarkdown(r))
 	}
-	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() {
+	// What was asked, criterion by criterion (#3822): only once the work ended against its brief, never on a decision.
+	if a.Outcome != outcomeDecide {
+		if against := briefResultMarkdown(l, s.briefResultOfTodo(t)); against != "" {
+			c.Markdown(against)
+		}
+	}
+	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() && a.AgentReply == nil {
 		c.Markdown(feishubot.EscapeMarkdown(d))
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
@@ -190,6 +196,10 @@ type conclusionInput struct {
 	Reversible bool
 	// Decision: a decision's why_owner, options and cost of waiting (#3804, decision.go); the zero value for the rest.
 	Decision reviewDecision
+	// ForBriefing: the decision can wait and is held for the next briefing: no card now (#4930, decision_wait.go).
+	ForBriefing bool
+	// RaisedBy: the leader conversation or background supervisor that raised it, kept while it is held (acceptAsk).
+	RaisedBy string
 	// Verified: the supervisor checked the evidence (supervisorVerified): a done or cannot conclusion tells the owner and
 	// is not left for them to acknowledge (#3240).
 	Verified bool
@@ -229,6 +239,10 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	if in.Outcome == outcomeDecide {
 		a.WhyOwner, a.Options, a.CostOfWaiting = in.Decision.WhyOwner, in.Decision.Options, in.Decision.CostOfWaiting
 		a.From, a.Stands = s.decisionBackground(ctx, t) // the hub's, not the model's: where it came from, where it stands
+		a.ForBriefing = in.ForBriefing
+		if a.ForBriefing {
+			a.RaisedBy = in.RaisedBy
+		}
 	}
 	if a.Reason == "" && in.Outcome == outcomeDone {
 		a.Reason = i18n.T(l, "assistant-reports.verdict_done_default")
@@ -310,11 +324,13 @@ func (s *Service) askCopy(id string) (acceptAsk, bool) {
 
 // takeRecommendation: the owner took decision a's recommended option for task id (or, a.ByDefault, nobody answered by its
 // deadline and the hub took it, #3127): it is kept in the todo's decisions and sent to the task's agent, whose next stop
-// comes back to the supervisor (userDecided). An error: it did not reach the agent.
-func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk) error {
+// comes back to the supervisor (userDecided). With no Agent to receive an explicit owner choice, the choice is recorded
+// and handed to the supervisor instead. Any other delivery error takes nothing and leaves the round retryable. A
+// failed automatic default keeps the old rollback and owner-reminder behavior.
+func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk) (acceptResult, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
-		return db.ErrTodoNotFound
+		return acceptResult{}, db.ErrTodoNotFound
 	}
 	l := s.botLang(ctx)
 	msg := i18n.T(l, "assistant-reports.verdict_take_to_agent", i18n.Args{"option": a.Recommend})
@@ -325,11 +341,15 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		// The hub's call at the deadline, not the owner's: an agent's source, with the reason saying so.
 		row.Reason, row.Source = defaultReason(l, s.location(ctx), a.Deadline), db.DecisionAgent
 	}
+	var sendErr error
 	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
 		return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 	}); err != nil {
 		s.logf("task %s: conclusion to agent: %v", id, err)
-		return err // not recorded either: the decision is not made until it reaches the agent
+		if a.ByDefault || !noAgentCanTake(err) {
+			return acceptResult{}, err // a retryable failure or an automatic default takes nothing
+		}
+		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
 		at := decisionNow()
@@ -337,16 +357,22 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		if ok, err := s.insertDecision(ctx, st, row); err != nil {
 			s.logf("task %s: conclusion decision: %v", id, err)
 		} else if ok {
+			if !a.ByDefault {
+				s.ownerDecided(id, row.ID, a.WhyOwner)
+			}
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
+	if sendErr != nil {
+		return s.decisionNotDelivered(ctx, id, a.AskedAt, a.Recommend, sendErr), nil
+	}
 	s.userDecided(ctx, id)
-	return nil
+	return acceptSucceeded(), nil
 }
 
-// userDecided: the owner answered supervised task id's decision, and the answer went to its agent: the task no longer
-// waits for them, so its agent's next stop comes back to the supervisor as any stop does (superviseJudged), whether it
-// finished or not, and the supervision messages are about it again.
+// userDecided: the owner answered supervised task id's decision, and the answer went to its agent or its supervisor for
+// delivery. The task no longer waits for them, so its agent's next stop comes back to the supervisor as any stop does
+// (superviseJudged), whether it finished or not, and the supervision messages are about it again.
 func (s *Service) userDecided(ctx context.Context, id string) {
 	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		if v.State != reviewNeedsUser {

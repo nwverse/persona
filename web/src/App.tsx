@@ -5,38 +5,50 @@ import { useCloseOnBack } from "./lib/back-close";
 import { SCRIM_FADE, useLingers } from "./lib/lingers";
 import { PageBoundary } from "./views/PageBoundary";
 import { PerAssistant } from "./views/PerAssistant";
-import { OverlayBoundary, useOpened } from "./views/LazyOverlay";
+import { lazyDialog, OverlayBoundary, useOpened } from "./views/LazyOverlay";
 import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
 import { drawerA11y, focusBack, useDrawerDrag } from "./lib/drawer";
 import { acceptHubs, here, rememberHub, takeHubs } from "./lib/hubs";
+import { holdImportLink, takeImportLink } from "./lib/import-link";
+import { stripBase } from "./lib/base";
 import { useSessionPanels } from "./lib/panel-memory";
-import { resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
+import { paneRoute, resolveTab, tabOfSessionLink, tabPagePane } from "./lib/herdr-tree";
+import { askTeamWorker, isWorker } from "./lib/team";
+import { foldsUnder, isSide, sideFoldOn } from "./lib/side-fold";
+import { askSide } from "./lib/side-panel";
 import { resolveSessionLink, sessionLinkRoute, type SessionLink } from "./lib/session-link";
-import { href, navigate, onLinkClick, type Route, routePath, useRoute } from "./lib/router";
+import { engineSwitchHome } from "./lib/engine-switch";
+import { followChildSession, followSubagentLink, splitSubagentLink } from "./lib/subagent-link";
+import { href, inWorkView, navigate, onLinkClick, type Route, routePath, useRoute, withWorkView } from "./lib/router";
 import { agentChatKey, noteChatShown, personaChatKey } from "./lib/recent-chats";
 import { ago, sessionTitle, shortPath } from "./lib/format";
 import type { Session } from "./lib/types";
-import { unreachable } from "./lib/shell";
+import { useTabLookup } from "./lib/tab-lookup";
 import { ConnectionPill } from "./views/ConnectionPill";
 import { NARROW, useKeyboardFrame, useMedia } from "./lib/viewport";
-import { connect, disconnect, reset, type State, useStore } from "./lib/store";
+import { connect, disconnect, reset, type State, useHubUnreachable, useStore } from "./lib/store";
 import { watchRoster } from "./lib/managers";
 import { t } from "./i18n";
-import { Button, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/atoms";
-import { focusables, trapTab } from "./ui/overlay";
+import { Button, Collapse, cx, EASE, IconButton, Loading, Spinner, Toasts } from "./ui/atoms";
+import { focusables, trapTabIn } from "./ui/overlay";
 import { Empty } from "./views/session/files/parts";
 import { AgentsPage } from "./views/AgentsPage";
-import { AgentArchives } from "./views/agents/AgentArchives";
 import { ChatView } from "./views/chat/ChatView";
-import { RequestPage } from "./views/RequestPage";
+import { preloadCloseoutEvidence } from "./views/chat/CloseoutCard";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
-import { Login } from "./views/Login";
-import { NewWorktreeHost } from "./views/NewWorktree";
+import { NewWorktreeHost } from "./views/NewWorktreeHost";
+import { CloseAgentHost } from "./views/CloseAgentHost";
+import { WorktreeActionsHost } from "./views/WorktreeActions";
+import { openWorktreeActions } from "./lib/worktree-actions";
+import { selectWorkspace } from "./lib/workspace-selection";
+import { setAgentGrouping } from "./lib/sidebar-api";
+import type { WorkspaceTarget } from "./lib/workspace-target";
+import { ForwardHost } from "./views/chat/ForwardHost";
 import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { StartingAgent } from "./views/StartingAgent";
-import { ShortcutHelp } from "./views/ShortcutHelp";
+import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
@@ -46,11 +58,18 @@ import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
+import { openStartPage } from "./lib/start-page";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
 // ExtensionSlots for its icons).
+// The sign-in page is only for a browser that isn't signed in yet (#4603): every load after that would carry it on the
+// first screen for nothing. Its chunk (and its words, the login namespace) loads when it is drawn.
+const Login = lazyPage(() => import("./views/Login").then((m) => m.Login));
 const AgentsView = lazyPage(() => import("./views/agents/AgentsView").then((m) => m.AgentsView), { routes: ["agents"] });
+const AgentArchives = lazyPage(() => import("./views/agents/AgentArchives").then((m) => m.AgentArchives), { routes: ["agent-archives"] });
+const CompareRuns = lazyPage(() => import("./views/CompareRuns").then((m) => m.CompareRuns), { routes: ["compare"] });
+const RequestPage = lazyPage(() => import("./views/RequestPage").then((m) => m.RequestPage), { routes: ["request"] });
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
 const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
 const TerminalPage = lazyPage(() => import("./views/terminal/TerminalPage").then((m) => m.TerminalPage), { routes: ["terminal"] });
@@ -66,11 +85,16 @@ const Inbox = lazyPage(() => import("./views/inbox/Inbox").then((m) => m.Inbox),
 const Messages = lazyPage(() => import("./views/messages/Messages").then((m) => m.Messages), { routes: ["messages"] });
 const Knowledge = lazyPage(() => import("./views/knowledge/Knowledge").then((m) => m.Knowledge), { routes: ["kb"] });
 const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView), { routes: ["todos"] });
-// The command palette and the new-agent dialog are not on a first screen either, and a shortcut opens them with no link
-// to reach first: their chunks come once the browser is idle after start, and each mounts on its first open (useOpened),
-// so ⌘K right after start waits on the network at most once.
+// an address that is no page (lib/router.ts "not-found"): loaded only by one
+const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFound));
+// Keep the shortcut palette warm. The new-agent dialog loads only when opened.
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
-const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent), { idle: true });
+const NewAgent = lazyPage(() => import("./views/NewAgent").then((m) => m.NewAgent));
+const ShortcutHelpDialog = lazyDialog(() => import("./views/ShortcutHelp").then((m) => m.ShortcutHelp));
+// The keyboard opener stays in the eager shell even before this dialog's first load.
+function ShortcutHelp() {
+  return <ShortcutHelpDialog open={useHelpOpen()} onClose={closeHelp} />;
+}
 
 // A link with the hub's token (`?token=…` or `#token=…`) signs in without the form. The token leaves the address bar
 // before anything else runs (history, bookmarks, a copied link), and is traded for this browser's own one.
@@ -83,6 +107,30 @@ const carried = typeof window === "undefined" ? null : takeHubs(window.location.
 if (carried) {
   acceptHubs(carried.hubs, carried.removed);
   window.history.replaceState(window.history.state, "", carried.rest);
+}
+
+// An opening at the root address shows the start page the user chose (lib/start-page.ts), before the first paint.
+if (typeof window !== "undefined") openStartPage();
+
+// A provider import link (`/settings?tab=models#import=…`, #5420) left the address bar before anything loaded (main.tsx,
+// lib/import-link.ts says why). Pasted into the address bar of a page already open, only the fragment changes and
+// nothing loads: it is taken then, the rest of the fragment with it (this page is signed in: nothing reads it now).
+function takeImportLinkHere() {
+  const importing = takeImportLink(window.location.href);
+  if (!importing) return;
+  // the fragment goes first: navigate does nothing for an address that differs only in it, and on an open page another
+  // address goes through the router, or the page the link was pasted over would stay
+  window.history.replaceState(window.history.state, "", location.pathname + location.search);
+  navigate(stripBase(importing.rest.replace(/#.*$/, "")), true);
+  holdImportLink(importing.text);
+}
+if (typeof window !== "undefined") window.addEventListener("hashchange", takeImportLinkHere);
+
+const workspaceActions = { onWorkspaceMenu: openWorktreeActions };
+function openWorkspaceInTree(target: WorkspaceTarget) {
+  selectWorkspace(target);
+  setAgentGrouping("repo");
+  navigate({ name: "agent-list" });
 }
 
 export function App() {
@@ -131,7 +179,17 @@ export function App() {
 
   return (
     <>
-      {joining ? <Joining /> : authed ? <Shell /> : <Login error={linkError} onDone={() => setAuthed(true)} />}
+      {joining ? (
+        <Joining />
+      ) : authed ? (
+        <Shell />
+      ) : (
+        <PageBoundary page="login">
+          <Suspense fallback={<PageLoading />}>
+            <Login error={linkError} onDone={() => setAuthed(true)} />
+          </Suspense>
+        </PageBoundary>
+      )}
       <Toasts />
     </>
   );
@@ -153,6 +211,13 @@ function pageRows(s: State, mid: string): Session[] {
   return [...complete, ...s.sessionSummaries.filter((row) => row.machine_id === mid && !details.has(row.session_id))];
 }
 
+/** The browser tab's name for an Agent's page: the session's title as the page's header has it (sessionTitle), so
+ *  several open tabs, the history and bookmarks tell them apart; "" until its row is in. */
+function paneTitle(s: State, mid: string, sid: string): string {
+  const row = (s.sessions[mid] ?? []).find((r) => r.session_id === sid) ?? s.sessionSummaries.find((r) => r.machine_id === mid && r.session_id === sid);
+  return row ? sessionTitle(row) : "";
+}
+
 /** What a `/s/…` or `/t/…` page opens, settled from its machine's rows. Only plain values: a push for another session on
  *  the machine leaves it equal (useStore's shallow compare), so the shell and everything it draws are left alone. */
 interface PageTarget {
@@ -164,22 +229,78 @@ interface PageTarget {
   mid: string;
   /** The conversation shown; undefined while there is none to show. */
   sid?: string;
+  /** The link is a child session's (#5120): the session it folds under, whose chat `to` opens at its card. */
+  parent?: string;
+  /** The link is a lead's worker's (#5180): the worker, which the lead's page (`to`, `parent` the lead) shows in its Team panel. */
+  worker?: string;
+  /** The link is a side session's, or a row's that belongs to one (#7944): the side, which its parent's page (`to`,
+   *  `parent`) shows in its Side sessions panel; `child`, the row of the side's own that the link named. */
+  side?: string;
+  child?: string;
+}
+
+/** A side session's link (#7944), or a link to a row of a side's own (`folded_side`): the parent's page, its Side
+ *  sessions panel on the side; undefined when `row` is neither. */
+function sideTarget(rows: Session[], mid: string, row: Session | undefined, view: boolean): PageTarget | undefined {
+  if (!row) return undefined;
+  const side = isSide(row) ? row.session_id : sideFoldOn() && row.folded_side ? row.folded_side : undefined;
+  const parent = side ? row.folded_under : undefined;
+  if (!side || !parent || parent === row.session_id) return undefined;
+  const parentRow = rows.find((r) => r.session_id === parent);
+  const to = routePath(withWorkView(parentRow ? paneRoute(parentRow) : { name: "session", mid, sid: parent }, view));
+  return { link: undefined, to, mid, sid: undefined, parent, side, child: side === row.session_id ? undefined : row.session_id };
+}
+
+/** A worker's link (#5180): the lead's page, its Team panel on the worker; undefined when `row` is not a worker. */
+function workerTarget(rows: Session[], mid: string, row: Session | undefined, view: boolean): PageTarget | undefined {
+  const lead = row && isWorker(row) && row.folded_under && row.folded_under !== row.session_id ? row.folded_under : undefined;
+  if (!lead || !row) return undefined;
+  const leadRow = rows.find((r) => r.session_id === lead);
+  const to = routePath(withWorkView(leadRow ? paneRoute(leadRow) : { name: "session", mid, sid: lead }, view));
+  return { link: undefined, to, mid, sid: undefined, parent: lead, worker: row.session_id };
 }
 
 function pageTarget(s: State, route: Route): PageTarget | undefined {
   if (route.name === "tab") {
-    // the pane a tab opens on: the asked-for one, its session, or the tab's most urgent (lib/herdr-tree.ts)
-    const pane = tabPagePane(resolveTab(pageRows(s, route.mid), route), route, s.loaded);
+    // the pane a tab opens on: the asked-for one, its session, or the tab's most urgent (lib/herdr-tree.ts); a worker's
+    // is its lead's page, the worker in its Team panel (#5180)
+    const rows = pageRows(s, route.mid);
+    const at = resolveTab(rows, route);
+    // a link naming a worker: the lead's chat at once (the tab is the lead's too), its panel on the worker
+    const named = at && route.sid === at.session_id ? workerTarget(rows, route.mid, at, inWorkView(route)) : undefined;
+    if (named) return { ...named, sid: named.parent };
+    // a tab opened without a pane whose most urgent one is a worker: its lead, the panel left as the lead's page has it
+    const lead = at && isWorker(at) && !named ? rows.find((r) => r.session_id === at.folded_under) : undefined;
+    const pane = tabPagePane(lead ?? at, route, s.loaded);
     return { link: undefined, to: "", mid: route.mid, sid: pane?.sid };
   }
   if (route.name !== "session") return undefined;
+  // a link to a subagent's own conversation (#5030): its parent's chat, which shows the subagent's card (lib/subagent-link.ts)
+  const sub = splitSubagentLink(route.sid);
+  if (sub) return { link: undefined, to: routePath({ ...route, sid: sub.parent }), mid: route.mid, sid: undefined };
   const rows = pageRows(s, route.mid);
+  const row = rows.find((r) => r.session_id === route.sid);
+  // a lead's worker's (#5180): the lead's page, the worker in its Team panel
+  const worker = workerTarget(rows, route.mid, row, inWorkView(route));
+  if (worker) return worker;
+  // a side session's (#7944): its parent's page, the side in its Side sessions panel
+  const side = sideTarget(rows, route.mid, row, inWorkView(route));
+  if (side) return side;
+  // a child session's (#5120): its parent's chat, which shows the child's card; known once its row is (a listed one, or
+  // the lookup of an unlisted chat), the session itself until then
+  const parent = row ? foldsUnder(row) : undefined;
+  if (parent && parent !== route.sid) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: parent }, inWorkView(route))), mid: route.mid, sid: undefined, parent };
+  // an earlier session of a conversation that moved between Claude Code and Codex (#5054): the conversation's own row,
+  // whose chat reads that session's stretch in its place
+  const home = engineSwitchHome(rows, route.sid);
+  if (home) return { link: undefined, to: routePath(withWorkView({ name: "session", mid: route.mid, sid: home.session_id }, inWorkView(route))), mid: route.mid, sid: undefined };
   // an old `/s/…` link of a pane in a tab becomes that tab's `/t/…`
   const tab = tabOfSessionLink(rows, route);
   // a `/s/…` link with only the front of an id (the 8-character ones shown everywhere, #2464): the whole id's link;
   // several sessions starting with it are listed to pick from (SessionChoices)
   const link = resolveSessionLink(rows, route.mid, route.sid, s.loaded);
-  const to = tab ? routePath(tab) : link.kind === "prefix" ? routePath(sessionLinkRoute(rows, link.session, route.view)) : "";
+  const resolved = tab ?? (link.kind === "prefix" ? sessionLinkRoute(rows, link.session, route.view) : undefined);
+  const to = resolved ? routePath(withWorkView(resolved, inWorkView(route))) : "";
   const shown = link.kind === "exact" || link.kind === "unlisted";
   return { link: link.kind, to, mid: route.mid, sid: shown ? route.sid : undefined };
 }
@@ -196,12 +317,31 @@ function Shell() {
   const target = useStore((s) => pageTarget(s, route));
   const loaded = useStore((s) => s.loaded);
   const tabLinkPath = target?.to ?? "";
+  const linkMid = route.name === "session" ? route.mid : "";
+  const linkSid = route.name === "session" ? route.sid : "";
+  const linkParent = target?.parent;
+  const linkWorker = target?.worker;
+  const linkSide = target?.side;
+  const linkChild = target?.child;
+  const targetMid = target?.mid ?? "";
   useEffect(() => {
-    if (tabLinkPath) navigate(tabLinkPath, true);
-  }, [tabLinkPath]);
-  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : undefined;
+    if (!tabLinkPath) return;
+    if (linkWorker && linkParent) askTeamWorker(targetMid, linkParent, linkWorker);
+    else if (linkSide && linkParent) {
+      askSide(targetMid, linkParent, linkSide);
+      // a row of the side's own (its Codex child): the side's chat opens at its card
+      if (linkChild) followChildSession(targetMid, linkChild, linkSide);
+    } else if (linkSid) followSubagentLink(linkMid, linkSid, linkParent);
+    navigate(tabLinkPath, true);
+  }, [tabLinkPath, linkMid, linkSid, linkParent, linkWorker, linkSide, linkChild, targetMid]);
+  // a tab not among the page's rows (a paged hub lists only active and pinned ones): asked of the hub before it is gone
+  const tabRoute = route.name === "tab" ? route : undefined;
+  const lookup = useTabLookup(tabRoute, !!tabRoute && loaded && !target?.sid);
+  const found = lookup.state === "found" ? { mid: lookup.mid, sid: lookup.sid } : undefined;
+  const pane = target?.sid ? { mid: target.mid, sid: target.sid } : found;
   const launch = useStore((s) => (pane ? s.launches[pane.sid] : undefined));
   const starting = useStore((s) => (pane ? (s.sessions[pane.mid] ?? []).find((session) => session.session_id === pane.sid)?.starting : undefined));
+  const agentTitle = useStore((s) => (pane ? paneTitle(s, pane.mid, pane.sid) : ""));
   const shell = useRef<HTMLDivElement>(null);
   useKeyboardFrame(shell);
   // a tab opened without a pane settles on the one it picked: another pane needing you later does not swap the page
@@ -215,6 +355,7 @@ function Shell() {
   const [newAgent, setNewAgent] = useState(false);
   const [preset, setPreset] = useState<NewAgentPreset | null>(null);
   useEffect(() => preloadPages(), []);
+  useEffect(() => preloadCloseoutEvidence(), []);
   useEffect(() => onOpenNewAgent((p) => {
     setPreset(p);
     setNewAgent(true);
@@ -264,7 +405,7 @@ function Shell() {
       if (document.querySelector("[role=menu]") || document.querySelectorAll("[role=dialog]").length > 1) return;
       if (e.key === "Tab" && drawerBox.current) {
         const list = focusables(drawerBox.current);
-        const to = trapTab(list.length, list.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+        const to = trapTabIn(drawerBox.current, list, e.shiftKey);
         if (to === null) return;
         e.preventDefault();
         list[to]?.focus();
@@ -294,7 +435,10 @@ function Shell() {
   }, [drawer, narrow]);
 
   // the keyboard shortcuts (⌘K and the rest, lib/shortcuts.ts): what they do here, and the listener that runs them
-  useShortcuts({ route, pane, narrow, toggleDrawer: toggle, closeDrawer: close });
+  const workPane = useRef<{ mid: string; sid: string } | undefined>(undefined);
+  const reportWorkPane = useCallback((available?: { mid: string; sid: string }) => { workPane.current = available; }, []);
+  const workPaneAvailable = (at: { mid: string; sid: string }) => workPane.current?.mid === at.mid && workPane.current?.sid === at.sid;
+  useShortcuts({ route, pane, narrow, toggleDrawer: toggle, closeDrawer: close, workPaneAvailable });
 
   useEffect(() => setDrawer(false), [route.name, pane ? pane.sid : route.name === "persona" ? route.sid : route.name === "agents" ? route.id : ""]);
   // a session's files / Git belong to that conversation: moving to another page closes them (a link and a task stay),
@@ -312,14 +456,13 @@ function Shell() {
 
   const extensionTitle = useExtensionPlace(route.name === "extension" ? route.extension : "", route.name === "extension" ? route.ui : "")?.title;
   const title =
-    pane ? "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages")
-      : route.name === "request" ? t("request-page.title") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "terminal" ? t("app.title_terminal") : route.name === "settings" ? t("app.title_settings")
-      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : t("app.title_home");
+    inWorkView(route) || route.name === "terminal" ? t("work-entry.title") : pane ? agentTitle || "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "health" ? t("app.title_health") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "messages" ? t("app.title_messages")
+      : route.name === "request" ? t("app.title_request") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "settings" ? t("app.title_settings")
+      : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "compare" ? t("app.title_compare_runs") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : route.name === "not-found" ? t("app.title_not_found") : t("app.title_home");
 
-  // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry)
-  const [away, setAway] = useState(false);
-  const offline = unreachable(away, conn, loaded);
-  if (offline !== away) setAway(offline);
+  // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry); the
+  // Agents list reads the same flag, so the two always agree
+  const offline = useHubUnreachable();
   let main: React.ReactNode;
   if (offline) main = <Offline onToggleSidebar={toggle} trying={conn === "connecting"} />;
   else switch (route.name) {
@@ -327,14 +470,19 @@ function Shell() {
       main = <RequestPage id={route.id} onToggleSidebar={toggle} />;
       break;
     case "session":
-    case "tab":
-      main = route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
-        : !pane ? (loaded && route.name === "tab" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
-        : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
-        : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={toggle} inPage />;
+    case "tab": {
+      const detail = (terminalAvailable?: boolean) =>
+        route.name === "session" && target?.link === "ambiguous" ? <SessionChoices mid={route.mid} sid={route.sid} onToggleSidebar={toggle} />
+          : !pane ? (loaded && route.name === "tab" && lookup.state === "missing" ? <TabGone onToggleSidebar={toggle} /> : <Loading />)
+          : launch ? <StartingAgent launch={launch} onToggleSidebar={toggle} />
+          : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={terminalAvailable === undefined ? toggle : undefined} inPage terminalAvailable={terminalAvailable} />;
+      main = inWorkView(route)
+        ? <TerminalPage onToggleSidebar={toggle} onNewAgent={openNewAgent} detail={{ selected: pane, render: detail }} onWorkPane={reportWorkPane} />
+        : detail();
       break;
+    }
     case "persona":
-      main = <PersonaAssistant sid={route.sid} routed={route.mid || route.manager ? { mid: route.mid, manager: route.manager } : undefined} onToggleSidebar={toggle} />;
+      main = <PersonaAssistant sid={route.sid} routed={route.mid || route.manager ? { mid: route.mid, manager: route.manager } : undefined} at={route.at} onToggleSidebar={toggle} />;
       break;
     case "persona-new":
       main = <PersonaAssistant fresh onToggleSidebar={toggle} />;
@@ -343,7 +491,7 @@ function Shell() {
       main = <History origin={route.origin} onToggleSidebar={toggle} />;
       break;
     case "health":
-      main = <Health key={route.sid ?? ""} sid={route.sid} onToggleSidebar={toggle} />;
+      main = <Health key={route.sid ?? (route.fresh ? "new" : "")} sid={route.sid} fresh={route.fresh} onToggleSidebar={toggle} />;
       break;
     case "profile":
       main = <Profile onToggleSidebar={toggle} />;
@@ -370,16 +518,19 @@ function Shell() {
       main = <AgentsView key={route.id ?? ""} id={route.id} onToggleSidebar={toggle} />;
       break;
     case "agent-list":
-      main = <AgentsPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
+      main = <AgentsPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} workspaceActions={workspaceActions} />;
       break;
     case "agent-archives":
       main = <AgentArchives onToggleSidebar={toggle} />;
+      break;
+    case "compare":
+      main = <CompareRuns id={route.id} onToggleSidebar={toggle} />;
       break;
     case "machines":
       main = <Machines onToggleSidebar={toggle} />;
       break;
     case "terminal":
-      main = <TerminalPage route={route} onToggleSidebar={toggle} />;
+      main = <TerminalPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
       break;
     case "machine":
       main = <MachineDetail key={route.mid} mid={route.mid} onToggleSidebar={toggle} />;
@@ -396,6 +547,9 @@ function Shell() {
     case "extension":
       main = <ExtensionNavPage key={`${route.extension}/${route.ui}`} extension={route.extension} ui={route.ui} onToggleSidebar={toggle} />;
       break;
+    case "not-found":
+      main = <NotFound onToggleSidebar={toggle} />;
+      break;
     default:
       main = <Home onNewAgent={openNewAgent} onToggleSidebar={toggle} />;
   }
@@ -407,6 +561,7 @@ function Shell() {
       <div
         ref={drawerBox}
         id={sidebarId}
+        data-sidebar-column
         role={a11y.modal ? "dialog" : undefined}
         aria-modal={a11y.modal || undefined}
         aria-label={a11y.modal ? SIDEBAR_LABEL : undefined}
@@ -420,7 +575,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -430,21 +585,24 @@ function Shell() {
         className={cx("fixed inset-0 z-20 bg-black/20 transition-opacity duration-200 lg:hidden", drawer ? "opacity-100 starting:opacity-0" : "pointer-events-none opacity-0", !scrimShown && "hidden")}
         onClick={close}
       />
-      <main ref={mainBox} inert={a11y.modal || undefined} className="relative min-w-0 flex-1">
-        {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx); under the page's
-            header, which a page taller than 56px reports as --page-header (Settings, #3594) */}
-        {conn !== "online" && loaded && !offline && (
-          <div className="pointer-events-none absolute inset-x-0 top-[var(--page-header,3.5rem)] z-10 flex justify-center px-4 pt-2" style={{ animation: `slide-up 220ms ${EASE} both` }}>
+      <main ref={mainBox} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
+        {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx). A strip
+            over the page that pushes it down while it shows, never a layer over its header, its fields or its title
+            (web usability audit item 87); its details open over the page. */}
+        <Collapse open={conn !== "online" && loaded && !offline} lazy unclipped className="shrink-0">
+          <div className="flex justify-center px-4 pt-2 pb-1">
             <ConnectionPill />
           </div>
-        )}
-        <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
+        </Collapse>
+        <div className="relative min-h-0 flex-1">
+          <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
+        </div>
       </main>
       <SidePanel />
       {paletteOpened && (
         <OverlayBoundary open={palette.open} onClose={closePalette}>
           <Suspense fallback={null}>
-            <Palette open={palette.open} onClose={closePalette} onNewAgent={openNewAgent} pane={pane} route={route} />
+            <Palette open={palette.open} onClose={closePalette} onNewAgent={openNewAgent} pane={pane} route={route} listShown={!narrow && !rail && sidebarShown(layout)} />
           </Suspense>
         </OverlayBoundary>
       )}
@@ -457,6 +615,9 @@ function Shell() {
         </OverlayBoundary>
       )}
       <NewWorktreeHost />
+      <CloseAgentHost />
+      <ForwardHost />
+      <WorktreeActionsHost onOpenWorkspace={openWorkspaceInTree} />
       {/* tab title with the "Needs you" count, favicon badge, optional sounds (#2332): a leaf, so a sessions push re-renders
           only it, not the whole shell */}
       <AttentionSignals label={title} pane={pane} />

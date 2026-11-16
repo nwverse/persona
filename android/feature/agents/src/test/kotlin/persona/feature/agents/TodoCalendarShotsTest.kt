@@ -1,10 +1,6 @@
 package persona.feature.agents
 
 import android.graphics.Bitmap
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +41,13 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -70,6 +73,10 @@ import persona.core.designsystem.PersonaTheme
 import java.io.File
 import java.time.Instant
 import java.util.TimeZone
+import persona.core.designsystem.FeedbackNotice
+import persona.core.designsystem.JToast
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /**
  * The to-dos' month (#2046) on a phone: List | Calendar, November 2026 from Monday with today (the 5th) circled, a
@@ -80,6 +87,11 @@ import java.util.TimeZone
  * Moving one (#2045): the month before, 体检预约 (09:00 on the 6th) carried to the 11th with where it would land, and
  * after it is let go there with the shell's "Moved to … Undo" (drawn here as Root.kt draws it, kept up for the shot);
  * and TalkBack's "Change Due Date…" sheet.
+ *
+ * Day and week (#4200): the 12th as a day, from the month's "Show Day", with its week's strip, its All Day row and
+ * 季度复盘 and 准备评审材料 side by side at 14:00 and 14:15; this week (Nov 2 – 8) with today's red line at 17:30;
+ * 体检预约 carried in the week to 11:00 on Wednesday, with where it would land; and a tap at 17:10 on the 12th
+ * bringing up a new to-do due at 17:00.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -144,7 +156,7 @@ class TodoCalendarShotsTest {
         override fun send(message: JsonObject) = true
     }
 
-    /** The shell's notices, to the snackbar the test draws where Root.kt draws it. */
+    /** The shell's notices, to the toast the test draws where Root.kt draws it. */
     private class Shell : AppFeedback {
         val shown = MutableSharedFlow<Pair<String, FeedbackAction?>>(extraBufferCapacity = 4)
         override fun failure(error: Throwable, operation: Boolean) = shown.tryEmit((error.message ?: "") to null)
@@ -160,21 +172,14 @@ class TodoCalendarShotsTest {
         val shell = Shell()
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                val snackbar = remember { SnackbarHostState() }
-                LaunchedEffect(shell) {
-                    shell.shown.collect { (message, action) ->
-                        launch {
-                            // the shell's is Short; kept up here for the shot
-                            val result = snackbar.showSnackbar(message, actionLabel = action?.label, duration = SnackbarDuration.Indefinite)
-                            if (result == SnackbarResult.ActionPerformed) action?.run?.invoke()
-                        }
-                    }
-                }
+                // The shell's toast, drawn where Root.kt draws it but kept up for the shot (the host times it out).
+                var notice by remember { mutableStateOf<FeedbackNotice?>(null) }
+                LaunchedEffect(shell) { shell.shown.collect { (message, action) -> notice = FeedbackNotice(message, action) } }
                 CompositionLocalProvider(LocalAppFeedback provides shell) {
                     val shown by store.todos.collectAsState()
                     Box(Modifier.testTag("shot").width(400.dp).height(860.dp).background(PersonaTheme.palette.background)) {
                         TodosScreen(shown, sessions, store, onBack = {}, onOpenTodo = {}, now = now)
-                        SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).padding(12.dp))
+                        notice?.let { JToast(it, dismiss = {}, modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp)) }
                     }
                 }
             }
@@ -219,6 +224,79 @@ class TodoCalendarShotsTest {
                 assertEquals(listOf("t5" to TodoDue.At(Instant.parse("2026-11-11T01:00:00Z"))), api.sent)
                 assertTrue("moved: no notice", has("已移到 11月11日周三 09:00"))
                 if (scene == "moved") save("moved")
+            }
+        }
+    }
+
+    /** Day and week (#4200): "dayview", "week", "weekdrag" (体检预约 carried to 11:00 on the 4th), "new" (a tap on the axis). */
+    private fun axis(scene: String, style: AppStyle, dark: Boolean, suffix: String = "") {
+        val api = Api(todos + Todo("t18", title = "准备评审材料", dueAt = at("2026-11-12T14:15")))
+        val store = TasksStore(api, Connection(), CoroutineScope(Dispatchers.Unconfined))
+        store.reloadTodos()
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val shown by store.todos.collectAsState()
+                Box(Modifier.testTag("shot").width(400.dp).height(860.dp).background(PersonaTheme.palette.background)) {
+                    TodosScreen(shown, sessions, store, onBack = {}, onOpenTodo = {}, now = now)
+                }
+            }
+        }
+        rule.waitForIdle()
+        fun has(text: String) = rule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        fun mode(name: String) {
+            rule.onNode(hasText(name) and hasAnyAncestor(hasTestTag("todo-calendar-mode"))).performClick()
+            rule.waitForIdle()
+        }
+        fun save(node: androidx.compose.ui.test.SemanticsNodeInteraction = rule.onNodeWithTag("shot")) {
+            val bitmap = node.captureToImage().asAndroidBitmap()
+            File(out(), "todo-calendar-$scene-${style.name.lowercase()}-${if (dark) "dark" else "light"}$suffix.png").outputStream()
+                .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        fun hours(h: Float) = with(rule.density) { (CalendarTokens.hour * h).toPx() }
+        rule.onNodeWithText("日历").performClick()
+        rule.waitForIdle()
+        mode("月")
+        if (scene == "dayview" || scene == "new") {
+            rule.onNodeWithTag("todo-calendar-day-2026-11-12").performClick()
+            rule.waitForIdle()
+            rule.onNodeWithTag("todo-calendar-show-day").performClick()
+            rule.waitForIdle()
+            assertTrue("$scene: not the 12th", has("11月12日周四"))
+            for (t in listOf("评审设计稿", "季度复盘", "准备评审材料", "写发布说明")) assertTrue("$scene: no $t", has(t))
+        } else {
+            mode("周")
+            assertTrue("$scene: no now line", rule.onAllNodesWithTag("todo-calendar-now").fetchSemanticsNodes().isNotEmpty())
+        }
+        when (scene) {
+            "dayview", "week" -> save()
+            "weekdrag" -> {
+                val block = rule.onNodeWithTag("todo-calendar-entry-t5")
+                val start = block.fetchSemanticsNode().boundsInRoot
+                val from = rule.onNodeWithTag("todo-calendar-day-header-2026-11-06").fetchSemanticsNode().boundsInRoot
+                val to = rule.onNodeWithTag("todo-calendar-day-header-2026-11-04").fetchSemanticsNode().boundsInRoot
+                block.performTouchInput {
+                    down(center)
+                    move(delayMillis = viewConfiguration.longPressTimeoutMillis + 100)
+                    val by = Offset(to.center.x - from.center.x, hours(2f))
+                    for (i in 1..6) moveTo(center + by * (i / 6f), delayMillis = 30)
+                }
+                rule.waitForIdle()
+                assertTrue("weekdrag: no landing", has("11月4日周三 11:00"))
+                rule.onNodeWithTag("todo-calendar-drop-at").assertExists()
+                assertTrue(start.width > 0f)
+                save()
+                block.performTouchInput { up() }
+                rule.waitForIdle()
+                assertEquals(listOf("t5" to TodoDue.At(Instant.parse("2026-11-04T03:00:00Z"))), api.sent)
+            }
+            "new" -> {
+                val day = rule.onNodeWithTag("todo-calendar-axis-2026-11-12").fetchSemanticsNode().positionInRoot
+                rule.onRoot().performTouchInput { click(day + Offset(hours(0.5f), hours(17f + 10 / 60f))) }
+                rule.waitForIdle()
+                rule.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("todo-calendar-new"))).performTextInput("准备周会")
+                rule.waitForIdle()
+                assertTrue("new: no time", has("17:00"))
+                save(rule.onNode(isDialog()))
             }
         }
     }
@@ -303,6 +381,38 @@ class TodoCalendarShotsTest {
     @Test fun rescheduleBriefDark() = move("reschedule", AppStyle.Brief, true)
     @Test fun rescheduleBoard() = move("reschedule", AppStyle.Board, false)
     @Test fun rescheduleBoardDark() = move("reschedule", AppStyle.Board, true)
+
+    // Day and week (#4200)
+    @Test fun dayViewGlass() = axis("dayview", AppStyle.Glass, false)
+    @Test fun dayViewGlassDark() = axis("dayview", AppStyle.Glass, true)
+    @Test fun dayViewBrief() = axis("dayview", AppStyle.Brief, false)
+    @Test fun dayViewBriefDark() = axis("dayview", AppStyle.Brief, true)
+    @Test fun dayViewBoard() = axis("dayview", AppStyle.Board, false)
+    @Test fun dayViewBoardDark() = axis("dayview", AppStyle.Board, true)
+    @Test fun weekGlass() = axis("week", AppStyle.Glass, false)
+    @Test fun weekGlassDark() = axis("week", AppStyle.Glass, true)
+    @Test fun weekBrief() = axis("week", AppStyle.Brief, false)
+    @Test fun weekBriefDark() = axis("week", AppStyle.Brief, true)
+    @Test fun weekBoard() = axis("week", AppStyle.Board, false)
+    @Test fun weekBoardDark() = axis("week", AppStyle.Board, true)
+
+    /** The largest text: the hours, the blocks' titles and the week's day names grow; the blocks keep their height and cut their titles short. */
+    @Config(fontScale = 2f)
+    @Test fun dayViewGlassLargeText() = axis("dayview", AppStyle.Glass, false, suffix = "-large")
+    @Config(fontScale = 2f)
+    @Test fun weekGlassLargeText() = axis("week", AppStyle.Glass, false, suffix = "-large")
+    @Test fun weekDragGlass() = axis("weekdrag", AppStyle.Glass, false)
+    @Test fun weekDragGlassDark() = axis("weekdrag", AppStyle.Glass, true)
+    @Test fun weekDragBrief() = axis("weekdrag", AppStyle.Brief, false)
+    @Test fun weekDragBriefDark() = axis("weekdrag", AppStyle.Brief, true)
+    @Test fun weekDragBoard() = axis("weekdrag", AppStyle.Board, false)
+    @Test fun weekDragBoardDark() = axis("weekdrag", AppStyle.Board, true)
+    @Test fun newGlass() = axis("new", AppStyle.Glass, false)
+    @Test fun newGlassDark() = axis("new", AppStyle.Glass, true)
+    @Test fun newBrief() = axis("new", AppStyle.Brief, false)
+    @Test fun newBriefDark() = axis("new", AppStyle.Brief, true)
+    @Test fun newBoard() = axis("new", AppStyle.Board, false)
+    @Test fun newBoardDark() = axis("new", AppStyle.Board, true)
 
     // The list with List | Calendar above it
     @Test fun listGlass() = shot("list", AppStyle.Glass, false)

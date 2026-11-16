@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initI18n, t } from "../i18n";
-import { api, ApiError, errorText } from "./api";
+import { api, apiBlob, ApiError, errorText, isTransient } from "./api";
 import { isOfflineError } from "./feedback";
 import { sessionLoadError } from "./session-link";
 
@@ -68,6 +68,15 @@ describe("readable hub errors", () => {
     expect(isOfflineError(text)).toBe(false);
   });
 
+  it("shows a decision accept failure's reason without exposing its diagnostic detail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "accept_not_taken", error: "every agent on this task has stopped", detail: "private diagnostic",
+    }), { status: 502 })));
+    const error = await api("/todos/todo_v1/accept", { method: "POST", token: "test-token" }).catch((e: unknown) => e);
+    expect(errorText(error)).toBe(t("lib-api.hub_unavailable", { detail: "HTTP 502: every agent on this task has stopped" }));
+    expect(errorText(error)).not.toContain("private diagnostic");
+  });
+
   it.each(["", "HTTP 500"])("keeps a bare status only once: %s", (message) => {
     expect(errorText(new ApiError(500, message, {}, false))).toBe(t("lib-api.server_error", { detail: "HTTP 500" }));
   });
@@ -115,6 +124,30 @@ describe("an error page from a proxy in front of the hub", () => {
   });
 });
 
+// A meeting photo's image (#3862 phase 3): an <img> can't send the bearer token or the manager, so the page reads the
+// bytes itself and shows them from an object URL.
+describe("a hub route's bytes", () => {
+  it("sends the credentials and headers api does and gives the body back as it came", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const fetch = vi.fn().mockResolvedValue(new Response(png, { status: 200, headers: { "Content-Type": "image/png" } }));
+    vi.stubGlobal("fetch", fetch);
+    const blob = await apiBlob("/recordings/r1/photos/1", { token: "test-token", headers: { "X-Persona-Manager": "m-1" } });
+    expect(blob.type).toBe("image/png");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(png);
+    const headers = new Headers(fetch.mock.calls[0][1].headers);
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/recordings/r1/photos/1");
+    expect(headers.get("Authorization")).toBe("Bearer test-token");
+    expect(headers.get("X-Persona-Manager")).toBe("m-1");
+  });
+
+  it("fails with the hub's error as api does", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "no such photo", code: "photo_not_found" }), { status: 404 })));
+    const err = await apiBlob("/recordings/r1/photos/9", { token: "test-token" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe("photo_not_found");
+  });
+});
+
 // What the hub answers when the computer did not (server/internal/apierr Body and Call): the summary may already be in the
 // page's language, the raw text in detail; the code is what the page goes by (#5031).
 describe("a computer that did not answer", () => {
@@ -146,6 +179,31 @@ describe("a computer that did not answer", () => {
     const internal = new ApiError(503, "private internal exception", { code: "internal", detail: "private diagnostic" });
     expect(errorText(internal)).toBe(t("lib-api.hub_unavailable", { detail: "HTTP 503" }));
     expect(internal.message).toBe("private internal exception");
+  });
+});
+
+// The hub answered that nothing it can call directly is set up for the request (an Inbox draft): where to set one up,
+// not a bare "HTTP 503" that reads as an outage.
+describe("no model set up", () => {
+  it("says where to set one up", () => {
+    const noModel = new ApiError(503, "No model can be called directly to draft a reply", { code: "model_unavailable" });
+    const text = errorText(noModel);
+    expect(text).toBe(t("lib-api.model_unavailable"));
+    expect(text).not.toContain("HTTP 50");
+    expect(isOfflineError(text)).toBe(false);
+  });
+});
+
+// A decision's accept the Agent's terminal refused, a dialog being open there (#7343): the hub answers 409 dialog_open,
+// and the toast says to close the dialog in the terminal, not "try again later (HTTP 502)".
+describe("a dialog open in the terminal", () => {
+  it("says to close it there first", () => {
+    const refused = new ApiError(409, "终端正在等待选择，请先到终端处理。", { code: "dialog_open", delivered: "none", retryable: false }); // i18n-ignore
+    const text = errorText(refused);
+    expect(text).toBe(t("lib-api.dialog_open"));
+    expect(text).toContain("先关掉终端里的对话框"); // i18n-ignore
+    expect(text).not.toContain("HTTP");
+    expect(isTransient(refused)).toBe(false);
   });
 });
 

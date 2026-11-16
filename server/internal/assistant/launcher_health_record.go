@@ -69,9 +69,15 @@ func (s *Service) recordHealth(ctx context.Context, machine, launcher string, r 
 	rec.ResetsAt = nil
 	if r.ok {
 		rec.State, rec.Kind, rec.Error, rec.Fails, rec.Repairs, rec.BlockedReason = healthOK, "", "", 0, 0, ""
+		rec.MissingFails = 0
 		rec.Model = r.model
 	} else {
 		rec.Fails++
+		if missingCode(r.err) == proto.CodeClaudeMissing {
+			rec.MissingFails++
+		} else {
+			rec.MissingFails = 0
+		}
 		rec.Error = clip(oneLine(r.err), 400)
 		rec.Kind = r.kind
 		if rec.Kind == "" {
@@ -155,11 +161,16 @@ func (s *Service) healthChanged(ctx context.Context, r LauncherHealth, before st
 	s.event(ctx, map[string]any{"type": "launcher_health", "record": r})
 }
 
-// recordStartFailure: a dropped link, refused request or stalled agent says nothing about launcher health. Other
-// failures count, with one shared follow-up check to tell a blink from a broken launcher. A terminal-shell failure
-// (errKindNotInTerminal) skips the check: the login shell is where the launcher already works.
+// recordStartFailure: a dropped link, refused request, stalled agent or a start whose own wait ran out says nothing
+// about launcher health. Other failures count, with one shared follow-up check to tell a blink from a broken launcher.
+// A terminal-shell failure (errKindNotInTerminal) skips the check: the login shell is where the launcher already works.
 func (s *Service) recordStartFailure(ctx context.Context, machine, launcher string, err error) {
 	if err == nil || launcher == "" || transientStartErr(err) || errors.Is(err, ErrNoDevice) || startRefused(err) || startStalled(err) {
+		return
+	}
+	if startWaitEnded(err) {
+		// A failing record here would stand until someone rechecked by hand, and refuse every fixed-machine start.
+		s.logf("launcher health: %s on %s: start ended without an answer (%v); not counted against the launcher", launcher, machine, err)
 		return
 	}
 	if terminalMissing(err) {
@@ -199,10 +210,11 @@ func (s *Service) recordTestPassed(ctx context.Context, machine, launcher string
 }
 
 // launcherSetupChanged: a save of a managed launcher changed what decides whether its requests get through (its key,
-// gateway, auth, model, headers or environment), so how it failed before says nothing of it now.
+// gateway, auth, model, headers, environment or the computer it sends through), so how it failed before says nothing
+// of it now.
 func launcherSetupChanged(old, saved storedLauncher) bool {
 	return old.KeySealed != saved.KeySealed || old.BaseURL != saved.BaseURL || old.Auth != saved.Auth || old.Model != saved.Model ||
-		old.HeadersSealed != saved.HeadersSealed || old.EnvSealed != saved.EnvSealed
+		old.HeadersSealed != saved.HeadersSealed || old.EnvSealed != saved.EnvSealed || old.ViaMachine != saved.ViaMachine
 }
 
 // forgetLauncherFailures drops launcher's failure records on every machine after its setup changed (#1838): it counts
@@ -317,8 +329,11 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // startRefusalCodes are the node's (and the hub's) coded refusals of the request itself (node/control.go,
 // node/codex_start.go, node/openelsewhere.go…). Codes about the machine's state (engine_missing, runtime_away,
 // not_running, orca_not_registered) are not here: the launcher cannot run there now, and a task may go elsewhere.
+// An engine with no provider of the launcher's kind (launcher_kind_missing, #8140) is the request's: the launcher is
+// not broken, and its check, which runs it on the command line, would pass and clear any record of it.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
-	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated}
+	"identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated,
+	proto.CodeLauncherKindMissing}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).
@@ -331,6 +346,19 @@ func startRefused(err error) bool {
 		return slices.Contains(startRefusalCodes, re.Code)
 	}
 	return startRequestErr.MatchString(re.Message)
+}
+
+// startWaitEnded: the start's own context ran out or was cancelled before the node answered (its link stuck, a node
+// that never replied within taskStartTimeout), here or on the hub that relayed the call (an uncoded rpc.Error with the
+// context's words). The hub stopped waiting and learned nothing of the launcher. A node's own words about a timeout
+// ("session.start: context deadline exceeded", errKindTimeout) are not this and still count.
+func startWaitEnded(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == "" &&
+		(re.Message == context.DeadlineExceeded.Error() || re.Message == context.Canceled.Error())
 }
 
 // startStalled is a node's coded timeout after opening the agent, or a start that ended in the new tab's shell before

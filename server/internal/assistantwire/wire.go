@@ -27,11 +27,11 @@ type Hello struct {
 	// DoneDelayMS is how long a finished turn stays still before it counts as the end (hub.json notify): a task's
 	// agents are followed with the same patience as the hub's own pushes.
 	DoneDelayMS int64 `json:"done_delay_ms"`
-	// PersonaView is hub.json's assistant.persona_view: teach ```persona-view rather than ```persona-card (#1850).
+	// PersonaView and HTMLViews were the switches for the assistant's cards and their HTML bridge. The cards are always
+	// on now (#5509): a hub always sends both true, for a manager from before that still reads them; a manager no
+	// longer reads them, so an older hub's false (its switch off) changes nothing.
 	PersonaView bool `json:"persona_view,omitempty"`
-	// HTMLViews is hub.json's assistant.html_views (default on) while PersonaView is on: the HTML bridge
-	// (…/views/{key}/html-actions) answers. An older hub never sends it, so the bridge stays off there.
-	HTMLViews bool `json:"html_views,omitempty"`
+	HTMLViews   bool `json:"html_views,omitempty"`
 	// Agents is manager.json's agents section: the triage's limits and default switches (agents.go).
 	Agents AgentsConfig `json:"agents,omitzero"`
 	// KB is manager.json's kb section: the knowledge base the assistant keeps (kb.go).
@@ -53,6 +53,17 @@ type Hello struct {
 	// Notify is hub.json's notify: the finished push's timings; HookTimeoutMS, how long a hook's card waits by default,
 	// is manager.json's hook_timeout_minutes, over the hello (the interactions and the pushes are the manager's).
 	Notify NotifyTimings `json:"notify,omitzero"`
+	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
+	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
+	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
+	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
+	ArchivedApart bool `json:"archived_apart,omitempty"`
+	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
+	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
+	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
+	// sends it: off. A change of the switch sends manager.updated.
+	QuietPush bool `json:"quiet_push,omitempty"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -76,7 +87,8 @@ type Placement struct {
 	// WorkMachines are configured work computers, including aliases; none may host the assistant.
 	WorkMachines []string `json:"work_machines,omitempty"`
 	// Standby: this hub is a member of a mesh group, whose center runs the scheduled tasks (docs/server/mesh.md).
-	Standby bool `json:"standby,omitempty"`
+	Standby        bool `json:"standby,omitempty"`
+	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 }
 
 // DeviceCall is device.call's params. Device is a machine id, or DeviceAll for DeviceDevicesList.
@@ -94,7 +106,13 @@ const (
 	DeviceSessionRename = "session.rename" // {session_id, title} → {ok}
 	DeviceAssistantSend = "assistant.send" // {session_id, text, resume_only?, permission_mode?, …model} → {session_id}
 	DeviceSessionSend   = "session.send"   // {session_id, text} → {}
-	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?} → {session}
+	DeviceSessionStart  = "session.start"  // {cwd, prompt, launcher?, model?, permission_mode?, tab_name?, workspace_id?, session_id?} → {session}; session_id names the new session (Claude), for an exact reconciliation when the answer is lost
+	// DeviceSessionModes: {session_id, launcher?, from?, model?, effort?, permission_mode?} → {}; a launcher other than
+	// the session's own is a switch to it, carried out by a session.send with apply_switch (docs/protocol/protocol.md).
+	DeviceSessionModes = "session.modes"
+	// DeviceSessionSwitch: {session_id} → {}, the switch session.modes just picked carried out now with no message
+	// (capability launcher_switch_idle, the assistant's batch switch).
+	DeviceSessionSwitch = "session.switch"
 	// DeviceWorktreePrepare / DeviceWorktreeCreate: "New worktree…" (docs/integrations/terminal.md), the workspace named by a directory
 	// in it: {cwd} → WorktreePrepare; {cwd, branch, path} → WorktreeCreateResult.
 	DeviceWorktreePrepare = "worktree.prepare"
@@ -133,6 +151,12 @@ type Device struct {
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`
+	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
+	HomeReal string `json:"home_real,omitempty"`
+	// Engine is the host its starts open in when they name none, as its node reports it (its default engine host:
+	// herdr, orca, paseo…); "" while it has not said. The manager holds a new Agent to what that host can run
+	// (launcher_fit.go, #8140).
+	Engine string `json:"engine,omitempty"`
 }
 
 // ClientApp is one Persona app as it last described itself in client_hello (docs/protocol/protocol.md "Client
@@ -181,8 +205,8 @@ const (
 	// the hub's clock and the user's time zone. The Lark bot's nudges (#6084) wait for it to turn false.
 	NotifyQuietGet = "notify.quiet"
 
-	// AppTool: {name, arguments, machine_id, session_id} → proto.ToolResult, one of the assistant's tools that is the
-	// app's to run (persona_settings).
+	// AppTool: {name, arguments, machine_id, session_id, call_id?} → proto.ToolResult, one of the assistant's tools that
+	// is the app's to run (persona_settings).
 	AppTool = "app.tool"
 )
 
@@ -205,11 +229,33 @@ type ModelBinding struct {
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
 	Runtime  string `json:"runtime,omitempty"` // main chat only: cli (default) or agentsdk; kept across a provider change
+	// ConfigDir is the main chat's only: the Claude profile its new conversations start in (#4633). None is Persona's
+	// own profile (the default); "legacy" is this computer's existing Claude Code setup. Kept across a provider change;
+	// an existing conversation keeps the profile it was started in.
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 
 // NotifyRequest is notify.request's params.
 type NotifyRequest struct {
 	Notification Notification `json:"notification"`
+}
+
+// NotifyResult is notify.request's answer. Held says the hub's low-distraction (ln) mode kept the push off the phone
+// (for the "Needs you" list / briefings); Reason is why, one of the hub's intercept reasons. For an assistant's push or
+// a finished turn the hub also says where it went: Devices, how many devices it was handed to now (a push route, a
+// ws_notify connection, a browser's Web Push; not a delivery receipt), and Kept, how many offline devices keep it for
+// their next connection. With Devices 0 and nothing held, Reason is "no_device" or "filtered" (every device that could
+// take it turned it off), as POST /api/v1/notify answers. Devices is nil from a hub that does not report it (older,
+// a card's push, or a notification handed over before). Queued is the manager's own: its outbox kept the push while
+// the hub is away (never on the wire). The assistant's notify_user tool tells the model what happened from it, so the
+// model never assumes the user was alerted when nobody was.
+type NotifyResult struct {
+	OK      bool   `json:"ok"`
+	Held    bool   `json:"held,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Devices *int   `json:"devices,omitempty"`
+	Kept    int    `json:"kept,omitempty"`
+	Queued  bool   `json:"-"`
 }
 
 // Notification is one notification intent: a push (kind assistant) to every device whose settings take it, like an
@@ -238,7 +284,23 @@ type Notification struct {
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
 	// out: the phone is pushed.
 	LinkCovered bool `json:"link_covered,omitempty"`
+	// RecordingID is the recording a NotifyPush push is about (a meeting's minutes, #3862 phase 6): the push carries it
+	// as `recording_id`, and apps that know it open the meeting's thread instead of the session. Older hubs drop it.
+	RecordingID string `json:"recording_id,omitempty"`
+	// Level is how urgent the push is for the hub's low-distraction (ln) mode: "P0", "P1" or "P2". "" lets the hub
+	// derive one from the kind. Hubs from before the field derive the level, so older and newer managers interoperate.
+	Level string `json:"level,omitempty"`
+	// RelatedKey links the push to what it is about (a to-do id, a PR URL, a subject): in low-distraction mode the same key pushes
+	// at most once in 12 hours, and same-minute P1 conclusion pushes with it merge into one intercepted entry.
+	RelatedKey string `json:"related_key,omitempty"`
 }
+
+// Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").
+const (
+	LevelP0 = "P0" // must interrupt: a decision or a card that needs the owner now
+	LevelP1 = "P1" // worth knowing: a conclusion, an explicit notify_user; held for the briefing in low-distraction mode
+	LevelP2 = "P2" // background news: silent in low-distraction mode
+)
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
 // POST /api/v1/todos/{id}/accept takes, so an OK from an earlier round takes nothing) and the option it recommends.
@@ -295,9 +357,9 @@ type Snapshot struct {
 type TaskView struct {
 	ID           string    `json:"id"`
 	Label        string    `json:"label"`  // its title, or what stands for one
-	Repeat       string    `json:"repeat"` // once / daily / interval
+	Repeat       string    `json:"repeat"` // once / daily / interval / cron
 	Enabled      bool      `json:"enabled"`
-	At           time.Time `json:"at,omitempty"` // once: when; interval: the next run
+	At           time.Time `json:"at,omitempty"` // once: when; interval, cron: the next run
 	EveryMinutes int       `json:"every_minutes,omitempty"`
 	MachineID    string    `json:"machine_id,omitempty"` // of the conversation it came from
 	RunMachineID string    `json:"run_machine_id,omitempty"`
@@ -371,6 +433,8 @@ type SessionView struct {
 	// Direction: the conversation is (or was) a leader, one direction of the owner's work (assistant/directions.go,
 	// #3484); nil for any other.
 	Direction *proto.Direction `json:"direction,omitempty"`
+	// ModelPick: what the user set the conversation to run on (assistant/model_pick.go, #5033); nil follows the default.
+	ModelPick *proto.ModelPick `json:"model_pick,omitempty"`
 }
 
 // ErrStaleSnapshot is manager.snapshot's stale_snapshot: a newer one came in first (two changes reported at once).

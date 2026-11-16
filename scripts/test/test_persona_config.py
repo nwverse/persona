@@ -83,27 +83,58 @@ class PersonaConfigTests(unittest.TestCase):
         target.write_bytes((ROOT / 'apple' / config.APP_ENTITLEMENTS).read_bytes())
         return root
 
-    def test_carplay_entitlements_only_for_json_true(self):
-        for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
+    def test_opt_in_entitlements_only_for_json_true(self):
+        for switch in config.OPT_IN:
+            for value in (None, False, 'false', 'False', 'true', 'no', 0, 1, [], {}):
+                with self.subTest(switch=switch, value=value), tempfile.TemporaryDirectory() as directory:
+                    root = self._fake_root(directory)
+                    cfg = {} if value is None else {'app': {switch.split('.', 1)[1]: value}}
+                    with patch.object(config, 'ROOT', str(root)):
+                        self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
+                    self.assertFalse((root / 'apple' / config.OPT_IN_ENTITLEMENTS).exists())
+
+    def test_opt_in_entitlements_keep_the_app_keys(self):
+        cases = {
+            'carplay_voice': ['com.apple.developer.carplay-voice-based-conversation'],
+            'health_background_delivery': ['com.apple.developer.healthkit.background-delivery'],
+            'homekit': ['com.apple.developer.homekit'],
+        }
+        cases['all'] = cases['carplay_voice'] + cases['health_background_delivery'] + cases['homekit']
+        for name, keys in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = self._fake_root(directory)
+                app = ({'carplay_voice': True, 'health_background_delivery': True, 'homekit': True} if name == 'all'
+                       else {name: True})
+                with patch.object(config, 'ROOT', str(root)):
+                    self.assertEqual(config.app_entitlements({'app': app}), config.OPT_IN_ENTITLEMENTS)
+                with open(root / 'apple' / config.APP_ENTITLEMENTS, 'rb') as f:
+                    original = plistlib.load(f)
+                with open(root / 'apple' / config.OPT_IN_ENTITLEMENTS, 'rb') as f:
+                    generated = plistlib.load(f)
+                self.assertTrue(original)
+                for key in keys:
+                    self.assertIs(generated.pop(key), True)
+                self.assertEqual(generated, original)
+
+    def test_health_background_delivery_flag_follows_the_switch(self):
+        for value, flag in ((True, 'YES'), (None, 'NO'), (False, 'NO'), ('true', 'NO')):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
                 root = self._fake_root(directory)
-                cfg = {} if value is None else {'app': {'carplay_voice': value}}
+                cfg = {} if value is None else {'app': {'health_background_delivery': value}}
                 with patch.object(config, 'ROOT', str(root)):
-                    self.assertEqual(config.app_entitlements(cfg), config.APP_ENTITLEMENTS)
-                self.assertFalse((root / 'apple' / config.CARPLAY_ENTITLEMENTS).exists())
+                    config.xcconfig(cfg)
+                text = (root / 'apple' / 'Config.xcconfig').read_text()
+                self.assertIn('PERSONA_HEALTH_BACKGROUND_DELIVERY = %s\n' % flag, text)
 
-    def test_carplay_entitlements_keep_the_app_keys(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = self._fake_root(directory)
-            with patch.object(config, 'ROOT', str(root)):
-                self.assertEqual(config.app_entitlements({'app': {'carplay_voice': True}}), config.CARPLAY_ENTITLEMENTS)
-            with open(root / 'apple' / config.APP_ENTITLEMENTS, 'rb') as f:
-                original = plistlib.load(f)
-            with open(root / 'apple' / config.CARPLAY_ENTITLEMENTS, 'rb') as f:
-                generated = plistlib.load(f)
-            self.assertTrue(original)
-            self.assertIs(generated.pop('com.apple.developer.carplay-voice-based-conversation'), True)
-            self.assertEqual(generated, original)
+    def test_homekit_flag_follows_the_switch(self):
+        for value, flag in ((True, 'YES'), (None, 'NO'), (False, 'NO'), ('true', 'NO')):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                root = self._fake_root(directory)
+                cfg = {} if value is None else {'app': {'homekit': value}}
+                with patch.object(config, 'ROOT', str(root)):
+                    config.xcconfig(cfg)
+                text = (root / 'apple' / 'Config.xcconfig').read_text()
+                self.assertIn('PERSONA_HOMEKIT = %s\n' % flag, text)
 
 
 class SigningProfileConfigTests(unittest.TestCase):
@@ -205,6 +236,30 @@ class SigningProfileConfigTests(unittest.TestCase):
                           {'com.example.other': 'Other Profile'}):
             with self.subTest(overrides=overrides), self.assertRaises(SystemExit):
                 self.exported({'app': {'bundle_id': self.bid}, 'app_store': {'provisioning_profiles': overrides}})
+
+
+class UpdateURLConfigTests(unittest.TestCase):
+    # What personad is built to look for updates at (-X main.updateURL, #4522): publish.update_url as configured, so
+    # a GitHub repository's releases/latest/download needs no /dl added; else publish.site_url's dl/ as before.
+    def test_update_url_defaults_to_the_site_and_takes_a_release_base_as_is(self):
+        github = 'https://github.com/nwverse/persona/releases/latest/download'
+        cases = {
+            'nothing': ({}, ''),
+            'site': ({'publish': {'site_url': 'https://site.example.test/'}}, 'https://site.example.test/dl'),
+            'release base': ({'publish': {'site_url': 'https://site.example.test', 'update_url': github + '/'}}, github),
+            'file copy': ({'publish': {'update_url': 'file:///srv/persona/dl'}}, 'file:///srv/persona/dl'),
+        }
+        for name, (cfg, expected) in cases.items():
+            with self.subTest(case=name):
+                generated = config.env(cfg)
+                self.assertEqual(generated['PERSONA_UPDATE_URL'], expected)
+                self.assertEqual(generated[PersonaConfigTests.former_prefix + 'UPDATE_URL'], expected)
+
+    def test_update_url_refuses_what_a_hub_could_not_use(self):
+        for value in ('http://site.example.test/dl', 'https://user:pw@site.example.test/dl', 'https://site.example.test/dl?x=1',
+                      'https://site.example.test/dl#x', 'https://site.example.test/dl/latest.json', 'site.example.test/dl', 7, []):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                config.update_url({'publish': {'update_url': value}})
 
 
 class MetaWearablesConfigTests(unittest.TestCase):

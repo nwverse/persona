@@ -57,7 +57,8 @@ import persona.core.contracts.api.SUBSCRIPTIONS_UI
  * the hub's machine), its state, and the way to its page. Extensions are installed on the hub's machine only.
  */
 @Composable
-internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null) {
+internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit, onExtension: (String, String?) -> Unit, onMarket: (() -> Unit)? = null,
+    slots: LazyListScope.() -> Unit = {}) {
     if (extensions == null) {
         JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_ext_demo_none)) } }
         return
@@ -73,6 +74,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
     LaunchedEffect(model) { model.watchAuth() }
     // The current assistant's alone (docs/assistant/managers.md "Clients"): a merged list is filtered by each one's stamp.
     val assistant = currentAssistant()
+    val logoApi = rememberPinned(extensions, listOf(listOf("extensions"), listOf("plugins")), assistant.id)
+    val logoLoader = rememberExtensionLogoLoader(logoApi)
     val list = state.extensions?.filter { assistant.owns(it.manager) }
     val roster = LocalManagerRoster.current
     val detail = LocalDetailKey.current
@@ -90,6 +93,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     selected = detail == ExtensionMarketRoute, onClick = onMarket)
             }
         }
+        // Cards and nav pages, above the installed list, as iOS Settings › Extensions (docs/extensions/extensions.md "UI slots").
+        slots()
         if (list == null && state.loading) item("loading") { JLoading() }
         if (list != null && list.isEmpty()) item("empty") {
             JEmptyState(stringResource(R.string.settings_ext_empty_title), stringResource(R.string.settings_ext_empty_text), icon = PhIcons.PuzzlePiece)
@@ -103,7 +108,9 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     "plugin-${it.manager.orEmpty()}-${it.id}" + if ((it.manager.orEmpty() to it.id) in repeated) "-$index" else ""
                 }) { index, extension ->
                     JGroupItem(GroupPosition.of(index, shown.size)) {
-                        JRow(extension.name.ifBlank { extension.id }, subtitle = ExtensionText.listLine(res, extension), leadingIcon = PhIcons.PuzzlePiece,
+                        val downloads = catalogDownloads(res, extension.downloads)
+                        val subtitle = listOfNotNull(ExtensionText.listLine(res, extension), downloads).joinToString("\n")
+                        JRow(extension.name.ifBlank { extension.id }, subtitle = subtitle, subtitleLines = installedSubtitleLines(downloads), leading = { ExtensionLogo(extension.iconUrl, logoApi, logoLoader) },
                             trailing = { ExtensionStateMark(extension) }, chevron = true,
                             selected = (detail as? ExtensionRoute)?.let { it.extensionId == extension.id && roster.ownerOrDefault(it.manager) == roster.ownerOrDefault(extension.manager) } == true,
                             onClick = { onExtension(extension.id, extension.manager?.takeIf { it != roster?.defaultManagerId }) })
@@ -120,6 +127,9 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
         }
     }
 }
+
+/** Legacy installed rows keep JRow's two-line subtitle unless a real count needs another line. */
+internal fun installedSubtitleLines(downloads: String?): Int = if (downloads == null) 2 else 3
 
 /** The mark beside an extension's state: the style's status dot, or a warning in the danger colour when it is broken. */
 @Composable
@@ -167,7 +177,9 @@ fun ExtensionPage(
     val api = rememberPinned(extensions, extensionPrefixes(extensionId) + listOf(listOf("extensions", "-", "catalog"),
         listOf("extensions", "-", "upgrades"), listOf("plugins", "-", "catalog"), listOf("plugins", "-", "upgrades")), owner)
     val res = LocalResources.current
+    val uri = LocalUriHandler.current
     val model = remember(api, extensionId, res, owner) { ExtensionModel(api, extensionId, res, owner) }
+    val logoLoader = rememberExtensionLogoLoader(api)
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
@@ -244,12 +256,12 @@ fun ExtensionPage(
     val memberNames = rememberExtensionNames(api, detail?.extensionPack?.isNotEmpty() == true || state.partial != null)
     ExtensionSettingsPage(detail = detail, memberNames = memberNames, busy = state.busy || state.saving || state.loading || state.loadFailed,
         refreshing = state.loading && detail != null, onBack = onBack, onRefresh = { scope.launch { model.load() } }, updates = state.updates,
-        onEnabled = { on -> scope.launch { model.setEnabled(on) } },
+        onEnabled = { on -> scope.launch { model.requestEnabled(on) } },
         onAutoUpgrade = { on -> scope.launch {
             if (model.setAutoUpgrade(on)) feedback?.notice(res.getString(if (on) R.string.settings_ext_auto_upgrade_on else R.string.settings_ext_auto_upgrade_off))
         } }, onCheck = { scope.launch { model.checkForUpdates() } }, onUpgrade = onUpgrade, onUninstall = { removing = true },
         configuration = {
-            header(extensionId, state, res, onRetry = { scope.launch { model.load() } })
+            header(extensionId, state, res, api, logoLoader, onRetry = { scope.launch { model.load() } })
             if (detail != null) {
                 if (auth != null) extensionSignIn(auth, enabled = !state.loadFailed, starting = signInState.bind.sending && signInState.bind.prompt == null,
                     error = signInState.bind.error?.resolve(res)?.takeIf { signInState.bind.prompt == null } ?: signOutError, busy = state.busy,
@@ -281,7 +293,8 @@ fun ExtensionPage(
         }, information = {
             if (detail != null) {
                 contributions(detail, state.busy || state.saving || state.loadFailed, res) { item, on -> scope.launch { model.setContribution(item, on) } }
-                sandbox(detail.extension.sandbox)
+                sandbox(detail.extension.sandbox, detail.extension.name.ifBlank { extensionId },
+                    onAllow = api.adminNetworkUrl(extensionId)?.let { url -> { uri.openUri(url) } })
                 permissions(detail)
             }
         })
@@ -306,12 +319,28 @@ fun ExtensionPage(
         removing = false
         scope.launch {
             if (model.uninstall(keep, members = members)) {
-                feedback?.notice(ExtensionText.uninstalled(res, current.extension.name.ifBlank { current.extension.id }, members, model.removal))
-                onBack()
+                if (model.state.value.removalNotice == null) {
+                    feedback?.notice(ExtensionText.uninstalled(res, current.extension.name.ifBlank { current.extension.id }, members, model.removal))
+                    onBack()
+                }
             }
         }
     }
+    state.removalNotice?.let { notice ->
+        ExtensionRemovalWarningsSheet(notice, onDone = {
+            model.dismissRemovalNotice()
+            onBack()
+        })
+    }
     state.partial?.let { PackPartialDialog(it, detail?.extension?.name?.ifBlank { null } ?: extensionId, memberNames) { model.dismissPartial() } }
+    // A new hub switches the pack's enabled members too: name them and change nothing until agreed (#1830).
+    if (state.packOff && state.cascade == null) detail?.let { pack ->
+        val name = pack.extension.name.ifBlank { pack.extension.id }
+        val names = pack.packOn.joinToString(res.getString(R.string.settings_ext_list_separator)) { it.label }
+        JDialog({ model.dismissPackOff() }, title = stringResource(R.string.settings_ext_disable_pack_title, name),
+            text = stringResource(R.string.settings_ext_disable_pack_body, names), destructive = true,
+            confirm = stringResource(R.string.settings_ext_disable_all) to { scope.launch { model.confirmPackOff() } })
+    }
     // Others depend on it (#5192): named, and switched off with it once agreed.
     state.cascade?.let { ask ->
         val name = detail?.extension?.name?.ifBlank { null } ?: extensionId
@@ -319,8 +348,10 @@ fun ExtensionPage(
             destructive = true, confirm = stringResource(if (ask.keepData == null) R.string.settings_ext_dependents_off else R.string.settings_ext_dependents_remove) to {
                 scope.launch {
                     if (model.confirmCascade() && ask.keepData != null) {
-                        feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
-                        onBack()
+                        if (model.state.value.removalNotice == null) {
+                            feedback?.notice(ExtensionText.uninstalled(res, name, ask.members, model.removal))
+                            onBack()
+                        }
                     }
                 }
             })
@@ -344,16 +375,20 @@ fun ExtensionPage(
 @Composable
 private fun Note(text: String) = SettingsCaption(text, Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
 
-private fun LazyListScope.header(id: String, state: ExtensionState, res: Resources, onRetry: () -> Unit) {
+private fun LazyListScope.header(id: String, state: ExtensionState, res: Resources, api: ExtensionManagement,
+    logoLoader: coil3.ImageLoader?, onRetry: () -> Unit) {
     val extension = state.detail?.extension
     item("header") {
         JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
-            JRow(extension?.name?.ifBlank { null } ?: id, subtitle = extension?.let { ExtensionText.stateLine(res, it) } ?: stringResource(if (state.loading) R.string.settings_ext_loading else R.string.settings_ext_unavailable),
-                leadingIcon = PhIcons.PuzzlePiece, trailing = { if (extension == null && state.loading) JSpinner() else ExtensionStateMark(extension) })
+            val line = extension?.let { ExtensionText.stateLine(res, it) } ?: stringResource(if (state.loading) R.string.settings_ext_loading else R.string.settings_ext_unavailable)
+            val downloads = catalogDownloads(res, extension?.downloads)
+            val subtitle = listOfNotNull(line, downloads).joinToString("\n")
+            JRow(extension?.name?.ifBlank { null } ?: id, subtitle = subtitle, subtitleLines = installedSubtitleLines(downloads),
+                leading = { ExtensionLogo(extension?.iconUrl, api, logoLoader) }, trailing = { if (extension == null && state.loading) JSpinner() else ExtensionStateMark(extension) })
         }
     }
     extension?.description?.takeIf { it.isNotBlank() }?.let { item("description") { Note(it) } }
-    extension?.let { ExtensionText.runNote(res, it) }?.let { item("run-note") { Note(it) } }
+    extension?.let { ExtensionText.runNote(res, it, state.detail.packMembersFollow) }?.let { item("run-note") { Note(it) } }
     extension?.needsSetup?.takeIf { it.isNotEmpty() }?.let { needs ->
         item("needs") { JInlineStatus(stringResource(R.string.settings_ext_still_needed, needs.joinToString(res.getString(R.string.settings_ext_list_separator))), Modifier.padding(top = Tokens.Space.s), tone = InlineTone.Caution) }
     }

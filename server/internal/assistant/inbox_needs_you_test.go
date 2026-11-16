@@ -56,6 +56,17 @@ func waitNeedsYouIdle(t *testing.T, s *Service) {
 	})
 }
 
+// setHub makes h s's hub; tests swap the hub with it, never with s.hub = h. The "Needs you" teller reads s.hub on a
+// goroutine of its own, and a test's service may still run the one its first inbox read started (or any later
+// change's): the teller reads the hub only under needsYouMu, and setHub swaps it under that lock. It does not wait for
+// the teller: in a synctest bubble a wait's sleep moves the clock, and the bubble's timers would fire while the hub
+// changes.
+func setHub(s *Service, h Hub) {
+	s.inbox.needsYouMu.Lock()
+	defer s.inbox.needsYouMu.Unlock()
+	s.hub = h
+}
+
 // The hub is told how many open items are in "Needs you" (the roster's inbox_needs_you): the items the apps list
 // under that section, the connectors' and the ones not triaged yet among them, and none of the others. It is told
 // when what is stored is first read, after every change, and again when asked (a handshake); never before the read.
@@ -157,8 +168,11 @@ func TestInboxNeedsYouDoesNotWaitForTheHub(t *testing.T) {
 		t.Fatal("telling waited for the hub")
 	}
 	f.mu.Unlock()
-	waitNeedsYou(t, f, 2)
-	got := needsYouTold(t, f)
+	var got []int
+	waitFor(t, "the last inbox count to reach the hub", func() bool {
+		got = needsYouTold(t, f)
+		return len(got) > 0 && got[len(got)-1] == 5
+	})
 	if got[len(got)-1] != 5 {
 		t.Fatalf("the last count told is %v, want 5", got)
 	}

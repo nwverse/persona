@@ -26,12 +26,8 @@ const featuresHeader = "X-Persona-Features"
 // requestWants reports whether a REST request's client declared feature: in its X-Persona-Features header, or on a
 // connection of the same device, platform and version (requestHasElicitation's rule).
 func (h *Hub) requestWants(r *http.Request, feature string) bool {
-	for _, v := range r.Header.Values(featuresHeader) {
-		for _, f := range strings.Split(v, ",") {
-			if strings.TrimSpace(f) == feature {
-				return true
-			}
-		}
+	if requestDeclares(r, feature) {
+		return true
 	}
 	who, rc := principalOf(r.Context()), requestClientOf(r.Context())
 	if rc.Platform == "" {
@@ -50,19 +46,33 @@ func (h *Hub) requestWants(r *http.Request, feature string) bool {
 	return false
 }
 
-// cardCompatItems is items as a client gets them: unchanged when it draws rings, else a copy with each assistant
-// text's ring cards rewritten (ringCardsDowngraded). The node's slice is shared, so it is never written to.
-func cardCompatItems(l i18n.Lang, ring bool, items []proto.Item) []proto.Item {
-	if ring {
-		return items
+// requestDeclares reports whether this request itself declares feature in its X-Persona-Features header.
+func requestDeclares(r *http.Request, feature string) bool {
+	for _, v := range r.Header.Values(featuresHeader) {
+		for _, f := range strings.Split(v, ",") {
+			if strings.TrimSpace(f) == feature {
+				return true
+			}
+		}
 	}
+	return false
+}
+
+// cardCompatItems is items as a client gets them: a copy with each assistant text's paseo-ui blocks written as cards
+// (paseoUIConverted) and, when the client does not draw rings, its ring cards rewritten (ringCardsDowngraded); items
+// itself when nothing changes. The node's slice is shared, so it is never written to.
+func cardCompatItems(l i18n.Lang, ring bool, items []proto.Item) []proto.Item {
 	var out []proto.Item
 	for i := range items {
 		it := items[i]
 		if it.Kind != proto.KindText || it.Role != "assistant" {
 			continue
 		}
-		text := ringCardsDowngraded(l, it.Text)
+		text := it.Text
+		if !ring {
+			text = ringCardsDowngraded(l, text)
+		}
+		text = paseoUIConverted(l, text)
 		if text == it.Text {
 			continue
 		}

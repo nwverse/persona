@@ -51,5 +51,7 @@
   "report_delete_body": "The original and its summary will be deleted for good. Anything your health conversations and health memory already mention stays; remove that separately.",
   "report_deleted": "Deleted \"{title}\"",
   "conversation_load_failed": "Couldn't open this health chat: {error}",
-  "retry": "Retry"
+  "retry": "Retry",
+  "history": "Health chats",
+  "new_chat": "New health chat"
 }

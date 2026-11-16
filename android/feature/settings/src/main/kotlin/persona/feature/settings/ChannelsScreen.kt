@@ -1,7 +1,5 @@
 package persona.feature.settings
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.res.Resources
@@ -268,6 +266,7 @@ private fun BindStep(channel: HubChannel, prompt: BindPrompt, bind: BindState, m
     val context = LocalContext.current
     val res = LocalResources.current
     val feedback = LocalAppFeedback.current
+    val copy = rememberCopy()
     val uri = LocalUriHandler.current
     Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         // Words line up with the notes and rows' text (the style's row padding); the buttons span the page like the others.
@@ -280,6 +279,11 @@ private fun BindStep(channel: HubChannel, prompt: BindPrompt, bind: BindState, m
         val view = StepView.of(prompt)
         when (view) {
             StepView.QrCode -> {
+                // The page the code points at, opened directly: on the phone that has the chat app.
+                prompt.link?.takeIf { StepView.isWebLink(it) }?.let { link ->
+                    JButton(prompt.linkText?.takeIf { it.isNotBlank() } ?: stringResource(R.string.settings_src_open_web), { runCatching { uri.openUri(link) } },
+                        Modifier.fillMaxWidth(), icon = PhIcons.ArrowSquareOut)
+                }
                 JQrCode(rows, Modifier.align(Alignment.CenterHorizontally), label = stringResource(R.string.settings_src_channel_qr_label, channel.label))
                 Waiting(stringResource(R.string.settings_src_channel_waiting_scan, channel.label))
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
@@ -298,10 +302,7 @@ private fun BindStep(channel: HubChannel, prompt: BindPrompt, bind: BindState, m
                 if (code.isNotEmpty()) Row(Modifier.padding(start = rowPadding), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     JCodeDisplay(code, Modifier.weight(1f))
-                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_channel_copy_code), {
-                        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(res.getString(R.string.settings_src_channel_code_clip), code))
-                        feedback?.notice(res.getString(R.string.settings_src_copied))
-                    })
+                    JIconButton(PhIcons.Copy, stringResource(R.string.settings_src_channel_copy_code), { copy(code, null) })
                 }
                 Waiting(if (prompt.kind == "pair_code") stringResource(R.string.settings_src_channel_waiting_send, channel.label) else stringResource(R.string.settings_src_channel_waiting_authorize))
                 Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {

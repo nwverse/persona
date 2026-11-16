@@ -27,14 +27,16 @@ type inboxBook struct {
 	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
 	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
 	seq         uint64
-	triaging    sync.Mutex  // one triage pass at a time (inbox_triage.go)
-	handing     sync.Mutex  // one judge / agent pass at a time (inbox_agent.go)
-	handAgain   atomic.Bool // a pass is asked for: the goroutine holding handing runs it (handInbox)
-	passHook    func()      // tests: runs as each pass starts
-	translating sync.Mutex  // one translation pass at a time (inbox_translate.go)
-	replies     sync.Map    // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
-	handingOff  sync.Map    // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
-	telling     sync.Map    // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
+	triaging    sync.Mutex     // one triage pass at a time (inbox_triage.go)
+	titling     sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
+	handing     sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
+	handAgain   atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
+	passHook    func()         // tests: runs as each pass starts
+	translating sync.Mutex     // one translation pass at a time (inbox_translate.go)
+	replies     sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
+	handingOff  sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
+	telling     sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
+	snapshots   inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
 	mutes       []InboxMute
 	mutesMu     sync.Mutex // one read-change-save of the kept mutes at a time
 	policies    []InboxPolicy
@@ -54,6 +56,7 @@ type inboxBook struct {
 	builtin    map[string]bool
 	kinds      map[string]string // "<connector>/<kind>" → words
 	names      map[string]string
+	vias       map[string]inboxVia // a subscription's, by its id (#6222)
 
 	// admitting is one triage of a round's new plugin items at a time (admitInbox): a round meanwhile does not start
 	// them again.
@@ -66,6 +69,25 @@ type inboxBook struct {
 	readErrs     map[string]string
 	mailReadErrs map[string]assistantwire.InboxMailFailed
 	grouping     inboxGrouping // the batches being related to events (inbox_group.go)
+	// mailAsked: when the mail of an open mail item off its account's page was last looked up (inbox_mail_off_page.go),
+	// by item id, under mu: the lookups take the longest unasked first. Memory only.
+	mailAsked map[string]time.Time
+	// retriaged: the stale "Needs you" items sorted again this run (retriageStale), tried once each. settling: one
+	// handled-elsewhere pass at a time; settleAsked: when each item was last looked at by one (inbox_settle.go). Memory
+	// only, under mu.
+	retriaged   map[string]bool
+	settling    sync.Mutex
+	settleAsked map[string]time.Time
+	settleSeen  map[string]string // the newest later position the settle model said "open" to, by item
+	settlePass  time.Time         // when the last handled-elsewhere pass started
+	// ruledFails / ruledRetryAt: the passes in a row whose retries of rule-tiered items (RuleOf) went out with no model
+	// answer since, and when the next may go out (retryRuled). Memory only, under mu.
+	ruledFails   int
+	ruledRetryAt time.Time
+	// mailBaselines: by mail account id, the newest UID when the inbox first read it (inbox_mail.go mailBaseline),
+	// stored (inboxMailBaselinesKey) when dirty. Under mu.
+	mailBaselines      map[string]uint32
+	mailBaselinesDirty bool
 
 	cfgMu sync.Mutex
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read
@@ -76,10 +98,20 @@ type inboxBook struct {
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 }
 
+// inboxVia is what the last round said a subscription reads (the connector's id and the source's name), for the AI
+// twin, and the knowledge-base chat of each of its rows' threads while its knowledge base is on (#6222). Memory only:
+// every round says it again before any item of it is handled.
+type inboxVia struct {
+	connector, source string
+	chats             map[string]string
+}
+
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
+		b.vias = map[string]inboxVia{}
+		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}
 	})
 }
 
@@ -211,7 +243,7 @@ func (x *threadIndex) openFor(thread string) (open, done *InboxItem) {
 		if !x.under(it, thread) {
 			continue
 		}
-		if it.open() {
+		if it.DoneAt == nil { // a member of a merged row is collected into as any open row (inbox_merge.go)
 			if open == nil || newerItem(it, open) {
 				open = it
 			}

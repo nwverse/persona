@@ -151,7 +151,10 @@ async function mount() {
   expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("20");
   expect(buildTodoTree).toHaveBeenCalled();
   expect(buildTodoAgentGroups).toHaveBeenCalled();
-  for (const [, count] of shellReads()) expect(count).toBeGreaterThan(0);
+  for (const [name, count] of shellReads()) {
+    if (name === "link") expect(count).toBe(0); // closed dialog code now loads only on intent
+    else expect(count).toBeGreaterThan(0);
+  }
   clearCounts();
 }
 
@@ -209,8 +212,12 @@ describe("the sidebar shell across store pushes", () => {
       await flush();
       const link = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((b) => b.textContent?.includes(t("agentmenus.link_to_todo")))!;
       expect(link).toBeTruthy();
-      act(() => link.click());
+      await act(async () => {
+        link.click();
+        await import("./LinkTodoDialog"); // wait for the same chunk the click requested
+      });
       await flush();
+      expect(renders.get("link")).toBeGreaterThan(0);
       return document.querySelector('[role="dialog"][aria-modal="true"]');
     };
     expect((await openLink())?.textContent).toContain("Build app");
@@ -262,7 +269,13 @@ describe("the sidebar shell across store pushes", () => {
     expect(buildTodoAgentGroups).toHaveBeenCalled();
     expect(renders.get("sidebar.theme_system")).toBeGreaterThan(0);
     expect(host.textContent).toContain("1/2");
-    expect(row()?.closest("[inert]")).toBeTruthy(); // the agent moves into the folded Recent section
+    // the agent moves into the folded Recent section, which mounts no rows: it is there once Recent opens
+    const recent = () => host.querySelector<HTMLButtonElement>('[data-tree-branch="recent"] button[aria-expanded]');
+    expect(row()).toBeNull();
+    expect(recent()?.getAttribute("aria-expanded")).toBe("false");
+    act(() => recent()!.click());
+    await flush();
+    expect(row()?.closest('[data-tree-branch="recent"]')).toBeTruthy();
     await push({ type: "machines", machines });
     expect(host.textContent).toContain("Home · Laptop");
     expect(host.textContent).toContain("2/2");

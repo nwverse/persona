@@ -1,7 +1,8 @@
 import { t } from "../i18n";
-import type { Session, Workflow } from "./types";
+import type { Session, Subagent, Workflow } from "./types";
 import type { SessionLookup, Todo } from "./todos";
-import { workflowCounts } from "./workflows";
+import { backgroundCommandLine, backgroundWaitLine, waitingOnWorkflow, workflowCounts, type WaitLine } from "./workflows";
+import { runningChildren } from "./child-sessions";
 
 /** Live work, not a waiting label: summary counts win over omitted detail arrays. */
 export interface BackgroundWork {
@@ -18,14 +19,49 @@ export function backgroundWork(session: Session | undefined): BackgroundWork | u
   const workflow = summary ? session.workflow_progress : session.workflows?.find((w) => w.running);
   const workflows = summary ? session.running_workflows ?? 0 : session.workflows?.filter((w) => w.running).length
     ?? background.filter((b) => b.kind === "workflow").length;
-  const subagents = summary ? session.running_subagents ?? 0 : session.subagents?.filter((a) => a.running).length
+  const own = summary ? session.running_subagents ?? 0 : session.subagents?.filter((a) => a.running).length
     ?? background.filter((b) => b.kind === "agent").length;
+  // its child sessions at work (#5120) are its subagents too; a Paseo parent may list the same ones as background
+  // agents already, so the larger count stands rather than their sum
+  const subagents = Math.max(own, runningChildren(session));
   // Old summaries expose only a raw background count, which may include workflows and agents. It cannot be split
   // reliably: retain a generic active-work line rather than invent an independent job count.
   const tasks = session.background_tasks_count ?? (summary ? 0
     : background.filter((b) => b.kind !== "workflow" && b.kind !== "agent").length);
   return tasks || subagents || workflows || session.background_working || (summary && session.background_tasks_count === undefined && (session.background_count ?? 0) > 0)
     ? { tasks, subagents, workflows, workflow } : undefined;
+}
+
+/** The hub says the agent's turn is over and a subagent it launched in the background still runs (#5030, cindy's
+ *  background subtasks): the chat draws that turn finished (its summary folded, the subagent's card running inside it),
+ *  and the bar above the composer says model usage goes on. A running workflow says so first (workflows.ts
+ *  backgroundLine). */
+export function waitingOnSubagents(s: Session | undefined, subagents: Subagent[] | undefined = s?.subagents): boolean {
+  return Boolean(s?.background_working) && !waitingOnWorkflow(s) && (subagents ?? []).some((a) => a.running && a.background);
+}
+
+export type BackgroundTurnKind = "workflow" | "subtasks" | "waiting" | "command";
+
+export interface BackgroundActivity {
+  streaming: boolean;
+  outgoing: boolean;
+  awaiting: boolean;
+}
+
+/** The one background kind that represents an ended turn, in display priority order. Null leaves the turn live. A
+ *  command requires the hub's explicit background_working flag: a foreground turn, and an older hub without the flag,
+ *  keep their old rendering even when background tasks are listed. */
+export function backgroundTurn(s: Session | undefined, subagents: Subagent[] | undefined, activity: BackgroundActivity): { kind: BackgroundTurnKind; line?: WaitLine } | null {
+  if (!s || activity.streaming || activity.outgoing || activity.awaiting) return null;
+  if (waitingOnWorkflow(s)) return { kind: "workflow" };
+  if (waitingOnSubagents(s, subagents)) return { kind: "subtasks" };
+  const wait = backgroundWaitLine(s);
+  if (wait) return { kind: "waiting", line: wait };
+  // Some runtimes list delegated work only as background agents / workflows, without the detail arrays above. Those
+  // are not a shell-command fallback, and a runtime that sends only background_working still gets the label alone.
+  if (s.background?.some((b) => b.kind === "agent" || b.kind === "workflow")) return null;
+  const command = backgroundCommandLine(s);
+  return command ? { kind: "command", line: command } : null;
 }
 
 /** One task can have several active agents: do not mistake a quiet lead for an idle task. */

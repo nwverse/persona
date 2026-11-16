@@ -29,12 +29,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -47,35 +45,16 @@ import com.mikepenz.markdown.model.markdownAnnotator
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.getTextInNode
-import persona.core.designsystem.Haptic
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JTextButton
-import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PhIcons
-import persona.core.designsystem.rememberHaptics
 
 /** The reply around it is still being written (#2984): its quotes do not fold yet; they would fold and open as the
  *  words came. */
 internal val LocalReplyStreaming = staticCompositionLocalOf { false }
-
-/** Copies text and says so ("Copied") with the success haptic (#2984): a code block's Copy, a tap on inline code. */
-@Composable
-internal fun rememberCopy(): (String) -> Unit {
-    val clipboard = LocalClipboardManager.current
-    val feedback = LocalAppFeedback.current
-    val haptics = rememberHaptics()
-    val copied = stringResource(R.string.chat_content_copied)
-    return remember(clipboard, feedback, haptics, copied) {
-        { text ->
-            clipboard.setText(AnnotatedString(text))
-            haptics(Haptic.Success)
-            feedback?.notice(copied)
-        }
-    }
-}
 
 /** A code block's title bar, as Telegram draws it (#2984): the fence's language on the left (none when it names none),
  *  Copy on the right, which takes the whole block. On the block's own well, so bar and code read as one block. */
@@ -108,13 +87,15 @@ private fun ASTNode.inLink(): Boolean {
 }
 
 /** Inline code a tap copies (#2984), drawn as code (the body's color on its well), not as a link; inside a link (a path
- *  that opens) it stays the link's. */
-internal fun copyingCode(style: SpanStyle, copy: (String) -> Unit): MarkdownAnnotator = markdownAnnotator { content, child ->
+ *  that opens) it stays the link's. With no [copy] it is only drawn, the same: the words of a message selected in place
+ *  take the tap (#4210). */
+internal fun copyingCode(style: SpanStyle, copy: ((String) -> Unit)?): MarkdownAnnotator = markdownAnnotator { content, child ->
     if (child.type != MarkdownElementTypes.CODE_SPAN || child.inLink()) return@markdownAnnotator false
     val words = codeSpanWords(child.getTextInNode(content).toString())
     // the style on the words themselves too: a link's styles draw no background. A thin space each side, as the
     // library pads its own inline code.
-    withLink(LinkAnnotation.Clickable("copy-code", TextLinkStyles(style)) { copy(words) }) {
+    if (copy == null) withStyle(style) { append("\u2009$words\u2009") }
+    else withLink(LinkAnnotation.Clickable("copy-code", TextLinkStyles(style)) { copy(words) }) {
         withStyle(style) { append("\u2009$words\u2009") }
     }
     true
@@ -135,7 +116,7 @@ internal fun ReplyQuote(lineStyle: TextStyle, content: @Composable () -> Unit) {
     val foldPx = with(LocalDensity.current) { fold.roundToPx() }
     var full by remember { mutableIntStateOf(0) }
     var open by remember { mutableStateOf(false) }
-    val folds = !streaming && full > foldPx + with(LocalDensity.current) { Tokens.Space.xxl.roundToPx() }
+    val folds = !streaming && full > foldPx + with(LocalDensity.current) { Tokens.Space.xl.roundToPx() }
     val folded = folds && !open
     val expand = stringResource(R.string.chat_content_quote_more)
     val collapse = stringResource(R.string.chat_content_quote_less)
@@ -144,10 +125,10 @@ internal fun ReplyQuote(lineStyle: TextStyle, content: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.badge)).background(palette.accentSoft)
         .drawWithContent {
             drawContent()
-            drawRect(palette.accent, size = Size(Tokens.Space.xs.toPx() * 3 / 4, size.height))
+            drawRect(palette.accent, size = Size(Tokens.Space.Standard.xs.toPx() * 3 / 4, size.height))
         }) {
         Box(Modifier.fillMaxWidth()
-            .padding(end = Tokens.Space.xxxl, top = Tokens.Space.s, bottom = Tokens.Space.s)
+            .padding(end = Tokens.Space.xxl, top = Tokens.Space.s, bottom = Tokens.Space.s)
             .then(if (folded) Modifier.heightIn(max = fold).clipToBounds().fade(palette.ink).clickable(onClickLabel = expand) { open = true }
                 .semantics { contentDescription = expand } else Modifier)) {
             Box(Modifier.wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged { full = it.height }) { content() }

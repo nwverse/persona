@@ -175,6 +175,23 @@ const CodeGone = "gone"
 // like its other questions with manager.action): the lists put an agent's own question before one of these.
 const WorkCardTool = "persona_triage"
 
+// AgentOwnTools are the Persona tools an Agent Persona starts calls without a permission card (#4966,
+// docs/integrations/claude-integration.md "Persona tools Agents call without a card"): the agent's own tools (the
+// manager's agentToolNames) and a task leader's task_plan and task_review. Each acts only inside Persona, for the
+// Agent calling it (the node names the session of its pane), and the manager bounds it: a leader's task_plan adds
+// workers only below its own task, its task_review reaches only its direct workers. The node allows them on the
+// command line of the Claude Agents it starts (--allowedTools), the Paseo bridge for the Agents it creates
+// (integrations/paseo/lib/map.js OWN_TOOLS). Not the phone's tools, the connectors' or dispatch_start / dispatch_read:
+// they act outside Persona, or start and read an Agent on another computer, and still ask.
+var AgentOwnTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "task_plan", "task_review"}
+
+// AgentToolNames are the manager's tools of the agents (not the assistant's conversations), its agentToolNames:
+// reporting to the supervisor and the to-do it works on (decisions, thread, repositories and their links). Each acts
+// for the agent calling it, so the node names the session of the caller's pane for every one of them (node
+// callerTools). One list for both sides: a tool added here cannot reach the hub without its caller (#9089).
+var AgentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread",
+	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add"}
+
 const (
 	// MethodAgentStartParams: AgentStartParams → {params}: an Agent the app starts (POST /api/v1/sessions), with what
 	// it runs on filled in and its tab named. An error with CodeBadRequest is the app's to see (400); while the manager

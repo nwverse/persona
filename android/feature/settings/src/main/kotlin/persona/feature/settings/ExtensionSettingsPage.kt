@@ -55,12 +55,15 @@ internal fun ExtensionSettingsPage(
                 JSwitchRow(stringResource(R.string.settings_ext_enabled), extension.enabled ?: false, onEnabled, enabled = !busy && capabilities.editable)
             }
         }
-        item("enabled-note") { HostSettingsNote(stringResource(when {
-            capabilities.editable -> R.string.settings_extension_enabled_note
-            detail.readOnly -> R.string.settings_ext_read_only
-            extension.source in listOf("dev", "hub.json") -> R.string.settings_extension_external_enabled
-            else -> R.string.settings_extension_unknown
-        })) }
+        item("enabled-note") {
+            val text = when {
+                capabilities.editable -> ExtensionText.enabledFooter(androidx.compose.ui.platform.LocalResources.current, detail, memberNames)
+                detail.readOnly -> stringResource(R.string.settings_ext_read_only)
+                extension.source in listOf("dev", "hub.json") -> stringResource(R.string.settings_extension_external_enabled)
+                else -> stringResource(R.string.settings_extension_unknown)
+            }
+            HostSettingsNote(text)
+        }
         item("configuration-title") { JSectionHeader(stringResource(R.string.settings_extension_configuration)) }
         configuration()
         hostInformation(detail)
@@ -99,8 +102,10 @@ internal fun ExtensionSettingsPage(
         }
         item("updates-auto") {
             JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
+                // While the assistant's automatic extension updates are off it stays at its own saved value, grayed (#4748, the
+                // web's): that value applies again once they are on. Unknown (loading, an older hub) stays editable.
                 JSwitchRow(stringResource(R.string.settings_ext_auto_upgrade), extension.autoUpgrade ?: false, onAutoUpgrade,
-                    enabled = !busy && !updates.checking && capabilities.automatic && extension.autoUpgradePaused == null)
+                    enabled = !busy && !updates.checking && capabilities.automatic && extension.autoUpgradePaused == null && updates.globalAuto != false)
             }
         }
         item("updates-auto-note") { HostSettingsNote(stringResource(when {

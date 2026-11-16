@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -80,6 +81,8 @@ func defaultReason(l i18n.Lang, loc *time.Location, deadline time.Time) string {
 // sweepDecisionDeadlines handles every decision whose deadline passed unanswered: the supervised tasks' and the
 // questions' that became to-dos.
 func (s *Service) sweepDecisionDeadlines(now time.Time) {
+	s.sweepAgentDecisionReplies()
+	s.sweepWaitingDecisions(now) // first: one no briefing brought to the owner is pushed (decision_wait.go)
 	s.sweepTaskDeadlines(now)
 	s.sweepAskDeadlines(now)
 	s.sweepDecisionAges(now) // after the deadlines: a decision taken by default is not rechecked (decision.go)
@@ -123,12 +126,18 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 	b.mu.Unlock()
 	slices.Sort(due)
 	for _, id := range due {
+		if t, ok := s.todoNow(id); ok {
+			dismissed, err := s.decisionDismissed(ctx, t)
+			if err != nil || dismissed {
+				continue // Hidden is not answered: neither take its default nor remind it.
+			}
+		}
 		a, ok := s.askCopy(id)
 		if !ok || !taskDeadlineDue(&a, now) {
 			continue
 		}
 		if a.Reversible && a.Recommend != "" {
-			took, err := s.acceptTryAs(ctx, id, "", true)
+			result, err := s.acceptTryAs(ctx, id, "", true)
 			switch {
 			case err != nil:
 				// Not retried (acceptTryAs keeps the deadline handled): the owner decides instead.
@@ -136,7 +145,7 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 				if cur, ok := s.askCopy(id); ok {
 					s.remindOverdue(ctx, id, cur)
 				}
-			case took:
+			case result.taken:
 				s.logf("task %s: deadline passed unanswered: recommendation taken by default", id)
 			}
 			continue
@@ -240,6 +249,33 @@ func readAskDeadline(a askDeadlineArgs, now time.Time) (askDeadline, error) {
 	return d, nil
 }
 
+// askRecommend is question i's recommended option as ask_user's arguments name it, when it is one of its options'
+// labels (a deadline requires that; without one a recommend naming no option is left out); "" for none.
+func askRecommend(a askDeadlineArgs, i int, options []proto.QuestionOption) string {
+	if i >= len(a.Questions) {
+		return ""
+	}
+	rec := strings.TrimSpace(a.Questions[i].Recommend)
+	if rec == "" || !slices.ContainsFunc(options, func(o proto.QuestionOption) bool { return strings.TrimSpace(o.Label) == rec }) {
+		return ""
+	}
+	return rec
+}
+
+// keepAskDecision keeps on ask_user card ix what its arguments said of the decision, for the history
+// (docs/protocol/protocol.md "Decision fields"): its deadline when it has one, and reversible as the asker said it (left
+// out when it said nothing; never guessed).
+func keepAskDecision(ix *proto.Interaction, a askDeadlineArgs, d askDeadline) {
+	if !d.At.IsZero() {
+		at := d.At.UTC()
+		ix.Deadline = &at
+	}
+	if a.Reversible != nil {
+		r := *a.Reversible
+		ix.Reversible = &r
+	}
+}
+
 // askDeadlineOf reads back the deadline toolAskUser wrote into ask_user ix's arguments (always an RFC 3339 time there,
 // checked when it was asked); false when it has none.
 func askDeadlineOf(ix proto.Interaction) (askDeadline, bool) {
@@ -330,9 +366,11 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 	l, loc := s.lang(ctx), s.location(ctx)
 	if !a.Reversible {
 		s.logf("ask_user to-do %s: deadline passed on a question that cannot be undone: reminded, not taken", id)
+		// The owner's own decision, past its deadline: P0 even in the hub's low-distraction mode.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: s.settings(ctx).MachineID,
 			Title: i18n.T(l, "assistant-ask_todo.overdue_title"),
-			Body:  clip(oneLine(t.Title), 120) + "\n" + deadlineText(l, loc, a.Deadline, false, now)})
+			Body:  clip(oneLine(t.Title), 120) + "\n" + deadlineText(l, loc, a.Deadline, false, now),
+			Level: assistantwire.LevelP0, RelatedKey: "ask-overdue:" + id + "@" + a.Deadline.UTC().Format(time.RFC3339)})
 		return nil
 	}
 	reason := defaultReason(l, loc, a.Deadline)
@@ -357,6 +395,7 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 				}
 			}
 		}
+		s.recordLateAnswer(a, choices, proto.AnsweredByDefault, reason)
 		s.settleAskClaim(ctx, id, true)
 		s.closeAskTodo(ctx, id)
 		s.logf("ask_user to-do %s: deadline passed unanswered: recommended options taken by default", id)
@@ -373,7 +412,8 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 			s.logf("ask_user to-do %s: the default goes nowhere: %v; the owner is reminded", id, err)
 			s.askDefaultFailed(ctx, id)
 			s.push(ctx, Notification{Subtitle: "Persona", DeviceID: s.settings(ctx).MachineID,
-				Title: i18n.T(l, "assistant-ask_todo.overdue_title"), Body: clip(oneLine(t.Title), 120)})
+				Title: i18n.T(l, "assistant-ask_todo.overdue_title"), Body: clip(oneLine(t.Title), 120),
+				Level: assistantwire.LevelP0, RelatedKey: "ask-overdue:" + id + "@" + a.Deadline.UTC().Format(time.RFC3339)})
 			return
 		}
 		record(ctx)

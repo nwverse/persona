@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The interactions (docs/protocol/protocol.md "Interactions"): the cards the user answers on the phone — a hook's permission, question
@@ -103,6 +106,9 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
 // the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
+	if s.approveStandingInteraction(ix) {
+		return
+	}
 	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
 		return
 	}
@@ -130,7 +136,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 	s.taskPlanApproval()
 	ix = s.withTask(ix)
 	s.markTold(ix)
-	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix})
+	s.tellCard(ix)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // whether it is told counts for Persona Link's summary, not for the list
 	return ix
@@ -139,6 +145,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 // tellUser rings card ix, already on the apps: the push (push false: one of several going out as one push, ask_route.go)
 // and the topic of the agent's todo unless the agent is muted, and the Feishu bot and the channels.
 func (s *Service) tellUser(ix proto.Interaction, push bool) {
+	s.recordConfirmationNotification(ix)
 	if push && !s.muted(ix.MachineID, ix.SessionID) {
 		s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
 		go s.threadAgentAsks(ix) // and the topic of the todo this agent works on, if it has one
@@ -151,9 +158,32 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 // user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
 	s.taskPlanApproval()
-	s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: s.withTask(ix)})
+	s.tellCard(s.withTask(ix))
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
+}
+
+// tellCard gives the hub card ix (fleet.interaction), as tellApps and show do. A card can end while it is on its way:
+// its node withdraws it at once (interaction.cancel: OpenCode's TUI in auto accept answers a permission the moment it
+// is asked, and the plugin cancels the card it was raising), or it ends between a caller's check and this tell
+// (escalate, ringAsks). finished() then told the hub its end before the card itself reached it, and the hub would keep
+// it pending for good ("needs you", and 410 when answered). So once the hub has the card, a card no longer held under
+// its id is told ended again, after it. One that ends after the check is told ended by finished(), which then comes
+// after the card too. A newer card held under the id (another CreatedAt) is left alone: its own tell settles it, and
+// ending the id would take it off the hub. cardTell keeps a newer card's tell from coming between the check and the
+// end told here; it is not fleet.mu, since a tell is a write on the hub's connection.
+func (s *Service) tellCard(ix proto.Interaction) {
+	s.fleet.cardTell.Lock()
+	defer s.fleet.cardTell.Unlock()
+	if err := s.hub.Tell(assistantwire.EventFleetInteraction, assistantwire.FleetInteraction{Interaction: ix}); err != nil {
+		return // the hub did not get it: nothing of it to take back (its handshake gets the pending cards again)
+	}
+	s.fleet.mu.Lock()
+	_, held := s.fleet.interactions[ix.ID]
+	s.fleet.mu.Unlock()
+	if !held {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: ix.ID})
+	}
 }
 
 // markTold notes that pending card ix is the user's: tell is ringing it (pending.told). Only that card: a newer one
@@ -180,7 +210,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	}
 	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
 	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
-	report := ix.Kind == proto.IxPermission && ix.ToolName == "mcp__persona__report_to_supervisor"
+	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
 	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)
@@ -207,7 +237,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 			}
 		}
 	}
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
+	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix), s.ixInAssistant(ctx, ix))
+	if ix.Kind == proto.IxPermission {
+		l := s.lang(ctx)
+		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
+		if name := personaToolTitle(l, ix.ToolName, nil); name != ix.ToolTitle {
+			ix.ToolNameTitle = name // the tool alone, for what Always covers: no report's kind
+		}
+	}
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
 			_ = s.resolveRemembered(ix.ID, r, false)
@@ -223,6 +260,9 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 // (the manager restarted with it on the phone) is shown again without a second push.
 func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
 	ix = cleanTitle(ix)
+	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
+	// never to Lark or a channel (meeting_justme.go).
+	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
 	if ix.ExpiresAt.IsZero() {
 		ix.ExpiresAt = time.Now().Add(s.notifyTimings().hookTimeout()).UTC()
 	}
@@ -244,6 +284,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
+			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
+			// are not resumable, so this branch never has a wait reporter to restore.
 			return s.await(ctx, p)
 		}
 		s.fleet.mu.Unlock()
@@ -286,6 +328,8 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.record(ix)
 		s.announce(ix)
 	}
+	resume := pushMCPInteraction(ctx, ix)
+	defer resume()
 	return s.await(ctx, p)
 }
 
@@ -463,6 +507,17 @@ func endStatus(r proto.Resolution) string {
 }
 
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
+var errInvalidEditedAnswer = errors.New("edited_text requires an editable permission card and a plain allow")
+
+// editedAnswerAllowed rejects an edit before its card or channel owner action is consumed. The node still has to
+// prove that the rewritten command has the same tool, gate, method, path and query; this checks only the answer envelope.
+func editedAnswerAllowed(ix proto.Interaction, r proto.Resolution) bool {
+	if r.EditedText == "" {
+		return true
+	}
+	return ix.Kind == proto.IxPermission && ix.EditableText != "" && len(ix.Fields) == 0 &&
+		strings.TrimSpace(r.EditedText) != "" && r.PlainAllowWithEditedText()
+}
 
 // resolve answers an interaction. A screen card acts right away and its error comes back (the dialog changed:
 // nothing pressed, a new card follows).
@@ -472,11 +527,42 @@ func (s *Service) resolve(id string, r proto.Resolution) error {
 
 // Automatically replayed grants must not write themselves back after a concurrent revocation.
 func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool) error {
+	return s.resolveWithStanding(id, r, remember, nil)
+}
+
+func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bool, authorization *standingResolution) error {
+	return s.resolveAnswer(id, r, remember, authorization, nil)
+}
+
+// resolveApproved is resolve for an app's answer the hub relayed, with the device it vouched may approve a hand-off
+// card (nil: none). Only this way does a hand-off card take more than a no (secret_handoff.go).
+func (s *Service) resolveApproved(id string, r proto.Resolution, approver *assistantwire.HandoffApprover) error {
+	return s.resolveAnswer(id, r, true, nil, approver)
+}
+
+func (s *Service) resolveAnswer(id string, r proto.Resolution, remember bool, authorization *standingResolution,
+	approver *assistantwire.HandoffApprover) error {
+	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
+	// valid, but an answer that would send text must be refused before the card is claimed and its answer is retried.
+	if ix, ok := s.pendingIx(id); ok && ix.ToolName == workCardTool && workResolutionSends(ix, r) {
+		if sess, found := s.decoratedSession(ix.MachineID, ix.SessionID); found && stoppedAgent(sess) {
+			return &rpc.Error{Code: "agent_stopped", Message: "the agent has stopped and cannot receive this answer"}
+		}
+	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
+	handoff := p != nil && p.ix.ToolName == proto.SecretHandoffTool
+	if handoff && !proto.SecretHandoffDeclines(r) && (approver == nil || approver.DeviceID == "" || authorization != nil) {
+		s.fleet.mu.Unlock()
+		return errHandoffElsewhere // a channel, the assistant, a remembered answer, an older hub: a no only
+	}
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
+	}
+	if p != nil && !editedAnswerAllowed(p.ix, r) {
+		s.fleet.mu.Unlock()
+		return errInvalidEditedAnswer
 	}
 	if p != nil && p.ix.Kind == proto.IxElicitation && !r.Dismiss &&
 		r.Action != "accept" && r.Action != "decline" && r.Action != "cancel" {
@@ -511,6 +597,10 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		}
 		p = nil // answered a moment ago: the first answer is the one the hook and the history get
 	}
+	if p != nil && p.local != nil && authorization != nil {
+		s.fleet.mu.Unlock()
+		return fmt.Errorf("standing authorizations require a hook-waited card")
+	}
 	if p != nil && p.local != nil {
 		delete(s.fleet.interactions, id) // claimed: a second answer to the same card is not pending any more
 		if p.ix.Kind == proto.IxScreen && !r.Dismiss {
@@ -530,13 +620,16 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 	} else if p != nil {
 		p.claimed = true
 		p.resolution = &r
-		if durableQuestion(p.ix) {
+		if durableQuestion(p.ix) || authorization != nil {
 			p.persisting = &questionPersistence{done: make(chan struct{})}
 			p.persistenceErr = nil
 		}
 		if p.resolved == nil {
 			p.resolved = make(chan struct{})
 		}
+	}
+	if p != nil && handoff {
+		s.claimHandoffLocked(id, r, approver) // claimed with this answer: an approval, and who gave it
 	}
 	if p != nil {
 		p.answeredBy, p.answeredReason = r.AnsweredBy, r.Reason // read by finished(), under this lock
@@ -579,7 +672,11 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
 	}
-	if durableQuestion(p.ix) {
+	if authorization != nil {
+		if err := s.persistStandingInteraction(p, told, authorization); err != nil {
+			return err
+		}
+	} else if durableQuestion(p.ix) {
 		if err := s.persistQuestion(p, status, told); err != nil {
 			return err
 		}
@@ -700,6 +797,7 @@ func (s *Service) finishInteraction(id string) {
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
+	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
 	done := assistantwire.FleetResolved{ID: p.ix.ID, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
@@ -710,6 +808,10 @@ func (s *Service) finished(p *pending) {
 		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
 	}
 	s.fleet.mu.Unlock()
+	if how != nil && s.askLaterSpokeOf(p.ix.ID) {
+		// Asked without waiting, and the owner wrote in the conversation meanwhile: it makes no to-do (ask_later.go).
+		how.Reason = proto.DismissedInChat
+	}
 	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.hub.Tell(assistantwire.EventFleetResolved, done)
@@ -789,12 +891,15 @@ func (s *Service) expireLoop(ctx context.Context) {
 }
 
 // errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
-// password card: only the assistant's secret_run tool makes one (secret_run.go), and the clients show it as that card,
-// with no Agent's name on it.
-var errReservedCard = errors.New("the tool name " + proto.SecretRunTool + " is reserved for the assistant's password card")
+// password card or the hand-off card: only the assistant's secret_run tool makes the one (secret_run.go) and only the
+// manager's Agent start the other, and the clients show them as those cards, the password card with no Agent's name on it.
+var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and " + proto.SecretHandoffTool +
+	" are reserved for the manager's password and hand-off cards")
 
-// reservedCard: ix calls itself the password card.
-func reservedCard(ix proto.Interaction) bool { return ix.ToolName == proto.SecretRunTool }
+// reservedCard: ix calls itself the password card or the hand-off card.
+func reservedCard(ix proto.Interaction) bool {
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool
+}
 
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),
 // waited for like a hook's.
@@ -826,19 +931,37 @@ const maxAlwaysKeys = 32
 // Whether a card's "Always allow" is kept is the manager's word (proto.Interaction.AlwaysHonored, #3590), never a
 // node's: the apps offer it only where it is.
 
-// nodeCard is a node's card as the apps get it. On an assistant conversation only the manager keeps Always (its
-// agent is given no session rule): honored when the manager will remember the keys the card names (remembering is a
-// conversation's store), not when it names keys it will not (too many, a card with fields, no store) or is a health
-// conversation's (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps
-// it itself). A node names no tool for people, and has no say in either: only the manager's own cards do.
-func nodeCard(ix proto.Interaction, remembers, health bool) proto.Interaction {
-	ix.AlwaysHonored, ix.ToolTitle = nil, ""
-	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health) {
+// nodeCard is a node's card as the apps get it. On an assistant conversation (assistant) only the manager keeps
+// Always (its agent is given no session rule): honored when the manager will remember the keys the card names
+// (remembering is a conversation's store), not when it names keys it will not (too many, a card with fields, no store),
+// names none (a gated command confirmed whole: nothing narrower to keep, #9075) or is a health conversation's
+// (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps it itself). A
+// node names no tool for people, and has no say in either: only the manager does, on its own cards and on a node's
+// card for one of Persona's own MCP tools (personaToolTitle).
+func nodeCard(ix proto.Interaction, remembers, health, assistant bool) proto.Interaction {
+	ix.AlwaysHonored, ix.ToolTitle, ix.ToolNameTitle = nil, "", ""
+	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health && !assistant) {
 		return ix
 	}
 	kept := remembers && !health && alwaysCard(ix)
 	ix.AlwaysHonored = &kept
 	return ix
+}
+
+// ixInAssistant: ix is a card of one of this manager's assistant conversations (isAssistant), by the working directory
+// the node gave it, else the conversation's as the machine lists it.
+func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool {
+	m, ok := s.fleetMachine(ix.MachineID)
+	if !ok || ix.SessionID == "" {
+		return false
+	}
+	sess := proto.Session{SessionID: ix.SessionID, Cwd: ix.Cwd}
+	if sess.Cwd == "" {
+		if c, ok := s.session(ctx, ix.MachineID, ix.SessionID); ok {
+			sess = c
+		}
+	}
+	return m.isAssistant(sess)
 }
 
 // honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
@@ -872,6 +995,41 @@ func toolTitle(l i18n.Lang, tool string) string {
 		return ""
 	}
 	return i18n.T(l, key)
+}
+
+// personaToolTitle is one of Persona's own MCP tools, called by its full name (mcp__persona__…, the compatibility
+// namespace too), by its name for people in l for the title of a node's card (#4966): the catalog's name
+// (assistant-tool_titles), a report to the supervisor with what it reports ("Report to supervisor · Done"), the
+// phone's and mail tools by their family and the rest of the name as the chat's tool rows say them ("iPhone · contacts
+// search"), any other "Persona · agent read". "" for every other tool: the apps name those themselves. Without input,
+// the tool alone ("Report to supervisor"; Interaction.ToolNameTitle).
+func personaToolTitle(l i18n.Lang, name string, input json.RawMessage) string {
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	i := strings.LastIndex(rest, "__")
+	if !ok || i <= 0 || !compat.IsMCPServer(strings.TrimPrefix(rest[:i], "plugin_")) || rest[i+2:] == "" {
+		return ""
+	}
+	tool := rest[i+2:]
+	if tool == "report_to_supervisor" {
+		var a struct {
+			Kind string `json:"kind"`
+		}
+		_ = json.Unmarshal(input, &a)
+		key := "assistant-tool_titles.report_to_supervisor_" + a.Kind
+		if a.Kind != "" && !strings.ContainsAny(a.Kind, ". ") && i18n.Has(key) {
+			return i18n.T(l, "assistant-tool_titles.report_to_supervisor") + " · " + i18n.T(l, key)
+		}
+	}
+	if t := toolTitle(l, tool); t != "" {
+		return t
+	}
+	words := func(s string) string { return strings.ReplaceAll(s, "_", " ") }
+	for _, family := range []string{"phone", "mail"} {
+		if what, ok := strings.CutPrefix(tool, family+"_"); ok && what != "" {
+			return i18n.T(l, "assistant-tool_titles.family_"+family) + " · " + words(what)
+		}
+	}
+	return "Persona · " + words(tool)
 }
 
 func alwaysCard(ix proto.Interaction) bool {
@@ -970,22 +1128,27 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 
 // restoreInteractions takes back, as the manager starts, the resumable cards the last one left pending: their hooks
 // reconnect through the next node and claim them again (waitInteraction), without a second push; the others it left
-// are over (cancelled in the history). A card that was on its way up to the user finds its route again (restoreRoute);
-// one the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
+// are over (cancelled in the history), and the hub is told so: a hub that took over from the one they were shown by
+// does not know them, and an app that resumed its event stream across the switch would keep them up, next to the
+// question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
+// the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
 	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, error)
+		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
 	})
 	if !ok {
 		return
 	}
-	resumable, err := func() (out []proto.Interaction, err error) {
+	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
 	}()
 	if err != nil {
 		s.logf("expire stale interactions: %v", err)
 		return
+	}
+	for _, id := range cancelled {
+		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()
@@ -1031,7 +1194,7 @@ func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	// A question may have rung the user before the restart: its timeout only puts it back on the apps. An approval is
 	// not quiet: only the user can answer it, so its timeout rings (ringAsks) instead of leaving the agent blocked
 	// with nobody told.
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, routedAt: now, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()

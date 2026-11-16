@@ -69,6 +69,8 @@ func TestKBReadOnlyAbsentArchiveAndWriteRefusals(t *testing.T) {
 		{"PUT", "/api/v1/kb/projects/example"},
 		{"PUT", "/api/v1/recordings/example"},
 		{"DELETE", "/api/v1/recordings/example"},
+		{"DELETE", "/api/v1/kb/projects/example"},
+		{"POST", "/api/v1/kb-trash/example-1/restore"},
 	} {
 		r := httptest.NewRecorder()
 		s.ServeHTTP(r, httptest.NewRequest(req.method, req.path, strings.NewReader(`{}`)))
@@ -100,9 +102,9 @@ func TestKBReadOnlyAbsentArchiveAndWriteRefusals(t *testing.T) {
 		t.Fatal("read-only engine has processing callbacks")
 	}
 	s.kbAgentTurn(ctx, assistantwire.KBAgentTurn{Line: "example"})
-	s.kbRound(ctx, e, &kbRounds{})
+	kbRoundNow(ctx, s, e)
 	s.kbConnectors(ctx, e)
-	s.kbCollectItems(ctx, e)
+	s.kbCollectItems(ctx, e, false)
 	if _, _, _, err := (busArchive{s: s}).Changes(ctx, "", 1); !errors.Is(err, kb.ErrReadOnly) {
 		t.Fatal(err)
 	}
@@ -181,7 +183,7 @@ func TestKBReadOnlyExistingArchiveRemainsUnchanged(t *testing.T) {
 	s.kb.waiting = []assistantwire.KBAgentTurn{{Line: "must not be written"}}
 	s.kb.mu.Unlock()
 	s.kbTakeWaiting(e)
-	s.kbRound(context.Background(), e, &kbRounds{})
+	kbRoundNow(context.Background(), s, e)
 	if _, err := e.Apply(kb.KindProject, "example", kb.Update{Summary: "overwrite"}); !errors.Is(err, kb.ErrReadOnly) {
 		t.Fatal(err)
 	}

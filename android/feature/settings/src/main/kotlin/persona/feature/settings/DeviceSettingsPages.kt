@@ -97,7 +97,12 @@ internal fun NotificationPreferences(
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    LaunchedEffect(controller) { if (available) controller.loadPreferences() }
+    LaunchedEffect(controller) {
+        if (available) {
+            controller.loadPreferences()
+            controller.loadLowDistraction()
+        }
+    }
     // The system's switch for the whole app (iOS: "Notifications are off" first): read again whenever the page comes back.
     var systemOff by remember { mutableStateOf(false) }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
@@ -155,6 +160,21 @@ internal fun NotificationPreferences(
             }
         }
         if (prefs?.muteWhileDesktop != null) desktopMuteItems(controller, desktops, onDesktops)
+        else if (desktops.isNotEmpty() && onDesktops != null) item("desktops-presence") {
+            // Older hubs still expose signed-in computers even when phone muting preferences are unavailable.
+            DesktopPresenceRow(desktops, muted = false, selected = false, position = GroupPosition.Single, onClick = onDesktops)
+        }
+        // The hub's switch, for every device (#8157): after this phone's own rows.
+        val lowDistraction = state.lowDistraction?.takeIf { available }
+        if (lowDistraction != null) item("low-distraction") {
+            Column(Modifier.padding(top = Tokens.Space.m)) {
+                JGroupItem(GroupPosition.Single) {
+                    JSwitchRow(stringResource(R.string.settings_notify_low_distraction), lowDistraction, { scope.launch { controller.saveLowDistraction(it) } },
+                        subtitle = stringResource(R.string.settings_notify_low_distraction_subtitle), enabled = enabled)
+                }
+                SettingsCaption(stringResource(R.string.settings_notify_low_distraction_footer), Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
+            }
+        }
         if (available && state.preferences == null) item {
             Action(stringResource(if (state.busy) R.string.settings_reading else R.string.settings_retry_read), enabled = !state.busy) { scope.launch { controller.loadPreferences() } }
         }
@@ -214,11 +234,12 @@ private fun elsewhere(tz: String): String? {
 }
 
 @Composable
-internal fun AboutSettingsPage() {
+internal fun AboutSettingsPage(commit: BuildCommit? = rememberBuildCommit()) {
     val context = LocalContext.current
     val info = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
-    JGroupItem(GroupPosition.of(0, 2)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
-    JGroupItem(GroupPosition.of(1, 2)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    JGroupItem(GroupPosition.of(0, 3)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
+    JGroupItem(GroupPosition.of(1, 3)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    JGroupItem(GroupPosition.of(2, 3)) { AboutBuildCommitRow(commit) }
 }
 
 @Composable

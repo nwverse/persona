@@ -228,8 +228,8 @@
     <string name="settings_src_model_group_other">その他</string>
     <string name="settings_src_model_summary_separator">、</string>
     <string name="settings_src_model_follows">%1$sに従う</string>
-    <string name="settings_src_model_lark_separate">個別設定</string>
-    <string name="settings_src_model_lark_follow">Agentsに従う</string>
+    <string name="settings_src_model_agents_separate">個別設定</string>
+    <string name="settings_src_model_agents_follow">Agentsに従う</string>
     <string name="settings_src_model_follow_default">デフォルトに従う</string>
     <string name="settings_src_model_provider_hidden">%1$s（非表示）</string>
     <string name="settings_src_model_provider_unavailable">%1$s（現在は利用できません）</string>

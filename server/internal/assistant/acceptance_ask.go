@@ -110,8 +110,17 @@ func (s *Service) assistantAccepts(ctx context.Context, t Todo, a acceptAsk) {
 // NoCard), for retryAcceptance.
 func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	b := &s.accept
-	st, stErr := s.feishuStatus(ctx)
+	var st FeishuStatus
+	var stErr error
+	if !a.ForBriefing {
+		st, stErr = s.feishuStatus(ctx)
+	}
 	switch {
+	case a.ForBriefing:
+		a.NoCard = true // a decision that can wait: the briefing lists it, or its card goes out once it is pushed (decision_wait.go)
+	case s.quietHoldsAsk(ctx, &a):
+		a.NoCard = true // low-distraction mode: a conclusion or a "Please verify" is the briefing's and the board's, not a card's
+		s.logf("task %s: %s: low-distraction mode, kept for the briefing and the board without a card", t.ID, askKind(&a))
 	case stErr != nil:
 		s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, stErr)
 	case st.Ready && st.Features.Reports:
@@ -142,7 +151,12 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 		return false
 	}
 	b.asks[t.ID] = &a
-	s.saveAcceptLocked(sctx)
+	if err := s.saveAcceptErrLocked(sctx); err != nil {
+		s.logf("acceptance: save: %v", err)
+		if a.ForBriefing { // not written: it is pushed now, not held in memory only (decision_wait.go)
+			a.ForBriefing, a.NoCard = false, false
+		}
+	}
 	b.mu.Unlock()
 	s.askChanged(ctx) // it waits for the owner now: the apps and the board
 	return posted

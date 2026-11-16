@@ -48,6 +48,7 @@ struct ComposerRow<MenuItems: View>: View {
                         .padding(.top, Theme.Space.s)
                 }
                 TextField(placeholder, text: $text, selection: $selection, axis: .vertical)
+                    .readingContent() // what is typed grows past the interface's cap, as in Messages
                     .lineLimit(1...6)
                     #if os(macOS)
                     .textFieldStyle(.plain) // the surface below is the field's box; the Mac's own bezel drew a second one inside
@@ -55,6 +56,9 @@ struct ComposerRow<MenuItems: View>: View {
                                      history: history.map { MacComposerHistory(key: $0, text: $text, focus: { focused.wrappedValue = true }) }, send: send)
                     #endif
                     .focused(focused)
+                    #if os(iOS)
+                    .returnSends(text: $text, canSend: canSend, gate: gate?.action, send: sendTyped) // #8178
+                    #endif
                     .padding(.horizontal, Theme.Space.l)
                     .padding(.vertical, Theme.Space.m)
                     .scaledFrame(minHeight: Theme.Size.tapTarget)
@@ -127,14 +131,59 @@ extension ComposerRow {
     #endif
 }
 
-/// A chat's composer's photos, videos and file uploads (#2626): kept by `AppModel.composerAttachments(_:)` per
+/// A chat's composer's photos, videos and files (#2626, #8361): kept by `AppModel.composerAttachments(_:)` per
 /// conversation, as the text is in `drafts`, not by the composer, which is built again with the whole tree when iOS
 /// snapshots the app in another width on its way to the background (iPhone Duo open).
 @MainActor @Observable
 final class ComposerAttachments {
-    var images: [(UIImage, ImagePayload)] = []
-    let uploads = FileUploads()
+    var images: [(UIImage, ImagePayload)] = [] {
+        didSet { edited.removeAll { e in !images.contains { $0.0 === e.result } } }
+    }
     let videos = VideoAttachments()
+    let files = FileAttachments()
+
+    /// A video or a file still on its way: the message waits for it.
+    var busy: Bool { videos.busy || files.busy }
+    /// What the message carries as `<persona-file>` tags after its words: the videos, then the files.
+    var ready: [AttachedFile] { videos.ready + files.ready }
+
+    /// The message went with what was ready.
+    func sentFiles() {
+        videos.sent()
+        files.sent()
+    }
+
+    /// Why a send waits (`busy`), for the toast.
+    var waitNote: String {
+        files.busy ? String(localized: "The files are still uploading. Send once they're done.")
+            : String(localized: "The video is still uploading. Send once it's done.")
+    }
+    /// The photos here that were edited (in the strip or the + panel): each one's source, edits and history beside the
+    /// picture that goes, so the editor opens it again as it was left. Dropped with the photo.
+    private(set) var edited: [EditedImage] = []
+
+    /// How `image`, one of `images`, was edited; nil when it never was.
+    func edits(of image: UIImage) -> EditedImage? { edited.first { $0.result === image } }
+
+    /// `image` in the strip becomes `edit`'s result, in its place, and remembers how it was made; nothing when it is gone
+    /// (another window on the same chat took it out).
+    func replace(_ image: UIImage, with edit: EditedImage) {
+        guard edit.result !== image, let i = images.firstIndex(where: { $0.0 === image }), let p = MessagePhotos.payload(edit.result) else { return }
+        var kept = edit
+        kept.result = p.0
+        images[i] = p
+        edited.append(kept)
+    }
+
+    /// An edited picture after the photos (at most `MessagePhotos.limit`, a toast says so).
+    func add(_ edit: EditedImage, model: AppModel) {
+        let before = images.count
+        MessagePhotos.add(edit.result, to: &images, model: model)
+        guard images.count > before, let added = images.last?.0 else { return }
+        var kept = edit
+        kept.result = added
+        edited.append(kept)
+    }
 }
 
 /// The new conversation's composer (#2626): its text and quotes as well, there being no conversation yet whose draft
@@ -152,8 +201,46 @@ final class StarterDraft {
         text = ""
         quotes = []
         held.images = []
-        held.videos.sent()
+        held.sentFiles()
         generation += 1
+    }
+
+    /// The first message as it goes, from what was typed (`typed`, trimmed) and the box: the quoted sessions as
+    /// <persona-context> tags first, as in a chat; with nothing typed, a line saying what to look at; then the videos
+    /// and files.
+    func message(_ typed: String, files: [AttachedFile]) -> String {
+        let said = typed.isEmpty
+            ? (held.images.isEmpty ? (files.isEmpty ? String(localized: "See the context above.") : AttachedFile.standIn(files))
+                                   : String(localized: "Please look at the image [Assistant View 5ad878]"))
+            : typed
+        let body = AttachedFile.message(said, files: files)
+        return ContextRef.message(quotes, body: body)
+    }
+}
+
+/// The composer's Take Photo and Glasses Photo, in a conversation and a new one alike: the system camera over the page,
+/// the glasses' viewfinder in a sheet (iOS); each picture taken goes to `add`.
+struct ComposerCaptureSheets: ViewModifier {
+    @Binding var camera: Bool
+    @Binding var glasses: Bool
+    /// Scan Document (#3720) and what to do with its pages (`DocumentScanner.deliver`).
+    @Binding var scan: Bool
+    var pages: ([UIImage]) -> Void
+    var add: (UIImage) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .fullScreenCover(isPresented: $camera) {
+                CameraPicker { img in add(img) }.ignoresSafeArea()
+            }
+            #if os(iOS)
+            .fullScreenCover(isPresented: $scan) {
+                DocumentScanner { pages($0) }.ignoresSafeArea()
+            }
+            .sheet(isPresented: $glasses) {
+                GlassesCaptureSheet { img in add(img) }
+            }
+            #endif
     }
 }
 
@@ -161,6 +248,10 @@ final class StarterDraft {
 struct ComposerImages: View {
     @Binding var images: [(UIImage, ImagePayload)]
     var edit: ((Int) -> Void)?
+
+    /// A conversation's photos (`held`): a tap opens one in the image editor, which picks up where an earlier edit (here
+    /// or in the + panel) left off; Done puts the result in its place.
+    static func editable(_ held: ComposerAttachments) -> some View { ComposerEditableImages(held: held) }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -192,6 +283,29 @@ struct ComposerImages: View {
                 }
             }
             .padding(.top, Theme.Space.sm)
+        }
+    }
+}
+
+/// `ComposerImages` with the image editor behind a tap, for the composers that keep their photos in a
+/// `ComposerAttachments` (a conversation's, a new conversation's).
+private struct ComposerEditableImages: View {
+    let held: ComposerAttachments
+    @State private var editing: EditingPhoto?
+
+    private struct EditingPhoto: Identifiable {
+        let image: UIImage
+        var id: ObjectIdentifier { ObjectIdentifier(image) }
+    }
+
+    var body: some View {
+        ComposerImages(images: Binding(get: { held.images }, set: { held.images = $0 })) { i in
+            if held.images.indices.contains(i) { editing = EditingPhoto(image: held.images[i].0) }
+        }
+        .fullScreenCover(item: $editing) { e in
+            ImageEditor(held.edits(of: e.image) ?? EditedImage(source: e.image)) { edited in
+                held.replace(e.image, with: edited)
+            }
         }
     }
 }

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
 var launcherCache struct {
@@ -32,9 +32,9 @@ var launcherCache struct {
 // launcherScript lists the login shell's launchers in one go (sourcing ~/.zshrc takes a while): what the
 // `_claude_launchers` helper prints when the rc file has one, a GS byte, then every alias as its name and its words
 // as zsh itself splits and unquotes them (name US word US … RS), so quoting never has to be parsed here (bash prints
-// `alias -p` after bashAliasMark instead, launchers_shell.go); then, each after a GS byte, where codex, traex and omp
-// are on the PATH, the names of the shell's functions and aliases (one a line: they come before a file on PATH of the
-// same name), and its PATH (for the wrapper scripts on it, pathlaunchers.go). All of it between launcherBegin and
+// `alias -p` after bashAliasMark instead, launchers_shell.go); then, each after a GS byte, where codex, traex, omp,
+// pi, cursor-agent and agy are on the PATH, the names of the shell's functions and aliases (one a line: they come
+// before a file on PATH of the same name), and its PATH (for the wrapper scripts on it, pathlaunchers.go). All of it between launcherBegin and
 // launcherEnd, so what the rc files print around it is never read as a section (launcherOutput).
 const launcherScript = `printf '\001persona-launchers-begin\001'
 __jl_path=$PATH
@@ -57,6 +57,12 @@ printf '\035'
 if [ -n "$ZSH_VERSION" ]; then whence -p traex 2>/dev/null; else command -v traex 2>/dev/null; fi
 printf '\035'
 if [ -n "$ZSH_VERSION" ]; then whence -p omp 2>/dev/null; else command -v omp 2>/dev/null; fi
+printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p pi 2>/dev/null; else command -v pi 2>/dev/null; fi
+printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p cursor-agent 2>/dev/null; else command -v cursor-agent 2>/dev/null; fi
+printf '\035'
+if [ -n "$ZSH_VERSION" ]; then whence -p agy 2>/dev/null; else command -v agy 2>/dev/null; fi
 printf '\035'
 if [ -n "$ZSH_VERSION" ]; then eval 'print -rl -- ${(k)functions} ${(k)aliases}'; elif [ -n "$BASH_VERSION" ]; then compgen -A function; compgen -a; fi
 printf '\035'
@@ -112,8 +118,9 @@ func (n *Node) launchers(ctx context.Context) ([]proto.Launcher, error) {
 
 // mergeLaunchers is launcherScript's output as the launcher list: the helper's, then the aliases it does not name,
 // then the wrapper scripts on PATH no function or alias shadows (nothing at all: plain claude), then Codex's — plain
-// codex when it is on the PATH, and the aliases that run it (how each runs: codex) — then plain traex when it is on the
-// PATH (started without Claude's flags, start_agent.go). settings: the claude aliases' and scripts' own --settings, by
+// codex when it is on the PATH, and the aliases that run it (how each runs: codex) — then plain traex and plain omp when
+// they are on the PATH, then pi, the Cursor CLI and the Antigravity CLI when their programs are (workagent.go: started in
+// a herdr pane with the model the start names). settings: the claude aliases' and scripts' own --settings, by
 // name (launcher_settings.go); an alias is what the shell runs for its name even when the helper lists the name too.
 // scripts: where each wrapper script is.
 func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]string, settings, scripts map[string]string) {
@@ -125,6 +132,9 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	codexPath, rest, _ := strings.Cut(rest, "\x1d")
 	traexPath, rest, _ := strings.Cut(rest, "\x1d")
 	ompPath, rest, _ := strings.Cut(rest, "\x1d")
+	piPath, rest, _ := strings.Cut(rest, "\x1d")
+	cursorPath, rest, _ := strings.Cut(rest, "\x1d")
+	agyPath, rest, _ := strings.Cut(rest, "\x1d")
 	shellNames, pathVar, _ := strings.Cut(rest, "\x1d")
 	list = parseLaunchers(helper)
 	seen := map[string]bool{}
@@ -155,7 +165,7 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	codex = map[string][]string{}
 	ls, words := parseCodexAliases(aliases)
 	if strings.TrimSpace(codexPath) != "" && words["codex"] == nil {
-		list = append(list, proto.Launcher{Name: "codex", Model: "默认", Agent: "codex", Source: "zshrc"})
+		list = append(list, proto.Launcher{Name: "codex", Model: "默认", Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
 		codex["codex"] = []string{"codex"}
 	}
 	for _, l := range ls {
@@ -169,6 +179,16 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	}
 	if strings.TrimSpace(ompPath) != "" && !seen["omp"] && codex["omp"] == nil {
 		list = append(list, proto.Launcher{Name: "omp", Model: "默认", Agent: "omp", Source: "zshrc"})
+	}
+	for _, bin := range []struct{ name, agent, path string }{
+		{"pi", piAgent, piPath},
+		{"cursor", cursorAgent, cursorPath},
+		{"agy", agyAgent, agyPath},
+	} {
+		if strings.TrimSpace(bin.path) != "" && !seen[bin.name] && codex[bin.name] == nil {
+			list = append(list, proto.Launcher{Name: bin.name, Model: "默认", Agent: bin.agent, Source: "zshrc",
+				RuntimeFallback: bin.agent == agyAgent && !taken[bin.name]})
+		}
 	}
 	return list, codex, settings, scripts
 }
@@ -226,10 +246,6 @@ func matchLauncher(list []proto.Launcher, baseURL, model string) string {
 	return ""
 }
 
-var nameRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-var assignRe = lazyre.New(`^[A-Za-z_][A-Za-z0-9_]*=`)
-
 // parseAliasLaunchers reads launcherScript's alias records and keeps the aliases that start claude: after the
 // variables set in front of it (`A=1 B=2 claude …`), through env / command / exec / noglob, by path or not, with
 // `export A=1;` before it in the same alias. Their gateway and model come from ANTHROPIC_BASE_URL and ANTHROPIC_MODEL
@@ -243,7 +259,7 @@ func parseAliasLaunchers(out string) (list []proto.Launcher, settings map[string
 			continue
 		}
 		name := words[0]
-		if !nameRe.MatchString(name) || name == "claude" {
+		if !shellcmd.NameRe.MatchString(name) || name == "claude" {
 			continue
 		}
 		if l, s, ok := aliasLauncher(words[1 : len(words)-1]); ok {
@@ -267,7 +283,7 @@ func parseCodexAliases(out string) ([]proto.Launcher, map[string][]string) {
 	words := map[string][]string{}
 	for _, rec := range strings.Split(out, "\x1e") {
 		w := strings.Split(rec, "\x1f")
-		if len(w) < 2 || !nameRe.MatchString(w[0]) {
+		if len(w) < 2 || !shellcmd.NameRe.MatchString(w[0]) {
 			continue
 		}
 		argv, model, ok := codexAliasArgv(w[1 : len(w)-1])
@@ -277,7 +293,7 @@ func parseCodexAliases(out string) ([]proto.Launcher, map[string][]string) {
 		if model == "" {
 			model = "默认"
 		}
-		list = append(list, proto.Launcher{Name: w[0], Model: model, Agent: "codex", Source: "zshrc"})
+		list = append(list, proto.Launcher{Name: w[0], Model: model, Agent: "codex", Source: "zshrc", PromptOptional: true, RunHere: true})
 		words[w[0]] = argv
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
@@ -307,7 +323,7 @@ func codexAliasArgv(words []string) (argv []string, model string, ok bool) {
 		}
 		if cmd[0] == "export" {
 			for _, w := range cmd[1:] {
-				if assignRe.MatchString(w) {
+				if shellcmd.AssignRe.MatchString(w) {
 					exported = append(exported, w)
 				}
 			}
@@ -317,14 +333,14 @@ func codexAliasArgv(words []string) (argv []string, model string, ok bool) {
 			return nil, "", false // more than one command
 		}
 		env := map[string]string{}
-		i := commandIndex(cmd, env)
+		i := shellcmd.CommandIndex(cmd, env)
 		if i < 0 || filepath.Base(cmd[i]) != "codex" {
 			return nil, "", false
 		}
 		found = true
 		argv = append([]string(nil), exported...)
 		for _, w := range cmd[:i] {
-			if assignRe.MatchString(w) {
+			if shellcmd.AssignRe.MatchString(w) {
 				argv = append(argv, w)
 			}
 		}
@@ -341,27 +357,6 @@ func codexAliasArgv(words []string) (argv []string, model string, ok bool) {
 		}
 	}
 	return argv, model, found
-}
-
-// commandIndex is where the command of one simple command starts, past the variables set for it (put in env) and
-// the wrappers that run what follows (env, with its -u / -i, command, exec, noglob, nocorrect); -1: there is none.
-func commandIndex(cmd []string, env map[string]string) int {
-	for i := 0; i < len(cmd); i++ {
-		w := cmd[i]
-		switch {
-		case assignRe.MatchString(w):
-			k, v, _ := strings.Cut(w, "=")
-			env[k] = v
-		case w == "env" || w == "command" || w == "exec" || w == "noglob" || w == "nocorrect":
-		case w == "-u" && i > 0 && i+1 < len(cmd): // env -u NAME
-			delete(env, cmd[i+1])
-			i++
-		case strings.HasPrefix(w, "-") && i > 0 && (cmd[i-1] == "env" || cmd[i-1] == "-i"): // env -i
-		default:
-			return i
-		}
-	}
-	return -1
 }
 
 // aliasLauncher finds the claude command in an alias's words and what it is started with; settings is its own
@@ -384,7 +379,7 @@ func aliasLauncher(words []string) (l proto.Launcher, settings string, ok bool) 
 		}
 		if len(cmd) > 0 && cmd[0] == "export" {
 			for _, w := range cmd[1:] {
-				if k, v, ok := strings.Cut(w, "="); ok && assignRe.MatchString(w) {
+				if k, v, ok := strings.Cut(w, "="); ok && shellcmd.AssignRe.MatchString(w) {
 					exported[k] = v
 				}
 			}
@@ -394,7 +389,7 @@ func aliasLauncher(words []string) (l proto.Launcher, settings string, ok bool) 
 		for k, v := range exported {
 			env[k] = v
 		}
-		i := commandIndex(cmd, env)
+		i := shellcmd.CommandIndex(cmd, env)
 		if i < 0 {
 			continue
 		}
@@ -429,7 +424,7 @@ func parseLaunchers(out string) []proto.Launcher {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) == 0 || !nameRe.MatchString(f[0]) {
+		if len(f) == 0 || !shellcmd.NameRe.MatchString(f[0]) {
 			continue
 		}
 		l := proto.Launcher{Name: f[0]}

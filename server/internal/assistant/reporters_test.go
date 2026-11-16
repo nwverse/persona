@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +119,34 @@ func TestStopReportingStopsItsTasks(t *testing.T) {
 	}
 }
 
+// A reporting conversation whose turn ended while a background command still runs is interrupted by a stop: for an
+// assistant conversation that ends its process with the command, which would otherwise wake it later (#8960).
+func TestStopReportingStopsItsBackgroundWork(t *testing.T) {
+	s, f := reportingWithTask(t)
+	bg := []proto.BackgroundTask{{ID: "b1", Kind: "shell", Command: "sleep 90", StartedAt: time.Now()}}
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Assistant: true, Status: proto.StatusIdle, Background: bg})
+	w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", "")
+	var res stopResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil || w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !res.Conversation || res.Already || !slices.Contains(f.interrupted(), "server/lark1") {
+		t.Fatalf("result = %+v, interrupted %q", res, f.interrupted())
+	}
+
+	// A TUI agent's interrupt is Escape in its terminal and stops no background command: an idle one is not sent it (#3793).
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lark1", MachineID: "server", Status: proto.StatusIdle, Background: bg})
+	before := len(f.interrupted())
+	if w := serve(s, "POST", "/api/v1/assistant/conversations/lark1/stop", ""); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := f.interrupted()[before:]; slices.Contains(got, "server/lark1") {
+		t.Fatalf("an idle TUI agent was interrupted: %q", got)
+	}
+}
+
 // Notices already queued behind the conversation's turn go when it is stopped.
 func TestStopReportingDropsQueuedNotices(t *testing.T) {
 	s, f := reportingWithTask(t)
@@ -161,5 +190,39 @@ func TestStopNotAReportingConversation(t *testing.T) {
 	s, _ := newQuietService(t)
 	if w := serve(s, "POST", "/api/v1/assistant/conversations/conv1/stop", ""); w.Code != 404 {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// Clearing the main conversation's context (#5095) closes its own process only: a Feishu request it reports on is not
+// stopped, so the Agents working on the tasks it handed out go on (unlike the Stop button above).
+func TestClearMainLeavesItsTasksRunning(t *testing.T) {
+	s, f := reportingWithTask(t)
+	ctx := context.Background()
+	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		v.MachineID, v.Main, v.MainMachineID = "server", "lark1", "server"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := serve(s, "POST", "/api/v1/assistant/main/clear", `{"expect":"lark1"}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"archived":"lark1"`) {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	if got := f.interrupted(); len(got) != 0 {
+		t.Fatalf("interrupted %q", got)
+	}
+	if s.reporterStopped(ctx, "lark1") {
+		t.Fatal("the reporting conversation was stopped")
+	}
+	f.mu.Lock()
+	closed := 0
+	for _, c := range f.calls {
+		if c.Method == "session.close" && strings.Contains(string(c.Params), `"lark1"`) {
+			closed++
+		}
+	}
+	f.mu.Unlock()
+	if closed != 1 {
+		t.Fatalf("session.close for lark1: %d", closed)
 	}
 }

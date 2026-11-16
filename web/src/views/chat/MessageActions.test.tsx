@@ -1,28 +1,34 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
-import { MessageActions, moreActions, rewindActions } from "./MessageActions";
+import { t } from "../../i18n";
+import { MessageActions, moreActions, rewindActions, savePromptActions } from "./MessageActions";
 
-const base: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Persona", isAgent: false, images: () => [] };
+const base: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Persona", title: "Persona", images: () => [] };
 
-function render(actions: ChatActions, itemId?: string) {
+function render(actions: ChatActions, itemId?: string, bar = true) {
   return renderToStaticMarkup(
     <ChatActionsContext.Provider value={actions}>
-      <MessageActions text="回复" itemId={itemId}>
+      <MessageActions text="回复" itemId={itemId} bar={bar}>
         <p>回复</p>
       </MessageActions>
     </ChatActionsContext.Provider>,
   );
 }
 
-// "Branch to new chat" (#2137): a reply's bar ends in ⋯ only when the session can fork.
-describe("MessageActions ⋯", () => {
-  it("shows ⋯ on a reply of a session that can fork", () => {
-    expect(render({ ...base, fork: () => {} }, "u1#0")).toContain('aria-label="更多"');
+// cindy's bar under a turn's last reply (#5314; its buttons and order: ReplyBar.test.tsx). It loads after the first
+// screen: until then its row is kept, so the reply does not move when it comes.
+describe("the reply bar", () => {
+  it("keeps its row while it loads", () => {
+    const html = render({ ...base, fork: () => {} }, "u1#0");
+    expect(html).toContain('data-reply-bar="loading"');
+    expect(html).toMatch(/data-reply-bar="loading" class="mt-1\.5 hidden h-6 \[@media\(hover:hover\)\]:block"/);
   });
-  it("has no ⋯ when the session cannot fork, or the message is not a reply", () => {
-    expect(render(base, "u1#0")).not.toContain('aria-label="更多"');
-    expect(render({ ...base, fork: () => {} })).not.toContain('aria-label="更多"');
+  it("is not there without `bar` (narration, words still streaming): the menus only", () => {
+    const html = render({ ...base, fork: () => {} }, "u1#0", false);
+    expect(html).not.toContain("data-reply-bar");
+    expect(html).not.toContain("aria-label");
+    expect(html).toContain("<p>回复</p>");
   });
 });
 
@@ -30,7 +36,8 @@ describe("moreActions", () => {
   it("branches off at the reply it is on", () => {
     const got: string[] = [];
     const [fork] = moreActions("u1#0", (id) => got.push(id));
-    expect(fork?.label).toBe("分支到新聊天");
+    expect(fork?.label).toBe("开启一个新会话");
+    expect(moreActions("u1#0", () => {}, true)[0]?.label).toBe("开启一个新对话");
     fork?.onSelect();
     expect(got).toEqual(["u1#0"]);
   });
@@ -38,6 +45,15 @@ describe("moreActions", () => {
     expect(moreActions("line12#0", () => {})).toEqual([]);
     expect(moreActions("u1", () => {})).toEqual([]);
     expect(moreActions(undefined, () => {})).toEqual([]);
+  });
+});
+
+// "Save as Prompt…" (#7329): on your messages with words.
+describe("savePromptActions", () => {
+  it("is there on a message with words", () => {
+    expect(savePromptActions("  ")).toEqual([]);
+    const [save] = savePromptActions("Review this diff.");
+    expect(save).toMatchObject({ key: "save-prompt", label: t("chat-messageactions.save_as_prompt"), icon: "book" });
   });
 });
 
@@ -77,10 +93,11 @@ describe("rewindActions", () => {
 });
 
 describe("MessageActions on your own message", () => {
+  // read-only: the bar beside your bubble has nothing else for its ⋯ (Forward and Use as context go there when it can send)
   const mine = (actions: ChatActions, messageId?: string) =>
     renderToStaticMarkup(
-      <ChatActionsContext.Provider value={actions}>
-        <MessageActions text="继续" isUser messageId={messageId}>
+      <ChatActionsContext.Provider value={{ ...actions, canCompose: false }}>
+        <MessageActions text="继续" isUser side messageId={messageId}>
           <p>继续</p>
         </MessageActions>
       </ChatActionsContext.Provider>,
@@ -93,4 +110,10 @@ describe("MessageActions on your own message", () => {
     expect(mine(base, "u1#0")).not.toContain('aria-label="更多"');
     expect(mine({ ...base, rewind: { block: liveValue(""), run: async () => {} } })).not.toContain('aria-label="更多"');
   });
+});
+
+
+it("offers only conversation rewind when native file restoration is unavailable", () => {
+  const [action] = rewindActions("example#0", "Example", { block: "", code: false, run: async () => {} });
+  expect((action.children as { key: string }[]).map((item) => item.key)).toEqual(["rewind-conversation"]);
 });

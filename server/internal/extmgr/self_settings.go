@@ -59,7 +59,7 @@ func (h *Manager) selfSettings() []selfSetting {
 	if h.mail != nil {
 		out = append(out, selfSetting{key: "mail.accounts", title: ss(l, "title_mail"),
 			about: "the user's mail accounts: Persona reads them in the inbox and mail_* use them. add connects (IMAP and SMTP) before saving; " +
-				"the password is typed on the phone, never pass one. Gmail can only be added in the app (Google sign-in)",
+				"the password is typed on the phone, never pass one. Gmail: with Google sign-in set up it is added in the app (Sign In with Google); otherwise a Gmail address with an app password (not the Google password; needs 2-Step Verification, made at myaccount.google.com/apppasswords) is typed in the app's Add Mail Account page. If the hub machine cannot reach Gmail, an admin sets google.proxy (http://[user:pass@]host:port or socks5://[user:pass@]host:port) in manager.json and restarts the hub",
 			value: `add: {"email", "provider": "imap|feishu" (default imap; feishu = Feishu / Lark mail), "name"?, "username"?, "imap_host"?, ` +
 				`"imap_port"?, "smtp_host"?, "smtp_port"?, "smtp_security"?: "tls|starttls"}; most providers need only the email. remove: the account id`,
 			get: h.getMailAccounts, add: h.addMailAccount, remove: h.removeMailAccount})
@@ -307,6 +307,19 @@ func (h *Manager) removeMailAccount(_ context.Context, id string) (*selfChange, 
 }
 
 func (h *Manager) toolPersonaSettings(ctx context.Context, machineID, sessionID string, args json.RawMessage) (string, error) {
+	out, err := h.personaSettings(ctx, machineID, sessionID, args)
+	// iPhone control's own setting read or changed while no iPhone is allowed: the rest of its setup (this iPhone's
+	// consent, pairing, Developer Mode) happens on the iPhone, in the guided setup (#8199).
+	var a struct {
+		Key string `json:"key"`
+	}
+	if err == nil && json.Unmarshal(args, &a) == nil && a.Key == "extension."+iphoneExtensionID && !h.iphoneSomeAllowed() {
+		out += "\n" + iphoneSetupHint
+	}
+	return out, err
+}
+
+func (h *Manager) personaSettings(ctx context.Context, machineID, sessionID string, args json.RawMessage) (string, error) {
 	var a struct {
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
@@ -364,6 +377,11 @@ func (h *Manager) toolPersonaSettings(ctx context.Context, machineID, sessionID 
 		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
 			return "", fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
 		}
+	}
+	// Whoever asked stopped waiting while the card was being answered (the hub's call ended, the bus dropped): it was
+	// told nothing came of the call, so nothing is changed now that nobody would hear of (#5907).
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("the change was approved after its caller stopped waiting: nothing changed (%w)", err)
 	}
 	return change.apply(ctx, r.Values)
 }

@@ -6,9 +6,11 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 
 - **Check out the repository with LF endings**: Git for Windows defaults to `core.autocrlf=true`, so every checked-out `.go` file has CRLF endings. `gofmt -l` reports many files, and scripts and golden files can also fail to match.
   After cloning, run `git config core.autocrlf false && git config core.eol lf` in this repository, then `git rm -q --cached -r . && git reset -q --hard` to check it out again (commit or stash your changes first).
+- **Retained third-party bytes must bypass text conversion**: `-whitespace` only controls whitespace checks; it does not keep `core.autocrlf=true` from changing checkout or archive bytes. Use `-text` for checksum-pinned notices and inventories. Preserve their original LF, CRLF or mixed endings instead of normalizing them or updating their pins to match a converted copy. Test staging, checkout and archive behavior with autocrlf enabled, including ordinary neighboring files that should still convert (#9342).
 - **Unix socket paths must not exceed 108 bytes**: Go supports AF_UNIX on Windows, but a long path makes `bind` return `invalid argument` (not “unsupported”).
   Paths such as `~/.persona/node-attach.sock` are fine; do not put test sockets deep inside temporary directories (Claude Code's scratchpad exceeded the limit).
 - **`/tmp` is not the temporary directory**: On Windows, `os.MkdirTemp("/tmp", …)` means `\tmp` on the current drive, which usually does not exist. Tests that need short paths should use platform-specific files (`listen_*.go` in `orcarttest`).
+- **Windows Python has no `fcntl`**: a repository script that locks with `fcntl.flock` fails with `ModuleNotFoundError` under Git Bash. One that must run on a Windows dev machine locks with `msvcrt.locking` there (`LK_NBLCK` on the first byte, trying again while it raises `PermissionError`), as `scripts/hooks/merge-pr.sh` and `scripts/operations/pr_watch_merge.py` do; two programs sharing a lock file must lock the same byte (seek to 0 first: `open("a+")` starts at the end). Its `subprocess.run(["bash", …])` also searches System32 before PATH, where `bash.exe` is WSL's: take `shutil.which("bash")`.
 
 ## Processes and shells
 
@@ -16,12 +18,25 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
   On Windows, node must always run shell scripts with Git for Windows bash (`loginShellProgram`, like Claude Code itself, honoring `CLAUDE_CODE_GIT_BASH_PATH`). If it cannot be found, fail to start the command; do not fall back to bare `bash`.
   Use `interactiveShell()` wherever a launcher is started. The assistant, Codex assistant, and launcher-model listing each once hardcoded “bash if zsh is missing.” On Windows, the assistant's claude entered WSL
   and immediately exited with “open terminal failed: not a terminal”; the main chat did not respond, and there was nothing in the logs (#1994). Do not choose a shell independently in new launch sites.
+- **A native path in a `bash -ic` script loses its quoting at the Git Bash boundary**: `shellQuote` closes and reopens its quotes around each backslash (`'C:'\\'Users'…`), which a POSIX shell reads back correctly, but Git Bash started as a native Windows process with the script as its argument eats an escape layer and ends with an unmatched quote ("unexpected EOF while looking for matching `''"). The assistant's launch (profile directory, a managed launcher's `personad`) exited about 200 ms after starting (#5487).
+  Every script the node hands its shell as an argument with native paths in it (`-ic`, `loginShell`: the assistant's launch, Codex's app-server, the model list, the launcher and sign-in checks) quotes them with `scriptPath` and its launcher with `launcherForScript`: forward slashes on Windows (`C:/Users/…`, which Git Bash and Windows programs both take), and an apostrophe as `'"'"'` (a double quote survives the boundary, as `"$@"` does). Commands typed into a terminal (herdr panes) cross no such boundary and keep `launcherCommand`. Leave `shellQuote` and other arguments alone. `filepath.ToSlash` converts nothing when tests run on macOS, so replace `\` explicitly.
+  The assistant's claude then has `CLAUDE_CONFIG_DIR=C:/Users/…` while other starts have `C:\Users\…`: a directory read back from a running process is cleaned to backslashes (`scannedConfigDir`) before it is compared, or one profile is listed twice.
+- **The arguments after a Git Bash script lose their quoting too**: Windows hands a program one command line, and `exec.Cmd` writes it for the MSVC runtime (`syscall.EscapeArg`: no quotes around an argument without spaces, `"` as `\"`). Git Bash splits it the MSYS way, where `\"` outside quotes is a backslash that opens a quote, so arguments with double quotes in them run together. Codex's `-c` TOML values arrived as one argument and the main chat started without the persona MCP server (18 arguments sent, 2 received; #6418).
+  A command the node starts with Git Bash as the program calls `msysCmdLine` after setting `SysProcAttr`: it quotes every argument whole and sets `SysProcAttr.CmdLine`. Other programs keep Go's quoting.
 - **Read other processes' environment variables from the PEB**: There is no `/proc` or `ps -E`. `procs_windows.go` lists processes with Toolhelp32, then uses `NtQueryInformationProcess` + `ReadProcessMemory` on candidates
   to read `RTL_USER_PROCESS_PARAMETERS` (command line, current directory, environment block). Pointers in the PEB are addresses in the other process: read bytes and extract fields using x/sys offsets.
   Do not read directly into a struct such as `windows.PEB` that contains Go pointer fields (the GC would treat the other process's addresses as its own pointers).
 - **Environment-variable values can contain spaces**: Whitespace-splitting regexes such as `envVarRe` are for `ps -E`; they truncate `C:\Users\A B\.claude`. On Windows, fetch the complete value by name (`pickEnv`); names are case-insensitive.
 - **There is no “foreground process group” or “suspended” state**: On Windows, the Orca host considers claude / codex foreground when its parent-process chain contains no agent process for the same pane. See [windows.md](../operations/windows.md) (“Orca”).
 - **PIDs are reused quickly and do not increase monotonically**: Sorting by PID to put wrappers first does not work on Windows. Sort by start time; when walking the parent chain, require ancestors to have started before the current process.
+
+## Paths the hub reads
+
+- **A Windows node's paths reach a hub that may not be Windows**: the node reports directories as `C:\Users\…`, and on a Linux or macOS hub `filepath` splits only at `/`, so `filepath.Base` returns the whole path. `identity`'s directory checks (`IsAssistantDir`, `IsAssistantDirOf`, `SpaceOf`, `InHealthSpace`) missed the computer's assistant and health directories, and its main chat conversations never reached the Persona tab (#6419). `filepath.ToSlash` does not help there: it converts nothing off Windows.
+  Code on the hub or a manager that takes apart a directory a node sent reads it through `identity.NodePath` first: a path with a drive letter or a `\\server\` prefix gets forward slashes on a hub that is not Windows, and anything else stays as it is. Test such code with Windows paths and run the test on Linux, not only on the computer you develop on.
+- **`path` is not a node's syntax either**: it knows only `/` on every system, Windows included. Task workspaces checked the node's answers with `path.IsAbs`, so a Windows computer's `C:\…` was never absolute, and every writable task in a Git directory there failed with "Workspace C:\… is not an available absolute directory" (#7106).
+  A path that is checked or joined and then sent back to its node goes through `proto.NodeAbs`, `proto.NodeClean` and `proto.NodeJoin`. They keep the node's own syntax (backslashes, an upper-case drive letter, a root of `C:\` or `\\server\share` that `..` cannot climb out of), so the node reads the result as its own path.
+  Two of a node's paths compare by `proto.NodeKey`, which also ignores case for a Windows path: `C:\Code\App` and `c:\code\app` are one directory there. Keys are for comparing only; never send one to the node.
 
 ## Scheduled tasks (automatic startup)
 
@@ -41,6 +56,19 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
   so when it disappears (`/End`, a crash, or a kill), its children disappear too.
 - A running `.exe` cannot be overwritten or deleted. Before reinstalling, `/End` the task and wait for persona-link to release the run lock; during uninstall, the daemon file may take a moment to become deletable.
 
+## Updating a running program (node updates)
+
+`server/internal/nodeupdate`; see [windows.md](../operations/windows.md) ("Updates through the hub"). Found on a physical Windows 11 machine on 2026-11-12:
+
+- **A running program's file cannot be replaced, but can be renamed**: `os.Rename(new, running.exe)` fails with access denied, while renaming `running.exe` away works. Move the old file aside, then put the new one in place; delete the aside file once its process is gone (deleting it earlier fails the same way).
+- **Go's `os.Open` does not share delete**: a rename over a file this process (or any other) holds open fails with access denied. Close the file before renaming over it.
+- **Only files ending in `.exe` start**: `exec.Command` on a staged `.node-update-stage-123` reports "executable file not found". Anything that is run (the staged build's self-check, the watchdog's backup copy) needs the suffix.
+- **`FlushFileBuffers` needs a handle that may write**: `f.Sync()` on a file opened with `os.Open`, or on a directory, returns access denied. Open the file read-write to flush it; a directory cannot be flushed: use `MoveFileEx` with `MOVEFILE_WRITE_THROUGH` for a durable rename instead.
+- **No inherited descriptors**: `exec.Cmd.ExtraFiles` is not supported, so a child cannot report readiness on fd 3. Report through a file both sides read.
+- **A program runs from the file a process has open**: the watchdog runs from the backup it may restore, so the backup can only be moved aside, not deleted, until the watchdog exits.
+- **A restart is a new process**: with exec the new program keeps the pid the rollback watchdog recorded; on Windows it does not, so a target build that never records itself (one from before Windows updates) kept running after a rollback put the old file back (found 2026-11-13 updating a node to a release without this support). Record the supervisor and find its children.
+- **The image path follows a rename**: `QueryFullProcessImageName` returns where the program's file is now (the moved-aside name), while `Get-Process` / `Win32_Process.ExecutablePath` show the path it was started from. Match both.
+
 ## Claude Code's peer inbox (desktop app, other terminals)
 
 Measured 2026-11-07 with Claude Code 2.1.308 / 2.1.291; see [claude-integration.md](../integrations/claude-integration.md) ("Claude outside Persona's terminals").
@@ -54,9 +82,9 @@ Measured 2026-11-07 with Claude Code 2.1.308 / 2.1.291; see [claude-integration.
 - **An interactive claude under a pseudo console needs its std handles to be the console's**: a `CreatePseudoConsole` child that inherits the parent's redirected stdout decides it is not on a terminal and runs as `--print` ("Input must be provided … when using --print"). Set `STARTF_USESTDHANDLES` with null handles.
 - **Testing on a dev machine**: start a throwaway `claude` with its own `CLAUDE_CONFIG_DIR` (copy `settings.json`, write a `.claude.json` with `hasCompletedOnboarding` and the test directory trusted) and an empty working directory; never send into a session the user has open. The first failed start renamed the test `.claude.json` into `backups/`: write it again before the next try.
 
-## Tray (WebView2, notification area)
+## Historical tray (WebView2, notification area)
 
-`internal/linktray`; see [windows.md](../operations/windows.md) ("Tray"). Found on a physical Windows 11 machine on 2026-11-07:
+Retired with the independent Link service (#6770); the implementation notes are in [windows-records.md](../archive/operations/windows-records.md) and [link-menu-tray.md](../archive/operations/link-menu-tray.md). These findings are historical, not a reason to restore a tray UI. Found on a physical Windows 11 machine on 2026-11-07:
 
 - **WebView2 holds back its callbacks while one of them runs**: creating a WebView inside a `WebMessageReceived` handler gets the environment back, but the controller's completion waits until the handler returns.
   go-webview2's `Embed` spins a nested message loop until then, so it never returned: the pairing window stayed hidden, and the tray's thread stayed inside that loop (which also swallowed the quit message). Handle page messages after the event has returned (`app.fromPage` queues them).

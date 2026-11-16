@@ -30,6 +30,7 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			return Forgotten{}, fmt.Errorf("invalid archive source %q", name)
 		}
 	}
+	defer e.Store.SearchIndexPurge() // what is forgotten leaves the search index at its next update
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	e.Store.ingestMu.Lock()
@@ -156,6 +157,9 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			cut = append(cut, p.Slug)
 		}
 		out.Projects = append(out.Projects, p.Slug)
+	}
+	if err := e.forgetTrash(out.Chats, out.People, out.Posts, itemKeys, names); err != nil {
+		return out, err
 	}
 	// Knowledge points from the forgotten chats, or from timeline lines that were theirs, go too (topics.go).
 	topics, err := e.forgetTopicSources(out.Chats, cut)

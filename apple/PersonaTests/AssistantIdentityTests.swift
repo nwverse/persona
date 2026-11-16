@@ -2,70 +2,74 @@ import Foundation
 import Testing
 @testable import Persona
 
+/// The sidebar shows the current assistant whenever the hub has a roster and an installed current assistant, including
+/// a roster of one. Filtering, request naming and waiting counts still start only with several installed assistants.
 @MainActor
 struct AssistantIdentityTests {
-    private func model(_ managers: [HubManager]?) -> AppModel {
+    private func model(_ roster: ManagerRoster?) throws -> AppModel {
+        let hub = FakeHub()
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "assistant-identity-" + UUID().uuidString))
-        model.managerRosters[""] = managers.map { ManagerRoster(managers: $0) }
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.connectOnly(.demo)
+        model.managerRosters[""] = roster
         return model
     }
 
+    private func assistant(online: Bool = true) -> HubManager {
+        HubManager(id: "assistant", name: "助手", online: online, isDefault: true, builtin: true)
+    }
+
     @Test(arguments: [true, false])
-    func oneAssistantHidesIdentityWhetherOnlineOrOffline(online: Bool) {
-        let model = model([HubManager(id: "assistant", name: "Only assistant", online: online, isDefault: true)])
-        #expect(!model.showsAssistantIdentity)
-        #expect(model.assistantDisplayName == String(localized: "Persona"))
-        #expect(model.assistantManager == nil)
-        #expect(model.assistantManagerOffline == nil)
-        #expect(model.assistantShown == nil)
-        model.selectAssistantManager("assistant")
+    func oneInstalledAssistantShowsTheSwitcherWhetherOnlineOrOffline(online: Bool) throws {
+        let model = try model(ManagerRoster(managers: [assistant(online: online)], defaultID: "assistant"))
+        #expect(model.showsAssistantSwitcher)
+        let current = try #require(model.currentAssistant)
+        #expect(current.id == "assistant" && current.name == "助手" && current.online == online)
+
+        // The switcher's wider gate does not turn one assistant into a scoped or named one. Establish the hub-level
+        // group explicitly so these nil/empty results exercise the isMulti gates rather than a missing hub.
+        #expect(model.hub?.group == "")
+        #expect(model.managerRoster?.isMulti == false)
         #expect(model.assistantManagerID == nil)
+        #expect(model.assistantManager == nil)
+        #expect(model.assistantScope == nil)
+        #expect(model.assistantBadges.isEmpty)
+        #expect(!model.othersWaiting)
     }
 
-    @Test(arguments: [true, false])
-    func multipleAssistantsKeepIdentityIncludingOfflineEntries(online: Bool) {
-        let model = model([
-            HubManager(id: "assistant", name: "First assistant", online: true, isDefault: true),
-            HubManager(id: "second", name: "Second assistant", online: online),
-        ])
-        #expect(model.showsAssistantIdentity)
-        #expect(model.assistantDisplayName == model.persona.name)
-        #expect(model.assistantManager?.id == "assistant")
-        #expect(model.assistantShown != nil)
+    @Test func severalInstalledAssistantsShowTheSwitcher() throws {
+        let work = HubManager(id: "m-1", name: "工作", online: true)
+        let model = try model(ManagerRoster(managers: [assistant(), work], defaultID: "assistant"))
+        #expect(model.showsAssistantSwitcher)
+        #expect(model.currentAssistant?.id == "assistant")
     }
 
-    @Test func unknownEmptyAndInstallingOnlyRostersHideIdentity() {
-        #expect(!model(nil).showsAssistantIdentity)
-        #expect(!model([]).showsAssistantIdentity)
-        let installing = HubManager(id: "next", name: "Installing assistant", online: false, installing: Date.now + 3600)
-        let model = model([HubManager(id: "assistant", name: "Only assistant", online: true), installing])
-        #expect(!model.showsAssistantIdentity)
-        #expect(model.managerRoster?.installed.count == 1)
+    @Test func aLegacyHubWithoutARosterDoesNotShowTheSwitcher() throws {
+        let model = try model(nil)
+        #expect(!model.showsAssistantSwitcher)
+        #expect(model.currentAssistant == nil)
     }
 
-    @Test func theMainChatLabelDoesNotNameASingleAssistant() {
-        #expect(AssistantSidebar.shownMainTitle(false) == String(localized: "Main Chat"))
-        #expect(AssistantSidebar.shownMainTitle(true) == "Persona")
+    @Test func anEmptyRosterDoesNotShowTheSwitcher() throws {
+        let model = try model(ManagerRoster(managers: [], defaultID: "assistant"))
+        #expect(!model.showsAssistantSwitcher)
+        #expect(model.currentAssistant == nil)
     }
 
-    @Test func conversationTitlesRemainWhileTheSoleAssistantsNameIsHidden() {
-        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: nil, isMain: true) == nil)
-        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: "Notes", isMain: false) == "Notes")
-        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: "Claude Code", isMain: false) == nil)
-        #expect(AssistantTopBar.visibleTitle(showsIdentity: true, persona: "Persona", conversation: nil, isMain: true) == "Persona")
-        #expect(AssistantTopBar.visibleTitle(showsIdentity: true, persona: "Persona", conversation: "Notes", isMain: false) == "Notes")
+    @Test func aRosterWithOnlyAnInstallingAssistantDoesNotShowTheSwitcher() throws {
+        let installing = HubManager(id: "m-installing", name: "安装中", online: false,
+                                    installing: Date(timeIntervalSince1970: 1_800_000_000))
+        let model = try model(ManagerRoster(managers: [installing], defaultID: installing.id))
+        #expect(!model.showsAssistantSwitcher)
+        #expect(model.currentAssistant == nil)
     }
 
-    @Test func identityFollowsTheRosterWithoutChangingOwnership() {
-        let first = HubManager(id: "assistant", name: "First assistant", online: true, isDefault: true)
-        let second = HubManager(id: "second", name: "Second assistant", online: false)
-        let model = model([first])
-        #expect(!model.showsAssistantIdentity)
-        model.managerRosters[""] = ManagerRoster(managers: [first, second])
-        #expect(model.showsAssistantIdentity)
-        #expect(!model.sameManager(first.id, second.id))
-        model.managerRosters[""] = ManagerRoster(managers: [first])
-        #expect(!model.showsAssistantIdentity)
-        #expect(model.sameManager(first.id, second.id))
+    @Test func oneInstalledAndOneInstallingAssistantShowTheSwitcher() throws {
+        let installing = HubManager(id: "m-installing", name: "安装中", online: false,
+                                    installing: Date(timeIntervalSince1970: 1_800_000_000))
+        let model = try model(ManagerRoster(managers: [assistant(), installing], defaultID: "assistant"))
+        #expect(model.showsAssistantSwitcher)
+        #expect(model.currentAssistant?.id == "assistant")
+        #expect(model.managerRoster?.isMulti == false, "an installing assistant is not a second installed assistant")
     }
 }

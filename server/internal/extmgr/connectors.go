@@ -7,18 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/github"
-	larkcliconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
-	"github.com/nwverse/persona/server/internal/i18n"
-	larkcliadapter "github.com/nwverse/persona/server/internal/larkcli"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -52,7 +47,8 @@ func (h *Manager) builtinTools() []string {
 	return names
 }
 
-// connectorChanged is a connector's realtime event: collect the inbox or archive soon.
+// connectorChanged is a connector's realtime event: collect the inbox or archive soon, and run the subscriptions that
+// read it (#6247), in the background: the event's caller never waits on their store.
 func (h *Manager) connectorChanged(id string, scope connector.Scope) {
 	switch scope {
 	case connector.ScopeInbox:
@@ -60,7 +56,17 @@ func (h *Manager) connectorChanged(id string, scope connector.Scope) {
 	case connector.ScopeChats, connector.ScopeItems:
 		h.kbKick(id, scope)
 	}
+	if subs := h.subsLive.Load(); subs != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), subscriptionKickWait)
+			defer cancel()
+			subs.ConnectorChanged(ctx, id)
+		}()
+	}
 }
+
+// subscriptionKickWait bounds how long a changed event's look at the subscriptions may take.
+const subscriptionKickWait = 10 * time.Second
 
 // callConnector runs a connector's tool for an agent or assistant conversation (by: none when the user acts in a
 // connector's thread); a write the gate leaves to the user is asked on the phone like mail_send, in that conversation.
@@ -284,9 +290,15 @@ func writeForgetErr(w http.ResponseWriter, err error) {
 }
 
 // withQR draws a QR step's code for the app (whatever the connector sent as QR is replaced: the code is always URL's).
+// A device-code step whose URL already carries its code (`user_code=` in the query, as Lark's does) gets one too, so
+// the phone can scan it instead of the code being typed (#5818); one whose page asks for the code (GitHub's) does not.
 func withQR(p *connector.Prompt) error {
 	p.QR = nil
-	if p.Kind != connector.PromptQRCode {
+	if p.Kind == connector.PromptDeviceCode {
+		if !urlCarriesCode(p.URL, p.UserCode) {
+			return nil
+		}
+	} else if p.Kind != connector.PromptQRCode {
 		return nil
 	}
 	if p.URL == "" {
@@ -298,6 +310,15 @@ func withQR(p *connector.Prompt) error {
 	}
 	p.QR = &connector.QRCode{Size: size, Rows: rows}
 	return nil
+}
+
+// urlCarriesCode: raw is an https URL whose query's user_code is code, so opening it needs nothing typed.
+func urlCarriesCode(raw, code string) bool {
+	if code == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Query().Get("user_code") == code
 }
 
 // connectorLogin is connector id's sign-in, or writes why there is none.
@@ -431,6 +452,9 @@ func (h *Manager) setConnectorFeed(ctx context.Context, id string, f connector.F
 		}
 	}
 	if on && f == connector.FeedInbox {
+		if c := h.connectors.Get(id); c != nil && c.Manifest().InboxSwitch {
+			h.inbox.owed.Store(true) // mail is read on a full round: the next one is that (inboxLoop)
+		}
 		h.kickInbox()
 	} else if on {
 		h.kbKick(id, connector.ScopeChats)
@@ -590,7 +614,7 @@ func (h *Manager) registerConnectors() {
 	if gh.Configured() {
 		name := gh.Auth.FromMachine
 		if m := h.localMachine(name); m != nil {
-			name = m.cfg.Name
+			name = m.name()
 		}
 		ghc = github.New(gh, name, h.ghToken(gh.Auth.FromMachine))
 	} else {
@@ -606,52 +630,13 @@ func (h *Manager) registerConnectors() {
 		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
 			h.logf("larkcli profile sync: %v", err)
 		}
-		lc := larkcliconnector.New(larkcliadapter.Config{Bin: h.cfg.Lark.CLI.Bin, Profile: h.effectiveLarkCLIProfile(context.Background())})
+		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
 		}
 	}
 	// Messages (imessage) is registered once the extensions are there: its Mac is the extension's, else manager.json's
 	// (applyIMessage, startConnectors).
-}
-
-// siblingProgram is a program released with personad (update.ProgramNames) next to the running personad ("" when there
-// is none).
-func siblingProgram(name string) string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	p := filepath.Join(filepath.Dir(exe), name)
-	if _, err := os.Stat(p); err != nil {
-		return ""
-	}
-	return p
-}
-
-// sameBuild holds a built-in plugin's program (named name, for people) to the hub's build: the two come from one
-// build (`version -v` says the same).
-func sameBuild(h *Manager, name, path string) func(context.Context) error {
-	want := fmt.Sprintf("%s\nchannel %s, build %d", h.version, h.build.Channel, h.build.Number)
-	return func(ctx context.Context) error {
-		if _, err := os.Stat(path); err != nil {
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_missing", i18n.Args{"name": name, "path": path}))
-		}
-		vctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel()
-		out, err := exec.CommandContext(vctx, path, "version", "-v").Output()
-		if err != nil {
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_fails", i18n.Args{"name": name, "err": err.Error()}))
-		}
-		if got := strings.TrimSpace(string(out)); got != strings.TrimSpace(want) {
-			first := func(s string) string { line, _, _ := strings.Cut(s, "\n"); return line }
-			return errors.New(i18n.T(h.userLang(), "hub-connectors.program_version", i18n.Args{"name": name, "got": first(got), "want": first(want)}))
-		}
-		return nil
-	}
 }
 
 // ghToken reads the token of machine's gh login (credential.gh_token); it never goes to a log.
@@ -676,7 +661,7 @@ func (h *Manager) ghToken(machine string) github.TokenSource {
 		case errors.As(err, &re) && re.Code == proto.CodeNotSignedIn:
 			return "", github.ErrNotSignedIn
 		case err != nil:
-			return "", fmt.Errorf("%s: %s", m.cfg.Name, github.Scrub(err.Error()))
+			return "", fmt.Errorf("%s: %s", m.name(), github.Scrub(err.Error()))
 		case out.Token == "":
 			return "", github.ErrNotSignedIn
 		}

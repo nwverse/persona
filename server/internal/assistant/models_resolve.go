@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBinding, string, error) {
@@ -40,7 +41,7 @@ func (s *Service) modelBaseline(ctx context.Context, p ModelPurpose) (ModelBindi
 			// failing while a keyed Claude connection sits unused (#388). Not stored, so a later explicit choice still
 			// wins.
 			if name := s.fallbackAPIProvider(ctx); name != "" {
-				return ModelBinding{Provider: "launcher." + name}, mc(l, modelAutoSource), nil
+				return ModelBinding{Provider: "launcher." + name, Effort: c.ReasoningEffort}, mc(l, modelAutoSource), nil
 			}
 		}
 		return ModelBinding{Provider: provider, Model: c.Model, Effort: c.ReasoningEffort}, mc(l, "source_hub_config"), nil
@@ -97,7 +98,7 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 		return mc(l, "source_delegate_connection", i18n.Args{"provider": name}) // the model is the user's pick, or the connection's own
 	case p.ID == "agent.delegate":
 		return mc(l, "source_delegate_default", i18n.Args{"provider": name, "model": model})
-	case p.ID == purposeLarkAgent, isExtensionPurpose(p.ID), isTaskPurpose(p.ID):
+	case ownModelRecord(p.ID), isExtensionPurpose(p.ID):
 		return purposeName(l, p.Parent)
 	case from == mc(l, modelAutoSource):
 		return mc(l, "source_auto_named", i18n.Args{"provider": name})
@@ -105,9 +106,23 @@ func inheritedLabel(l i18n.Lang, p ModelPurpose, base ModelBinding, from string,
 	return from
 }
 
-// modelNoAPIStatus explains an API use with nothing to call: launchers like "Claude Code default" only start a CLI on a
-// computer, so they never show up for these uses. A catalog name.
+// modelNoAPIStatus explains an API use with nothing to call without assuming which launchers are installed.
+// modelCodexNoAPIStatus adds Codex's limitation only when a visible Codex launcher actually exists.
 const modelNoAPIStatus = "status_no_api"
+const modelCodexNoAPIStatus = "status_codex_no_api"
+
+// noAPIStatus is the catalog key for an unconfigured API use, on the settings row and on a done judge's task alike.
+// It reads the last-seen node list: explaining a failed call must not start another round of node requests.
+func (s *Service) noAPIStatus(ctx context.Context) string {
+	seen, _ := s.zshrcLaunchersLastSeen(ctx)
+	views := s.launcherViewsFrom(ctx, seen, s.storedLaunchers(ctx))
+	if slices.ContainsFunc(views, func(v LauncherView) bool {
+		return !v.Hidden && v.Kind != "api" && viewAgent(v) == "codex"
+	}) {
+		return modelCodexNoAPIStatus
+	}
+	return modelNoAPIStatus
+}
 
 // modelUnverified is the status of a use nothing is known to be wrong with. Not translated: the apps compare it to
 // this text (iOS ModelConfigurationView, Android HttpVoiceExtensions) to leave it out.
@@ -141,7 +156,7 @@ func (s *Service) fallbackAPIProvider(ctx context.Context) string {
 // mergeModel puts over's choices on base: another provider starts from nothing (its model and effort are its own).
 func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Provider != "" && over.Provider != base.Provider {
-		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime}
+		base = ModelBinding{Provider: over.Provider, Runtime: base.Runtime, ConfigDir: base.ConfigDir}
 	}
 	if over.Model != "" {
 		base.Model = over.Model
@@ -152,10 +167,27 @@ func mergeModel(base, over ModelBinding) ModelBinding {
 	if over.Runtime != "" {
 		base.Runtime = over.Runtime
 	}
+	if over.ConfigDir != "" {
+		base.ConfigDir = over.ConfigDir
+	}
 	return base
 }
 
-// resolveModel reads category defaults, except the opt-in Lark /agent override and independent plugin models.
+// effectiveModel applies purpose defaults after merging, so choosing another provider cannot clear triage's default.
+// The In-meeting conversation takes no runtime from the main chat it follows: a room runs on Claude Code's CLI only.
+func effectiveModel(p ModelPurpose, base, over ModelBinding) ModelBinding {
+	b := mergeModel(base, over)
+	if p.ID == "inbox.triage" && b.Effort == "" {
+		b.Effort = "off"
+	}
+	if p.ID == purposeMeetingRoom {
+		b.Runtime = ""
+	}
+	return b
+}
+
+// resolveModel reads category defaults, except the opt-in overrides of Agents (agentsOverride), a task's own and
+// independent plugin models.
 func (s *Service) resolveModel(ctx context.Context, id string) (ModelBinding, error) {
 	return s.resolveModelRecord(ctx, id, nil)
 }
@@ -180,7 +212,7 @@ func (s *Service) resolveModelRecord(ctx context.Context, id string, r *modelRec
 		}
 		r = &read
 	}
-	return mergeModel(base, r.Binding), nil
+	return effectiveModel(p, base, r.Binding), nil
 }
 
 func launcherProvider(name string) string {
@@ -190,9 +222,47 @@ func launcherProvider(name string) string {
 	return "launcher." + name
 }
 
+// chatEffortForModel applies the provider's declared model capabilities without treating an empty list as a
+// declaration of "no efforts" (empty currently means unknown). NoEffort is explicit and always wins. AllEfforts is
+// the direct API's complete list when present; older Efforts-only entries keep off as a separate control.
+func chatEffortForModel(models []proto.ProviderModel, model, effort string) string {
+	if effort == "" {
+		return ""
+	}
+	for _, candidate := range models {
+		if candidate.ID != model {
+			continue
+		}
+		if candidate.NoEffort {
+			return ""
+		}
+		levels, direct := candidate.Efforts, len(candidate.AllEfforts) > 0
+		if direct {
+			levels = candidate.AllEfforts
+		}
+		if len(levels) == 0 {
+			return effort
+		}
+		wanted := effort
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "off", "none", "disabled":
+			if !direct {
+				return effort
+			}
+			wanted = "none"
+		}
+		if slices.Contains(levels, wanted) {
+			return effort
+		}
+		return ""
+	}
+	return effort
+}
+
 // apiConfig is the connection an API binding calls, with its key opened.
 func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, error) {
 	var c ai.Config
+	var providerModels []proto.ProviderModel
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		c = s.legacyModelConfig(ctx, b.Provider)
 	} else if name, ok := strings.CutPrefix(b.Provider, "launcher."); ok {
@@ -200,23 +270,47 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 		for _, l := range s.storedLaunchers(ctx) {
 			if l.Name == name {
 				if l.Kind != "api" && !messagesAPI(l.API) {
-					return c, i18n.Err("assistant-models.err_launcher_not_responses")
+					break // no gateway the manager can call: its CLI answers on a computer (models_run.go)
 				}
 				if err := checkAPITransport(l.Kind, l.API, l.Proxy, l.NoProxy, l.HeadersSealed != ""); err != nil {
 					return c, err
 				}
-				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, Bearer: l.BearerAuth()}
+				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
+				providerModels = l.Models
+				model, err := resolveAPITierAlias(l, cmp.Or(b.Model, l.Model))
+				if err != nil {
+					return c, err
+				}
+				c.Model, b.Model = model, ""
 				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
 					return c, err
 				}
 				c.APIKey = key
+				if l.HeadersSealed != "" {
+					headers, err := s.openKey(l.HeadersSealed)
+					if err != nil {
+						return c, i18n.Err("assistant-models_probe.err_open_headers")
+					}
+					for _, header := range parseHeaders(headers) {
+						if strings.EqualFold(header[0], "User-Agent") {
+							c.UserAgent = &header[1]
+						}
+					}
+				}
 				found = true
 				break
 			}
 		}
-		if !found {
-			return c, i18n.Err("assistant-models.err_not_callable")
+		if !found { // plain claude, a computer's own launcher, a managed one without a Messages gateway
+			// Claude Code only (an empty agent is Claude Code) and one the manager knows: a deleted launcher is an error.
+			if name != "claude" && !slices.ContainsFunc(s.launcherViews(ctx), func(v LauncherView) bool { return v.Name == name && (viewAgent(v) == "" || viewAgent(v) == "claude") }) {
+				return c, i18n.Err("assistant-models.err_not_callable")
+			}
+			c = ai.Config{RunLauncher: name, ViaMachine: s.settings(ctx).MachineID}
+			if c.ViaMachine == "" {
+				return c, i18n.Err("assistant-models.err_run_no_machine")
+			}
 		}
 	} else {
 		return c, i18n.Err("assistant-models.err_not_api")
@@ -224,13 +318,15 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 	if b.Model != "" {
 		c.Model = b.Model
 	}
-	c.ReasoningEffort = b.Effort
+	if b.Effort != "" {
+		c.ReasoningEffort = b.Effort
+	}
 	if c.API != "" && c.API != "messages" && c.API != "responses" && c.API != "chat" {
 		return c, i18n.Err("assistant-models.err_api_protocol")
 	}
-	if c.API != "responses" && b.Effort != "" {
-		c.ReasoningEffort = ""
-	} // Older Messages configurations carried an unused Responses-only field.
+	if c.API == "chat" {
+		c.ReasoningEffort = chatEffortForModel(providerModels, c.Model, c.ReasoningEffort)
+	}
 	return c, nil
 }
 
@@ -245,7 +341,7 @@ func (s *Service) purposeModel(id string) *ai.Client {
 		if err != nil {
 			return nil, err
 		}
-		return ai.New(c), nil
+		return s.aiClient(c), nil
 	})
 }
 
@@ -265,6 +361,7 @@ func (s *Service) modelFingerprint(ctx context.Context, id string) (string, erro
 
 // modelBindingFingerprint changes when what the binding runs on does (the provider's settings, the key sealed anew).
 func (s *Service) modelBindingFingerprint(ctx context.Context, b ModelBinding) string {
+	b.ConfigDir = "" // where new conversations start, not what this binding runs on (#4633)
 	raw, _ := json.Marshal(b)
 	if strings.HasPrefix(b.Provider, "legacy.") {
 		v, _ := json.Marshal(s.legacyModelConfig(ctx, b.Provider))

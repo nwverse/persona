@@ -145,13 +145,27 @@ func Digest(m *Manifest) string {
 		Node        *nodeConsent `json:"node,omitempty"`
 		Tools       []string     `json:"tools,omitempty"`
 		SendsAsUser []string     `json:"sends_as_user,omitempty"`
+		// HostIntegrations are existing configured CLI profiles, not downloaded
+		// tools or arbitrary host commands; a new integration needs consent.
+		HostIntegrations []string `json:"host_integrations,omitempty"`
 		// SecretSchemes: supplying secret values is agreed to like a permission (empty for any other extension, so
 		// their digests are what they were).
 		SecretSchemes []string `json:"secret_schemes,omitempty"`
 	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
-		sortedSchemes(m)})
+		hostIntegrationConsent(m), sortedSchemes(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// hostIntegrationConsent identifies the integration without its version: a
+// compatible version-range change is not a new host capability grant.
+func hostIntegrationConsent(m *Manifest) []string {
+	out := make([]string, 0, len(m.HostIntegrations))
+	for _, h := range m.HostIntegrations {
+		out = append(out, h.ID)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // sortedSchemes are the schemes m's secret_providers claim, sorted: what the digest holds of them.
@@ -204,6 +218,16 @@ func toolsLine(l i18n.Lang, tools []ToolSpec, title string) PermissionLine {
 	}
 	return PermissionLine{Key: "tools", Title: title,
 		Detail: permissionText(l, "tools_detail", i18n.Args{"tools": strings.Join(what, permissionText(l, "list_separator"))})}
+}
+
+// hostIntegrationLines makes a host CLI grant visible at install/upgrade.
+func hostIntegrationLines(l i18n.Lang, integrations []HostIntegrationSpec, title string) PermissionLine {
+	parts := make([]string, 0, len(integrations))
+	for _, h := range integrations {
+		parts = append(parts, h.ID+" "+h.Version)
+	}
+	return PermissionLine{Key: "host_integrations", Title: title,
+		Detail: permissionText(l, "host_integrations_detail", i18n.Args{"tools": strings.Join(parts, permissionText(l, "list_separator"))})}
 }
 
 // NewTools are m's tools old did not install the same way (a new name, or from somewhere else).
@@ -377,6 +401,11 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 		out = append(out, PermissionLine{Key: "recalls_sent", Title: permissionText(l, "recalls_sent_title"),
 			Detail: permissionText(l, "recalls_sent_detail", i18n.Args{"names": strings.Join(names, permissionText(l, "list_separator"))})})
 	}
+	// What its program writes for the assistant to read is shown, like recalls not agreed to: package instructions and
+	// skills are not either, and the user sees and switches each contribution in the extension's details.
+	if m.HasDataContent() {
+		out = append(out, permissionLine(l, "assistant_data"))
+	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string
 		for _, t := range topics {
@@ -401,6 +430,9 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if len(m.Tools) > 0 {
 		out = append(out, toolsLine(l, m.Tools, permissionText(l, "tools_title")))
 	}
+	if len(m.HostIntegrations) > 0 {
+		out = append(out, hostIntegrationLines(l, m.HostIntegrations, permissionText(l, "host_integrations_title")))
+	}
 	if m.NodeProgram() != nil {
 		out = append(out, nodeLines(l, m.Node, nil)...)
 		if names := nodeSecrets(m, nil); len(names) > 0 {
@@ -417,13 +449,26 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 func Added(old, m *Manifest) []PermissionLine { return AddedIn(i18n.Default, old, m) }
 
 // AddedIn generates only the permissions added by an upgrade, in the requested language.
-func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
+func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine { return AddedWith(l, old, m, nil) }
+
+// AddedWith is AddedIn naming, for each "config:" entry it adds, the address the installed extension's saved settings
+// hold (config, nil when there are none), as ExplainWith does.
+func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []PermissionLine {
 	var out []PermissionLine
 	if m.Runtime != nil && old.Runtime == nil {
 		out = append(out, permissionLine(l, "runs_code"))
 	}
 	if more := NewTools(old, m); len(more) > 0 {
 		out = append(out, toolsLine(l, more, permissionText(l, "tools_more_title")))
+	}
+	var moreIntegrations []HostIntegrationSpec
+	for _, h := range m.HostIntegrations {
+		if !slices.Contains(old.HostIntegrations, h) {
+			moreIntegrations = append(moreIntegrations, h)
+		}
+	}
+	if len(moreIntegrations) > 0 {
+		out = append(out, hostIntegrationLines(l, moreIntegrations, permissionText(l, "host_integrations_title")))
 	}
 	var hosts []string
 	var configured []ConfiguredNetwork
@@ -440,7 +485,7 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	if len(hosts) > 0 {
 		out = append(out, PermissionLine{Key: "network", Title: permissionText(l, "network_more_title"), Detail: strings.Join(hosts, permissionText(l, "list_separator"))})
 	}
-	out = append(out, configuredLines(l, m, configured, nil)...)
+	out = append(out, configuredLines(l, m, configured, config)...)
 	if m.Permissions.FullHub() && !old.Permissions.FullHub() {
 		out = append(out, permissionLine(l, "hub_api"))
 	} else if !m.Permissions.FullHub() {

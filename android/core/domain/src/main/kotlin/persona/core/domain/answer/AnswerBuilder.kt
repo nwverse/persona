@@ -40,6 +40,11 @@ data class AnswerDraft(
     val openedElicitationUrl: String? = null,
     /** A password card's typed password, from its own form at the moment of Run; never written to the draft journal. */
     val password: String = "",
+    /**
+     * A fields card's values by declared key ([hasFieldsForm], #4641), from its own form at the moment of Allow; never
+     * written to the draft journal (some are secrets).
+     */
+    val values: Map<String, String> = emptyMap(),
 )
 
 data class AnswerResult(
@@ -49,13 +54,31 @@ data class AnswerResult(
     val nextPage: Int? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class OptionDisplay(val text: String, val recommended: Boolean)
 
+/** Existing production call sites stay exactly as they were. */
 object AnswerBuilder {
+    @JvmStatic fun display(label: String): OptionDisplay = AnswerAdapters.current().display(label)
+
+    @JvmStatic fun build(
+        interaction: Interaction,
+        action: AnswerAction,
+        draft: AnswerDraft = AnswerDraft(),
+        context: AnswerContext = AnswerContext(),
+    ): AnswerResult = AnswerAdapters.current().build(interaction, action, draft, context)
+}
+
+/** The unmodified production behavior behind [AnswerAdapter]. */
+internal object KotlinAnswerBuilder {
     fun display(label: String): OptionDisplay {
         val suffix = listOf("(Recommended)", "（推荐）", "(推荐)").firstOrNull(label::endsWith) // i18n-ignore: marks the agent writes on its options
         return if (suffix == null) OptionDisplay(label, false)
-        else OptionDisplay(label.dropLast(suffix.length).trim(), true)
+        // QuestionOption.display uses CoreFoundation .whitespaces, including U+200B but not newlines.
+        else OptionDisplay(label.dropLast(suffix.length).trim {
+            it == ' ' || it == '\t' || it == '\u00a0' || it == '\u1680' ||
+                it in '\u2000'..'\u200b' || it == '\u202f' || it == '\u205f' || it == '\u3000'
+        }, true)
     }
 
     /** Both entry policy and form validation must pass before a Resolution is produced. */
@@ -71,6 +94,9 @@ object AnswerBuilder {
         // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
         val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
         if (!passwordRulesMet) return blocked()
+        // A fields card's values go only with its own Allow in the conversation; no other answer carries any.
+        if (draft.values.isNotEmpty() && !(interaction.hasFieldsForm && action == AnswerAction.Allow &&
+                context.entry == AnswerEntry.Conversation)) return blocked()
         if (action in setOf(AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation)) {
             if (interaction.kind != "elicitation" || context.entry != AnswerEntry.Conversation || context.locked) return blocked()
             return when (action) {
@@ -122,10 +148,11 @@ object AnswerBuilder {
         // Reasons and feedback are mutually exclusive with approval across all entries.
         if (action in listOf(AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise) &&
             (context.rejecting || draft.feedback.isNotEmpty())) return blocked()
-        // Allowing a card with fields needs their values: only a password card's Run carries one (checked above); other
-        // cards with fields have no form here (#4987).
-        if (action in listOf(AnswerAction.Allow, AnswerAction.Always) &&
-            (draft.message.isNotEmpty() || (interaction.needsFieldValues && draft.password.isEmpty()))) return blocked()
+        // Allowing a card with fields needs their values: a password card's Run carries its password (checked above), any
+        // other's Fill In & Allow every required field (#4641). Such a card is never allowed for good: no Always.
+        if (action in listOf(AnswerAction.Allow, AnswerAction.Always) && (draft.message.isNotEmpty() ||
+                (interaction.isSecretRun && draft.password.isEmpty()) ||
+                (interaction.hasFieldsForm && (action == AnswerAction.Always || !fieldsFilled(interaction, draft))))) return blocked()
         if (action == AnswerAction.Deny && draft.message.length > 4000) return blocked()
         if (context.entry == AnswerEntry.Notification && policyId == ApprovalAction.ChooseOption) {
             val validOption = when (action) {
@@ -143,7 +170,8 @@ object AnswerBuilder {
             AnswerAction.Reject -> resolved(Resolution(approve = false, feedback =
                 if (context.entry == AnswerEntry.Notification) draft.feedback.trim() else draft.feedback))
             AnswerAction.Allow -> resolved(Resolution(allow = true,
-                values = draft.password.takeIf { it.isNotEmpty() }?.let { mapOf(SecretRunRequest.PASSWORD to it) }))
+                values = draft.password.takeIf { it.isNotEmpty() }?.let { mapOf(SecretRunRequest.PASSWORD to it) }
+                    ?: draft.values.filterValues(String::isNotEmpty).takeIf { it.isNotEmpty() }))
             AnswerAction.Always -> resolved(Resolution(allow = true, always = true))
             AnswerAction.Deny -> {
                 if (policy.input == "none" && draft.message.isNotEmpty()) return blocked()
@@ -193,6 +221,13 @@ object AnswerBuilder {
             draft == AnswerDraft(password = draft.password)
         AnswerAction.Deny -> draft.message.isEmpty() && draft.password.isEmpty()
         else -> false
+    }
+
+    /** Every required field has something besides spaces, and nothing is filled in for a key the card does not declare. */
+    private fun fieldsFilled(interaction: Interaction, draft: AnswerDraft): Boolean {
+        val fields = interaction.fields.orEmpty()
+        return fields.all { it.optional || draft.values[it.key].orEmpty().isNotBlank() } &&
+            draft.values.keys.all { key -> fields.any { it.key == key } }
     }
 
     private fun question(questions: List<Question>, action: AnswerAction, draft: AnswerDraft): AnswerResult {

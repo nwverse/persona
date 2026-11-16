@@ -1,11 +1,13 @@
+import { conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 // Where a link opens (CLAUDE.md "Links open inside the app", docs/web/web.md "Links"). In a browser the browser is the app:
 // ordinary pages open in a new tab (most sites refuse to be framed and the page cannot tell it was refused, so a
 // framed panel would just be blank), Feishu documents and Moments posts open in the side panel's reader (the same links
 // the phone reads natively, FeishuLinks.route) when the hub reads Feishu (feature `lark`; otherwise they are ordinary
 // pages), and persona://session links move to that conversation. This hub's own agent and task pages (/s/<machine>/
-// <session>, /todos?id=…, the links the assistant writes) open in the side panel next to where they were clicked, or
-// move there on a narrow screen, which has no room beside the page; its conversations (/persona/<id>) move there. The
+// <session>, /todos?id=…, the links the assistant writes) open where the browser's setting says (lib/agent-open.ts,
+// #5424): in the side panel next to where they were clicked, the default, or as pages of their own (#5096); on a narrow
+// screen, which has no room beside the page, as pages either way. Its conversations (/persona/<id>) are pages. The
 // hub's own pages are those of this page's origin and of every address the hub advertises (hello's endpoints, its
 // public_url first: the address the assistant writes, which may not be the one this page was opened at).
 //
@@ -15,14 +17,19 @@ import { t } from "../i18n";
 import { useSyncExternalStore } from "react";
 import { uuid } from "./format";
 import { openPanel } from "./panel";
+import { agentOpenMode } from "./agent-open";
+import { leaveChat, taskRoute } from "./handoff";
 import { navigate, parse as parseRoute } from "./router";
 import { BASE, stripBase } from "./base";
-import { contextBody } from "./context-body";
+import { contextXML } from "./context-xml";
 import { otherManager } from "./manager-choice";
 import { localhostLink, PREVIEW_FEATURE } from "./preview";
 import type { PortLink } from "./port-links";
 import { getSession, getState, hubHas, larkOn, onHubEvent } from "./store";
 import { mediaMatches, NARROW } from "./viewport";
+
+/** An Agent's or a task's link opens in the side panel: Agents open there (lib/agent-open.ts) and there is room. */
+const beside = () => agentOpenMode() === "panel" && !mediaMatches(NARROW);
 
 /** What a Feishu document link points at, from the link alone (FeishuDocsKind.from). A wiki link does not say. */
 export type DocKind = "doc" | "sheet" | "bitable" | "mindnote" | "file" | "slides" | "wiki" | "page" | "whiteboard" | "other";
@@ -31,8 +38,8 @@ export type LinkRoute =
   | { kind: "doc"; doc: DocKind } // a Feishu cloud document: the panel's reader
   | { kind: "moments"; id: string } // a Moments post: the panel
   | { kind: "session"; mid: string; sid: string } // persona://session/<machine>/<session>: that conversation
-  | { kind: "agent"; mid: string; sid: string } // this hub's /s/<machine>/<session>: that agent's chat in the panel
-  | { kind: "task"; id: string } // this hub's /todos?id=<todo>: that task in the panel
+  | { kind: "agent"; mid: string; sid: string } // this hub's /s/<machine>/<session>: that agent's page
+  | { kind: "task"; id: string } // this hub's /todos?id=<todo>: that task's Agent's page, or its to-do's while it has none
   | { kind: "conversation"; sid: string; mid?: string; manager?: string } // this hub's /persona/<id>: that assistant conversation, in place (with the computer and manager its address names)
   | { kind: "web" } // any other http(s) page: a new tab
   | { kind: "system" } // mailto: / tel:: the browser hands it to the system
@@ -42,9 +49,9 @@ const FEISHU_HOSTS = ["larkoffice.com", "feishu.cn", "larksuite.com"];
 // First path segments the reader opens (FeishuLinks.isDoc).
 const DOC_PATHS = ["docx", "wiki", "docs", "sheets", "base", "mindnotes", "file", "slides"];
 
-function parse(url: string): URL | null {
+function parse(url: string, base?: string | URL): URL | null {
   try {
-    return new URL(url);
+    return new URL(url, base);
   } catch {
     return null;
   }
@@ -123,6 +130,16 @@ export function hubOrigins(endpoints: unknown): string[] {
 }
 
 const pageOrigin = () => (typeof location !== "undefined" ? [location.origin, ...advertised] : advertised);
+
+/** Whether an image URL is this page's or an advertised hub's own (its attachments and extension images), so it loads
+ *  inline. Relative and non-http(s) URLs are the hub's too; every other host stays behind the tap-to-load gate. */
+export function isOwnImageURL(src: string): boolean {
+  // Resolve protocol-relative URLs (//host/x) against the page origin: without a base they fail to parse and would be
+  // mistaken for the hub's own, letting a third-party image load past the gate (#8162).
+  const u = parse(src.trim(), typeof location !== "undefined" ? location.href : undefined);
+  if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return true;
+  return pageOrigin().includes(u.origin);
+}
 
 /** An agent, task or conversation page of the hub this page is served by (router.ts's /s/…, /todos, /persona/…, under the
  * sub-path the page is served at), or null. */
@@ -247,13 +264,15 @@ export function openLink(url: string, title?: string, manager?: string) {
     case "session":
       navigate({ name: "session", mid: r.mid, sid: r.sid });
       return;
+    // the side panel on a wide screen while Agents open there (#5424), else a page of its own (#5096, cindy's session
+    // links), the chat keeping its place
     case "agent":
-      if (mediaMatches(NARROW)) navigate({ name: "session", mid: r.mid, sid: r.sid });
-      else openPanel({ kind: "agent", mid: r.mid, sid: r.sid });
+      if (beside()) openPanel({ kind: "agent", mid: r.mid, sid: r.sid });
+      else leaveChat({ name: "session", mid: r.mid, sid: r.sid }, false);
       return;
     case "task":
-      if (mediaMatches(NARROW)) navigate({ name: "todos", id: r.id });
-      else openPanel({ kind: "task", todo: r.id });
+      if (beside()) openPanel({ kind: "task", todo: r.id });
+      else leaveChat(taskRoute(r.id), false);
       return;
     case "conversation":
       navigate({ name: "persona", sid: r.sid, ...(r.mid ? { mid: r.mid } : {}), ...(r.manager ? { manager: r.manager } : {}) });
@@ -307,39 +326,23 @@ export function prefetchLink(url: string | undefined, manager?: string) {
 /** A piece of a page the user picked (LinkSheet.swift ContextRef). `text` is "(whole document)" in Chinese for a whole document. */
 export interface ContextRef {
   id: string;
-  /** "workspace": a folder on a computer picked in the @ menu, carrying `machine` and `cwd` (docs/protocol/protocol.md "Tags in messages"). */
-  kind: "context" | "edit" | "workspace";
+  /** "workspace": a folder on a computer picked in the @ menu, carrying `machine` and `cwd` (docs/protocol/protocol.md "Tags in messages").
+   *  "forward": a message forwarded from another chat (lib/forward.ts, docs/protocol/protocol.md "Forwarded messages"). */
+  kind: "context" | "edit" | "workspace" | "forward" | "skill";
   title: string;
   url: string;
   text: string;
-  /** Extra attributes written on the tag after kind / title / url (a workspace's `machine` and `cwd`). */
+  /** Extra attributes written on the tag after kind / title / url (a workspace's `machine` and `cwd`, a forward's `msg` and metadata). */
   attrs?: Record<string, string>;
+  /** A forward's line under its card over the box: which computer it comes from and where it goes. Shown, never sent. */
+  route?: string;
 }
 
 // i18n-ignore: a marker inside <persona-context>, the app (QuoteViews.swift) matches it
 export const WHOLE = "（整篇）";
 
-function escAttr(s: string) {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-/** `<persona-context kind="…" title="…" url="…">\ntext\n</persona-context>`, as the phone writes it. */
-export function contextXML(r: Pick<ContextRef, "kind" | "title" | "url" | "text" | "attrs">): string {
-  const body = contextBody(r.text);
-  const extra = Object.entries(r.attrs ?? {})
-    .filter(([k]) => /^[a-z_]+$/.test(k) && k !== "kind" && k !== "title" && k !== "url")
-    .map(([k, v]) => ` ${k}="${escAttr(v)}"`)
-    .join("");
-  return `<persona-context kind="${escAttr(r.kind)}" title="${escAttr(r.title)}" url="${escAttr(r.url)}"${extra}>\n${body}\n</persona-context>`;
-}
-
-/** A message with its picked contexts in front (ChatView.swift sendText). */
-export function withContexts(refs: Pick<ContextRef, "kind" | "title" | "url" | "text" | "attrs">[], text: string, hasImages = false): string {
-  const typed = text.trim();
-  if (!refs.length) return typed;
-  const body = typed || (hasImages ? t("lib-links.see_images") : t("lib-links.see_context"));
-  return `${refs.map(contextXML).join("\n")}\n\n${body}`;
-}
+// writing the tags: lib/context-xml.ts (no store, no router: New agent and the tests take it alone)
+export { contextXML, withContexts } from "./context-xml";
 
 /** "AI edit": the picked text and what to do with it, sent at once (LinkSheet.swift sendEdit). */
 export function editMessage(r: Pick<ContextRef, "title" | "url" | "text">, ask: string): string {
@@ -366,9 +369,10 @@ export function getContexts(key: string): ContextRef[] {
 }
 
 export function addContext(key: string, ref: ContextRef) {
+  if (conversationKeyDeleted(key)) return;
   const cur = getContexts(key);
   // the same passage of the same page once
-  if (cur.some((c) => c.url === ref.url && c.text === ref.text && c.kind === ref.kind)) return;
+  if (cur.some((c) => ref.kind === "skill" ? c.kind === "skill" && c.attrs?.ref === ref.attrs?.ref : c.url === ref.url && c.text === ref.text && c.kind === ref.kind)) return;
   pending.set(key, [...cur, ref]);
   emitContexts();
 }
@@ -449,3 +453,8 @@ export function whenComposer(key: string | undefined, run: (c: ComposerHandle) =
     expired?.();
   }, ms);
 }
+
+onConversationDeleted((mid, sid) => {
+  pending.delete(`${mid}/${sid}`);
+  emitContexts();
+});

@@ -45,7 +45,8 @@ var (
 )
 
 // AskOf is the question text's last words put to the user, cleaned of Markdown and cut to a line; "" when they ask
-// nothing.
+// nothing. Words alone: what a session asks also depends on the reply's closeout (closeout.AskOf, which the node and
+// the manager call). That rule is not here because the hub's program links this package (#4371).
 func AskOf(text string) string {
 	last, n := askSentences(text)
 	if n == 0 {

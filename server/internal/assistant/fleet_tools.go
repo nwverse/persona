@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -24,18 +27,13 @@ const runtimeCLITool = "phone_runtime_cli"
 // are ok and give their tools to agents too (mail); for the assistant also its own, then Cua's, ego's and those of
 // the connectors only it gets (Feishu, GitHub…).
 func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
-	var phone struct {
-		Tools []proto.Tool `json:"tools"`
-	}
-	if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneTools, map[string]any{}, &phone); err != nil {
-		s.logf("mcp tools: the phone's: %v", err)
-	}
 	var agents, assistantOnly []proto.Tool
 	if s.ext != nil {
 		agents, assistantOnly = s.ext.AgentTools(ctx, assistant)
 	}
-	tools := append(phone.Tools, agents...)
+	tools := append(s.phoneTools(ctx), agents...)
 	if !assistant {
+		tools = append(tools, s.knowledgeFolderTools(ctx)...)
 		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
 		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
 	}
@@ -46,32 +44,112 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 	return tools
 }
 
+// phoneToolTries is how many times a tool list asks the hub for the phone's tools, phoneToolRetry apart, before it
+// takes the ones the hub last listed (#6422); tests shorten the wait.
+var (
+	phoneToolTries = 3
+	phoneToolRetry = 500 * time.Millisecond
+)
+
+// keptPhoneTools is the phone's tools as the hub last listed them (ok: it has answered since the manager started).
+type keptPhoneTools struct {
+	mu    sync.Mutex
+	tools []proto.Tool
+	ok    bool
+}
+
+// phoneTools are the phone's tools for a tool list, as the hub lists them now. Tool refresh is driven by task links,
+// not phone connectivity, and older MCP clients list only once. A list made while the hub can't answer (restarting,
+// its link coming back) must not leave the model thinking the phone has no tools (#6422):
+// the hub is asked again briefly, then the list it last gave is used. A call is still the phone's to refuse (a source
+// turned off since). Only a manager the hub never answered lists none, as before.
+func (s *Service) phoneTools(ctx context.Context) []proto.Tool {
+	var err error
+	for try := 1; ; try++ {
+		var phone struct {
+			Tools []proto.Tool `json:"tools"`
+		}
+		if err = s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneTools, map[string]any{}, &phone); err == nil {
+			k := &s.phoneKept
+			k.mu.Lock()
+			k.tools, k.ok = slices.Clone(phone.Tools), true
+			k.mu.Unlock()
+			return phone.Tools
+		}
+		if try >= phoneToolTries || ctx.Err() != nil {
+			break
+		}
+		t := time.NewTimer(phoneToolRetry)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+		case <-t.C:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	k := &s.phoneKept
+	k.mu.Lock()
+	tools, ok := slices.Clone(k.tools), k.ok
+	k.mu.Unlock()
+	if !ok {
+		s.logf("mcp tools: the phone's: %v; none listed yet, so none", err)
+		return nil
+	}
+	s.logf("mcp tools: the phone's: %v; the %d the hub last listed", err, len(tools))
+	return tools
+}
+
 // sessionMCPTools are machine's conversation session's tools: a guest conversation's only its own (guest.go; the
 // node saying it is one, the hub not knowing it or not able to tell: none), any other's mcpTools.
 func (s *Service) sessionMCPTools(ctx context.Context, machine, session string, assistant, guestHint bool) []proto.Tool {
-	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
-	allowed, guest, err := s.guestOf(ctx, machine, session)
+	tools, err := s.sessionMCPToolsChecked(ctx, machine, session, assistant, guestHint)
 	if err != nil {
 		s.logf("mcp tools: %v", err)
 		return []proto.Tool{}
 	}
+	return tools
+}
+
+// Discovery with a cursor must distinguish a denied/empty list from a failed
+// state read. Otherwise the failed list is cached until an unrelated link changes.
+func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session string, assistant, guestHint bool) ([]proto.Tool, error) {
+	assistant = assistant && s.assistantDiscovery(ctx, machine, session)
+	allowed, guest, err := s.guestOf(ctx, machine, session)
+	if err != nil {
+		return nil, err
+	}
+	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}, nil
+		}
+		return guestTools(meetingRoomTools(), allowed), nil
+	}
 	if !guest {
 		if guestHint {
-			return []proto.Tool{}
+			return []proto.Tool{}, nil
 		}
 		if s.isWorkMachine(machine) {
-			return s.AgentTools()
+			return s.AgentTools(), nil
+		}
+		if !assistant && session != "" {
+			if err := s.ensureTodosLoaded(ctx); err != nil {
+				return nil, err
+			}
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if !assistant {
-			tools = append(tools, s.leaderTools(ctx, machine, session)...) // a task leader's task_plan (task_leader.go)
+			tools = append(tools, s.leaderTools(ctx, machine, session)...)
+			tools = append(tools, s.spawnTools(ctx, machine, session)...)
 		}
-		return tools
+		return tools, nil
 	}
 	if s.isWorkMachine(machine) {
-		return []proto.Tool{}
+		return []proto.Tool{}, nil
 	}
-	return guestTools(s.mcpTools(ctx, assistant), allowed)
+	tools := guestTools(s.mcpTools(ctx, assistant), allowed)
+	return slices.DeleteFunc(tools, func(t proto.Tool) bool { return isKnowledgeFolderTool(t.Name) }), nil
 }
 
 // guestRefuses refuses a guest conversation's call of a tool it was not given (and any call of one the hub cannot
@@ -84,7 +162,7 @@ func (s *Service) guestRefuses(ctx context.Context, machine, session, name strin
 		return proto.TextResult("tool unavailable for the moment: "+name, true), true
 	case !guest && guestHint:
 		return proto.TextResult("unknown tool "+name, true), true
-	case guest && !slices.Contains(allowed, name):
+	case guest && (isKnowledgeFolderTool(name) || !slices.Contains(allowed, name)):
 		return proto.TextResult("unknown tool "+name, true), true
 	}
 	return proto.ToolResult{}, false
@@ -105,6 +183,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	if assistant && !s.assistantCaller(ctx, machine, session) {
 		return proto.TextResult(i18n.T(s.lang(ctx), "assistant-privacy.assistant_denied"), true)
 	}
+	if isKnowledgeFolderTool(name) && !assistant {
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
+	}
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
 			return res
@@ -112,6 +193,13 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	}
 	if !assistant && isAgentTool(name) {
 		return s.agentTool(ctx, machine, session, name, args)
+	}
+	if !assistant && name == "task_spawn" {
+		text, err := s.taskSpawn(ctx, machine, session, args)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
+		return proto.TextResult(text, false)
 	}
 	if !assistant && name == "task_plan" { // only a task leader's agent has it (task_leader.go)
 		return s.leaderTaskPlan(ctx, machine, session, args)
@@ -129,6 +217,11 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	case name == runtimeCLITool:
 		return proto.TextResult("unknown tool "+name, true)
 	case strings.HasPrefix(name, "phone_"):
+		if name == "phone_notify" && s.justMeNow(machine, session) {
+			// A Just me turn (meeting_justme.go): a phone on the table shows its notifications to the room. As
+			// notify_user's: nothing goes out, the text stays in the conversation, which the meeting page shows.
+			return proto.TextResult(justMeNotice(s.lang(ctx)), false)
+		}
 		if name == "phone_notify" && s.inHealth(ctx, session) {
 			var a map[string]any
 			if err := json.Unmarshal(args, &a); err != nil {
@@ -141,7 +234,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 			}
 		}
 		var res proto.ToolResult
-		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, map[string]any{"name": name, "args": args}, &res); err != nil {
+		params := map[string]any{"name": name, "args": args}
+		mcpWaitParams(ctx, params)
+		if err := s.appCall(ctx, assistantwire.AppPhone, assistantwire.PhoneCall, params, &res); err != nil {
 			return proto.TextResult(err.Error(), true)
 		}
 		return res
@@ -191,16 +286,33 @@ func (s *Service) isOwnTool(ctx context.Context, name string) bool {
 }
 
 // assistantLark is what the assistant's machine gets for its skills' commands (proto.AssistantLark): lark-cli's
-// settings and rules, and the plugins' command gates (the hub's, app.call hub). Another machine gets nothing: the
-// credentials go to the assistant's machine only (its process runs them).
+// settings and rules, and the plugins' command gates (the hub's, app.call hub). The credentials go to the assistant's
+// machine only (its process runs them): another personal machine gets otherMachineLark, a work machine nothing.
 func (s *Service) assistantLark(ctx context.Context, machine string) (proto.AssistantLark, error) {
-	if s.isWorkMachine(machine) || !s.sameMachine(machine, s.settings(ctx).MachineID) {
+	if s.isWorkMachine(machine) || s.ext == nil {
 		return proto.AssistantLark{}, nil
 	}
-	if s.ext == nil {
-		return proto.AssistantLark{}, nil
+	cfg, err := s.ext.AssistantLark(ctx)
+	if err != nil || s.sameMachine(machine, s.settings(ctx).MachineID) {
+		return cfg, err
 	}
-	return s.ext.AssistantLark(ctx)
+	return otherMachineLark(cfg), nil
+}
+
+// otherMachineLark is what another personal machine's gate gets for the assistant conversations the manager starts
+// there (a Lark /agent placed on it, #5479): the rules and lark-cli's name, so its lark-cli calls go by lark-cli's own
+// risk levels instead of all being confirmed. Not the command gates (their credentials) nor the extensions' MCP
+// servers, and not the profile, which names one in the manager computer's lark-cli: that machine uses its lark-cli's
+// default profile, and an absolute bin is looked up there by its base name.
+func otherMachineLark(cfg proto.AssistantLark) proto.AssistantLark {
+	out := proto.AssistantLark{Rules: cfg.Rules}
+	if cfg.CLI != nil {
+		out.CLI = &proto.LarkCLI{Bin: cfg.CLI.Bin}
+		if out.CLI.Bin != "" {
+			out.CLI.Bin = filepath.Base(out.CLI.Bin)
+		}
+	}
+	return out
 }
 
 // assistantSummary is the text a gated command's card shows, as its plugin names what the ids are; false: none.

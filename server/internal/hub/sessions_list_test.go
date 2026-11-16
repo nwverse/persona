@@ -46,6 +46,90 @@ func runtimePage(t *testing.T, h *Hub, query string) listTestPage {
 	return page
 }
 
+func TestRuntimeAgentsOnly(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	h.sessionListIndex()
+	m.sessions = []proto.Session{
+		{MachineID: "demo", SessionID: "agent-a", State: "working"},
+		{MachineID: "demo", SessionID: "agent-b", State: "idle"},
+		{MachineID: "demo", SessionID: "assistant", State: "working", Assistant: true},
+		{MachineID: "demo", SessionID: "former-main", State: "working", Assistant: true, Archived: true},
+		{MachineID: "demo", SessionID: "health", State: "working", Space: "health"},
+	}
+
+	indexRows := func() {
+		list := h.shown("demo", m.sessions)
+		h.sessionsMu.Lock()
+		defer h.sessionsMu.Unlock()
+		h.indexSessionsLocked("demo", list, encodeSessions(list))
+	}
+	indexRows()
+
+	read := func(query string, status int, dst any) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+query, nil))
+		if w.Code != status {
+			t.Fatalf("%s: %d %s", query, w.Code, w.Body)
+		}
+		if dst != nil {
+			if err := json.Unmarshal(w.Body.Bytes(), dst); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if !slices.Contains(h.features(), featureSessionsAgentsOnly) || slices.Contains(proto.Features, featureSessionsAgentsOnly) {
+		t.Fatal("the hub must advertise the Agents-only filter independently of node capabilities")
+	}
+	if page := runtimePage(t, h, "limit=50&agents_only=0"); page.Total != 5 || len(page.Sessions) != 5 {
+		t.Fatalf("ordinary list changed: %+v", page)
+	}
+	first := runtimePage(t, h, "limit=1&summary=1&agents_only=1")
+	if first.Total != 2 || !first.HasMore || len(first.Sessions) != 1 || first.Sessions[0].SessionID != "agent-a" {
+		t.Fatalf("first page: %+v", first)
+	}
+	var counts sessionlist.Counts
+	read("agents_only=1&counts=1", 200, &counts)
+	if counts.Total != 2 || !reflect.DeepEqual(counts.State, map[string]int{"working": 1, "idle": 1}) {
+		t.Fatalf("scoped counts: %+v", counts)
+	}
+	var withCounts struct {
+		listTestPage
+		Counts sessionlist.Counts
+	}
+	read("agents_only=1&summary=1&with_counts=1&state=working", 200, &withCounts)
+	if withCounts.Total != 1 || withCounts.Counts.Total != 1 || withCounts.Counts.State["working"] != 1 {
+		t.Fatalf("scoped page with counts: %+v", withCounts)
+	}
+	var catalog sessionCatalog
+	read("agents_only=1&catalog=1", 200, &catalog)
+	if catalog.Total != 2 {
+		t.Fatalf("scoped catalog: %+v", catalog)
+	}
+
+	// One row leaves the scope, another enters it. Neither a frozen cursor nor other runtime views should change scope.
+	m.sessions[0].Assistant = true
+	m.sessions[2].Assistant = false
+	indexRows()
+	cursor := neturl.QueryEscape(first.Cursor)
+	next := runtimePage(t, h, "limit=1&summary=1&agents_only=true&cursor="+cursor)
+	if next.Total != 2 || next.Revision != first.Revision || next.HasMore ||
+		len(next.Sessions) != 1 || next.Sessions[0].SessionID != "agent-b" {
+		t.Fatalf("scoped cursor: %+v", next)
+	}
+	read("limit=1&summary=1&cursor="+cursor, 400, nil)
+	read("agents_only=invalid", 400, nil)
+	read("agents_only=1&agents_only=0", 400, nil)
+	delta := runtimePage(t, h, "agents_only=1&summary=1&since="+neturl.QueryEscape(first.Revision))
+	if delta.Total != 2 || len(delta.Sessions) != 1 || delta.Sessions[0].SessionID != "assistant" ||
+		!slices.Equal(delta.Remove, []string{runtimeListID("demo", "agent-a")}) {
+		t.Fatalf("scoped delta: %+v", delta)
+	}
+}
+
 func TestRuntimeExactLookupFullRow(t *testing.T) {
 	h := newTestHub(t)
 	m := newMachine(h, MachineConfig{ID: "demo"})
@@ -77,10 +161,10 @@ func TestRuntimeExactLookupFullRow(t *testing.T) {
 	h.machines, h.byID["other"] = append(h.machines, other), other
 	q := "summary=0&limit=50&machine_id=demo&session_id=" + neturl.QueryEscape(full.SessionID)
 	exact := runtimePage(t, h, q)
-	legacy := runtimePage(t, h, "machine_id=demo")
+	legacy := runtimePage(t, h, "machine_id=demo&summary=0&limit=1&session_id="+neturl.QueryEscape(full.SessionID))
 	if exact.Total != 1 || len(exact.Sessions) != 1 || exact.HasMore || exact.Cursor != "" || len(exact.Remove) != 0 || exact.Revision == "" ||
 		!reflect.DeepEqual(exact.Sessions[0], legacy.Sessions[0]) {
-		t.Fatalf("exact row differs from legacy collection: %+v", exact)
+		t.Fatalf("exact row differs from the same full-row page: %+v", exact)
 	}
 	if full := exact.Sessions[0]; len(full.Background) != 1 || len(full.Subagents) != 1 || len(full.Workflows) != 1 || len(full.Queued) != 2 ||
 		full.PermissionMode != "acceptEdits" || full.Launcher != "example" || full.Ultracode == nil || full.Loop.Prompt == "" {
@@ -201,8 +285,78 @@ func TestRuntimeListPagesAndSummary(t *testing.T) {
 		t.Fatalf("filtered: %+v", filtered)
 	}
 	legacy := runtimePage(t, h, "machine_id=demo")
-	if len(legacy.Sessions) != 3 || len(legacy.Sessions[0].Background) != 1 || len([]rune(legacy.Sessions[0].LastText)) != 500 {
+	// The legacy answer carries the same bounded rows the paged list does (#3759): a whole fleet's list was hundreds of
+	// KB per pull, cut to the same summary — last_text bounded, background work left out (its counts ride along).
+	if len(legacy.Sessions) != 3 || len(legacy.Sessions[0].Background) != 0 || len([]rune(legacy.Sessions[0].LastText)) != 180 {
 		t.Fatalf("legacy changed: %+v", legacy)
+	}
+}
+
+// The whole-list answer (no opt-in keys) keeps its exact legacy shape — the keys apps that never opted into the
+// bounded API decode — while its rows are bounded like a summary's: long texts cut, the task arrays left out, none
+// of the summary's own additions (pane_source, the counts scalars) added. A whole fleet's answer was hundreds of KB
+// per pull while every sessions_list hint reread it.
+func TestLegacyListBoundedRows(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	now := time.Now().UTC()
+	m.sessions = []proto.Session{{
+		MachineID: "demo", SessionID: "busy", Title: strings.Repeat("t", 600), Cwd: "/demo/app", Status: proto.StatusWorking,
+		UpdatedAt: now, LastText: strings.Repeat("你", 600), Activity: strings.Repeat("a", 600),
+		Subagents: []proto.Subagent{{ID: "sub", Running: true}}, Background: []proto.BackgroundTask{{ID: "task"}},
+		Workflows: []proto.Workflow{{TaskID: "flow", Running: true}}, Queued: []string{"waiting"}, Ports: []proto.Port{{Port: 3000}},
+	}}
+	w := httptest.NewRecorder()
+	h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions", nil))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, gained := range []string{`"pane_source"`, `"waiting"`, `"background_count"`, `"running_subagents"`, `"background_tasks_count"`} {
+		if strings.Contains(body, gained) {
+			t.Fatalf("legacy answer gained %s: %s", gained, body)
+		}
+	}
+	for _, kept := range []string{`"subagents"`, `"background"`, `"workflows"`, `"queued"`, `"ports"`} {
+		if strings.Contains(body, kept) {
+			t.Fatalf("legacy answer kept the task array %s: %s", kept, body)
+		}
+	}
+	var v struct {
+		Sessions []proto.Session `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Sessions) != 1 {
+		t.Fatalf("rows: %d", len(v.Sessions))
+	}
+	row := v.Sessions[0]
+	if len([]rune(row.Title)) != 256 || len([]rune(row.LastText)) != 180 || len([]rune(row.Activity)) != 120 {
+		t.Fatalf("texts not bounded: title=%d last_text=%d activity=%d", len([]rune(row.Title)), len([]rune(row.LastText)), len([]rune(row.Activity)))
+	}
+}
+
+// q finds a row by its branch, as the apps' own searches do (#4770): a working tree's sessions by `fix/123`.
+func TestRuntimeListSearchesTheBranch(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	m.sessions = []proto.Session{
+		{MachineID: "demo", SessionID: "tree", Title: "Login form", State: "idle", UpdatedAt: time.Unix(100, 0), Cwd: "/demo/app-wt",
+			RepoRoot: "/demo/app", Worktree: "/demo/app-wt", Branch: "fix/123-login"},
+		{MachineID: "demo", SessionID: "main", Title: "Release notes", State: "idle", UpdatedAt: time.Unix(90, 0), Cwd: "/demo/app",
+			RepoRoot: "/demo/app", Worktree: "/demo/app", Branch: "main"},
+	}
+	for query, want := range map[string]string{"FIX/123": "tree", "123-login": "tree", "release": "main"} {
+		page := runtimePage(t, h, "summary=1&q="+neturl.QueryEscape(query))
+		if page.Total != 1 || page.Sessions[0].SessionID != want || page.Sessions[0].Branch == "" {
+			t.Fatalf("q=%s: %+v", query, page)
+		}
+	}
+	if page := runtimePage(t, h, "summary=1&q=fix%2F999"); page.Total != 0 {
+		t.Fatalf("another branch: %+v", page)
 	}
 }
 
@@ -349,6 +503,10 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 		full[row.id] = row.raw
 	}
 	var items []sessionlist.Item
+	indexed := map[string]bool{} // the rows indexed: those a row can be folded under
+	for _, row := range list {
+		indexed[row.SessionID] = row.SessionID != "" && len(full[row.SessionID]) > 0
+	}
 	seen := map[string]bool{}
 	for _, row := range list {
 		if row.SessionID == "" || seen[row.SessionID] || len(full[row.SessionID]) == 0 {
@@ -357,11 +515,25 @@ func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []s
 		seen[row.SessionID] = true
 		id, _ := json.Marshal([2]string{mid, row.SessionID})
 		summary, _ := json.Marshal(runtimeSummary(row))
+		root := ""
+		if indexed[row.FoldedUnder()] {
+			root = row.FoldedUnder()
+		}
+		kids := row.Children()
+		todo := ""
+		if row.Todo != nil {
+			todo = row.Todo.ID
+		}
+		foldedWaiting := row.BackgroundWaiting && kids.Working == 0 && kids.NeedsYou == 0
+		var fold *sessionlist.Fold // none: no hierarchy or to-do, shown with its own state and background wait
+		if f := (sessionlist.Fold{Root: root, State: row.FoldedState(), Todo: todo, BackgroundWaiting: foldedWaiting}); f != (sessionlist.Fold{State: row.State, BackgroundWaiting: row.BackgroundWaiting}) {
+			fold = &f
+		}
 		items = append(items, sessionlist.Item{
 			ID: string(id), Machine: mid, Project: cmp.Or(row.RepoRoot, row.WorkspaceCwd, row.Cwd), Group: cmp.Or(row.SpaceID, row.WorkspaceID),
 			PaneSource: sessionorigin.Of(row), State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind,
-			Provider: row.Agent, UpdatedAt: row.UpdatedAt,
-			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
+			Provider: row.Agent, UpdatedAt: row.UpdatedAt, Fold: fold, Private: healthSession(&row), Assistant: row.Assistant,
+			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.Branch, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
 			Summary:    json.RawMessage(summary),
 			Full: runtimeListFields(full[row.SessionID], struct {
 				PaneSource string `json:"pane_source"`
@@ -435,11 +607,22 @@ func TestIndexRowReuseMatchesFullPath(t *testing.T) {
 		func(r *proto.Session, n int) {
 			r.RepoRoot, r.WorkspaceCwd, r.Cwd = cycle(n, "", "/demo/repo", ""), cycle(n, "", "", "/demo/real"), cycle(n, "/demo/app", "/demo/b")
 		},
+		func(r *proto.Session, n int) { // searched by q (#4770)
+			r.Branch, r.SlotName = cycle(n, "", "fix/needle-1", "main"), cycle(n, "", "Demo workspace")
+		},
 		func(r *proto.Session, n int) {
 			r.State, r.BackgroundWaiting = cycle(n, "working", "needs_you", "idle"), n%2 == 0
 		},
+		func(r *proto.Session, n int) { // open to-do: none, one id, another (#6662)
+			r.Todo = []*proto.TodoRef{nil, {ID: "todo_a"}, {ID: "todo_b"}}[n%3]
+		},
 		func(r *proto.Session, n int) { r.Rev++ },
 		func(r *proto.Session, n int) { r.Archived = n%2 == 0 }, // hidden from the lists while archived
+		func(r *proto.Session, n int) { // folded under a row listed or not, as a tab's worker, a side or neither, a rollup of its own (#5120, #5180, #7944)
+			r.SetFold(cycle(n, "", "s01", "s02", "missing"), cycle(n, "", "", proto.FoldedAsWorker, proto.FoldedAsSide), cycle(n, "", "", "", "s03", ""),
+				[]*proto.SessionChildren{nil, {Total: 2, Working: 1, Workers: 1}, {Total: 1, NeedsYou: 1},
+					{Total: 2, Sides: 2, SidesWorking: 1, SidesUnread: 1}}[n%4])
+		},
 	}
 	listEdits := []func(list []proto.Session, n int) []proto.Session{
 		func(list []proto.Session, n int) []proto.Session {
@@ -475,14 +658,18 @@ func TestIndexRowReuseMatchesFullPath(t *testing.T) {
 		epoch := strings.Split(i.Revision(), ".")[1]
 		var out []any
 		for _, o := range []sessionlist.Options{{Limit: 200}, {Limit: 200, Summary: true}, {Limit: 200, Q: "needle"}, {Limit: 200, Since: since[0]},
-			{Limit: 200, Summary: true, Since: since[1]}} {
+			{Limit: 200, Summary: true, Since: since[1]}, {Limit: 200, Roots: true}, {Limit: 200, Roots: true, Since: since[0]},
+			{Limit: 200, Machine: "demo", Under: "s01", Summary: true}} {
 			p, err := i.Query(o)
 			p.Revision = strings.Replace(p.Revision, epoch, "E", 1)
 			out = append(out, p, fmt.Sprint(err))
 		}
-		c, err := i.Counts(sessionlist.Options{})
-		c.Revision = strings.Replace(c.Revision, epoch, "E", 1)
-		return append(out, c, fmt.Sprint(err))
+		for _, o := range []sessionlist.Options{{}, {Roots: true}, {Roots: true, State: "working"}} {
+			c, err := i.Counts(o)
+			c.Revision = strings.Replace(c.Revision, epoch, "E", 1)
+			out = append(out, c, fmt.Sprint(err))
+		}
+		return out
 	}
 	first := [2]string{got.Revision(), ref.Revision()}
 	prev := first
@@ -785,7 +972,7 @@ func TestSessionsOfOneManager(t *testing.T) {
 // whole list come from its computers only (one computer would fall back to a machine_id lookup and skip ownPage / ownCounts).
 func TestSessionsOfOneManagerSeveralComputersExtension(t *testing.T) {
 	h, url, _, b := reachHub(t) // A has ma (s3); B has mb (b1)
-	h.cfg.Machines = append(h.cfg.Machines, MachineConfig{ID: "mc", Name: "mc", Kind: "local"})
+	addCfgMachines(h, MachineConfig{ID: "mc", Name: "mc", Kind: "local"})
 	if _, err := h.moveMachine(context.Background(), "mc", "m-0b0b0b"); err != nil {
 		t.Fatal(err)
 	}
@@ -810,5 +997,77 @@ func TestSessionsOfOneManagerSeveralComputersExtension(t *testing.T) {
 	var c sessionlist.Counts
 	if err := json.Unmarshal([]byte(out), &c); code != 200 || err != nil || c.Total != 2 || !reflect.DeepEqual(c.Machine, map[string]int{"mb": 1, "mc": 1}) {
 		t.Errorf("B's counts through its extension: %d %s %v", code, out, err)
+	}
+}
+
+// with_counts=1 (#4858): the page is what it is without the key, and its counts are what ?counts=1 with the same
+// filters answers, ignoring since, cursor and limit, so one read replaces a refresh's two.
+func TestRuntimePageWithCounts(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	for n := range 60 {
+		state := "idle"
+		if n%3 == 0 {
+			state = "working"
+		}
+		m.sessions = append(m.sessions, proto.Session{MachineID: "demo", SessionID: fmt.Sprintf("s%02d", n), State: state})
+	}
+	read := func(query string) (int, []byte) {
+		w := httptest.NewRecorder()
+		h.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?"+query, nil))
+		return w.Code, w.Body.Bytes()
+	}
+	counts := func(query string) sessionlist.Counts {
+		t.Helper()
+		code, body := read("counts=1" + query)
+		var c sessionlist.Counts
+		if err := json.Unmarshal(body, &c); code != 200 || err != nil {
+			t.Fatalf("counts%s: %d %s %v", query, code, body, err)
+		}
+		return c
+	}
+	first := runtimePage(t, h, "summary=1&limit=50")
+	for _, tc := range []struct{ page, filters string }{
+		{"summary=1&limit=50", ""},
+		{"summary=1&limit=10", "&state=working"},
+		{"summary=1&limit=50&since=" + neturl.QueryEscape(first.Revision), ""},
+		{"summary=1&limit=50&cursor=" + neturl.QueryEscape(first.Cursor), ""},
+	} {
+		code, body := read(tc.page + tc.filters + "&with_counts=1")
+		var got struct {
+			listTestPage
+			Counts *sessionlist.Counts `json:"counts"`
+		}
+		if err := json.Unmarshal(body, &got); code != 200 || err != nil || got.Counts == nil {
+			t.Fatalf("%s: %d %s %v", tc.page, code, body, err)
+		}
+		want := runtimePage(t, h, tc.page+tc.filters)
+		if (got.Cursor == "") != (want.Cursor == "") {
+			t.Errorf("%s: cursor %q, want one like %q", tc.page, got.Cursor, want.Cursor)
+		}
+		got.Cursor, want.Cursor = "", "" // every read freezes its own view, under a new token
+		if !reflect.DeepEqual(got.listTestPage, want) {
+			t.Errorf("%s: the page changed with with_counts:\n got %+v\nwant %+v", tc.page, got.listTestPage, want)
+		}
+		if want := counts(tc.filters); !reflect.DeepEqual(*got.Counts, want) {
+			t.Errorf("%s: counts %+v, want %+v", tc.page, *got.Counts, want)
+		}
+	}
+	if c := counts("&state=working"); c.Total != 20 {
+		t.Fatalf("fixture: %+v", c)
+	}
+	// Without the key nothing is added; a malformed value is refused like any other boolean.
+	if _, body := read("summary=1&limit=50"); strings.Contains(string(body), `"counts"`) {
+		t.Errorf("counts without with_counts: %s", body)
+	}
+	if code, _ := read("summary=1&limit=50&with_counts=yes"); code != 400 {
+		t.Errorf("with_counts=yes: %d, want 400", code)
+	}
+	if !slices.Contains(h.features(), featureSessionsPageCounts) || slices.Contains(proto.Features, featureSessionsPageCounts) {
+		t.Error("sessions_page_counts must be advertised by the hub")
+	}
+	if !slices.Contains(h.features(), featureAgentsPageCounts) || slices.Contains(proto.Features, featureAgentsPageCounts) {
+		t.Error("agents_page_counts must be advertised by the hub")
 	}
 }

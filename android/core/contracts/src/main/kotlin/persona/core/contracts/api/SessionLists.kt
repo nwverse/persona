@@ -15,6 +15,9 @@ data class SessionListFilter(
     val query: String = "",
     /** Local policy: the caller derives membership the paged API cannot express (#6108). Never sent as a query. */
     val requiresCompleteMembership: Boolean = false,
+    /** Runtime lists fold children when sessions_hierarchy is advertised. Complete membership keeps their rows. */
+    val roots: Boolean = true,
+    val parentSessionId: String? = null,
 )
 
 @Serializable
@@ -35,6 +38,11 @@ data class SessionListCounts(
     val group: Map<String, Int> = emptyMap(),
     val state: Map<String, Int> = emptyMap(),
     val revision: String = "",
+    /**
+     * How many of [state]'s working only wait in the background (#6045): a client that shows them apart, as the
+     * "Waiting in the background" filter, takes them out of its Working count. 0 from older hubs.
+     */
+    @SerialName("background_waiting") val backgroundWaiting: Int = 0,
 )
 
 /** An older hub cannot serve bounded lists; callers may use its legacy list API. */

@@ -2,6 +2,7 @@ package assistantwire
 
 import (
 	"github.com/nwverse/persona/server/internal/connectorwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
@@ -19,6 +20,10 @@ const (
 	// ConnectorsChanges: {id, cursor, limit} → {batches: [connectorwire.ChatBatch], next, more}: what moved in a connector's
 	// account since cursor ("" the first time), and the cursor to go on from (connector.Archive).
 	ConnectorsChanges = "connectors.changes"
+	// ArchiveBegin/End reserve and release an iMessage page's commit; Abort retires an uncertain begin.
+	ConnectorsArchiveBegin = "connectors.archive_begin"
+	ConnectorsArchiveEnd   = "connectors.archive_end"
+	ConnectorsArchiveAbort = "connectors.archive_abort"
 	// ConnectorsArchiveMedia: {id, ref} → {media: connectorwire.Media}: an archived message's attachment, at most
 	// connectorwire.ArchiveMediaMost bytes (connector.ArchiveMedia).
 	ConnectorsArchiveMedia = "connectors.archive_media"
@@ -48,6 +53,8 @@ type Archives struct {
 // ArchiveSource is a connector whose conversations the knowledge base reads now.
 type ArchiveSource struct {
 	ID string `json:"id"`
+	// FenceVersion identifies the commit protocol required by this source; zero is the legacy protocol.
+	FenceVersion int `json:"fence_version,omitempty"`
 	// PollMS is how often it wants to be asked (its manifest's Poll); 0: the knowledge base's own default.
 	PollMS int64 `json:"poll_ms,omitempty"`
 	// Sources are the other names its batches may be filed under: its manifest's ArchiveSources, minus the ids of the
@@ -80,9 +87,23 @@ type HistoryAnchorsParams struct {
 
 // ChangesResult is connectors.changes' answer.
 type ChangesResult struct {
-	Batches []connectorwire.ChatBatch `json:"batches"`
-	Next    string                    `json:"next"`
-	More    bool                      `json:"more,omitempty"`
+	Batches    []connectorwire.ChatBatch `json:"batches"`
+	Next       string                    `json:"next"`
+	More       bool                      `json:"more,omitempty"`
+	Generation string                    `json:"generation,omitempty"`
+}
+
+const ArchiveFenceV1 = 1
+
+// ArchiveFence identifies a page and its caller-generated commit reservation.
+type ArchiveFence struct {
+	ID         string `json:"id"`
+	Generation string `json:"generation"`
+	Token      string `json:"token"`
+}
+
+type ArchiveFenceResult struct {
+	Acquired bool `json:"acquired"`
 }
 
 // The hub asks the knowledge base (calls), and tells it (events).
@@ -122,14 +143,22 @@ type KBKick struct {
 	Scope     string `json:"scope,omitempty"`
 }
 
+// KBRemoteFolder identifies a user-configured, read-in-place knowledge source.
+type KBRemoteFolder struct {
+	Name    string `json:"name"`
+	Machine string `json:"machine"`
+	devicewire.KnowledgeFolder
+}
+
 // KBSettings is the knowledge base's settings the manager goes by: its manager.json's kb section, laid over the hub's
 // hello (an older hub still sends its hub.json's). Its ai is the models' (HubModels.KBAI).
 type KBSettings struct {
-	ReadOnly       bool     `json:"read_only,omitempty"`       // serve local archives without collection, models or writes
-	Off            bool     `json:"off,omitempty"`             // kb.enabled false: no knowledge base at all
-	TextDays       int      `json:"text_days,omitempty"`       // 0: 365
-	AttachmentDays int      `json:"attachment_days,omitempty"` // 0: 30
-	ExtraDirs      []string `json:"extra_dirs,omitempty"`      // as written; "~/" is the assistant's home
+	ReadOnly       bool             `json:"read_only,omitempty"`       // serve local archives without collection, models or writes
+	Off            bool             `json:"off,omitempty"`             // kb.enabled false: no knowledge base at all
+	TextDays       int              `json:"text_days,omitempty"`       // 0: 365
+	AttachmentDays int              `json:"attachment_days,omitempty"` // 0: 30
+	ExtraDirs      []string         `json:"extra_dirs,omitempty"`      // as written; "~/" is the assistant's home
+	RemoteFolders  []KBRemoteFolder `json:"remote_folders,omitempty"`
 	// AttachmentDaysBySource: attachment_days for the chats of one source (kb.attachment_days_by_source); the sources
 	// not in it, and non-positive values, keep attachment_days.
 	AttachmentDaysBySource map[string]int `json:"attachment_days_by_source,omitempty"`

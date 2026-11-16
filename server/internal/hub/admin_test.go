@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // failingDeleteStore is adminMemStore whose session delete fails, as when Postgres is down.
@@ -962,38 +963,60 @@ func TestAdminBadScopeFailsClosed(t *testing.T) {
 	}
 }
 
-func TestParseDoctor(t *testing.T) {
-	text := "hub 自检（只读）\n正常｜明文 listen：:18660；仅供内网或 VPN 使用\n有问题｜public.tls_listen：未设置有效 TLS 监听端口\n" +
-		"正常｜候选地址：已读取\n  http://hub.example.com:18660（name，端口 18660）\n外部可达性：未验证。\n\n下一步：\n- 放行 TLS 端口\n- 用手机测一次\n"
-	items, next := parseDoctor(text)
-	if len(items) != 5 || items[1].Level != "ok" || items[1].Item != "明文 listen" || items[2].Level != "problem" ||
-		!strings.Contains(items[3].Detail, "hub.example.com") || items[4].Level != "info" {
-		t.Fatalf("items %+v", items)
-	}
-	if len(next) != 2 || next[0] != "放行 TLS 端口" {
-		t.Fatalf("next %v", next)
+// The admin page's self-check runs the same checks as `personad hub doctor` and words them in the page's language
+// (#5520), not in the terminal's.
+func TestAdminDoctorSpeaksThePageLanguage(t *testing.T) {
+	t.Setenv("PERSONA_LANG", "zh-Hans") // the terminal's language must not leak into the page
+	_, _, mux := adminTestHub(t)
+	c := signedIn(t, mux, ip4(192, 168, 1, 20)+":1")
+	for _, l := range []i18n.Lang{i18n.En, i18n.Ja} {
+		c.header = http.Header{"Accept-Language": {string(l)}}
+		code, out, _ := c.do("POST", "/api/v1/admin/doctor", "{}")
+		if code != 200 {
+			t.Fatalf("%s: %d %v", l, code, out)
+		}
+		items, _ := out["items"].([]any)
+		next, _ := out["next"].([]any)
+		if len(items) == 0 || len(next) == 0 || out["ran_at"] == nil {
+			t.Fatalf("%s: %v", l, out)
+		}
+		if last := next[len(next)-1]; last != i18n.T(l, "hub-doctor.next_certificate") {
+			t.Fatalf("%s: last step %q", l, last)
+		}
+		first := items[0].(map[string]any)
+		if first["level"] == "" || first["item"] != i18n.T(l, "hub-doctor.item_config") && first["item"] != i18n.T(l, "hub-doctor.item_listen") {
+			t.Fatalf("%s: first item %v", l, first)
+		}
 	}
 }
 
 func TestAdminAccessCommand(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "hub.json"), []byte(`{"token":"","listen":"127.0.0.1:1","other":true}`), 0o600)
+	t.Setenv("PERSONA_LANG", "en") // the terminal's language (#5520)
 	var out, errOut strings.Builder
 	ctx := context.Background()
 	if err := adminAccessCommand(ctx, dir, []string{"--get"}, &out, &errOut); err != nil || strings.TrimSpace(out.String()) != "" {
 		t.Fatalf("get unset: %v %q", err, out.String())
 	}
-	if err := adminAccessCommand(ctx, dir, []string{"cidrs"}, &out, &errOut); err == nil {
-		t.Fatal("cidrs without --cidrs")
+	if err := adminAccessCommand(ctx, dir, []string{"cidrs"}, &out, &errOut); err == nil || !strings.HasPrefix(err.Error(), "cidrs needs at least one network") {
+		t.Fatalf("cidrs without --cidrs: %v", err)
 	}
-	if err := adminAccessCommand(ctx, dir, []string{"everyone"}, &out, &errOut); err == nil {
-		t.Fatal("bad scope")
+	if err := adminAccessCommand(ctx, dir, []string{"everyone"}, &out, &errOut); err == nil ||
+		err.Error() != `The scope must be loopback, lan, cidrs or any, not "everyone"` {
+		t.Fatalf("bad scope: %v", err)
+	}
+	out.Reset()
+	if err := adminAccessCommand(ctx, dir, nil, &out, &errOut); err != nil || !strings.Contains(out.String(), "admin.access in hub.json: lan (not set in hub.json, so the default)") ||
+		!strings.Contains(out.String(), "  loopback Only the hub machine itself") {
+		t.Fatalf("show: %v %q", err, out.String())
 	}
 	out.Reset()
 	if err := adminAccessCommand(ctx, dir, []string{"cidrs", "--cidrs", "192.0.2.7, 198.51.100.0/24"}, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "hub 没在运行") {
+	if !strings.Contains(out.String(), "The admin page’s access is now cidrs: This machine and the networks you list") ||
+		!strings.Contains(out.String(), "The hub isn’t running. The scope applies when it next starts.") {
 		t.Fatalf("out %q", out.String())
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "hub.json"))

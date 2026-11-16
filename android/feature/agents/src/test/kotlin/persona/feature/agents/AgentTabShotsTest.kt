@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -96,6 +95,8 @@ class AgentTabShotsTest {
                                 launcher = entry.launcher, branch = entry.branch)
                             is TreeChildrenEntry -> error("Fixture has no Codex subtasks")
                             is TreeIdleEntry -> AgentIdleRow(entry.hidden, {}, depth = entry.depth)
+                            is TreeIdleReposEntry -> error("Only Glass's By Repository on the page heads idle repositories")
+                            is TreeShowAllEntry -> AgentShowAllRow(entry.count, entry.expanded, {}, depth = entry.depth)
                         }
                     }
                 }
@@ -104,7 +105,7 @@ class AgentTabShotsTest {
         val tab = agentTreeEntries(list, "", tabs = true).filterIsInstance<TreeTabEntry>().first().tab
         for (nextStyle in AppStyle.entries) for (nextDark in listOf(false, true)) {
             rule.runOnIdle { style = nextStyle; dark = nextDark; folded = emptySet() }
-            rule.onAllNodesWithText("发起者")[0].assertIsDisplayed()
+            rule.onAllNodesWithText("发起者", substring = true)[0].assertIsDisplayed()
             rule.onNodeWithContentDescription("3 个 Agent").assertIsDisplayed()
             capture("list-${nextStyle.name.lowercase()}-${if (nextDark) "dark" else "light"}")
             rule.runOnIdle { folded = setOf(tab.foldKey) }
@@ -121,14 +122,15 @@ class AgentTabShotsTest {
             PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
                 Box(Modifier.testTag("shot").size(400.dp, 900.dp).background(PersonaTheme.palette.background)) {
                     SpaceScreen(space, machines, emptyList(), AgentsPreferencesSnapshot(), busy = false, canStart = true,
-                        snackbar = SnackbarHostState(), now = now, onDismiss = {}, onOpen = {}, onNewTab = {},
+                        toast = JToastState(), now = now, onDismiss = {}, onOpen = {}, onNewTab = {},
                         spaceMenu = {}, sessionMenu = { emptyList() })
                 }
             }
         }
         for (nextStyle in AppStyle.entries) for (nextDark in listOf(false, true)) {
             rule.runOnIdle { style = nextStyle; dark = nextDark }
-            rule.onAllNodesWithText("发起者")[0].assertIsDisplayed()
+            // Glass's cards say it after the state ("工作中 · 发起者"), the rows in a tag of its own.
+            rule.onAllNodesWithText("发起者", substring = true)[0].assertIsDisplayed()
             capture("space-${nextStyle.name.lowercase()}-${if (nextDark) "dark" else "light"}")
         }
     }

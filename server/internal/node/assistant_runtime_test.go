@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,6 +167,132 @@ func TestAssistantOnARuntimeStartsAndSendsWithTheSnapshot(t *testing.T) {
 	}
 }
 
+// A runtime may put the client_msg_id it was sent a message with on the message's line (the node-to-runtime
+// session.send, as Paseo does). For an assistant conversation that id is the message's own: the app's, or none when it
+// came without one, so the apps match their pending bubble by it, or by its words. The node used to send every message
+// under an id of its own, which such a runtime put on the line: the app kept its bubble and showed the message twice
+// (#5225, as #5200).
+func TestAssistantOnARuntimeSendsTheMessagesOwnID(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	var mu sync.Mutex
+	started, seq := 0, map[string]int{}
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch method {
+		case "session.start":
+			started++
+			return map[string]any{"session": map[string]any{"session_id": fmt.Sprintf("session-a%d", started), "cwd": filepath.Join(n.home, ".persona", "assistant"), "status": "idle"}}, nil
+		case "session.send": // a runtime that ties its own line: the user's line carries the id it was sent with
+			var p struct {
+				SessionID   string `json:"session_id"`
+				Text        string `json:"text"`
+				ClientMsgID string `json:"client_msg_id"`
+			}
+			_ = json.Unmarshal(params, &p)
+			seq[p.SessionID]++
+			s := seq[p.SessionID]
+			_ = host.peer.Notify("session.items", map[string]any{"session_id": p.SessionID, "from_seq": s - 1, "to_seq": s,
+				"items": []proto.Item{{ID: fmt.Sprintf("%d#0", s), Seq: s, Role: "user", Kind: proto.KindText, Text: p.Text, ClientMsgID: p.ClientMsgID}}})
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	// pushed is the client_msg_id the hub got on the line with text, once it got it.
+	pushed := func(text string) string {
+		t.Helper()
+		var id string
+		waitFor(t, "the line "+text, func() bool {
+			hub.mu.Lock()
+			defer hub.mu.Unlock()
+			for _, raw := range hub.items {
+				var b struct {
+					Items []proto.Item `json:"items"`
+				}
+				_ = json.Unmarshal(raw, &b)
+				for _, it := range b.Items {
+					if it.Text == text {
+						id = it.ClientMsgID
+						return true
+					}
+				}
+			}
+			return false
+		})
+		return id
+	}
+	// sentID is the client_msg_id the runtime got the message with text under; absent is "", never a key with "".
+	sentID := func(text string) string {
+		t.Helper()
+		for _, raw := range host.got("session.send") {
+			var p map[string]any
+			_ = json.Unmarshal(raw, &p)
+			if p["text"] != text {
+				continue
+			}
+			id, has := p["client_msg_id"]
+			if !has {
+				return ""
+			}
+			if s, _ := id.(string); s != "" {
+				return s
+			}
+			t.Fatalf("%q went with client_msg_id %v", text, id)
+		}
+		t.Fatalf("%q never reached the runtime", text)
+		return ""
+	}
+	assistantDir := filepath.Join(n.home, ".persona", "assistant")
+
+	// A new conversation's first message as the manager sends it (no id since #5200): the line carries none, and the
+	// app finds it by its words.
+	raw, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": "dsh", "cwd": assistantDir, "text": "第一条"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &res)
+	sid := res.SessionID
+	if sid != "session-a1" || !n.runtimeAssistant(sid) {
+		t.Fatalf("assistant.send %s", raw)
+	}
+	if got, line := sentID("第一条"), pushed("第一条"); got != "" || line != "" {
+		t.Fatalf("a first message without an id went with %q, its line carries %q", got, line)
+	}
+
+	// The app's message, with its id: the runtime gets that id, and the line carries it.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "第二条", "client_msg_id": "app-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, line := sentID("第二条"), pushed("第二条"); got != "app-2" || line != "app-2" {
+		t.Fatalf("the app's message went with %q, its line carries %q; want app-2", got, line)
+	}
+
+	// An older app's message, without one: none on the line either.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "第三条"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, line := sentID("第三条"), pushed("第三条"); got != "" || line != "" {
+		t.Fatalf("a message without an id went with %q, its line carries %q", got, line)
+	}
+
+	// A new conversation's first message with its id (one a person's own app opened): the line carries it.
+	raw, err = nodeCall(t, n, "assistant.send", map[string]any{"launcher": "dsh", "cwd": assistantDir, "text": "新对话", "client_msg_id": "app-new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.Unmarshal(raw, &res)
+	if res.SessionID != "session-a2" {
+		t.Fatalf("assistant.send %s", raw)
+	}
+	if got, line := sentID("新对话"), pushed("新对话"); got != "app-new" || line != "app-new" {
+		t.Fatalf("a first message with its id went with %q, its line carries %q; want app-new", got, line)
+	}
+}
+
 func TestAssistantLauncherNeedsTheCapability(t *testing.T) {
 	n, _ := runtimeNode(t)
 	_ = dialRuntime(t, n, dshHello()) // a runtime without caps.assistant
@@ -229,6 +356,53 @@ func TestAssistantToolsOnlyForTheAssistantsConversations(t *testing.T) {
 	}
 	if p := call(plain, sid); p["assistant"] == true {
 		t.Fatalf("another runtime's call passed as the assistant's: %v", p)
+	}
+}
+
+func TestRuntimeAgentToolsRequireOwnedSessions(t *testing.T) {
+	n, hub := runtimeNode(t)
+	calls := assistantHub(hub)
+	host := dialRuntime(t, n, assistantRuntimeHello())
+	other := dialRuntime(t, n, map[string]any{"runtime": "other", "caps": map[string]any{"send": true}})
+	const sid = "session-leader"
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{
+		{"session_id": sid, "cwd": "/w/app", "status": "idle"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)[sid]; return ok })
+	ctx := context.Background()
+	for _, runtime := range []*fakeRuntime{host, other} {
+		var result struct{ Tools []proto.Tool }
+		if err := runtime.peer.Call(ctx, "mcp.tools", map[string]any{"leader_only": true, "session_id": sid}, &result); err != nil {
+			t.Fatal(err)
+		}
+		if (len(result.Tools) > 0) != (runtime == host) {
+			t.Fatalf("unexpected discovery result: %+v", result)
+		}
+		for _, name := range []string{"task_plan", "report_to_supervisor"} {
+			var res proto.ToolResult
+			if err := runtime.peer.Call(ctx, "mcp.call", map[string]any{"name": name, "session_id": sid}, &res); err != nil {
+				t.Fatal(err)
+			}
+			if res.IsError != (runtime == other) {
+				t.Fatalf("%s: unexpected call result: %+v", name, res)
+			}
+		}
+	}
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.tools) != 1 || len(calls.calls) != 2 {
+		t.Fatalf("unexpected manager requests: tools %s, calls %s", calls.tools, calls.calls)
+	}
+	for _, raw := range append(append([]json.RawMessage(nil), calls.tools...), calls.calls...) {
+		var req struct {
+			SessionID string `json:"session_id"`
+			Assistant bool   `json:"assistant"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil || req.SessionID != sid || req.Assistant {
+			t.Fatalf("unexpected caller: %s (%v)", raw, err)
+		}
 	}
 }
 

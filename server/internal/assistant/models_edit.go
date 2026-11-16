@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -20,6 +19,8 @@ type modelPatch struct {
 	Model    json.RawMessage `json:"model"`
 	Effort   json.RawMessage `json:"effort"`
 	Runtime  json.RawMessage `json:"runtime"`
+	// ConfigDir: the main chat's profile for new conversations (#4633), private (stored as none) or legacy.
+	ConfigDir json.RawMessage `json:"config_dir"`
 }
 
 func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
@@ -37,7 +38,7 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 	for _, f := range []struct {
 		raw json.RawMessage
 		dst *string
-	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.Runtime, &b.Runtime}} {
+	}{{in.Provider, &b.Provider}, {in.Model, &b.Model}, {in.Effort, &b.Effort}, {in.Runtime, &b.Runtime}, {in.ConfigDir, &b.ConfigDir}} {
 		if f.raw == nil {
 			continue
 		}
@@ -60,6 +61,12 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 	if b.Runtime == proto.AssistantRuntimeCLI {
 		b.Runtime = "" // the default, stored as none: an explicit cli fingerprints like no choice
 	}
+	if b.ConfigDir != "" && !slices.Contains(assistantConfigDirs, b.ConfigDir) {
+		return b, i18n.Err("assistant-models.err_config_dir_invalid")
+	}
+	if b.ConfigDir == assistantConfigDirPrivate {
+		b.ConfigDir = "" // the default, stored as none
+	}
 	return b, nil
 }
 
@@ -70,9 +77,12 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		compatible = messagesAPI(v.API)
 	}
 	if p.Kind == "api" && v.Kind == "launcher" {
+		// Claude Code answering on the main chat's computer (models_run.go); a managed launcher with a Messages gateway is
+		// called over HTTP, as before. With no such computer it stays offered, and its status says to choose one.
+		compatible = (v.Agent == "" || v.Agent == "claude") && (p.MachineID == "" || len(v.Machines) == 0 || slices.Contains(v.Machines, p.MachineID))
 		for _, l := range stored {
 			if v.ID == "launcher."+l.Name {
-				compatible = messagesAPI(l.API)
+				compatible = messagesAPI(l.API) || compatible && (p.MachineID == "" || s.scopeReason(l, p.MachineID) == "")
 				break
 			}
 		}
@@ -88,6 +98,9 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 		if v.Agent == "codex" && slices.ContainsFunc(stored, func(l storedLauncher) bool { return v.ID == "launcher."+l.Name && l.Kind != "api" }) {
 			compatible = false
 		}
+	}
+	if compatible && p.ID == purposeMeetingRoom { // Claude Code only (models_room.go)
+		compatible = claudeCodeProvider(v, stored)
 	}
 	if compatible && p.Kind == "launcher" && len(v.Machines) > 0 && p.MachineID != "" {
 		compatible = slices.Contains(v.Machines, p.MachineID)
@@ -116,8 +129,10 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 			break
 		}
 	}
-	source := compat.Source(l.Source)
-	runtime := source != "" && source != "persona" && source != "builtin" && !machineSource(source)
+	runtime := runtimeSource(l.Source)
+	if p.ID == purposeMeetingRoom && runtime {
+		return false // a room runs on Claude Code's CLI only
+	}
 	if p.CategoryID == "assistant" && runtime {
 		if !l.Assistant {
 			return false
@@ -128,6 +143,13 @@ func (s *Service) modelLauncherCompatible(p ModelPurpose, l ConfiguredLauncher, 
 	return s.modelProviderCompatible(p, v, stored)
 }
 
+func effortLevelsForKind(kind string) []string {
+	if kind == "api" {
+		return append(slices.Clone(proto.EffortLevels), "off", "none")
+	}
+	return proto.EffortLevels
+}
+
 func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBinding, providers []ModelProvider) error {
 	var provider *ModelProvider
 	for i := range providers {
@@ -135,6 +157,9 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			provider = &providers[i]
 			break
 		}
+	}
+	if p.ID == purposeMeetingRoom && !s.roomClaudeCode(ctx, p.MachineID, b.Provider, providers) {
+		return errMeetingRoomClaudeOnly // before anything else: Codex, a runtime, a Responses or Chat connection
 	}
 	if p.Kind == "launcher" && p.CategoryID == "assistant" && p.MachineID != "" {
 		// Model settings and the picker share the current machine's merged launchers, not the global discovery cache.
@@ -161,11 +186,14 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_provider_unsupported")
 		}
 	}
-	if b.Effort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, b.Effort) {
+	if b.Effort != "" && !slices.Contains(effortLevelsForKind(p.Kind), b.Effort) {
 		return i18n.Err("assistant-models.err_effort_unsupported")
 	}
 	if p.Kind == "api" {
-		_, err := s.apiConfig(ctx, b)
+		c, err := s.apiConfig(ctx, b)
+		if err == nil && c.RunLauncher != "" {
+			return checkModelID(b.Model) // passed to the CLI as --model
+		}
 		return err
 	}
 	if p.Kind == "plugin" {
@@ -209,8 +237,8 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 				if p.CategoryID == "agent.new" && result.Agent != "claude" && result.Agent != "codex" && result.Agent != "agy" && result.Agent != "omp" {
 					return i18n.Err("assistant-models.err_agent_launcher")
 				}
-				if p.CategoryID == "agent.new" && result.Agent == "codex" && b.Effort != "" {
-					return i18n.Err("assistant-models.err_codex_effort")
+				if p.ID == purposeMeetingRoom && result.Agent != "" && result.Agent != "claude" {
+					return errMeetingRoomClaudeOnly // the machine runs another agent under this launcher's name
 				}
 			}
 		}
@@ -220,6 +248,9 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 
 // providerModelUses are the current configurable purposes assigned to provider: a provider in use is not deleted underneath them.
 // Automatic selection by the built-in API categories is not an assignment; current extension purposes also protect an inherited provider.
+// The background supervisor's use is one of them (modelConfigIDs, #5806): its own provider, or the main chat's while it follows it;
+// so are the In-meeting conversation's, the same way, and Meeting minutes' (#7980): its own provider, or Information
+// processing's explicit one while it follows it, an automatic selection there being no use as for the category.
 func (s *Service) providerModelUses(ctx context.Context, provider string) ([]string, error) {
 	uses := []string{}
 	ids := slices.Clone(modelConfigIDs)
@@ -238,9 +269,10 @@ func (s *Service) providerModelUses(ctx context.Context, provider string) ([]str
 		if b.Provider != provider {
 			continue
 		}
-		if p.Kind == "api" && slices.Contains(modelCategoryIDs, id) {
+		if p.Kind == "api" && (slices.Contains(modelCategoryIDs, id) || id == purposeMeetingMinutes) {
 			// Automatic selection follows the remaining providers; only an assignment that still names this provider
-			// without its automatic fallback blocks deletion. Current extension purposes keep their inherited-use guard.
+			// without its automatic fallback blocks deletion (Meeting minutes' own pick, or Information processing's it
+			// follows, still names it). Current extension purposes keep their inherited-use guard.
 			without := slices.DeleteFunc(slices.Clone(s.storedLaunchers(ctx)), func(l storedLauncher) bool {
 				return launcherProvider(l.Name) == provider
 			})

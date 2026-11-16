@@ -9,6 +9,8 @@ struct SavedPlacesView: View {
     @State private var page = SavedPlacesModel()
     @State private var editing: APIClient.SavedPlace?
     @State private var creating: APIClient.SavedPlace?
+    /// The place whose swipe or context-menu Delete waits for the same confirmation as the editor's (#4248, HIG-004).
+    @State private var deleting: APIClient.SavedPlace?
 
     var body: some View {
         List {
@@ -45,20 +47,33 @@ struct SavedPlacesView: View {
         .sheet(item: $creating) { p in
             NavigationStack { SavedPlaceEditor(place: p, save: page.save, delete: page.delete) }
         }
+        .confirmationDialog(Text("Delete “\(deleting?.name ?? "")”?"), isPresented: deletingShown, titleVisibility: .visible,
+                            presenting: deleting) { p in
+            Button("Delete", role: .destructive) { Task { await page.delete(p) } }
+        } message: { _ in
+            Text("Reminders already set for this place keep going off where they are.")
+        }
         .task { await load() }
         .refreshable { await page.load() }
     }
 
+    private var deletingShown: Binding<Bool> {
+        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
+    }
+
+    /// Delete only asks here: the swipe's button is not destructive (a destructive one hides the row before the answer)
+    /// and a full swipe does nothing.
     private func row(_ p: APIClient.SavedPlace) -> some View {
         Button { editing = p } label: { SavedPlaceRow(place: p) }
             .foregroundStyle(.primary)
             .accessibilityIdentifier("saved-place-\(p.id)")
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) { Task { await page.delete(p) } } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button { deleting = p } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                    .tint(Theme.danger)
             }
             .contextMenu {
                 Button { editing = p } label: { Label("Edit [Message Menu 051836]", systemImage: Theme.Icon.compose) }
-                Button(role: .destructive) { Task { await page.delete(p) } } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                Button(role: .destructive) { deleting = p } label: { Label("Delete", systemImage: Theme.Icon.delete) }
             }
     }
 
@@ -68,6 +83,7 @@ struct SavedPlacesView: View {
         switch UserDefaults.standard.string(forKey: "openAssistantPage") {
         case "place" where editing == nil: editing = page.places.first
         case "newPlace" where creating == nil: creating = APIClient.SavedPlace()
+        case "deletePlace" where deleting == nil: deleting = page.places.first
         default: break
         }
         #endif
@@ -97,17 +113,25 @@ struct SavedPlaceRow: View {
     }
 }
 
-/// Adding or changing a saved place: its name, where it is (searched by address or name, or the current location),
-/// a map with the reminder's circle, and the circle's radius.
+/// Adding or changing a saved place (#4248): its name; where it is, on a map that is there from the start, found by a
+/// search that suggests places as the user types, from the current location, or by tapping the map; and the reminder's
+/// radius, drawn as the circle on the map.
 struct SavedPlaceEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: APIClient.SavedPlace
-    /// It has coordinates: a saved place always does, a new one once a result or the current location is picked.
+    /// It has coordinates: a saved place always does, a new one once a search, the current location or a tap set them.
     @State private var located: Bool
+    @State private var camera: MapCameraPosition
+    /// What the map shows, once it has said: suggestions and searches favor it, and a tap decides from it whether to zoom.
+    @State private var visible: MKCoordinateRegion?
+    @State private var suggestions = PlaceSuggestions()
     @State private var query = ""
+    /// What the keyboard's Search key found; the suggestions show while there is none.
     @State private var results: [LocationTool.Found] = []
     @State private var searching = false
     @State private var locating = false
+    /// The address of the spot tapped on the map is being looked up.
+    @State private var addressing = false
     /// Why the search or the current location gave nothing.
     @State private var findError: String?
     @State private var saving = false
@@ -122,6 +146,7 @@ struct SavedPlaceEditor: View {
          delete: @escaping (APIClient.SavedPlace) async -> Void) {
         _draft = State(initialValue: place)
         _located = State(initialValue: !place.id.isEmpty)
+        _camera = State(initialValue: place.id.isEmpty ? .automatic : .region(Self.region(around: place)))
         creating = place.id.isEmpty
         opened = place
         self.save = save
@@ -139,26 +164,26 @@ struct SavedPlaceEditor: View {
                 Text("What you call it in a chat, as in “remind me when I get home”.")
             }
             Section {
+                map
                 if located { whereItIs }
-                TextField("Search for an Address or Place", text: $query)
-                    .submitLabel(.search)
-                    .onSubmit { Task { await search() } }
-                    .accessibilityIdentifier("saved-place-search")
+                searchField
                 if searching {
                     ProgressView().frame(maxWidth: .infinity)
                 }
-                ForEach(results, id: \.self) { f in
-                    Button { pick(f) } label: {
-                        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                            Text(f.name ?? f.address ?? SavedPlaceText.coordinates(APIClient.SavedPlace(latitude: f.latitude, longitude: f.longitude)))
-                                .font(Theme.Font.body).lineLimit(1)
-                            if let address = f.address, address != f.name {
-                                Text(address).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                        }
-                        .contentShape(.rect)
+                if results.isEmpty {
+                    ForEach(suggestions.found, id: \.self) { s in
+                        Button { Task { await pick(s) } } label: { candidate(s.title, detail: s.subtitle) }
+                            .foregroundStyle(.primary)
+                            .disabled(searching)
                     }
-                    .foregroundStyle(.primary)
+                } else {
+                    ForEach(results, id: \.self) { f in
+                        Button { pick(f) } label: {
+                            candidate(f.name ?? f.address ?? SavedPlaceText.coordinates(APIClient.SavedPlace(latitude: f.latitude, longitude: f.longitude)),
+                                      detail: f.address)
+                        }
+                        .foregroundStyle(.primary)
+                    }
                 }
                 Button { Task { await useCurrentLocation() } } label: {
                     if locating {
@@ -172,7 +197,7 @@ struct SavedPlaceEditor: View {
             } header: {
                 Text("Location")
             } footer: {
-                if let findError { Text(findError) }
+                Text(locationNote)
             }
             Section {
                 Picker("Reminder Radius", selection: $draft.radiusMeters) {
@@ -206,6 +231,18 @@ struct SavedPlaceEditor: View {
             }
         }
         .interactiveDismissDisabled(saving)
+        .onAppear {
+            // A new place opens on the user when Persona may already see where they are; it never asks by itself.
+            if SavedPlaceText.opening(located: located, location: LocationAccess.status()) == .user {
+                camera = .userLocation(fallback: .automatic)
+            }
+        }
+        .onChange(of: query) { _, q in
+            results = []
+            findError = nil
+            suggestions.update(q, near: visible)
+        }
+        .onChange(of: draft.radiusMeters) { if located { recenter() } }
         .confirmationDialog("Delete “\(opened.name)”?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await delete(opened) }
@@ -216,27 +253,91 @@ struct SavedPlaceEditor: View {
         }
     }
 
-    /// Where the place is: the map with the reminder's circle, and its address.
-    @ViewBuilder private var whereItIs: some View {
-        let center = CLLocationCoordinate2D(latitude: draft.latitude, longitude: draft.longitude)
-        let span = CLLocationDistance(draft.radiusMeters) * 4
-        Map(initialPosition: .region(MKCoordinateRegion(center: center, latitudinalMeters: span, longitudinalMeters: span)),
-            interactionModes: []) {
-            MapCircle(center: center, radius: CLLocationDistance(draft.radiusMeters))
-                .foregroundStyle(Theme.accent.opacity(0.18))
-                .stroke(Theme.accent, lineWidth: Theme.Size.lineMedium)
-            Marker(draft.name, systemImage: Theme.Icon.place, coordinate: center)
-                .tint(Theme.accent)
+    /// The map, there from the start: the place and the reminder's circle once it has coordinates, and the user's own
+    /// location when Persona may see it. It pans and zooms; a tap puts the place where it landed.
+    private var map: some View {
+        MapReader { proxy in
+            Map(position: $camera) {
+                UserAnnotation()
+                if located {
+                    MapCircle(center: center, radius: CLLocationDistance(draft.radiusMeters))
+                        .foregroundStyle(Theme.accent.opacity(0.18))
+                        .stroke(Theme.accent, lineWidth: Theme.Size.lineMedium)
+                    Marker(draft.name, systemImage: Theme.Icon.place, coordinate: center)
+                        .tint(Theme.accent)
+                }
+            }
+            .onMapCameraChange(frequency: .onEnd) { visible = $0.region }
+            .onTapGesture { point in
+                guard let spot = proxy.convert(point, from: .local) else { return }
+                Task { await move(to: spot) }
+            }
         }
-        .id("\(draft.latitude),\(draft.longitude),\(draft.radiusMeters)") // a new pick or radius recenters it
         .scaledFrame(height: Theme.Size.placeMap)
         .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
         .listRowInsets(EdgeInsets(top: Theme.Space.s, leading: Theme.Space.s, bottom: Theme.Space.s, trailing: Theme.Space.s))
-        .accessibilityLabel(Text(SavedPlaceText.detail(draft)))
-        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-            if !draft.address.isEmpty { Text(draft.address).font(Theme.Font.body).lineLimit(2) }
-            Text(SavedPlaceText.coordinates(draft)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+        .accessibilityIdentifier("saved-place-map")
+    }
+
+    /// The place's address and coordinates, under the map.
+    private var whereItIs: some View {
+        HStack(spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                if !draft.address.isEmpty { Text(draft.address).font(Theme.Font.body).lineLimit(2) }
+                Text(SavedPlaceText.coordinates(draft)).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: Theme.Space.s)
+            if addressing { ProgressView() }
         }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// A search field like the sidebar's: suggestions follow what is typed, the Search key looks further.
+    private var searchField: some View {
+        HStack(spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.search).foregroundStyle(.secondary).accessibilityHidden(true)
+            TextField("Search for an Address or Place", text: $query)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .onSubmit { Task { await search() } }
+                .accessibilityIdentifier("saved-place-search")
+            if !query.isEmpty {
+                Button { query = "" } label: { ThemedIcon(Theme.Icon.clear).foregroundStyle(.tertiary) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear Search")
+            }
+        }
+    }
+
+    private func candidate(_ title: String, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Text(title).font(Theme.Font.body).lineLimit(1)
+            if let detail, !detail.isEmpty, detail != title {
+                Text(detail).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+    }
+
+    /// The location section's footer: what went wrong, else the ways to set the place.
+    private var locationNote: String {
+        findError
+            ?? (suggestions.failed ? SavedPlaceText.searchNote(.failed, query: query) : nil)
+            ?? String(localized: "Search, use your current location, or tap the map where the place is.")
+    }
+
+    private var center: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: draft.latitude, longitude: draft.longitude) }
+
+    private static func region(around p: APIClient.SavedPlace) -> MKCoordinateRegion {
+        let span = SavedPlaceText.mapSpan(radius: p.radiusMeters)
+        return MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: p.latitude, longitude: p.longitude),
+                                  latitudinalMeters: span, longitudinalMeters: span)
+    }
+
+    /// The map back on the place and its whole circle: after a search, the current location or a new radius.
+    private func recenter() {
+        withAnimation(Theme.Motion.standard) { camera = .region(Self.region(around: draft)) }
     }
 
     private func search() async {
@@ -245,12 +346,34 @@ struct SavedPlaceEditor: View {
         searching = true
         defer { searching = false }
         findError = nil
+        let outcome: SavedPlaceText.SearchOutcome
+        var found: [LocationTool.Found] = []
         do {
-            results = try await LocationTool.find(q, limit: 6)
+            found = try await LocationTool.find(q, limit: 6, near: visible)
+            outcome = found.isEmpty ? .nothing : .found
         } catch {
-            results = []
+            outcome = SavedPlaceText.SearchOutcome(error)
         }
-        if results.isEmpty { findError = String(localized: "No places found for “\(q)”.") }
+        // Typing since the Search key started a new search; this one's answer is stale.
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return }
+        results = found
+        findError = SavedPlaceText.searchNote(outcome, query: q)
+    }
+
+    /// A suggestion is only a name: MapKit looks up where it is.
+    private func pick(_ s: MKLocalSearchCompletion) async {
+        searching = true
+        defer { searching = false }
+        findError = nil
+        do {
+            if let f = try await LocationTool.find(s) {
+                pick(f)
+            } else {
+                findError = SavedPlaceText.searchNote(.nothing, query: s.title)
+            }
+        } catch {
+            findError = SavedPlaceText.searchNote(SavedPlaceText.SearchOutcome(error), query: s.title)
+        }
     }
 
     private func pick(_ f: LocationTool.Found) {
@@ -260,9 +383,32 @@ struct SavedPlaceEditor: View {
         draft.address = f.address ?? f.name ?? ""
         if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let name = f.name { draft.name = String(name.prefix(40)) }
         located = true
+        addressing = false
         results = []
         query = ""
         findError = nil
+        recenter()
+    }
+
+    /// A tap on the map: the place goes there, and its address follows once MapKit says what is there.
+    private func move(to spot: CLLocationCoordinate2D) async {
+        Haptics.tap()
+        draft.latitude = spot.latitude
+        draft.longitude = spot.longitude
+        located = true
+        query = ""
+        findError = nil
+        if SavedPlaceText.zoomsIn(shownLatitudeDelta: visible?.span.latitudeDelta, radius: draft.radiusMeters) {
+            recenter()
+        } else if camera.followsUserLocation, let visible {
+            camera = .region(visible) // stays where the user tapped instead of following them
+        }
+        addressing = true
+        let address = await LocationTool.address(of: CLLocation(latitude: spot.latitude, longitude: spot.longitude))
+        // A later tap, search or the current location moved the place again; its own address wins.
+        guard draft.latitude == spot.latitude, draft.longitude == spot.longitude else { return }
+        addressing = false
+        draft.address = address ?? ""
     }
 
     private func useCurrentLocation() async {
@@ -279,9 +425,14 @@ struct SavedPlaceEditor: View {
             let location = try await OneShotLocation.fetch(timeout: 15)
             draft.latitude = location.coordinate.latitude
             draft.longitude = location.coordinate.longitude
-            draft.address = await LocationTool.address(of: location) ?? ""
             located = true
+            addressing = false
             results = []
+            recenter()
+            let address = await LocationTool.address(of: location)
+            // A tap or a search while the address was looked up moved the place; its own address wins.
+            guard draft.latitude == location.coordinate.latitude, draft.longitude == location.coordinate.longitude else { return }
+            draft.address = address ?? ""
         } catch {
             findError = String(localized: "Couldn't get your location. Try again outdoors, or search for the address.")
         }
@@ -294,5 +445,44 @@ struct SavedPlaceEditor: View {
             Haptics.success()
             dismiss()
         }
+    }
+}
+
+/// Places suggested while the user types where a saved place is, as Maps suggests them (#4248): MapKit's completer,
+/// favoring what the editor's map shows. Like the location manager, it answers on the main thread.
+@Observable final class PlaceSuggestions: NSObject, MKLocalSearchCompleterDelegate {
+    private(set) var found: [MKLocalSearchCompletion] = []
+    /// The last query couldn't be completed (offline, too many requests): the editor says the search couldn't run.
+    private(set) var failed = false
+    @ObservationIgnored private let completer = MKLocalSearchCompleter()
+
+    /// As many as fit above the keyboard on a phone.
+    private static let shown = 6
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.address, .pointOfInterest]
+    }
+
+    func update(_ query: String, near region: MKCoordinateRegion?) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        failed = false
+        guard !q.isEmpty else {
+            completer.cancel()
+            found = []
+            return
+        }
+        if let region { completer.region = region }
+        completer.queryFragment = q
+    }
+
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        found = Array(completer.results.prefix(Self.shown))
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: any Error) {
+        found = []
+        failed = SavedPlaceText.SearchOutcome(error) == .failed
     }
 }

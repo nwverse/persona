@@ -13,6 +13,11 @@ export interface Manifest {
   publisher?: string;
   homepage?: string;
   /**
+   * Source-only square PNG artwork: 256–4096 pixels, at most 2 MiB. Catalog entry icon carries this path; strip it
+   * from packaged and runtime manifests for compatibility.
+   */
+  icon?: "assets/icon.png";
+  /**
    * What the market shows and searches (docs "Extension market"): at most 16, each 1 to 24 characters. Packages and
    * indexes carry the manifest without them (hubs before tags refuse an unknown field); the index entry carries them
    * instead.
@@ -54,6 +59,19 @@ export interface Manifest {
    */
   tools?: ToolSpec[];
   auth?: AuthSpec;
+  /**
+   * Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
+   * executable; writes and arbitrary command lines are not part of this contract.
+   */
+  host_integrations?: HostIntegrationSpec[];
+}
+
+/**
+ * A configured CLI integration, selected by a closed ID rather than by an extension-provided executable.
+ */
+export interface HostIntegrationSpec {
+  id: string;
+  version: string;
 }
 
 /**
@@ -297,6 +315,8 @@ export interface StoragePermission {
 export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
+  transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
@@ -327,26 +347,49 @@ export interface Contributes {
 
 /**
  * A skill (docs "Declarative contributions"): a directory of the package with SKILL.md, put in with the assistant's
- * skills.
+ * skills. With source data (docs "Assistant content from the data directory"): a directory of the extension's data
+ * directory whose subdirectories with a SKILL.md are skills its program writes (Markdown files only, 256 KB and 32
+ * skills per extension).
  */
 export interface SkillItem {
   id: string;
-  /** The directory, relative to the package. */
+  /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
+  source?: ContentSource;
 }
 
-export type PromptKind = "instructions" | "quick" | (string & {});
-export const PROMPT_KINDS = ["instructions", "quick"] as const;
+/**
+ * Where a skill's or a prompt's files are: package (the default) or data, the extension's data directory, which its
+ * program writes and upgrades keep.
+ */
+export type ContentSource = "package" | "data" | (string & {});
+export const CONTENT_SOURCES = ["package", "data"] as const;
+
+export type PromptKind = "instructions" | "quick" | "project_context" | "inbox_context" | (string & {});
+export const PROMPT_KINDS = ["instructions", "quick", "project_context", "inbox_context"] as const;
 
 /**
- * A prompt: instructions (a .md of the package added to the assistant's CLAUDE.md) or quick (a template the apps
- * offer in the message box).
+ * A prompt: instructions (a .md of the package, or with source data of the data directory, added to the assistant's
+ * CLAUDE.md), quick (a template the apps offer in the message box), project_context (a directory of the data
+ * directory whose <project slug>.md files go into a new Agent's project background) or inbox_context (a .md of the
+ * data directory added to the Inbox's triage and draft prompts).
  */
 export interface PromptItem {
   id: string;
   kind: PromptKind;
-  /** instructions: the .md file. */
+  source?: ContentSource;
+  /**
+   * instructions: the .md file (with source data: at most 6 KB, adopted at most once a day); inbox_context: the .md
+   * file (1 KB used).
+   */
   file?: string;
+  /** project_context: the directory of <project slug>.md files (1.5 KB of each used). */
+  dir?: string;
+  /**
+   * inbox_context: a text file of sentences, one a line, a draft must not repeat word for word (64 KB used); only
+   * checked, never in a prompt.
+   */
+  never_quote?: string;
   /** quick: what the apps show. */
   title?: string;
   /** quick: what goes into the message box. */
@@ -582,7 +625,7 @@ export interface ConnectorItem {
 }
 
 /**
- * A contribution with only an id and a name: voice, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -678,6 +721,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -820,11 +876,37 @@ export interface AuthPrompt {
   expires_at?: string;
 }
 
+/**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+export interface SettingsCheckParams {
+  /** The whole configuration as it would be saved, the schema's defaults filled in. */
+  config: unknown;
+  secrets: Record<string, string>;
+  /**
+   * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+   * permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+   * ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+   * ordinary proxy (an older hub sends none).
+   */
+  proxy?: string;
+}
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+export interface SettingsCheckResult {
+  ok: boolean;
+  error?: string;
+}
+
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -1019,6 +1101,8 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
 }
 
 export interface UIPlaces {
@@ -1411,8 +1495,9 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
 export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
@@ -1446,6 +1531,16 @@ export interface Section {
   items: Component[];
   more?: More;
   pane?: Pane;
+  span?: SectionSpan;
+  /** Drawn before the title. */
+  icon?: NavIcon;
+  icon_color?: Color;
+  link?: SectionLink;
+  /**
+   * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+   * screen and when absent. Other components keep the whole width.
+   */
+  columns?: number;
 }
 
 /**
@@ -1969,21 +2064,56 @@ export interface Tile {
   control?: RowControl;
   actions?: RowAction[];
   action?: Action;
+  /** Draws the tile as a ring (UI version 9): never with an image or a spark. */
+  gauge?: Gauge;
+}
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+export interface Gauge {
+  /** How full the ring is, 0 to 1. */
+  ratio: number;
+  /** A short word under the value (USD, GB, h), as a control's unit. */
+  unit?: string;
+  color?: Color;
 }
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
-export type Layout = "stack" | "split" | (string & {});
-export const LAYOUTS = ["stack", "split"] as const;
+export type Layout = "stack" | "split" | "columns" | (string & {});
+export const LAYOUTS = ["stack", "split", "columns"] as const;
 
 /**
  * Where a section of a split view goes.
  */
 export type Pane = "main" | "side" | (string & {});
 export const PANES = ["main", "side"] as const;
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+export type SectionSpan = "full" | (string & {});
+export const SECTION_SPANS = ["full"] as const;
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+export interface SectionLink {
+  title: string;
+  action: Action;
+}
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | (string & {});
 export const FILE_STATUSES = ["added", "modified", "deleted", "renamed"] as const;
@@ -3189,8 +3319,12 @@ export interface ConnectorCatalogCallParams {
   args?: unknown;
 }
 
-export type ConnectorSubscriptionMode = "items" | "snapshot" | (string & {});
-export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot"] as const;
+/**
+ * items: new items, each kept once; snapshot: the answer as one state, kept when it changes; things: the answer lists
+ * Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they are.
+ */
+export type ConnectorSubscriptionMode = "items" | "snapshot" | "things" | (string & {});
+export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot", "things"] as const;
 
 export type ConnectorSubscriptionGroup = "source" | "thread" | (string & {});
 export const CONNECTOR_SUBSCRIPTION_GROUPS = ["source", "thread"] as const;
@@ -3200,6 +3334,8 @@ export const CONNECTOR_SUBSCRIPTION_KINDS = ["sub_mail", "sub_message", "sub_not
 
 /**
  * Paths relative to one item. Only $, .field and [index] are supported; no expressions or recursive descent.
+ * sender_id, chat and chat_name name who and where for mutes and policies (the Inbox row's sender and chat tags),
+ * seen its read state, and reply_to where a reply goes; none of them is part of an item's content.
  */
 export interface ConnectorSubscriptionFields {
   id?: string;
@@ -3210,10 +3346,29 @@ export interface ConnectorSubscriptionFields {
   body?: string;
   link?: string;
   due_date?: string;
+  /** The sender's stable id; without it the sender tag is the lowercased display name. */
+  sender_id?: string;
+  /** The conversation's stable id: the row gets a chat tag. */
+  chat?: string;
+  /** The conversation's name, the chat tag's name. */
+  chat_name?: string;
+  /**
+   * Whether the item was already seen in the source: true, a non-zero number, or true, 1, yes, read or seen in any
+   * case. The Inbox row is read when its newest item is; seen only ever turns on.
+   */
+  seen?: string;
+  /**
+   * Where a reply goes and who sees it, in a line for people. With it, an item with an id can be replied to through
+   * the connector's inbox reply, with its thread (else its id) and its id as last.
+   */
+  reply_to?: string;
 }
 
 /**
- * A pull recipe, not a schedule. args is an object (default {}); strings may contain {{since}} or {{since_date}}.
+ * A pull recipe, not a schedule. In things mode the rows bring their own threads and kinds: group_by is thread, kind
+ * is a row's when it has none, and fields and pagination are not used. args is an object (default {}); strings may
+ * contain {{since}} or {{since_date}}. cursor_arg and next_cursor_path opt into cursor pagination; page_arg and
+ * optional next_page_path opt into page pagination (without next_page_path, a full requested page continues).
  * items_path defaults to $; fields are relative to one item. Text results require snapshot mode. Runtime
  * argument/schema and mapped-value validation belongs to the subscription runner.
  */
@@ -3221,6 +3376,10 @@ export interface ConnectorSubscriptionRecipe {
   mode: ConnectorSubscriptionMode;
   tool: string;
   args?: unknown;
+  cursor_arg?: string;
+  next_cursor_path?: string;
+  page_arg?: string;
+  next_page_path?: string;
   items_path?: string;
   fields?: ConnectorSubscriptionFields;
   kind: ConnectorSubscriptionKind;
@@ -3405,12 +3564,34 @@ export interface ConnectorCallParams {
 export interface ConnectorCallResult {
   text?: string;
   /**
+   * tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+   * initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+   * 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+   * pixels; the hub leaves out any over a limit and says so after the text.
+   */
+  images?: ConnectorToolImage[];
+  /**
    * actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
    * service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
    * sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
    * Leave it out when there is none.
    */
   message_ref?: string;
+}
+
+/**
+ * One picture of a tools.call answer (ConnectorCallResult.images).
+ */
+export interface ConnectorToolImage {
+  /** image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes. */
+  mime?: string;
+  /** The bytes, base64 (standard, with padding). */
+  data: string;
+  /**
+   * One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+   * post); the hub keeps the first 200 characters of its first line.
+   */
+  caption?: string;
 }
 
 /**
@@ -4650,6 +4831,8 @@ export interface KBEntry {
   extra?: string;
   /** A chat's source (lark, mail, wechat, github…). */
   source?: string;
+  /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
+  recording_kind?: string;
 }
 
 /**
@@ -4693,7 +4876,10 @@ export interface KBDetail {
   id: string;
   /** Where it is on the manager's machine, for its own file tools. */
   path: string;
-  /** The entity's own fields (meta.json). */
+  /**
+   * The entity's own fields (meta.json). For people, status is active, ignored or self; absent or empty means active.
+   * Status uses the same locked_fields and provenance as other corrected fields.
+   */
   meta: unknown;
   summary?: string;
   log?: string[];
@@ -4703,8 +4889,64 @@ export interface KBDetail {
   segments?: KBRecordingSegment[];
   /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
   minutes?: unknown;
+  /** An all-day recording's day recap, once written (docs/assistant/day-recap.md); kept as the hub sends them. */
+  recap?: unknown;
   /** A topic's knowledge points (docs/assistant/knowledge.md "Topics"). */
   points?: KBTopicPoint[];
+  /**
+   * A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
+   * (docs/assistant/knowledge.md "Person profiles").
+   */
+  profiles?: Record<string, KBProfileRecord>;
+}
+
+export interface KBProfileRecord {
+  profile: KBPersonProfile;
+  at: string;
+}
+
+/**
+ * One writer's profile of a person, its four parts kept apart. Every item says where it comes from; at most 30 items
+ * a part, and 8000 bytes as summary.md shows it.
+ */
+export interface KBPersonProfile {
+  /** Their role, what they are in charge of, how they relate to the user. */
+  facts?: KBProfileItem[];
+  /** The user's own words about them, quoted. */
+  views?: KBProfileItem[];
+  /** Inferred, never stated: each needs its basis. Shown as only a hint. */
+  inferences?: KBProfileItem[];
+  /** Promises and to-dos between the user and them, either way. */
+  commitments?: KBProfileCommitment[];
+}
+
+export interface KBProfileItem {
+  text: string;
+  /** Inferences only (required there): what it rests on. */
+  basis?: string;
+  /**
+   * Where it comes from: a knowledge-base path (chats/<id>/messages/<day>.md, recordings/<id>), a URL, or "user" for
+   * the user's own word.
+   */
+  sources: string[];
+}
+
+export interface KBProfileCommitment {
+  text: string;
+  /** user: the user owes it to them; them: they owe it to the user. */
+  owes: string;
+  /** YYYY-MM-DD, when there is one. */
+  due?: string;
+  done?: boolean;
+  sources: string[];
+}
+
+/**
+ * A field an update carried that its kind does not use: not applied, and why.
+ */
+export interface KBIgnoredField {
+  field: string;
+  reason: string;
 }
 
 /**
@@ -4753,6 +4995,22 @@ export interface KBRecordingSegment {
   start: number;
   end: number;
   text: string;
+  /**
+   * An all-day recording's line number: the segment's 1-based position in its uploads (docs/assistant/day-recap.md);
+   * absent on other recordings.
+   */
+  n?: number;
+  /**
+   * Whose text the segment is in a meeting transcribed on the hub (docs/assistant/meeting-minutes.md "The transcript
+   * of record"): hub or device; absent means device.
+   */
+  source?: string;
+  /**
+   * The line is Persona's own answer as the meeting's microphone heard it (docs/assistant/meeting-minutes.md
+   * "Persona's echo"): kept in the transcript but not what the meeting said, so leave it out of anything read as the
+   * meeting's words; absent (false) on every other line.
+   */
+  echo?: boolean;
 }
 
 /**
@@ -4832,6 +5090,10 @@ export interface KBUpdateParams {
   name?: string;
   /** A project's: short or long. */
   project_kind?: string;
+  /**
+   * People: active, ignored or self; other values are rejected by kb.update. Projects: active, paused, done or
+   * ignored. Omitted or empty keeps the current status; active restores a person.
+   */
   status?: string;
   goal?: string;
   my_role?: string;
@@ -4853,6 +5115,12 @@ export interface KBUpdateParams {
   projects?: string[];
   /** Refused (conflict) when the user or another extension holds anything on the project folded away; no before. */
   merge_into?: string;
+  /**
+   * People only: this extension's own profile of the person, replacing the one it wrote before (one with no items
+   * removes it). Nobody else's profile, nor pinned or note, is touched; before.profile is the one replaced. A profile
+   * breaking a rule is invalid_params and nothing is written.
+   */
+  profile?: KBPersonProfile;
   /** Kept as the provenance of the fields this write holds. */
   evidence?: KBEvidence[];
   /** Fields this extension holds, handed back to the built-in pipeline; unlocking pinned clears it. */
@@ -4862,10 +5130,15 @@ export interface KBUpdateParams {
 export interface KBUpdateResult {
   id: string;
   /**
-   * The previous value of each field written (null when unset; summary is the old text), for the extension's own
-   * undo.
+   * The previous value of each field written (null when unset; summary is the old text, profile this extension's own
+   * profile before), for the extension's own undo.
    */
   before?: Record<string, unknown>;
+  /**
+   * Fields the update carried that its kind does not use (a person's summary and log, for one): not applied, each
+   * with why.
+   */
+  ignored?: KBIgnoredField[];
 }
 
 /**
@@ -5003,6 +5276,11 @@ export interface LeaderReportEvent {
   doing?: string;
   needs_you?: string;
   links?: string[];
+  /**
+   * set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+   * in the log and the briefing, alert nobody), P0 for a decision
+   */
+  level?: string;
 }
 
 /**
@@ -5104,9 +5382,10 @@ export interface ModelRefusal {
 }
 
 /**
- * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}): invalid_params;
- * not_found (assistant.messages: no such conversation in the assistant's own space); assistant_offline (the manager
- * is away: try again); machine_offline (the assistant's computer is not connected or not set up: try again).
+ * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
+ * "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
+ * in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again).
  */
 export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
 export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
@@ -5175,11 +5454,121 @@ export type AssistantRole = "user" | "assistant" | (string & {});
 export const ASSISTANT_ROLES = ["user", "assistant"] as const;
 
 /**
+ * assistant.memory (assistant.memory.read): the assistant's memory entries of its own space (never the health
+ * space's), by name. Read-only.
+ */
+export interface AssistantMemoryParams {
+  /**
+   * Return each entry's text too: cut at 16 KB each, and left out once a page holds 512 KB of text (truncated says
+   * so).
+   */
+  include_content?: boolean;
+}
+
+export interface AssistantMemoryEntry {
+  /** The entry's file name. */
+  name: string;
+  /** The frontmatter's description; empty without one. */
+  description?: string;
+  /** The frontmatter's type (or metadata.type); empty without one. */
+  type?: string;
+  /** The file's size in bytes. */
+  size: number;
+  /** When the file was made, where the computer's file system keeps it. */
+  created?: string;
+  modified: string;
+  /** With include_content: the text, perhaps cut. */
+  content?: string;
+  /** content was cut or left out for its size. */
+  truncated?: boolean;
+}
+
+/**
+ * An assistant without memory (none written yet, or the feature off) has no entries.
+ */
+export interface AssistantMemoryResult {
+  entries: AssistantMemoryEntry[];
+}
+
+/**
  * next_seq is set while there is more to read (pass it as after_seq), even when this page has no messages.
  */
 export interface AssistantMessagesResult {
   messages: AssistantMessage[];
   next_seq?: number;
+}
+
+/**
+ * assistant.data_status takes no parameters.
+ */
+export interface AssistantDataStatusParams {
+}
+
+/**
+ * What the assistant reads of the contribution: adopted (the content as it is now; skills: sent; project and Inbox
+ * context: used whenever their prompt is built), pending (instructions: an older version, the new one waits for
+ * next_adopt_at), kept (instructions: an older version, the new one cannot be used, see reason), none (nothing: none
+ * written yet, none usable, or the extension or contribution is switched off).
+ */
+export type AssistantDataState = "adopted" | "pending" | "kept" | "none" | (string & {});
+export const ASSISTANT_DATA_STATES = ["adopted", "pending", "kept", "none"] as const;
+
+/**
+ * Why what the assistant reads is not the content as it is now: too_large (over its limit), invalid (not UTF-8 text),
+ * not_regular (not a plain file inside the data directory: a directory, or a link out of it), unreadable,
+ * rate_limited (a new version of instructions waits for its turn), disabled (the extension is switched off or cannot
+ * run), switched_off (this contribution is switched off).
+ */
+export type AssistantDataReason = "too_large" | "invalid" | "not_regular" | "unreadable" | "rate_limited" | "disabled" | "switched_off" | (string & {});
+export const ASSISTANT_DATA_REASONS = ["too_large", "invalid", "not_regular", "unreadable", "rate_limited", "disabled", "switched_off"] as const;
+
+/**
+ * One data contribution of the extension.
+ */
+export interface AssistantDataItem {
+  /** Its id, as the manifest has it. */
+  contribution: string;
+  /** instructions, skills, project_context or inbox_context. */
+  kind: string;
+  /** Its file or directory, relative to the data directory. */
+  path: string;
+  /** The most it may weigh, in bytes. */
+  limit: number;
+  /** What it weighs now (all files, for skills). */
+  bytes: number;
+  state: AssistantDataState;
+  reason?: AssistantDataReason;
+  /** The rest of a file's problem, for logs. */
+  detail?: string;
+  /**
+   * The digest of the content as it is now (instructions: the cleaned text, the first 16 hex digits of its sha256;
+   * skills: of every skill's name and digest).
+   */
+  hash?: string;
+  /**
+   * instructions: the digest of the text the assistant reads (for a contribution or extension switched off: read
+   * last); empty when that is no text.
+   */
+  adopted_hash?: string;
+  /** instructions: when that text was adopted (RFC 3339). */
+  adopted_at?: string;
+  /**
+   * instructions, state pending: the new version is adopted by then at the latest (RFC 3339); sooner when the hub's
+   * own instructions change or the user applies it.
+   */
+  next_adopt_at?: string;
+  /** skills: the skills sent. */
+  skills?: string[];
+  /** project_context: the projects (slugs) with a file in use. */
+  files?: string[];
+  /** project_context, inbox_context: some content is used cut at its limit (detail says which). */
+  truncated?: boolean;
+  /** inbox_context: how many sentences drafts are checked against. */
+  never_quote?: number;
+}
+
+export interface AssistantDataStatusResult {
+  items: AssistantDataItem[];
 }
 
 export interface StorageEmptyParams {
@@ -5693,6 +6082,77 @@ export interface UIPageSnapshot {
   view: View;
 }
 
+/**
+ * error.code of the transcription calls besides permission_denied (data {scope: "transcription"}): invalid_params (a
+ * field missing or wrong, audio that is not base64 PCM16 or over 256 KiB a call, a job that is not this extension's
+ * or no longer runs); assistant_offline (the manager is away: try again); transcription_unavailable (no transcription
+ * is chosen, ready or able to replay: the owner sets it up in Settings › Meetings); busy (this extension has a job
+ * running, or two extensions have); too_long (more than 15 minutes of audio: the job is ended); timeout (the
+ * transcription stopped answering: the job is ended); transcription_failed (the transcription failed the job; data
+ * {code}: its error code).
+ */
+export type TranscriptionErrorCode = "invalid_params" | "assistant_offline" | "transcription_unavailable" | "busy" | "too_long" | "timeout" | "transcription_failed" | (string & {});
+export const TRANSCRIPTION_ERROR_CODES = ["invalid_params", "assistant_offline", "transcription_unavailable", "busy", "too_long", "timeout", "transcription_failed"] as const;
+
+/**
+ * transcription.start: a job for one piece of audio.
+ */
+export interface TranscriptionStartParams {
+  /**
+   * A BCP 47 hint (zh-CN, en-US); the transcription still follows the speech. Empty: the transcription's own guess.
+   */
+  language?: string;
+  /** A short name of what this is, for the manager's log (its first 40 characters); never what is said. */
+  label?: string;
+}
+
+export interface TranscriptionStartResult {
+  /** The job's id, for the calls after; it is this extension's only. */
+  job: string;
+}
+
+/**
+ * transcription.audio: the next piece of the audio, contiguous with the last: PCM16 little-endian, mono, 16 kHz,
+ * base64 (standard, with padding), at most 256 KiB of PCM (8 seconds) a call. The call returns once the audio is with
+ * the transcription and no more than 60 seconds wait ahead of it, so sending as fast as it returns paces the job.
+ */
+export interface TranscriptionAudioParams {
+  job: string;
+  data: string;
+}
+
+/**
+ * transcription.finish (every piece is sent: wait for the text) and transcription.cancel (drop the job and its text).
+ */
+export interface TranscriptionJobParams {
+  job: string;
+}
+
+/**
+ * One sentence, from and to in seconds from the start of the audio.
+ */
+export interface TranscriptionSegment {
+  from: number;
+  to: number;
+  text: string;
+}
+
+/**
+ * A span the transcription did not trust any text for (its sessions did not agree: noise, music, crosstalk): say so,
+ * never guess.
+ */
+export interface TranscriptionGap {
+  from: number;
+  to: number;
+}
+
+export interface TranscriptionFinishResult {
+  segments: TranscriptionSegment[];
+  gaps?: TranscriptionGap[];
+  /** How much audio the job took. */
+  seconds: number;
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -5770,6 +6230,8 @@ export const CALLS: Record<string, Call> = {
   "model.complete": { from: "program", params: "ModelCompleteParams", result: "ModelCompleteResult" },
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
+  "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
+  "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
   "storage.get": { from: "program", params: "StorageKeyParams", result: "StorageEntry" },
   "storage.list": { from: "program", params: "StorageListParams", result: "StorageListResult" },
@@ -5785,4 +6247,8 @@ export const CALLS: Record<string, Call> = {
   "storage.blob.finish": { from: "program", params: "StorageBlobMutateParams", result: "StorageBlobFinishResult" },
   "storage.blob.delete": { from: "program", params: "StorageBlobMutateParams", result: "StorageDeleteResult" },
   "storage.blob.read": { from: "program", params: "StorageBlobReadParams", result: "StorageBlobReadResult" },
+  "transcription.start": { from: "program", params: "TranscriptionStartParams", result: "TranscriptionStartResult" },
+  "transcription.audio": { from: "program", params: "TranscriptionAudioParams", result: "Empty" },
+  "transcription.finish": { from: "program", params: "TranscriptionJobParams", result: "TranscriptionFinishResult" },
+  "transcription.cancel": { from: "program", params: "TranscriptionJobParams", result: "Empty" },
 };

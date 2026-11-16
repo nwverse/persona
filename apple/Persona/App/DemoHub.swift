@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Demo Mode (docs/apple/ios.md「Demo mode」): a made-up hub inside the app, for someone without one (App Review, a friend
 /// with the TestFlight link). It sits under the data layer, so no page knows: `APIClient.request` and `LiveConnection`
@@ -669,7 +670,7 @@ final class DemoHub {
         sockets.removeAll { $0.socket == nil }
         sockets.append(WeakSocket(socket: s))
         s.send(["type": "hello", "server_version": "demo", "client_id": "demo",
-                "features": ["file_upload", "terminal_stream", "task_push", .string(ProviderScopeForm.feature)]])
+                "features": ["file_upload", "terminal_stream", "task_push", "task_inbox", .string(ProviderScopeForm.feature)]])
         s.send(["type": "machines", "machines": .array(machines)])
         for m in Set(sessions.compactMap { $0["machine_id"]?.string }).sorted() {
             s.send(["type": "sessions", "machine_id": .string(m), "sessions": .array(sessions.filter { $0["machine_id"]?.string == m })])
@@ -1043,9 +1044,9 @@ final class DemoSocket: LocalSocket {
 
 nonisolated extension JSONValue: ExpressibleByStringLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral,
     ExpressibleByDictionaryLiteral, ExpressibleByArrayLiteral {
-    init(stringLiteral value: String) { self = .string(value) }
-    init(booleanLiteral value: Bool) { self = .bool(value) }
-    init(integerLiteral value: Int) { self = .number(Double(value)) }
-    init(dictionaryLiteral elements: (String, JSONValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { $1 })) }
-    init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
+    public init(stringLiteral value: String) { self = .string(value) }
+    public init(booleanLiteral value: Bool) { self = .bool(value) }
+    public init(integerLiteral value: Int) { self = .number(Double(value)) }
+    public init(dictionaryLiteral elements: (String, JSONValue)...) { self = .object(Dictionary(elements, uniquingKeysWith: { $1 })) }
+    public init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
 }

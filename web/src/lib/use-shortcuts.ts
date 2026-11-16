@@ -5,12 +5,12 @@ import { useEffect, useRef } from "react";
 import { toast } from "../ui/atoms";
 import { AGENT_GROUPINGS } from "./agent-groups";
 import { adjacentTab, machineAt, panelToggle, terminalChat, type PaneRef } from "./shortcut-nav";
-import { toggleHelp } from "./shortcut-help";
-import { toggleMaximized, toggleSidebarColumn } from "./layout";
-import { togglePalette } from "./palette";
+import { closeHelp, toggleHelp } from "./shortcut-help";
+import { focusInColumn, toggleMaximized, toggleSidebarColumn } from "./layout";
+import { closePalette, getPalette, togglePalette, type PaletteMode } from "./palette";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
-import { navigate, type Route } from "./router";
-import { canShowTerminal, readView, resolveView } from "./session-view";
+import { inWorkView, navigate, withWorkView, type Route } from "./router";
+import { canShowTerminal, readView, rememberView, resolveView } from "./session-view";
 import { cycleGrouping, groupingLabel, setAllFolded, stepSidebarRow } from "./sidebar-api";
 import { focusWaitingCard } from "./card-keys";
 import { dispatchKey, registerShortcut } from "./shortcuts";
@@ -20,11 +20,24 @@ export interface ShortcutContext {
   route: Route;
   /** The conversation on the page. */
   pane?: PaneRef;
+  workPaneAvailable?: (pane: PaneRef) => boolean;
   /** A phone-width screen: the sidebar is a drawer, there is no column to hide. */
   narrow: boolean;
   toggleDrawer: () => void;
   /** Closes the drawer (a no-op when it is shut), as a tap on one of its rows does. */
   closeDrawer?: () => void;
+}
+
+/** ⌘K / ⌘⇧P and ⌘/: the palette and the shortcut help take each other's place, never one over the other (with two
+ *  modals stacked Esc and Tab serve only the top one, and the one under it waits behind for its own Esc). Closing one and
+ *  opening the other in one render gives the focus back where the first was opened from (ui/overlay.ts useModalFocus). */
+export function paletteKey(mode: PaletteMode) {
+  closeHelp();
+  togglePalette(mode);
+}
+export function helpKey() {
+  if (getPalette().open) closePalette();
+  toggleHelp();
 }
 
 /** The panel ⌘B closed last, to bring back. */
@@ -57,9 +70,9 @@ export function useShortcuts(ctx: ShortcutContext) {
 
   useEffect(() => {
     const off = [
-      registerShortcut("jump", () => togglePalette("jump")),
-      registerShortcut("commands", () => togglePalette("command")),
-      registerShortcut("help", () => toggleHelp()),
+      registerShortcut("jump", () => paletteKey("jump")),
+      registerShortcut("commands", () => paletteKey("command")),
+      registerShortcut("help", helpKey),
       registerShortcut("settings", () => navigate({ name: "settings" })),
       // what a click on the sidebar's Persona row does: the main conversation (#5581)
       registerShortcut("persona", () => {
@@ -74,15 +87,17 @@ export function useShortcuts(ctx: ShortcutContext) {
       }),
       registerShortcut("left-sidebar", () => {
         if (at.current.narrow) at.current.toggleDrawer();
-        else toggleSidebarColumn();
+        else toggleSidebarColumn(focusInColumn());
       }),
       registerShortcut("maximize", () => (at.current.narrow ? false : void toggleMaximized())),
       registerShortcut("terminal-chat", () => {
-        const { route, pane } = at.current;
-        const can = Boolean(pane) && canShowTerminal(getSession(pane!.mid, pane!.sid));
+        const { route, pane, workPaneAvailable } = at.current;
+        const inWork = inWorkView(route);
+        const can = !!pane && canShowTerminal(getSession(pane.mid, pane.sid)) && (!inWork || workPaneAvailable?.(pane) === true);
         const url = route.name === "session" || route.name === "tab" ? route.view : undefined;
         const to = terminalChat(route, pane ? resolveView(url, readView(pane.mid, pane.sid), can) : "chat", can);
         if (!to) return false;
+        if (inWork && pane && (to.go.name === "session" || to.go.name === "tab") && to.go.view) rememberView(pane.mid, pane.sid, to.go.view);
         // on an agent's page the view changes in place: Back leaves the page, it does not undo each ⌘J
         navigate(to.go, route.name === "session" || route.name === "tab");
       }),
@@ -114,7 +129,7 @@ export function useShortcuts(ctx: ShortcutContext) {
       const s = getState();
       const to = adjacentTab(s.machines, Object.values(s.sessions).flat(), at.current.pane, dir);
       if (!to) return false;
-      navigate(to);
+      navigate(withWorkView(to, inWorkView(at.current.route)));
     }
     const key = (e: KeyboardEvent) => void dispatchKey(e, { overlay: overlayOpen() });
     addEventListener("keydown", key);

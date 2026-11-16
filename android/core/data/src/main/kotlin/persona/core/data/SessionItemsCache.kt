@@ -103,7 +103,9 @@ class SessionItemsCache(
     override suspend fun save(session: SessionKey, snapshot: CachedChat) {
         val ordered = snapshot.items.distinctBy { it.id }.sortedWith(compareBy<Item> { it.seq }.thenBy { part(it) })
         val turns = chatTurns(ordered.map { it.lineItem() })
-        val first = turns.takeLast(2).firstOrNull()?.users?.firstOrNull()?.item
+        // The last two turns the user started: a turn a background task's wake opened has no message to start from,
+        // and goes with the turn before it (iOS `ChatCache.tail` counts the user's questions the same way).
+        val first = turns.filter { it.users.isNotEmpty() }.takeLast(2).firstOrNull()?.users?.firstOrNull()?.item
         var start = first?.let { item -> ordered.indexOfFirst { it.id == item.id }.coerceAtLeast(0) } ?: 0
         // A subagent can hand back after several user turns. Its reports cannot survive restart without the
         // launching call: keep that exchange too, including earlier reports, rather than orphaning the result.
@@ -127,7 +129,7 @@ class SessionItemsCache(
         }
         val rows = ordered.drop(start).map { item ->
             // Inline originals belong to the display-sized image cache, not the items database.
-            val cached = item.image?.let { item.copy(image = it.copy(data = "", lazy = true)) } ?: item
+            val cached = publicRefusalItem(item.image?.let { item.copy(image = it.copy(data = "", lazy = true)) } ?: item)
             ItemRow(scope.path, session.machineId, session.sessionId, item.seq, part(item), item.id, JsonCodec.encodeToString(cached))
         }
         ledgerTransaction {
@@ -192,4 +194,13 @@ internal class ItemsLedger {
     }
 
     fun clear() { sessions = null; total = null }
+}
+
+/**
+ * A refusal notice as it may be kept (#2528, web `publicRefusalItem`): its text is the refusal's words (else its
+ * explanation, else its subtype), never the record's whole line, which an older hub sent as the notice's text.
+ */
+internal fun publicRefusalItem(item: Item): Item {
+    val r = item.modelRefusal ?: return item
+    return item.copy(text = r.text?.takeIf(String::isNotEmpty) ?: r.explanation?.takeIf(String::isNotEmpty) ?: r.subtype)
 }

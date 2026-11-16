@@ -13,6 +13,30 @@ export interface FsEntry {
   mtime?: string;
   /** Git ignores it (the tree dims it); only set inside a repository. */
   ignored?: boolean;
+  /** A symlink's text and whether it leads nowhere (hub feature `file_info`, docs/protocol/protocol.md "File details and links"). */
+  link_target?: string;
+  link_broken?: boolean;
+}
+
+/** One path's details (`/stat?detail=1`, the Info dialog); an older node sends only path, kind and size. */
+export interface FileInfo {
+  path: string;
+  /** file, dir, link (a broken symlink), denied, missing */
+  kind: string;
+  size?: number;
+  /** Permission bits as chmod takes them. */
+  mode?: number;
+  owner?: string;
+  group?: string;
+  mtime?: string;
+  ctime?: string;
+  birthtime?: string;
+  items?: number;
+  items_more?: boolean;
+  symlink?: boolean;
+  link_target?: string;
+  link_real?: string;
+  link_broken?: boolean;
 }
 
 export interface FsListing {
@@ -121,8 +145,8 @@ export function resolveRef(baseDir: string, ref: string): string {
   const src = ref.trim().split(/[?#]/)[0];
   if (!src || !isMachineRef(ref)) return "";
   const path = decodeURIComponentSafe(src);
-  if (path.startsWith("~") || path.startsWith("/")) return normalize(path);
-  return normalize(joinPath(baseDir, path));
+  if (path.startsWith("~") || path.startsWith("/")) return normalizePath(path);
+  return normalizePath(joinPath(baseDir, path));
 }
 
 /** A reference that points into the machine (relative, absolute or ~/), not a URL or an in-page anchor. */
@@ -132,7 +156,8 @@ export function isMachineRef(ref: string): boolean {
   return !/^[a-z][a-z0-9+.-]*:/i.test(r);
 }
 
-function normalize(p: string): string {
+/** A path without "." parts, doubled slashes or ".." where it can go up (a file named two ways is one path). */
+export function normalizePath(p: string): string {
   const abs = p.startsWith("/");
   const out: string[] = [];
   for (const part of p.split("/")) {
@@ -249,6 +274,21 @@ export function parseDiff(diff: string): DiffLine[] {
   return out;
 }
 
+/** Git C-quotes special path bytes even with core.quotepath off (node gitCmd / gitQuote). */
+function unquoteGitPath(path: string): string | null {
+  const escapes: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  const bytes: number[] = [];
+  for (const token of path.match(/\\(?:[0-7]{1,3}|.)|[^\\]+/g) ?? []) {
+    if (!token.startsWith("\\")) bytes.push(...new TextEncoder().encode(token));
+    else {
+      const byte = /^[0-7]/.test(token[1]) ? parseInt(token.slice(1), 8) : escapes[token[1]];
+      if (byte === undefined || byte > 255) return null;
+      bytes.push(byte);
+    }
+  }
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(bytes));
+}
+
 /** A multi-file diff (git show) cut into one diff per file, keyed by the new path. */
 export function splitDiff(diff: string): Record<string, string> {
   const res: Record<string, string> = {};
@@ -261,9 +301,10 @@ export function splitDiff(diff: string): Record<string, string> {
     if (line.startsWith("diff --git ")) {
       flush();
       buf = [];
-      // diff --git a/x b/x → x (b/ taken from the end, so paths with spaces work)
+      // The -z file list uses raw paths; the diff headers may quote the same names.
+      const quoted = / "b\/((?:[^"\\]|\\.)*)"$/.exec(line);
       const i = line.lastIndexOf(" b/");
-      path = i >= 0 ? line.slice(i + 3) : null;
+      path = quoted ? unquoteGitPath(quoted[1]) : i >= 0 ? line.slice(i + 3) : null;
     }
     buf.push(line);
   }

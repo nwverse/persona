@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, attachSession } from "./api";
-import { resumeCommand, sessionCan, shellPath, sessionDeletable, sessionMenuActions, sourceSubtitle } from "./format";
+import { isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, shellPath, sessionDeletable, sessionMenuActions, sourceSubtitle } from "./format";
 import type { Session, SessionCapabilities } from "./types";
 
 const legacy: Session = { machine_id: "m", session_id: "raw-thread", title: "", cwd: "/tmp/project", status: "working" };
@@ -27,6 +27,9 @@ describe("session capability contract", () => {
     for (const op of operations.filter((op) => op !== "read")) expect(sessionCan(history, op)).toBe(false);
     expect(sourceSubtitle(history)).toContain("仅查看：外部进程正在使用此会话");
     expect(sourceSubtitle({ ...history, source_kind: "claude_bg", read_only_reason: "回复请在电脑上打开" })).toBe("Claude 后台 · 仅查看：回复请在电脑上打开");
+    // The node's own "仅查看：" prefix is said once (#7803); a reason that is only the prefix falls back to the default.
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：这个子 Agent 由父 Agent 驱动" })).toBe("Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动");
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：" })).toBe("Codex 实时 · 仅查看：这个来源还不能发消息");
   });
 
   it("names Claude sessions outside Persona's terminals and lets them send only when the node says so", () => {
@@ -56,9 +59,25 @@ describe("session capability contract", () => {
     expect(sessionCan(runtime, "close")).toBe(true);
     expect(sessionMenuActions(runtime)).toEqual(["stop", "close"]);
     expect(sessionMenuActions({ ...runtime, status: "offline" })).toEqual([]);
-    expect(sessionMenuActions({ ...legacy, capabilities: { terminal: true, close: false } })).toEqual(["stop", "resume"]);
+    expect(sessionMenuActions({ ...legacy, capabilities: { terminal: true, interrupt: true, close: false } })).toEqual(["stop", "resume"]);
     expect(sessionCan({ ...runtime, capabilities: { terminal: true } }, "close")).toBe(true);
     expect(sessionCan(undefined, "close")).toBe(false);
+  });
+
+  it("renames a runtime's session by its declared capability and keeps the old rule where none is declared (#6294)", () => {
+    const runtime: Session = { ...legacy, source_kind: "runtime", capabilities: { read: true, send: true, rename: true } };
+    expect(sessionCanRename(runtime)).toBe(true);
+    expect(sessionCanRename({ ...runtime, capabilities: { read: true, send: true, rename: false } })).toBe(false);
+    // the node's word wins over sending too: renaming is not a message
+    expect(sessionCanRename({ ...runtime, capabilities: { read: true, rename: true } })).toBe(true);
+    // absent (an older node): a source never renames, a native row that can send does, a Persona conversation does
+    expect(sessionCanRename({ ...runtime, capabilities: { read: true, send: true } })).toBe(false);
+    expect(sessionCanRename(legacy)).toBe(true);
+    expect(sessionCanRename({ ...legacy, capabilities: { read: true, terminal: true } })).toBe(false); // a stopped Agent
+    expect(sessionCanRename({ ...runtime, assistant: true, capabilities: { read: true, send: true } })).toBe(true);
+    // an explicit refusal holds on a native row too
+    expect(sessionCanRename({ ...legacy, capabilities: { read: true, send: true, terminal: true, rename: false } })).toBe(false);
+    expect(sessionCanRename(undefined)).toBe(false);
   });
 
   it("quotes the folder in the resume command, and gives only the command without one", () => {
@@ -67,6 +86,22 @@ describe("session capability contract", () => {
     expect(resumeCommand({ ...legacy, cwd: "~/My Project" })).toBe("cd ~/'My Project' && claude --resume raw-thread");
     expect(resumeCommand({ ...legacy, cwd: "" })).toBe("claude --resume raw-thread");
     expect(resumeCommand({ ...legacy, agent: "traex", cwd: "" })).toBe("traex resume raw-thread");
+  });
+
+  it("gives no resume command for a runtime's session, which its runtime keeps (#8142)", () => {
+    const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
+    expect(resumeCommand({ ...paseo, session_id: "paseo-1", agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("");
+    expect(resumeCommand({ ...paseo, session_id: "aaaaaaaa-0000-4000-8000-000000000001", agent: "claude", launcher: "my-claude" })).toBe("");
+    expect(resumeCommand({ ...paseo, session_id: "paseo-2", agent: "codex", launcher: "my-codex" })).toBe("");
+  });
+
+  it("says a runtime's session comes from its agent, by name, never a raw id (#8142)", () => {
+    const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("Grok");
+    expect(sourceSubtitle({ ...paseo, agent: "claude", launcher: "my-claude" })).toBe("Claude Code");
+    // a row Paseo names no label for yet: its provider, never "paseo"
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", launcher: "kimi" })).toBe("kimi");
+    expect(sourceSubtitle({ ...paseo, agent: "dsh", agent_label: "DSH", source_instance_id: "dsh" })).toBe("DSH");
   });
 
   it("keeps plain paths as they are and a leading ~ outside the quotes", () => {
@@ -84,6 +119,45 @@ describe("session capability contract", () => {
     expect(sourceSubtitle(dsh)).toBe("DSH");
     expect(sessionMenuActions(dsh)).toEqual(["stop"]);
     expect(sourceSubtitle({ ...dsh, capabilities: { read: true }, read_only_reason: "DSH 没有开放从手机发消息" })).toBe("DSH · 仅查看：DSH 没有开放从手机发消息");
+  });
+});
+
+describe("a stopped Agent (#4754)", () => {
+  const stopped: Session = { ...legacy, agent: "claude", status: "offline", capabilities: { read: true, terminal: true }, read_only_reason: "Agent 已停止" };
+
+  it("holds a native row that carries capabilities to them: read and terminal, nothing else", () => {
+    expect(sessionCan(stopped, "read")).toBe(true);
+    expect(sessionCan(stopped, "terminal")).toBe(true);
+    for (const op of ["send", "interrupt", "approve", "model", "modes"] as const) expect(sessionCan(stopped, op)).toBe(false);
+    expect(sessionCan(stopped, "attach")).toBe(false); // attach is a source's, never a native row's
+    expect(sessionCan(stopped, "close")).toBe(true); // close follows terminal on a row that does not say
+    // its node's own words never show as a source line
+    expect(sourceSubtitle(stopped)).toBe("");
+  });
+
+  it("is a native, non-assistant row that is offline or interrupted with read and terminal and no send", () => {
+    expect(isStoppedAgent(stopped)).toBe(true);
+    expect(isStoppedAgent({ ...stopped, status: "interrupted" })).toBe(true);
+    expect(isStoppedAgent({ ...stopped, status: "idle" })).toBe(false); // a live tab on Claude's agents list says the same, but runs
+    expect(isStoppedAgent({ ...stopped, capabilities: { read: true, terminal: true, send: true } })).toBe(false);
+    expect(isStoppedAgent({ ...stopped, capabilities: { read: true } })).toBe(false); // an archive's snapshot: no terminal
+    expect(isStoppedAgent({ ...stopped, source_kind: "claude_cli" })).toBe(false);
+    // a Codex thread nothing has open is marked the same way (#5521); a Codex App thread offers no terminal
+    expect(isStoppedAgent({ ...stopped, agent: "codex", source_kind: "codex_history" })).toBe(true);
+    expect(isStoppedAgent({ ...stopped, agent: "codex", source_kind: "codex_history", capabilities: { read: true } })).toBe(false);
+    expect(isStoppedAgent({ ...stopped, assistant: true })).toBe(false);
+    expect(isStoppedAgent(undefined)).toBe(false);
+  });
+
+  it("keeps an older node's offline row as it was: no capabilities, so it may still be sent to (a message resumes it there)", () => {
+    const old: Session = { ...legacy, status: "offline" };
+    expect(isStoppedAgent(old)).toBe(false);
+    for (const op of operations) expect(sessionCan(old, op)).toBe(true);
+  });
+
+  it("is left out of Home's Continue, which offers only rows that take messages", () => {
+    expect(sessionCan(stopped, "send")).toBe(false);
+    expect(sessionCan({ ...stopped, capabilities: { read: true, terminal: true, send: true }, status: "idle" }, "send")).toBe(true);
   });
 });
 

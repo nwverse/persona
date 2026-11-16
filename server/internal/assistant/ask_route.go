@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -23,8 +25,10 @@ import (
 // ask_escalate: every card of the task still waiting then rings the user once, with the supervisor's reason and
 // recommendation, and a leader's escalation is an escalated entry in the main conversation, so the layers above know.
 // Approvals stay the user's: no conversation can allow a tool or approve a plan (interaction_answer refuses them), so
-// they reach the user through ask_escalate or the timeout. A card nobody handles within askHoldFor moves one rung up
-// (leader, main conversation, the user), so nothing waits on a supervisor for ever.
+// they reach the user through ask_escalate, when their supervisor itself needs the user, or at the absolute 15-minute
+// deadline. A card nobody handles within askHoldFor moves one rung up
+// (leader, main conversation, the user; or the background supervisor, then the user, for a task no leader supervises),
+// so nothing waits on a supervisor for ever.
 //
 // The route lives on the pending card, not in the store: after a manager restart the card is back on the apps without
 // a push (as every card is), and its route is made again from the task's supervisor (restoreRoute) so that the
@@ -40,19 +44,32 @@ var askHoldFor = 5 * time.Minute
 // keep a card for ever.
 var askBusyMax = time.Hour
 
+// askOwnerOnlyDeadline bounds a permission or plan's whole route, however many rungs it crosses and however long a
+// rung stays busy. Only the owner can answer these cards, so they cannot spend an unbounded time held by supervisors.
+var askOwnerOnlyDeadline = 15 * time.Minute
+
 // askRoute is where a pending card is on its way to the user: the conversations it goes through, nearest first (its
 // task's leader, then the main conversation), the one it is with (step; past the last: the user's), and since when.
 type askRoute struct {
-	todo    string
-	machine string // where its rungs are: the assistant's conversations, on the assistant's machine
-	ladder  []string
-	step    int
-	since   time.Time
-	held    time.Time // when it reached this rung: askBusyMax counts from here
+	todo     string
+	machine  string // where its rungs are: the assistant's conversations, on the assistant's machine
+	ladder   []string
+	step     int
+	routedAt time.Time // when this route began: an owner-only card's absolute deadline counts from here
+	since    time.Time
+	held     time.Time // when it reached this rung: askBusyMax counts from here
 	// maybeTold: a question card restored after a restart. Whether the user was told of it is not kept, so its
 	// timeout only puts it back on the apps (ringAsks), not ringing them a second time. An approval restored so (a
 	// permission or a plan) is not: no conversation may answer it, so its timeout rings.
 	maybeTold bool
+	// With push tiering on (push_quiet.go) a card that runs past its last rung goes back to its task's supervisor once
+	// more (reminded), and when that hold runs out too it stays there (parked) until someone answers or escalates it,
+	// or the switch goes off, when it climbs on as before. An owner-only card's absolute deadline and needs_you release
+	// still take precedence. Neither flag is kept over a restart: a restored route starts again from the supervisor,
+	// which is then reminded once more. reminded is sticky while the card lives: turning the switch off and on again
+	// before its hold runs out does not buy a second reminder for the same supervisor — only the switch being off when
+	// the hold runs out hands an ordinary card to the user.
+	reminded, parked bool
 }
 
 func (r *askRoute) at() string {
@@ -94,9 +111,14 @@ func routable(ix proto.Interaction) bool {
 // task, and the machine those conversations are on (the assistant's: its leaders and its main conversation). None when
 // no leader is configured (everything stays as it was), the agent is no supervised task's, the task already waits for
 // the user, or the agent is a supervising conversation itself.
+//
+// A task no leader supervises has one rung: the background supervisor, then the user, as a leader's card goes to the
+// leader, then the main conversation; the main conversation while the background supervisor is off or not made yet
+// (ownSupervisor, supervise_background.go). The background supervisor does not change when cards are routed at all:
+// that still takes leader conversations, so with none configured a card is the user's as it comes, as before.
 func (s *Service) askLadder(ctx context.Context, machine, sid string) (ladder []string, todo, home string, ok bool) {
 	cfg := s.settings(ctx)
-	if len(cfg.Leaders) == 0 || cfg.Main == "" || sid == cfg.Main || slices.Contains(cfg.Leaders, sid) {
+	if len(cfg.Leaders) == 0 || cfg.Main == "" || sid == cfg.Main || sid == cfg.BackgroundSupervisor || slices.Contains(cfg.Leaders, sid) {
 		return nil, "", "", false
 	}
 	home = cfg.MachineID
@@ -115,7 +137,7 @@ func (s *Service) askLadder(ctx context.Context, machine, sid string) (ladder []
 	if lead := t.Supervision.Supervisor; lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
 		return []string{lead, cfg.Main}, t.ID, home, true
 	}
-	return []string{cfg.Main}, t.ID, home, true
+	return []string{s.ownSupervisor(cfg)}, t.ID, home, true
 }
 
 // routeAsk sends new card ix to its supervisor instead of the user (announce); false when it is not one to route.
@@ -136,13 +158,13 @@ func (s *Service) routeAsk(ix proto.Interaction) bool {
 		return false
 	}
 	now := time.Now()
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now}
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, routedAt: now, since: now, held: now}
 	p.ix.Delegating = true
 	s.fleet.mu.Unlock()
 	shown := ix
 	shown.Delegating = true
 	s.show(shown)
-	s.workEvent(ix.MachineID, ix.SessionID, "ask_routed", map[string]any{"to": ladder[0], "kind": ix.Kind, "todo": todo})
+	s.workEvent(ix.MachineID, ix.SessionID, "ask_routed", map[string]any{"to": ladder[0], "kind": ix.Kind, "todo": todo, "id": ix.ID})
 	s.signalAsk(todo, ladder[0], ix, 0)
 	return true
 }
@@ -153,17 +175,37 @@ func (s *Service) signalAsk(todo, to string, ix proto.Interaction, step int) {
 		Key: fmt.Sprintf("%s@%d", ix.ID, step)})
 }
 
+// quietRemind is low-distraction mode's timeout of card ix of task todo past its last rung: instead of ringing the user, supervisor to
+// gets the card once more, and the owner a P1 notice the hub holds for the "Needs you" list and the briefing (and
+// records among the pushes it held back), never an alert.
+func (s *Service) quietRemind(todo, to string, ix proto.Interaction) {
+	s.logf("ask %s of task %s: not handled in time; low-distraction mode: not pushed to the user, %s reminded once", ix.ID, todo, to)
+	s.workEvent(ix.MachineID, ix.SessionID, "ask_quiet_reminded", map[string]any{"to": to, "kind": ix.Kind, "todo": todo, "id": ix.ID})
+	s.signal(superviseSignal{Todo: todo, Kind: sigAsk, To: to, Machine: ix.MachineID, Session: ix.SessionID,
+		Key: ix.ID + "@remind"})
+	l := s.lang(context.Background())
+	name := todo
+	if t, ok := s.todoNow(todo); ok && t.Title != "" {
+		name = t.Title
+	}
+	title := i18n.T(l, "assistant-tasks.ask_held_title", i18n.Args{"name": name})
+	s.deliver(Notification{Kind: assistantwire.NotifyPush, Level: assistantwire.LevelP1, RelatedKey: "ask:" + todo,
+		DeviceID: ix.MachineID, Subtitle: s.machineName(ix.MachineID), SessionID: ix.SessionID, Title: title,
+		Body: clip(oneLine(noticeAsk(ix)), 200)})
+}
+
 // heldAsks are the cards of task todo waiting with conversation to, oldest first, as a supervision entry lists them.
 func (s *Service) heldAsks(todo, to string) []prompts.SuperviseAsk {
 	type held struct {
-		ix   proto.Interaction
-		step int
+		ix       proto.Interaction
+		step     int
+		reminded bool
 	}
 	var list []held
 	s.fleet.mu.Lock()
 	for _, p := range s.fleet.interactions {
 		if r := p.route; r != nil && !p.claimed && r.todo == todo && r.at() == to {
-			list = append(list, held{p.ix, r.step})
+			list = append(list, held{p.ix, r.step, r.reminded})
 		}
 	}
 	s.fleet.mu.Unlock()
@@ -171,7 +213,7 @@ func (s *Service) heldAsks(todo, to string) []prompts.SuperviseAsk {
 	out := make([]prompts.SuperviseAsk, 0, len(list))
 	for _, h := range list {
 		out = append(out, prompts.SuperviseAsk{ID: h.ix.ID, Kind: h.ix.Kind, Machine: s.machineName(h.ix.MachineID),
-			Session: short(h.ix.SessionID), Text: noticeAsk(h.ix), Raised: h.step > 0})
+			Session: short(h.ix.SessionID), Text: noticeAsk(h.ix), Raised: h.step > 0, Reminded: h.reminded})
 	}
 	return out
 }
@@ -193,12 +235,13 @@ func (s *Service) routedSessions() map[[2]string]bool {
 }
 
 // routedTo: pending card id is on its way up and with conversation self now, or with one below it (the main
-// conversation answering what its leader still holds); its task.
-func (s *Service) routedTo(id, self string) (string, bool) {
+// conversation answering what its leader still holds); its task. main: self is the main conversation, which may
+// answer any card still on its way up, the background supervisor's too (its ladder does not pass the main conversation).
+func (s *Service) routedTo(id, self string, main bool) (string, bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	p := s.fleet.interactions[id]
-	if p == nil || p.route == nil || p.claimed || p.route.step >= len(p.route.ladder) || !slices.Contains(p.route.ladder[p.route.step:], self) {
+	if p == nil || p.route == nil || p.claimed || p.route.step >= len(p.route.ladder) || !main && !slices.Contains(p.route.ladder[p.route.step:], self) {
 		return "", false
 	}
 	return p.route.todo, true
@@ -207,45 +250,91 @@ func (s *Service) routedTo(id, self string) (string, bool) {
 // askTick moves each card held past askHoldFor one rung up: to the next conversation, or to the user, every card of
 // the same task that reached the user at once going out as one. The time a card has spent with a conversation on a turn
 // does not count (busyLocked): it is being worked through, not waiting to be looked at. A conversation still on a turn
-// askBusyMax after the card came is stuck instead, and its time counts again.
+// askBusyMax after the card came is stuck instead, and its time counts again. A permission or plan instead goes straight
+// to the user at its absolute deadline, and moves up at once when its current supervisor itself needs the user.
+//
+// With push tiering on a card past its last rung is not the user's: its task's supervisor is reminded of it once
+// (quietRemind), then it stays with that supervisor. An owner-only card's absolute deadline and needs_you release take
+// precedence over that quiet hold; otherwise only ask_escalate hands a quiet-held card to the user.
 func (s *Service) askTick(now time.Time) {
 	type up struct {
 		todo, to string
 		ix       proto.Interaction
 		step     int
+		reason   string
 	}
-	var ups []up
+	var ups, reminds []up
 	toUser := map[string][]string{}
+	quiet := s.quietModeOn(context.Background())
 	s.fleet.mu.Lock()
 	for id, p := range s.fleet.interactions {
 		r := p.route
 		if r == nil || p.claimed {
 			continue
 		}
-		if r.busyLocked(s) && now.Sub(r.held) < askBusyMax {
-			r.since = now // its conversation is on a turn: the hold starts again once the turn ends
+		ownerOnly := p.ix.Kind == proto.IxPermission || p.ix.Kind == proto.IxPlan
+		if ownerOnly && !now.Before(r.routedAt.Add(askOwnerOnlyDeadline)) {
+			r.step = len(r.ladder)
+			toUser[r.todo] = append(toUser[r.todo], id)
 			continue
 		}
-		if now.Sub(r.since) < askHoldFor {
+		release := ownerOnly && r.needsYouLocked(s)
+		if r.parked && quiet && !release {
+			continue
+		}
+		if !release {
+			if r.busyLocked(s) && now.Sub(r.held) < askBusyMax {
+				r.since = now // its conversation is on a turn: the hold starts again once the turn ends
+				continue
+			}
+			if now.Sub(r.since) < askHoldFor {
+				continue
+			}
+		}
+		if quiet && r.reminded && !release {
+			r.parked, r.since = true, now // reminded once already: it stays with the task's supervisor
+			s.logf("ask %s: not handled after its reminder; push tiering on: kept with %s, not pushed to the user", id, r.at())
 			continue
 		}
 		r.step++
 		r.since, r.held = now, now
-		if to := r.at(); to != "" {
-			ups = append(ups, up{r.todo, to, p.ix, r.step})
-		} else {
+		switch to := r.at(); {
+		case to != "":
+			reason := fmt.Sprintf("not handled in %v", askHoldFor)
+			if release {
+				reason = "its supervisor needs the user"
+			}
+			ups = append(ups, up{r.todo, to, p.ix, r.step, reason})
+		case quiet && !release:
+			r.step, r.reminded = 0, true // back to the task's supervisor, once
+			reminds = append(reminds, up{r.todo, r.ladder[0], p.ix, 0, ""})
+		default:
 			toUser[r.todo] = append(toUser[r.todo], id)
 		}
 	}
 	s.fleet.mu.Unlock()
 	for _, u := range ups {
-		s.logf("ask %s: not handled in %v, up to %s", u.ix.ID, askHoldFor, u.to)
+		s.logf("ask %s: %s, up to %s", u.ix.ID, u.reason, u.to)
 		s.signalAsk(u.todo, u.to, u.ix, u.step)
+	}
+	for _, u := range reminds {
+		s.quietRemind(u.todo, u.to, u.ix)
 	}
 	for todo, ids := range toUser {
 		s.logf("asks %v of task %s: not handled in time, to the user", ids, todo)
-		s.ringAsks(todo, ids, nil)
+		s.ringAsks(todo, ids, nil, escalation{})
 	}
+}
+
+// needsYouLocked: the conversation holding the card needs the user itself, so it cannot handle an owner-only card.
+// s.fleet.mu is held.
+func (r *askRoute) needsYouLocked(s *Service) bool {
+	to := r.at()
+	if to == "" || r.machine == "" {
+		return false
+	}
+	mk, ok := s.fleet.stateSince[[2]string{r.machine, to}]
+	return ok && mk.state == proto.StateNeedsYou
 }
 
 // busyLocked: the conversation the card waits with is on a turn now, as the state the apps show it says: it is working
@@ -266,7 +355,11 @@ func (r *askRoute) busyLocked(s *Service) bool {
 // supervisor says so), and so does a question restored after a restart, which may have rung the user before it. An
 // approval restored so is not quiet: no conversation may answer it, so its timeout rings as any other approval's.
 // The cards rung.
-func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate) []proto.Interaction {
+//
+// esc is an escalation's push level (escalateLevel): its push carries it, and a P1 one in low-distraction mode (held) is put on the
+// apps and given to the hub as a P1 push only, which the hub holds for the "Needs you" list and the briefing: no alert,
+// no Feishu card, no channel message.
+func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate, esc escalation) []proto.Interaction {
 	var list []proto.Interaction
 	maybeTold := map[string]bool{}
 	s.fleet.mu.Lock()
@@ -302,11 +395,30 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate) []proto
 	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.Before(list[j].CreatedAt) })
 	pushed := false
 	for _, ix := range list {
+		if d != nil {
+			ix = s.suggestOnCard(ix) // a card a supervisor passed up may offer a standing rule (rule_suggest.go)
+		}
 		ix = s.tellApps(ix)
 		if d == nil && (maybeTold[ix.ID] || s.quietSession(ix.MachineID, ix.SessionID)) {
 			continue // a question that may have rung before, or a quiet task's: the apps, no second push
 		}
-		s.tellUser(ix, !pushed)
+		switch {
+		case esc.held:
+			s.recordConfirmationNotification(ix)
+			s.heldAnnounced(ix.ID) // no Feishu card or channel message, now or when the channels catch up
+			if !pushed {
+				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), false, esc.level, esc.key)
+			}
+		case esc.level != "":
+			s.recordConfirmationNotification(ix)
+			if !pushed && !s.muted(ix.MachineID, ix.SessionID) {
+				s.notifyInteractionAt(ix, s.machineName(ix.MachineID), s.linkCovers(ix), esc.level, esc.key)
+				go s.threadAgentAsks(ix)
+			}
+			s.InteractionAnnounced(context.Background(), InteractionAnnounced{Interaction: ix})
+		default:
+			s.tellUser(ix, !pushed)
+		}
 		pushed = true
 	}
 	return list
@@ -341,6 +453,26 @@ func (s *Service) waitingCards(t Todo) []string {
 
 // ---- ask_escalate (prompts/mcp/agents) ----
 
+// escalation is how an escalated card rings (ringAsks): its push level and related key, and whether low-distraction mode holds it
+// back from the phone. The zero value is a timeout's: the level the hub derives, as before.
+type escalation struct {
+	level, key string
+	held       bool
+}
+
+// quietPushWhys are the why_owner values whose escalation still pushes in low-distraction mode: what cannot be undone, what other
+// people will see, and what only the owner knows. priority and acceptance wait for the "Needs you" list and the briefing.
+var quietPushWhys = []string{whyIrreversible, whyVisible, whyOnlyOwnerKnow}
+
+// escalateLevel is the push level of an escalation that says why the owner must decide (why_owner) and whether the
+// supervisor marked it P0: P0 for one of quietPushWhys or the mark, else P1. With low-distraction mode off both push as before.
+func escalateLevel(why string, p0 bool) string {
+	if p0 || slices.Contains(quietPushWhys, why) {
+		return assistantwire.LevelP0
+	}
+	return assistantwire.LevelP1
+}
+
 // toolAskEscalate hands the cards task todo_id's agents wait on to the user, as one, with why and what the
 // supervisor recommends; only the task's supervisor and the main conversation may.
 func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.RawMessage) (string, error) {
@@ -348,9 +480,15 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 		TodoID    string `json:"todo_id"`
 		Reason    string `json:"reason"`
 		Recommend string `json:"recommend"`
+		WhyOwner  string `json:"why_owner"`
+		P0        bool   `json:"p0"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
+	}
+	a.WhyOwner = strings.TrimSpace(a.WhyOwner)
+	if a.WhyOwner != "" && !slices.Contains(whyOwners, a.WhyOwner) {
+		return "", fmt.Errorf("why_owner is one of %s", strings.Join(whyOwners, ", "))
 	}
 	reason, recommend := clip(oneLine(a.Reason), 120), clip(oneLine(a.Recommend), 120)
 	if reason == "" {
@@ -367,16 +505,21 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 		return "", errors.New("cards go to their supervisor first only with leader conversations (assistant.leaders): without them a task's cards are the user's already")
 	}
 	main := s.isMain(ctx, self)
-	if !main && t.Supervision.Supervisor != self {
+	if !main && t.Supervision.Supervisor != self && !s.backgroundSupervises(ctx, self, t) {
 		return "", fmt.Errorf("task %s is not yours to supervise: its supervisor or the main conversation escalates its cards", t.ID)
 	}
 	ids := s.waitingCards(t)
 	if len(ids) == 0 {
 		return "", fmt.Errorf("task %s has no card waiting that the user has not been told of", t.ID)
 	}
-	rung := s.ringAsks(t.ID, ids, &proto.Delegate{Reason: reason, Recommend: recommend})
+	esc := escalation{level: escalateLevel(a.WhyOwner, a.P0)}
+	esc.held = esc.level != assistantwire.LevelP0 && s.quietModeOn(ctx)
+	rung := s.ringAsks(t.ID, ids, &proto.Delegate{Reason: reason, Recommend: recommend}, esc)
 	if len(rung) == 0 {
 		return "", fmt.Errorf("task %s has no card waiting any more", t.ID)
+	}
+	if esc.held {
+		s.logf("ask_escalate of task %s by %s: low-distraction mode, why_owner %q: %d card(s) to the Needs you list, not pushed", t.ID, self, a.WhyOwner, len(rung))
 	}
 	cards := make([]prompts.SuperviseAsk, 0, len(rung))
 	for _, ix := range rung {
@@ -384,13 +527,22 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 			Session: short(ix.SessionID), Text: noticeAsk(ix)})
 	}
 	for _, ix := range rung {
-		s.workEvent(ix.MachineID, ix.SessionID, "ask_escalated", map[string]any{"by": self, "todo": t.ID})
+		// card, kind and recommend: what a suggested rule counts the owner's answer against (rule_suggest.go).
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_escalated", map[string]any{"by": self, "todo": t.ID, "card": ix.ID, "kind": ix.Kind, "recommend": recommend,
+			"why_owner": a.WhyOwner, "level": esc.level, "held": esc.held})
 	}
 	if !main {
 		// The main conversation knows the user was asked, and what this leader recommends: it does not ask again.
 		cfg := s.settings(ctx)
 		s.signal(superviseSignal{Todo: t.ID, Kind: sigEscalated, To: cfg.Main, Key: "ask@" + rung[0].ID,
 			Detail: reason, Ask: recommend, Cards: cards})
+	}
+	if esc.held {
+		return fmt.Sprintf("Low-distraction mode is on and this is not the user's alone (why_owner %q, no p0): %d card(s) of task %s "+
+			"went to their Needs you list and briefing without a push, with your reason and recommendation. Their answers go to the "+
+			"agents and are kept as the task's decisions; don't ask them the same again. These cards cannot be escalated again: "+
+			"next time, when the user must act on it themselves now, escalate with p0 or the right why_owner from the start.",
+			a.WhyOwner, len(rung), t.ID), nil
 	}
 	return fmt.Sprintf("The user is asked now: %d card(s) of task %s went to them as one, with your reason and "+
 		"recommendation. Their answers go to the agents and are kept as the task's decisions; don't ask them the same again.", len(rung), t.ID), nil

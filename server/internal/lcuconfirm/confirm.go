@@ -45,6 +45,16 @@ type parsed struct {
 	fields   []proto.Field
 }
 
+// NativeApp is the app a native-app elicitation asks about, its name and bundle id as the runtime gave them; ok is
+// false for any other kind.
+func NativeApp(params json.RawMessage) (name, id string, ok bool) {
+	p := parse(params)
+	return p.appName, p.appID, p.kind == KindNative
+}
+
+// Decline is the elicitation result that refuses the request without a card (an app never operated, #4336).
+func Decline() map[string]any { return decline() }
+
 // Kind is the elicitation's kind for a log line (never the message).
 func Kind(params json.RawMessage) string { return parse(params).kind }
 

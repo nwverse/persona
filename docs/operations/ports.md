@@ -21,6 +21,9 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 - **Who owns it**: for each live Agent's pane, take the process the host reports (herdr's foreground process; the first one is claude / codex itself),
   walk all its descendants, and add the processes on the same terminal (tty) (including ones adopted by init after `npm run dev &` and the outer shell exiting).
   Listeners belonging to claude / codex themselves (IDE bridge, MCP) do not count.
+  The host is asked for a pane's foreground processes only when the pane is new or its first process has changed (#5515): while that process is still in the
+  process table with the same parent, terminal and name, the last answer is used again, less any other process in it that exited or whose pid now names a different process (a reused pid could belong to another pane). A shell first (the Agent not started yet) is asked for on every scan,
+  so claude starting under it is not taken for one of the pane's servers. Before this, every scan made one herdr call per pane (about 10 calls/s with 40 Agents at work).
 - **How it scans**: on Linux it reads `/proc` directly (`/proc/*/stat` for the process tree; LISTEN sockets in `/proc/net/tcp{,6}` are matched to process fds by inode),
   with no child processes. On macOS it uses `ps -Ao pid=,ppid=,tty=,comm=` plus `lsof -a -p <these processes> -nP -iTCP -sTCP:LISTEN -Fpcn`.
   `lsof` exits 1 when one of the pids has exited / is a zombie but still prints results, so results are used as-is; when a scan really fails, the same error is logged only once.
@@ -65,9 +68,13 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 
 ### Phone (`apple/Persona/Code/PortForwarder.swift`)
 
-- One forward per (machine, port): first bind the same port number on `127.0.0.1`; if it's taken (another forward on the phone, or an existing program on the Mac running the simulator), pick a random one.
+- One forward per (group, machine, port), since machine ids are only unique within a group: first bind the same port number on `127.0.0.1`; if it's taken (another forward on the phone, or an existing program on the Mac running the simulator), pick a random one.
   Then bind the same number on `::1` (`localhost` resolves to ::1 first; without it WebKit falls back to 127.0.0.1 anyway). Only loopback is bound, so nobody on the LAN can connect.
 - Each incoming connection opens a `wss://<hub>/api/v1/machines/{mid}/ports/{port}/connect` (`Authorization: Bearer <device token>`).
+  The hub address, route and token are read when each connection arrives, not when the forward starts (#1886): the group's current hub
+  (the one its socket is on), `HubTransport`'s tunnel route at that moment, and the current device token. After a switch between a tunnel
+  and a direct address, to another hub of the group, or a re-pairing, a reload or HMR reconnect goes the new way. Disconnecting a group,
+  removing its last hub or unpairing closes its forwards (`AppModel.forgetGroups` / `unpair`).
   Each side "finishes sending the previous chunk before reading the next", so a slow side holds back a fast one instead of piling up in memory.
 - The listener stays up. If it breaks after the App is suspended, it is rebuilt on next open (reusing the old number when possible; the page's HMR reconnects by itself).
 - Before opening, ask the hub: if the port is in some Agent's `ports`, open it directly; otherwise `POST …/open` (the user explicitly tapped it). If nothing is listening, show "Nothing is listening on port :N anymore",

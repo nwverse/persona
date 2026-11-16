@@ -294,7 +294,7 @@ func TestTagItemsDoesNotRestoreForgottenConnector(t *testing.T) {
 	}
 	e.Model = forgettingConnectorModel{engine: e, answer: `{"items":[{"id":"events/event","project":"Project","importance":"P1"}]}`}
 	e.Index = func(_, _, _ string, _ Tagging, _ string, _ time.Time) { t.Error("deleted item indexed again") }
-	if err := e.TagItems(context.Background()); err != nil {
+	if _, err := e.TagItems(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := e.Store.Item(KindEvent, "event"); exists {
