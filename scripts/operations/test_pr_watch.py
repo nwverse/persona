@@ -1950,6 +1950,30 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("repair_exhausted", state)
         self.assertEqual(self.comments, [])
 
+    def test_stale_close_pending_requires_fresh_review(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, outcome="stale_close_pending",
+                               semantic="passed", verification="passed", success_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+
+    def test_semantic_repair_infrastructure_failure_preserves_round(self):
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, repair_rounds=1)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model", return_value=None), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", side_effect=pr_watch_common.WatchError("offline")):
+            with self.assertRaises(pr_watch_common.WatchError):
+                self.watcher.repair_findings(self.watcher.config["repositories"][0], pr(), self.root, [finding])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 1)
+
     def test_repair_stops_after_three_rounds(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)
         with patch.object(self.watcher, "comment") as comment, \

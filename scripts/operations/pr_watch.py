@@ -651,8 +651,24 @@ class Watcher:
             raise
         self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                        repair_rounds=rounds + 1, outcome="repairing", failure=reason)
-        new_number, checks = pr_watch_repair.commit_and_push_repair(
-            repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
+        new_number, checks = (None, [])
+        try:
+            new_number, checks = pr_watch_repair.commit_and_push_repair(
+                repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
+        except pr_watch_common.RepairAttemptError:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           repair_rounds=rounds + 1, outcome="repairing", failure=reason)
+            raise
+        except WatchError as error:
+            if isinstance(error, pr_watch_common.VerificationError):
+                # A concrete failed verification belongs to this repair round.
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                               repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
+            else:
+                # Launch/transport/push outages are not completed repairs.
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                               repair_rounds=rounds, outcome="repairing", failure=str(error))
+            raise
         if new_number == number:
             published = pr_snapshot(repo, number)
             published_head = published["headRefOid"]
@@ -873,7 +889,7 @@ class Watcher:
             self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
         marked = self.state.get(repo, number)
-        marked["stale_updated_at"] = last_progress
+        marked["stale_updated_at"] = pr_watch_common.github_time(latest["updatedAt"])
         progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
@@ -884,6 +900,10 @@ class Watcher:
                                 last_progress_at=last_progress, stale_activity_at=progress,
                                 failure="New substantive activity arrived while the stale notice was published; the PR stays open.")
             return False
+        self.state.annotate(repo, number, outcome="stale_close_pending",
+                            stale_close_pending=True, semantic=None, verification=None,
+                            verification_policy=None, checks=[], success_posted=False,
+                            review_posted=False, base_failures=None)
         result = run(["gh", "pr", "close", str(number), "--repo", repo,
                       "--comment", "Closing after the stale notice above: no substantive progress for more than seven days."],
                      timeout=90)
@@ -912,10 +932,9 @@ class Watcher:
             return
         head = pr["headRefOid"]
         old = self.state.get(repo, number)
-        if old.get("outcome") == "stale_closed":
-            # Reopening is new work, not permission to reuse the closed PR's
-            # old approval. Keep the repair budget and publication history,
-            # but require fresh semantic and verification evidence.
+        if old.get("outcome") in ("stale_closed", "stale_close_pending"):
+            # Closing or an interrupted close invalidates the old approval.
+            # A later reopen must produce new semantic and verification evidence.
             self.state.annotate(repo, number, outcome="retry", semantic=None,
                                 verification=None, verification_policy=None,
                                 checks=[], success_posted=False, review_posted=False,
