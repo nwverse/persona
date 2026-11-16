@@ -74,8 +74,8 @@ allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type
 
 | Code | Status | `delivered` | `retryable` | When |
 | --- | --- | --- | --- | --- |
-| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat. Reply in the source's own app. |
-| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, or lark-cli is not installed or too old. |
+| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat, a subscription's row whose item or `reply_to` is gone (#9194). Reply in the source's own app. |
+| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, lark-cli is not installed or too old, or a subscription is gone or its connector can't be called now. |
 | `inbox_source_signed_out` | 503 | `none` | false | lark-cli is not signed in, or its sign-in expired. |
 | `inbox_send_denied` | 502 | `none` | false | The source refused the send: a missing permission or scope, or the chat or message is gone or closed to the bot. |
 | `inbox_send_rate_limited` | 429 | `none` | true | The source is rate limited (lark-cli, or an extension's `rate_limited` error); `retry_after` seconds and a `Retry-After` header when it said how long. |

@@ -17600,6 +17600,21 @@ if os.environ.get("MOCK_RICH") == "1":
 参考：https://en.wikipedia.org/wiki/Weather_(disambiguation)。"""
     ITEMS[RICH] = [it("user", "text", 5, text="还有哪些要我拍板？"), it("assistant", "text", 2, text=_rich)]
 
+# MOCK_TABLE_CHIPS=1: a reply whose two-column table has a sentence with code chips in its second column (#9146): on a
+# wide column it takes the room it needs and wraps at a reading length; a short chip is never broken across lines.
+TABLE_CHIPS = "a1f3c2d4-0000-4000-8000-000000009146"
+if os.environ.get("MOCK_TABLE_CHIPS") == "1":
+    SESSIONS.append(sess("macbook", TABLE_CHIPS, "Check the MCP endpoint", "/Users/me/code/weather", "done", "unread", "weather", 1, "mcp", 5, 2,
+                         "The endpoint works."))
+    _chips = """The endpoint works:
+
+| Item | Result |
+| --- | --- |
+| Service | Runs `1.2.3`, the `/mcp` endpoint on port 8080 accepts `Bearer` tokens; without a token it answers 401 `invalid_token` |
+| Tools | Only two: `list_items`, `list_item_details` |
+| Config | Reads `~/.config/weather/mcp-endpoint-settings.json` and falls back to the defaults when it is missing |"""
+    ITEMS[TABLE_CHIPS] = [it("user", "text", 5, text="Does the MCP endpoint work?"), it("assistant", "text", 2, text=_chips)]
+
 # MOCK_WIDE=1: an Agents chat whose reply has a table that fits, one that does not and a code block with a long line,
 # then a short reply in a turn of its own (SwipeWideContentTests, #5737: a drag to the left scrolls what scrolls sideways, else quotes).
 WIDE = "a1f3c2d4-0000-4000-8000-0000000005e1"

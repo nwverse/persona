@@ -494,7 +494,7 @@ fun ComposerFrame(
     val trailingNow by rememberUpdatedState(trailing)
     val movableTrailing = remember { movableContentWithReceiverOf<RowScope> { trailingNow?.invoke(this) } }
     if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current != null) {
-        val shape = RoundedCornerShape(HomeTokens.composerRadius)
+        val shape = RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)
         val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
         val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
         Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
@@ -520,7 +520,7 @@ fun ComposerFrame(
     }
     when (PersonaTheme.style) {
         AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
-            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius)).then(keepsKeyboard).padding(Tokens.Space.s)) {
+            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius.bubbleCorner)).then(keepsKeyboard).padding(Tokens.Space.s)) {
             accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!expanded) leading?.invoke(this)

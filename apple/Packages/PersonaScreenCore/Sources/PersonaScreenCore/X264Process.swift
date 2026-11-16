@@ -309,7 +309,7 @@ public final class X264Session<Context>: @unchecked Sendable {
                 let own = X264Watch.ownMicros(given: pending.given, lastOut: run.lastOut, now: now)
                 run.lastOut = now
                 onEvent(.frame(sample: sample, keyframe: keyframe, context: pending.context, encodeMicros: micros))
-                if watch.encoded(micros: own, at: now, first: pending.index == 0) {
+                if watch.encoded(micros: own, at: now, index: pending.index) {
                     off(.slow, "frame \(pending.index): " + watch.why)
                 }
             }

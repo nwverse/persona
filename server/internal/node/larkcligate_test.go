@@ -80,6 +80,14 @@ func TestLarkCLIGate(t *testing.T) {
 		{`unset LARKSUITE_CLI_PROFILE; lark-cli im +chat-list`, "deny"},
 		{`env -u LARKSUITE_CLI_PROFILE lark-cli im +chat-list`, "deny"},
 		{`export LARKSUITE_CLI_PROFILE=other && timeout 30 lark-cli im +chat-list`, "deny"},
+		{`: ${LARKSUITE_CLI_PROFILE:=other}; lark-cli im +chat-list`, "deny"},
+		{`read LARKSUITE_CLI_PROFILE; lark-cli im +chat-list`, "deny"},
+		{`printenv LARKSUITE_CLI_PROFILE; LARKSUITE_CLI_PROFILE=other lark-cli im +chat-list`, "deny"},
+		// Reading it changes nothing, so it is not refused: a diagnostic beside a read runs, and printenv (not a filter)
+		// goes the way of any other command.
+		{`echo "PROFILE=$LARKSUITE_CLI_PROFILE"; lark-cli calendar +agenda --as user`, "allow"},
+		{`echo "${LARKSUITE_CLI_PROFILE}" && lark-cli im +chat-list`, "allow"},
+		{`printenv LARKSUITE_CLI_PROFILE; lark-cli im +chat-list`, "other"},
 		// A read's argument from a file: $(cat file) and $(< file), as $(head file) (#9101).
 		{`lark-cli im +chat-messages-list --chat-id "$(cat ids.txt)"`, "allow"},
 		{`lark-cli im +chat-messages-list --chat-id "$(< ids.txt)"`, "allow"},

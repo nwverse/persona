@@ -26,6 +26,7 @@ const root = base.replace(/\/$/, "");
 const WIDGET = "/s/macbook/a1f3c2d4-0000-4000-8000-000000000001"; // a working session with a long first message
 const TABLES = "/s/macbook/a1f3c2d4-0000-4000-8000-00000000000a"; // a reply with a narrow table and a wide one
 const BIG = "/s/server/a1f3c2d4-0000-4000-8000-000000000008"; // MOCK_BIG: 650 commands folded into one work line
+const CHIPS = "/s/macbook/a1f3c2d4-0000-4000-8000-000000009146"; // MOCK_TABLE_CHIPS: a table with code chips in a sentence
 const results = [];
 const check = (name, ok, detail) => {
   results.push({ name, ok: Boolean(ok), detail });
@@ -224,6 +225,47 @@ try {
         await into(p, first);
         const b = await first.boundingBox();
         await p.screenshot({ path: join(shots, `item77-tables-390-${theme}.png`), clip: { x: 0, y: Math.max(0, b.y - 20), width: 390, height: 640 } });
+        await p.context().close();
+      }
+      // 9146: on a wide column a table takes the room its text needs, up to the column, and wraps at a reading length,
+      // not at a phone's 18em; a short code chip in a cell is never broken across lines. On a phone it still fits.
+      for (const [width, height] of [[1440, 900], [390, 844]]) {
+        const p = await page({ path: CHIPS, width, height, theme, touch: width < 600 });
+        const wrap = p.locator(".md-table").first();
+        await wrap.waitFor({ timeout: 20_000 });
+        await p.waitForTimeout(800);
+        const m = await p.evaluate(() => {
+          const table = document.querySelector(".md-table table");
+          const cells = [...table.querySelectorAll("td:not([data-fit])")].map((td) => {
+            const cs = getComputedStyle(td);
+            const r = td.getBoundingClientRect();
+            const text = r.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - parseFloat(cs.borderBottomWidth);
+            return { lines: Math.round(text / parseFloat(cs.lineHeight)), width: Math.round(r.width), em: parseFloat(cs.fontSize) };
+          });
+          const chips = [...table.querySelectorAll("code[data-chip]")].map((c) => ({ text: c.textContent, rects: c.getClientRects().length }));
+          return {
+            table: Math.round(table.getBoundingClientRect().width),
+            column: Math.round(table.closest(".prose-j").getBoundingClientRect().width),
+            scrolls: table.scrollWidth > table.clientWidth,
+            page: document.scrollingElement.scrollWidth,
+            cells,
+            chips,
+          };
+        });
+        const em = m.cells[0]?.em ?? 13;
+        if (width > 600) {
+          check(`9146 ${theme} 1440: the table is no wider than the column and does not scroll`, m.table <= m.column && !m.scrolls, { table: m.table, column: m.column });
+          check(`9146 ${theme} 1440: a long cell is wider than the old 18em cap`, m.cells[0].width > 18 * em + 20, m.cells[0]);
+          check(`9146 ${theme} 1440: each long cell takes at most two lines`, m.cells.every((c) => c.lines <= 2), m.cells);
+        } else {
+          check(`9146 ${theme} 390: the table stays in the page (it fits or scrolls inside itself)`, m.page <= 390 && (m.table <= m.column || m.scrolls), { table: m.table, column: m.column, page: m.page });
+          check(`9146 ${theme} 390: long cells keep their 7em`, m.cells.every((c) => c.width >= 7 * em), m.cells);
+        }
+        check(`9146 ${theme} ${width}: the short chips are marked and none is broken across lines`, m.chips.length >= 6 && m.chips.every((c) => c.rects === 1), m.chips);
+        await into(p, wrap);
+        const b = await wrap.boundingBox();
+        const x = Math.max(0, b.x - 24);
+        await p.screenshot({ path: join(shots, `item9146-${width}-${theme}.png`), clip: { x, y: Math.max(0, b.y - 60), width: Math.min(width - x, b.width + 48), height: Math.min(height, b.height + 100) } });
         await p.context().close();
       }
     }
