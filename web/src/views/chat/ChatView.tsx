@@ -1890,6 +1890,13 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
 
   // the header's Team button (#5180): on a lead with workers, at every width (a phone has no other way to the panel); its dot
   // says a worker needs you while the panel is shut
+  const showConversationTasks = Boolean((assistant || inPage) && !embedded && !chrome && session?.space !== "health");
+  const conversationTasksOpen = panel?.kind === "conversation-tasks" && panel.mid === mid && panel.sid === sid;
+  const chatHeaderActions = useMemo(() => showConversationTasks ? <>
+    <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={conversationTasksOpen}
+      onClick={() => togglePanel({ kind: "conversation-tasks", mid, sid, manager: skillManager })} />
+    {headerActions}
+  </> : headerActions, [showConversationTasks, conversationTasksOpen, mid, sid, skillManager, headerActions]);
   const teamCount = leads ? workerCount(session) : 0;
   const teamNeeds = workers.some((w) => stateOf(w) === "needs_you");
   const toggleTeam = useCallback(() => {
@@ -1945,7 +1952,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         onTerminal={openTerminal}
         viewDot={view === "term" && (interactions.length > 0 || state === "needs_you")}
         termDot={terminalWaits(session, interactions, outbox)}
-        actions={headerActions}
+        actions={chatHeaderActions}
         team={team}
         sides={sideControl}
         panel={chrome}

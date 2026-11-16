@@ -134,12 +134,9 @@ final class PhoneScreenSession {
         let app = NSRunningApplication(processIdentifier: key.pid)
         // Terminals and editors: bigger text while on the phone (PhoneScreenZoom), noted before the keys go so a crash
         // still undoes it.
-        let steps = PhoneScreenZoom.steps(for: app?.bundleIdentifier)
-        if steps > 0, restore.record(pid: key.pid, window: key.id)?.zoom == nil {
-            restore.setZoom(steps, pid: key.pid, window: key.id)
-            _ = save()
-            AX.zoom(pid: key.pid, steps: steps)
-        }
+        // Only once the record with the steps is on disk (#9540): a failed save sends no key.
+        PhoneScreenZoom.raise(&restore, pid: key.pid, window: key.id, steps: PhoneScreenZoom.steps(for: app?.bundleIdentifier),
+                              save: { RestoreFile.save($0) }, send: { AX.zoom(pid: key.pid, steps: $0) })
         let w = PhoneScreenWindow(pid: key.pid, window: key.id, app: app?.localizedName ?? "", bundle: app?.bundleIdentifier,
                                   title: AX.string(e, kAXTitleAttribute) ?? "", placed: true, frame: got?.phoneRect)
         // The arrangement too: the display may have changed width, and the phone finds it on the picture by all of them.
@@ -156,19 +153,20 @@ final class PhoneScreenSession {
         defer { if placed == key { placed = nil } }
         guard let r = restore.record(pid: key.pid, window: key.id) else { return }
         if let e = AX.element(key) {
-            if let z = r.zoom, z > 0 { // the text size back first: the keys go to the app's front window
+            let undo = PhoneScreenZoom.undo(r)
+            if undo != 0 { // the text size back first: the keys go to the app's front window
                 AXUIElementPerformAction(e, kAXRaiseAction as CFString)
                 AX.set(e, kAXMainAttribute, kCFBooleanTrue)
-                AX.zoom(pid: key.pid, steps: -z)
+                AX.zoom(pid: key.pid, steps: undo)
             }
             AX.move(e, to: CGRect(r.frame))
             if r.fullScreen { AX.setFullScreen(e, true) }
             if r.minimized { AX.setMinimized(e, true) }
         } else if NSRunningApplication(processIdentifier: key.pid) != nil, AX.windows(pid: key.pid) == nil {
             return // its app does not answer: keep the record for the next try
-        } else if let z = r.zoom, z > 0, let app = NSRunningApplication(processIdentifier: key.pid),
+        } else if PhoneScreenZoom.undo(r) != 0, let app = NSRunningApplication(processIdentifier: key.pid),
                   PhoneScreenZoom.appWide.contains(app.bundleIdentifier ?? "") {
-            AX.zoom(pid: key.pid, steps: -z) // the window is gone, but the app's text size is the app's: back too
+            AX.zoom(pid: key.pid, steps: PhoneScreenZoom.undo(r)) // the window is gone, but the app's zoom is the app's
         }
         restore.remove(pid: key.pid, window: key.id)
         _ = save()
@@ -226,26 +224,12 @@ final class PhoneScreenSession {
 /// `~/.persona/phone-screen.json`, gone while there is nothing to put back. A few hundred bytes, read once a session and
 /// written before each move (the move must not happen without it).
 nonisolated enum RestoreFile {
-    static var url: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".persona/phone-screen.json") }
+    static let store = PhoneScreenRestoreStore(
+        url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".persona/phone-screen.json"))
 
-    static func load() -> PhoneScreenRestore {
-        guard let data = try? Data(contentsOf: url) else { return PhoneScreenRestore() }
-        return (try? JSONDecoder().decode(PhoneScreenRestore.self, from: data)) ?? PhoneScreenRestore()
-    }
+    static func load() -> PhoneScreenRestore { store.readRecords() }
 
-    static func save(_ restore: PhoneScreenRestore) -> Bool {
-        if restore.records.isEmpty {
-            try? FileManager.default.removeItem(at: url)
-            return true
-        }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(restore).write(to: url, options: .atomic)
-            return true
-        } catch {
-            return false
-        }
-    }
+    static func save(_ restore: PhoneScreenRestore) -> Bool { store.writeRecords(restore) }
 }
 
 /// `--phone-screen-restore`: put back what the records say, then exit (0, or 1 without Accessibility). The records are
