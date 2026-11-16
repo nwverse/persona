@@ -52,17 +52,19 @@ nonisolated struct SidebarPageShown: Encodable, Equatable {
     var depth = 0
 }
 
-/// Writes `probe.sidebar-page` beside the Sidebar layout's page (`ChatsView`, roots mode).
+/// Writes `probe.sidebar-page` beside the Sidebar layout's page (`ChatsView`, roots mode); the Separate layout's Agents
+/// tab writes `probe.sidebar-page-agents` (#8603), so the two tabs' pages are told apart.
 struct SidebarPageProbe: View {
     let root: SidebarPageRoot
     let path: Int
+    var name = "sidebar-page"
 
     var body: some View {
         let watch = NavMotionWatch.shared
         Color.clear
             .frame(width: Theme.Size.line, height: Theme.Size.line)
             .allowsHitTesting(false)
-            .screenProbe("sidebar-page", SidebarPageShown(root: root.probeName, path: path, transitions: watch.transitions, depth: watch.depth))
+            .screenProbe(name, SidebarPageShown(root: root.probeName, path: path, transitions: watch.transitions, depth: watch.depth))
             .onAppear { watch.start() }
     }
 }

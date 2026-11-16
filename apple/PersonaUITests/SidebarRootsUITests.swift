@@ -36,7 +36,24 @@ final class SidebarRootsUITests: XCTestCase {
         return split.exists ? split : element("assistant-sidebar")
     }
 
-    @MainActor private func page() -> Page? { app.probe("sidebar-page", as: Page.self) }
+    /// The page's probe: the Sidebar layout's (and the Persona tab's), or the Separate layout's Agents tab's (#8603).
+    private var probeName = "sidebar-page"
+
+    @MainActor private func page() -> Page? { app.probe(probeName, as: Page.self) }
+
+    /// What brings the column out and is in it: the main conversation's row; the Agents tab has none, its head's fold button.
+    @MainActor private var columnAnchor: XCUIElement {
+        probeName == "sidebar-page" ? element("sidebar-main") : element("sidebar-fold-column")
+    }
+
+    /// The chat in front's title: the open header's, or the folded bar's.
+    @MainActor private func chatTitle() -> String {
+        // From a snapshot: while one chat replaces another the element can go between a check and a read.
+        for id in ["chat.title", "chat.compactTitle"] {
+            if let label = (try? element(id).snapshot())?.label, !label.isEmpty { return label }
+        }
+        return ""
+    }
 
     /// The page once `root` is in front and nothing has moved for a moment (a push, had there been one, has run).
     @MainActor private func settled(_ root: String, _ step: String) -> Page {
@@ -107,7 +124,7 @@ final class SidebarRootsUITests: XCTestCase {
 
     /// The column's head (and the main conversation held under it) over a row scrolled to the column's top takes the tap.
     @MainActor private func underHead(_ row: XCUIElement) -> Bool {
-        let main = element("sidebar-main")
+        let main = columnAnchor
         return main.exists && row.exists && row.frame.midY < main.frame.maxY + 8
     }
 
@@ -122,13 +139,17 @@ final class SidebarRootsUITests: XCTestCase {
 
     /// Picks an Agent's row in the sidebar's Agents list, scrolling to it; a row tapped while the list still glides after
     /// the scroll can be missed, so again until the Agent is the root (at most three taps).
-    @MainActor private func pickAgent(_ step: String, titled title: String? = nil) -> Page {
+    @MainActor private func pickAgent(_ step: String, titled title: String? = nil, excluding: String? = nil,
+                                      until done: (() -> Bool)? = nil) -> Page {
         let rows = app.buttons.matching(identifier: "agents.row")
-        reveal(element("sidebar-main"))
-        // Any Agent: the first row in reach and clear of the jump; a named one: its row.
+        let anchor = columnAnchor
+        reveal(anchor)
+        // Any Agent: the first row in reach, clear of the jump and the head (and not `excluding`); a named one: its row.
         func find() -> XCUIElement {
             if let title { return rows.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch }
-            return rows.allElementsBoundByIndex.first { $0.exists && $0.isHittable && !underJump($0) && !underHead($0) } ?? rows.firstMatch
+            return rows.allElementsBoundByIndex.first {
+                $0.exists && $0.isHittable && !underJump($0) && !underHead($0) && !(excluding.map($0.label.contains) ?? false)
+            } ?? rows.firstMatch
         }
         var row = find()
         for _ in 0..<16 where !(row.exists && row.isHittable) {
@@ -136,10 +157,11 @@ final class SidebarRootsUITests: XCTestCase {
             row = find()
         }
         XCTAssertTrue(row.exists && row.isHittable, "\(step): no Agent's row \(title ?? ""):\n\(app.debugDescription)")
-        for _ in 0..<3 where page()?.root != "agent" {
-            if !(row.exists && row.isHittable) { reveal(element("sidebar-main")) }
+        let done = done ?? { self.page()?.root == "agent" }
+        for _ in 0..<3 where !done() {
+            if !(row.exists && row.isHittable) { reveal(anchor) }
             tapClear(row)
-            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.page()?.root == "agent" }, object: nil)], timeout: 5)
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in done() }, object: nil)], timeout: 5)
         }
         return settled("agent", step)
     }
@@ -448,5 +470,54 @@ final class SidebarRootsUITests: XCTestCase {
         let afterOpen = settled("agent", "the sidebar brought out over the Agent's root")
         XCTAssertEqual(afterOpen.path, 0)
         XCTAssertEqual(afterOpen.transitions, root.transitions, "bringing the sidebar out moved the page: \(root) → \(afterOpen)")
+    }
+
+    /// The Separate layout's Agents tab (#8603): an Agent picked in its list is the page's root, put in place with no push,
+    /// as in the Sidebar layout; another one picked replaces it, again with no push; nothing picked, "Choose an Agent". With
+    /// the column folded the chat has the sidebar's button and no ‹, which brings the column back.
+    @MainActor func testTheAgentsTabSwitchesItsRootWithoutAPush() throws {
+        app = XCUIApplication()
+        app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "dev", "-dev.openChat", "",
+                               "-app.navigation", "separate", "-probes", "YES"]
+        app.launchPinned(navigation: false)
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("the Separate layout's tabs at regular width") }
+        let agentsTab = app.buttons["Agents"].firstMatch
+        if agentsTab.waitForExistence(timeout: 10), !agentsTab.isSelected { agentsTab.tap() }
+        probeName = "sidebar-page-agents"
+        let empty = settled("conversation", "the Agents tab with nothing picked")
+        XCTAssertEqual(empty.path, 0)
+        shot("agents-tab-0-empty")
+
+        let first = pickAgent("an Agent in the Agents tab")
+        XCTAssertEqual(first.path, 0, "the Agent's chat is not the root: \(first)")
+        assertSwitched(empty, first, "an Agent from Choose an Agent")
+        let firstTitle = chatTitle()
+        // The chat's own title, without what the folded bar's label adds ("…, show title and tags").
+        let firstName = firstTitle.components(separatedBy: CharacterSet(charactersIn: ",，")).first ?? firstTitle
+        shot("agents-tab-1-agent")
+
+        let second = pickAgent("another Agent in the Agents tab", excluding: firstName,
+                               until: { !self.chatTitle().isEmpty && self.chatTitle() != firstTitle })
+        XCTAssertEqual(second.path, 0, "the second Agent's chat is not the root: \(second)")
+        XCTAssertNotEqual(chatTitle(), firstTitle, "the second Agent did not replace the first")
+        assertSwitched(first, second, "another Agent")
+        shot("agents-tab-2-another")
+
+        // The column folded (beside the page) or slid away (over it): the sidebar's button, no ‹; it brings the column back.
+        let fold = element("sidebar-fold-column")
+        if fold.exists && fold.isHittable { fold.tap() }
+        Thread.sleep(forTimeInterval: 0.8)
+        let back = app.buttons.matching(NSPredicate(format: "identifier == 'chevron.left' OR label IN %@", ["返回", "Back"]))
+        XCTAssertFalse(back.allElementsBoundByIndex.contains { $0.exists && $0.isHittable }, "a ‹ on the Agents tab's root:\n\(app.debugDescription)")
+        let opener = app.buttons.matching(NSPredicate(format: "identifier == 'chat-sidebar-button' OR identifier == 'ToggleSidebar' OR label IN %@",
+                                                      ["Show Sidebar", "显示边栏", "显示侧边栏"])).allElementsBoundByIndex
+            .first { $0.exists && $0.isHittable }
+        XCTAssertNotNil(opener, "no button that brings the column back:\n\(app.debugDescription)")
+        shot("agents-tab-3-folded")
+        opener?.tap()
+        XCTAssertTrue(fold.waitForExistence(timeout: 5) && fold.isHittable, "the column did not come back:\n\(app.debugDescription)")
+        let shown = settled("agent", "the column brought back")
+        XCTAssertEqual(shown.transitions, second.transitions, "bringing the column back moved the page: \(second) → \(shown)")
     }
 }

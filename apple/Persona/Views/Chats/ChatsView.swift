@@ -267,10 +267,10 @@ struct ChatsView: View {
         case .whole: "sidebar.list"
         }
     }
-    /// The Sidebar layout's page and the Persona tab's (#8359, docs/design/sidebar-navigation.md option 3): the sidebar
-    /// picks the page's root (`UnifiedSidebar.roots`), and the path holds only what is opened inside it. The Agents tab's
-    /// page keeps "Choose an Agent" at its root and its chat as the first page.
-    private var rootsMode: Bool { unified.map { $0.part != .agents } ?? false }
+    /// Every page beside the one sidebar's column (#8359, docs/design/sidebar-navigation.md option 3): the Sidebar layout's,
+    /// the Persona tab's and the Agents tab's (#8603). The list picks the page's root (`UnifiedSidebar.roots`), and the path
+    /// holds only what is opened inside it. The Agents tab shows "Choose an Agent" while nothing is picked.
+    private var rootsMode: Bool { unified != nil }
     /// Laid out for searching (`AgentsHeader.compact`).
     private var headerCompact: Bool { header.compact }
     /// Where the shell's bar is and how far it has faded for the rising field, read apart from this body (`AgentsTopBarPlace`).
@@ -355,7 +355,24 @@ struct ChatsView: View {
                         rootsSwap: rootsMode, selection: rootsMode ? unified.map { AnyHashable($0.root) } : nil) {
             listColumn
         } empty: {
-            if rootsMode {
+            if rootsMode, let unified, unified.part == .agents {
+                // The Agents tab (#8603): the Agent picked in the list (or a space, a computer…) is the root, replaced
+                // at once; nothing picked, "Choose an Agent".
+                Group {
+                    if let value = unified.root.value {
+                        SidebarAgentsRootPage(value: value)
+                            .id(value)
+                            .sidebarRootPage(ownsBack: value.base is SessionKey)
+                    } else {
+                        SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
+                                         message: String(localized: "Click an agent in the list on the left to open its chat here."))
+                    }
+                }
+                #if DEBUG && os(iOS)
+                // On the page itself: on the tab's outer background the tab's badge count took the probe's value.
+                .background { if ScreenProbe.enabled { SidebarPageProbe(root: unified.root, path: path.count, name: "sidebar-page-agents") } }
+                #endif
+            } else if rootsMode {
                 // The Sidebar layout (#6332) and the Persona tab's (#4206): the page beside the sidebar. `AssistantView`
                 // (embedded) draws the root the sidebar picked, the conversation or another page (#8359).
                 AssistantView()
@@ -371,7 +388,7 @@ struct ChatsView: View {
         #endif
         .modifier(UnifiedFront(unified: unified, atRoot: rootsMode ? unified?.atRoot == true && path.isEmpty : path.isEmpty))
         #if DEBUG && os(iOS)
-        .background { if rootsMode, ScreenProbe.enabled, let unified { SidebarPageProbe(root: unified.root, path: path.count) } }
+        .background { if rootsMode, ScreenProbe.enabled, let unified, unified.part != .agents { SidebarPageProbe(root: unified.root, path: path.count) } }
         #endif
         #if os(iOS)
         .tabActiveTask(id: model.api.map { PersonalAgentEntryModel.Connection($0) }) {
@@ -537,7 +554,7 @@ struct ChatsView: View {
                     guard !leaving, model.agentsNavigationRevision == request, path == previousPath,
                           model.openChat == nil, model.openPersonalAgent == nil else { return }
                     spaceAt = [:]
-                    if !path.isEmpty { path = NavigationPath() }
+                    if rootsMode, let unified { unified.forget(path: $path) } else if !path.isEmpty { path = NavigationPath() }
                 }
             }
             .onChange(of: model.openChat, initial: true) { _, key in
@@ -595,7 +612,9 @@ struct ChatsView: View {
             // computer) is the assistant before's.
             .onChange(of: model.assistantSwitches) {
                 if !machineFilter.isEmpty, !model.scopedMachines(inFront: false).contains(where: { $0.ref.path == machineFilter }) { machineFilter = "" }
-                if !path.isEmpty { path = NavigationPath() }
+                // The Agents tab's root was the assistant before's too (the other pages forget theirs in `AssistantView`).
+                if rootsMode, unified?.part == .agents, let unified { unified.forget(path: $path) }
+                else if !path.isEmpty { path = NavigationPath() }
             }
     }
 
@@ -1682,8 +1701,8 @@ private struct AgentsList: View {
     private func openFromList(_ value: some Hashable) {
         openedWorkspace = nil
         #if os(iOS)
-        if let unified, unified.part != .agents {
-            // The Sidebar layout's page (#8359): its root replaced, not pushed. A space at the root is index -1 (`openSpace`).
+        if let unified {
+            // The page beside the one sidebar (#8359, #8603): its root replaced, not pushed. A space at the root is index -1 (`openSpace`).
             spaceAt = (value as? SpaceRoute).map { [-1: $0.id] } ?? [:]
             unified.select(.page(AnyHashable(value)), path: $path)
             return
@@ -1696,7 +1715,7 @@ private struct AgentsList: View {
     private func selectEmptyWorktree(_ workspace: HostWorkspace) {
         spaceAt = [:]
         #if os(iOS)
-        if let unified, unified.part != .agents { unified.select(.conversation, path: $path) } else { path = NavigationPath() }
+        if let unified { unified.select(.conversation, path: $path) } else { path = NavigationPath() }
         #else
         path = NavigationPath()
         #endif
@@ -3226,7 +3245,7 @@ private struct AgentsList: View {
     /// The Agent whose row is shaded: the Sidebar layout's root while it is an Agent's chat, also with pages opened on it
     /// (#8359); elsewhere the chat on screen.
     private var shownAgent: SessionKey? {
-        if let unified, unified.part != .agents { return unified.root.value?.base as? SessionKey }
+        if let unified { return unified.root.value?.base as? SessionKey }
         return model.visibleSession
     }
 

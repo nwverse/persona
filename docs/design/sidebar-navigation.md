@@ -222,11 +222,14 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   its cache.
 - **Unchanged**: the iPhone shell (option 2 above), and the phone's drawer in the Sidebar layout behaves as before (the page
   changes under the drawer, which then closes; the face where a back would be; a drag to the right at a root opens the drawer).
-  The Separate layout's Agents tab at regular width keeps "Choose an Agent" at its root and the chat as the first page.
+- **The Separate layout's Agents tab** (#8603): its list picks the page's root too (an Agent's chat, a space…), replaced
+  with no push; nothing picked, "Choose an Agent"; picking the Agents tab again goes back to that. Its page writes
+  `probe.sidebar-page-agents`.
 - **Checks**: `SidebarRootsUITests` reads the app's `probe.sidebar-page` (root, path, and how many animated UIKit navigation
   transitions ran): from the conversation Recordings and an Agent replace the root with no transition and no Back; Machines →
   a machine pushes with Back; Machines keeps that page while the conversation is in front; Machines in front picked again goes
   to its root; an edge swipe at a root stays on it; an Agent's chat picked in the sidebar has the sidebar's button and no ‹,
-  pushed from a page it has ‹ (`testTheLeadingButtonFollowsHowThePageWasReached`). Run on the iPad, the open Duo upright and
+  pushed from a page it has ‹ (`testTheLeadingButtonFollowsHowThePageWasReached`); in the Separate layout's Agents tab an
+  Agent and then another replace the root with no transition (`testTheAgentsTabSwitchesItsRootWithoutAPush`). Run on the iPad, the open Duo upright and
   on its side, and an iPhone.
 

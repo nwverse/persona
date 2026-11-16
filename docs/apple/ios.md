@@ -984,7 +984,8 @@ regular width it stays beside the page. The Mac (frozen) and Apple Vision Pro ke
   Duo on its side), each tab the same column with its part of the one sidebar (`UnifiedSidebar.Part`), its own selection
   and its own page: Persona's tab the head, the main conversation, the pages and Persona's chats (in a list of their own,
   `personaList`), Persona's page beside it; the Agents tab the head and the Agents list, the "Choose an Agent" page beside
-  it. Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
+  it until an Agent is picked, which then is the page's root, put in place with no push (#8603, as the Sidebar layout's
+  roots). Both feet are the Sidebar layout's (New Chat, Search, Settings); the Agents tab's New Chat and places open on
   Persona's tab. Each tab's column is kept as before (`assistant.list`, `agents.list`); an Agent asked for from outside
   opens on the Agents tab only. At compact width the shell is drawn as before.
 - **The head's fold** (both layouts, beside a page; #4206 as the earlier one sidebar had it): the column's head ends in
