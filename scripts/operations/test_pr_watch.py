@@ -102,6 +102,29 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("baseRefOid", snapshot.call_args.args[0][-1])
         self.assertIn("commits/main", base.call_args.args[0][2])
 
+    def test_stale_failure_does_not_overwrite_terminal_outcome(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, outcome="repair_exhausted", repair_exhausted=True,
+                               repair_rounds=3, failure="original repair failure")
+        with patch.object(self.watcher, "mark_and_close_stale", side_effect=pr_watch_common.WatchError("offline")), \
+                patch.object(pr_watch, "pr_snapshot", return_value=pr()):
+            self.watcher.process("example/one", 7)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["outcome"], "repair_exhausted")
+        self.assertEqual(state["failure"], "original repair failure")
+        self.assertEqual(state["stale_close_failure"], "offline")
+
+    def test_stale_notice_does_not_close_a_newly_pushed_head(self):
+        old = time.time() - 8 * 86400
+        config = dict(self.watcher.config["repositories"][0], close_stale=True)
+        with patch.object(self.watcher, "stale_progress_at", return_value=old), \
+                patch.object(pr_watch, "pr_snapshot", return_value=pr(SHA_B)), \
+                patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as execute:
+            self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
+        self.assertEqual(execute.call_count, 1)
+        self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
+
     def test_stale_pr_is_marked_explained_then_closed_without_merging(self):
         self.watcher.config["repositories"][0]["close_stale"] = True
         self.watcher.repositories["example/one"]["close_stale"] = True
@@ -192,7 +215,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
             self.watcher.process("example/one", 7)
         self.assertFalse(any("seven days" in body for body in self.comments))
-        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+        self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
         activity.assert_called_once()
         self.assertFalse(any(call.args[0][1:3] in (["pr", "close"], ["pr", "edit"])
                              for call in mutations.call_args_list))
@@ -275,7 +298,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "comment"):
             self.assertFalse(self.watcher.mark_and_close_stale(config, pr(), {}))
         self.assertEqual(execute.call_count, 1)
-        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+        self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
 
     def test_stale_progress_uses_substantive_activity_and_rejects_bad_timestamps(self):
         snapshot = pr(createdAt="2026-11-13T00:00:00Z", updatedAt="2026-11-13T00:00:00Z")

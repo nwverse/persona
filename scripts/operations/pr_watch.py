@@ -833,14 +833,18 @@ class Watcher:
         self.comment(repo, number, reason)
         self.state.annotate(repo, number, stale_notice=reason)
         latest = pr_snapshot(repo, number)
-        if latest["state"] != "OPEN" or latest["isDraft"]:
+        if latest["state"] != "OPEN" or latest["isDraft"] or latest["headRefOid"] != pr["headRefOid"]:
+            # A push during publication is substantive work, even if it is an
+            # old commit. Leave the marked PR open for its next review cycle.
+            self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
-        progress = self.stale_progress_at(repo, number, pr, old, ignore_notice=reason)
+        progress = self.stale_progress_at(repo, number, latest, old, ignore_notice=reason)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
         # the marker write cannot make its own timestamp look like new work.
         if progress > last_progress + 1:
-            self.state.annotate(repo, number, outcome="stale_close_pending",
+            self.state.annotate(repo, number, stale_head=pr["headRefOid"])
+            self.state.annotate(repo, number, stale_close_pending=True,
                                 last_progress_at=last_progress, stale_activity_at=progress,
                                 failure="New substantive activity arrived while the stale notice was published; the PR stays open.")
             return False
@@ -888,8 +892,9 @@ class Watcher:
         except WatchError as error:
             # Marking, commenting and closing are independent GitHub writes.
             # A partial notice never proves that the PR was actually closed.
-            self.state.annotate(repo, number, outcome="stale_close_pending",
-                                failure=str(error), stale_close_attempts=int(old.get("stale_close_attempts", 0)) + 1)
+            self.state.annotate(repo, number,
+                                stale_close_failure=str(error),
+                                stale_close_attempts=int(old.get("stale_close_attempts", 0)) + 1)
             self.log("%s#%s stale-PR cleanup failed; no merge was attempted: %s" % (
                 repo, number, bounded(error, 500)))
             return
