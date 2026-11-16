@@ -315,15 +315,30 @@ class PersonaShellOverlayTest {
         shell(automation = false) {
             awaitText("The trip outline is ready.")
             awaitText("Weekend plans")
-            sidebar()
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
+            val switcherOut = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals(690f, (switcherOut.left.value + switcherOut.right.value) / 2f, 0.5f)
+
+            hideSidebar()
             assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            val switcherFolded = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals("Top-bar switcher must stay centered when hiding sidebar",
+                500f, (switcherFolded.left.value + switcherFolded.right.value) / 2f, 0.5f)
             awaitSavedColumns(sidebar = false)
         }
         shell(automation = false) {
             awaitText("The trip outline is ready.")
             assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+
             sidebar()
             awaitText("Weekend plans")
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
             awaitSavedColumns(sidebar = true)
         }
     }
@@ -334,14 +349,16 @@ class PersonaShellOverlayTest {
         shell(width = width, automation = false) {
             awaitText("The trip outline is ready.")
             awaitText("Weekend plans")
-            sidebar()
+            hideSidebar()
             assertFalse(isTextDisplayed("Weekend plans"))
             awaitSavedColumns(sidebar = false)
 
             rule.runOnIdle { width.value = 673 }
             frames()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
             sidebar()
             close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
             close().performTouchInput { click(centerRight) }
             frames()
             close().assertDoesNotExist()
@@ -356,6 +373,20 @@ class PersonaShellOverlayTest {
             frames()
             assertFalse(isTextDisplayed("Weekend plans"))
             awaitSavedColumns(sidebar = false)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsDrawerNeverShowsColumnFoldButton() {
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            awaitText("Weekend plans")
+            clickText("Agents")
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            sidebar()
+            close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
         }
     }
 
@@ -595,6 +626,12 @@ class PersonaShellOverlayTest {
     private fun close() = rule.onNodeWithContentDescription("Close")
     private fun sidebar() {
         val buttons = rule.onAllNodesWithContentDescription("Sidebar")
+        val visible = (0 until buttons.fetchSemanticsNodes().size).single { buttons[it].isDisplayed() }
+        buttons[visible].performClick()
+        frames()
+    }
+    private fun hideSidebar() {
+        val buttons = rule.onAllNodesWithContentDescription("Hide sidebar")
         val visible = (0 until buttons.fetchSemanticsNodes().size).single { buttons[it].isDisplayed() }
         buttons[visible].performClick()
         frames()

@@ -139,3 +139,30 @@ internal fun detailOf(stack: List<NavKey>): NavKey? = when (val top = stack.last
     PhoneToolsRoute -> SettingsPageRoute(SettingsPage.PhoneData)
     else -> top.takeIf(::isDetailDestination)
 }
+
+/** What the home top bar's leading slot shows and does on the primary tabs. */
+internal enum class HomeLeadingAction {
+    /** Opens the shared navigation drawer (compact windows and the Agents tab). */
+    OpenDrawer,
+    /** Toggles the floating overlay sidebar over the page (upright open foldable). */
+    ToggleOverlay,
+    /** Reopens the folded sidebar column beside the page (wide Assistant root). */
+    ShowColumn,
+    /** Keeps the button's room empty while the sidebar column is out beside the page. */
+    HiddenSpacer,
+}
+
+internal fun resolveHomeLeadingAction(
+    assistantRoot: Boolean,
+    regular: Boolean,
+    columnsOver: Boolean,
+    sidebarColumnShown: Boolean,
+): HomeLeadingAction = when {
+    !assistantRoot || !regular -> HomeLeadingAction.OpenDrawer
+    columnsOver -> HomeLeadingAction.ToggleOverlay
+    sidebarColumnShown -> HomeLeadingAction.HiddenSpacer
+    else -> HomeLeadingAction.ShowColumn
+}
+
+/** The column header folds the column only where the sidebar is a column beside the page: never over it or in a drawer. */
+internal fun showsSidebarColumnFoldButton(regular: Boolean, columnsOver: Boolean): Boolean = regular && !columnsOver

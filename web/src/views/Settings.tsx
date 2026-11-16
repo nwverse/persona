@@ -20,7 +20,7 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { RecentChatsRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
-import { setAgentDetails, setContextAsUsed, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
@@ -681,7 +681,6 @@ function AgentPreferences() {
   const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
   const sidebarTerminals = useSidebarTerminals();
   const agentDetails = useAgentDetails();
-  const contextAsUsed = useContextAsUsed();
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
@@ -691,9 +690,6 @@ function AgentPreferences() {
       </Row>}
       <Row label={t("context.details")} hint={t("context.details_hint")} wrapHint anchor="agent-details">
         <Switch on={agentDetails} onChange={setAgentDetails} label={t("context.details")} />
-      </Row>
-      <Row label={t("context.as_used")} hint={t("context.as_used_hint")} wrapHint anchor="context-as-used">
-        <Switch on={contextAsUsed} onChange={setContextAsUsed} label={t("context.as_used")} />
       </Row>
     </Group>
   );

@@ -50,6 +50,8 @@ fun AssistantSidebarContent(
      * Compact windows keep the drawer's inline search.
      */
     fullWindowSearch: Boolean = false,
+    /** When the sidebar is a column beside the page, folds the column from its own header; null in a drawer or overlay. */
+    onFoldColumn: (() -> Unit)? = null,
 ) {
     val choice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val received = snapshot.takeIf { it.managerId == choice.shown }
@@ -163,7 +165,8 @@ fun AssistantSidebarContent(
                 pages = pages, onPage = onPage, onOpenTodo = onOpenTodo, onOpenAgent = onOpenAgent, switcher = switcher,
                 found = foundChats, searchPartial = searchPartial,
                 fullWindowSearch = fullWindowSearch,
-                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true })
+                onFullSearch = { if (fullWindowSearch) fullSearchOpen = true },
+                onFoldColumn = onFoldColumn)
         }
     }
     if (fullSearchOpen && fullWindowSearch) {

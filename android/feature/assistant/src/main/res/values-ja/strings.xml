@@ -86,6 +86,7 @@
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>
     <string name="assistant_phone_permissions_pending">スマホの権限を確認待ち</string>
     <string name="assistant_search_chats">チャットを検索</string>
+    <string name="assistant_hide_sidebar">サイドバーを非表示</string>
     <string name="assistant_search_partial">以前のチャットを整理中です。まだ表示されないものがあります。</string>
     <plurals name="assistant_full_search_chats">
         <item quantity="other">%1$d件のチャット</item>
