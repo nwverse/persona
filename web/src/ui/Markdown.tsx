@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, memo, startTransition, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { cloneElement, isValidElement, lazy, memo, startTransition, Suspense, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "./remark-gfm-parse";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
@@ -15,6 +15,8 @@ import { t } from "../i18n";
 import { Icon } from "./icons";
 import { MermaidBlock } from "./Mermaid";
 import { ExternalImage } from "./ExternalImage";
+import { ReplyPicturesContext } from "./reply-pictures-context";
+import { useReplyImages } from "./reply-images-lazy";
 import { AssistantCard, CARD_LANGUAGES } from "./AssistantCard";
 import { rehypePathLinks, textPaths, writtenText } from "./PathLinks";
 import { usePathLinks } from "../lib/path-presence";
@@ -366,6 +368,14 @@ function Link({ href, children, mid, cwd, line, title: hover }: { href?: string;
 // rehype-katex turns those into formulas before they get here.
 const hasClass = (cls: string | undefined, name: string) => (cls ?? "").split(/\s+/).includes(name);
 
+// A run of a reply's pictures (reply-images-lazy.ts lifts it out of its paragraph), drawn by its own chunk (#9475).
+const ReplyImages = lazy(() => import("./ReplyImages").then((m) => ({ default: m.ReplyImages })));
+const replyImagesComponent = (props: { node?: unknown }) => (
+  <Suspense fallback={null}>
+    <ReplyImages node={props.node as never} />
+  </Suspense>
+);
+
 export const markdownComponents: Components = {
   a: ({ href, children }) => <Link href={href}>{children}</Link>,
   // third-party images stay unloaded until tapped (#8162); the hub's own images render inline
@@ -403,6 +413,8 @@ export const markdownComponents: Components = {
     </td>
   ),
 };
+// react-markdown draws a custom element through its components too; Components' type lists HTML's only.
+(markdownComponents as Record<string, unknown>)["reply-images"] = replyImagesComponent;
 
 // A table cell's words fit on one line in what a long cell keeps (7em less its padding, about 5.5em of text): the cell
 // doesn't wrap and needs no minimum width, so a column of numbers or names is as narrow as they are (audit item 77).
@@ -566,7 +578,7 @@ function componentsFor(mid: string, cwd: string | undefined): Components {
 // "Reply animation" off or reduced motion; once streaming ends it is plain Markdown again, without the fade's spans.
 // `lineBreaks`: a reply, read line by line as it was written (#2088, `reply-breaks.ts`): a single line break is one,
 // and steps numbered on from 5 right under a line of text are a list.
-export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean }) {
+export const Markdown = memo(function Markdown({ text: raw, small, compact, mid, cwd, streaming, fade, lineBreaks, askImages }: { text: string; small?: boolean; compact?: boolean; mid?: string; cwd?: string; streaming?: boolean; fade?: boolean; lineBreaks?: boolean; askImages?: boolean }) {
   const components = useMemo<Components>(() => (mid ? componentsFor(mid, cwd) : markdownComponents), [mid, cwd]);
   const text = useThrottledText(raw, Boolean(streaming));
   const motion = useReplyMotion();
@@ -586,10 +598,13 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const remarkPlugins = lineBreaks ? REMARK_LINES : REMARK;
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
+  // The step that lifts block pictures into runs, once the text names a web picture (#9475).
+  const images = useReplyImages(useMemo(() => /!\[[^\]\n]*\]\(\s*<?https?:\/\//i.test(text), [text]));
+  const picturesContext = useMemo(() => ({ text, ask: Boolean(askImages) }), [text, askImages]);
   const rehypePlugins = useMemo<PluggableList>(
-    () => [...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],
+    () => [...(images ? [images] : []), ...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, highlight, katex],
+    [key, highlight, katex, images],
   );
   const chunks = useMemo(() => (streaming ? splitChunks(md) : wordFade ? [{ start: 0, content: md }] : null), [md, streaming, wordFade]);
   // A finished block: its tree from the cache when this text was drawn with the same plugins and links before.
@@ -597,11 +612,12 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
     () =>
       chunks || !markdownCache.on
         ? null
-        : cachedMarkdown(markdownKey(md, `${katex ? "katex" : ""}|${highlight ? "highlight" : ""}|${key}`, mid, cwd), { children: md, remarkPlugins, rehypePlugins, components, urlTransform: markdownUrl }),
-    [chunks, md, katex, highlight, key, mid, cwd, remarkPlugins, rehypePlugins, components],
+        : cachedMarkdown(markdownKey(md, `${katex ? "katex" : ""}|${highlight ? "highlight" : ""}|${images ? "images" : ""}|${key}`, mid, cwd), { children: md, remarkPlugins, rehypePlugins, components, urlTransform: markdownUrl }),
+    [chunks, md, katex, highlight, images, key, mid, cwd, remarkPlugins, rehypePlugins, components],
   );
   return (
     <HighlightWanted.Provider value={fenced && inBlock}>
+      <ReplyPicturesContext.Provider value={picturesContext}>
       <ReplyStreaming.Provider value={Boolean(streaming)}>
       <div className={`prose-j ${small ? "prose-sm" : ""} ${compact ? "prose-compact" : ""}`}>
         {chunks ? (
@@ -617,6 +633,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
         )}
       </div>
       </ReplyStreaming.Provider>
+      </ReplyPicturesContext.Provider>
     </HighlightWanted.Provider>
   );
 });

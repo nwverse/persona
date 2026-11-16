@@ -18,7 +18,8 @@ function hostOf(src: string): string {
 const gateClass =
   "my-0.5 inline-flex items-center gap-1.5 rounded-chip bg-inset px-2.5 py-1 text-label text-ink-2 shadow-btn hover:bg-hover hover:text-ink";
 
-export function ExternalImageGate({ node: _node, src = "", alt = "", ...rest }: ComponentProps<"img"> & { node?: unknown }) {
+// `load`: what the tap loads instead of `src` (the hub's remote image route, which fetches it for the reader).
+export function ExternalImageGate({ node: _node, src = "", alt = "", load, ...rest }: ComponentProps<"img"> & { node?: unknown; load?: string }) {
   const [gate, setGate] = useState<GateState>("idle");
   if (gate !== "loading") {
     const host = hostOf(src);
@@ -36,5 +37,5 @@ export function ExternalImageGate({ node: _node, src = "", alt = "", ...rest }: 
     );
   }
   // The src reaches an <img> only after the tap, and the request carries no Referer header.
-  return <img {...rest} src={src} alt={alt} referrerPolicy="no-referrer" onError={() => setGate("failed")} data-external-image="loading" />;
+  return <img {...rest} src={load ?? src} alt={alt} referrerPolicy="no-referrer" onError={() => setGate("failed")} data-external-image="loading" />;
 }
