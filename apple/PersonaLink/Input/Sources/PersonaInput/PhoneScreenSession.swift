@@ -117,6 +117,8 @@ final class PhoneScreenSession {
         }
         AX.setFullScreen(e, false)
         AX.setMinimized(e, false)
+        // Every window starts from the base width: one that needed a wider mode must not leave the next one small.
+        if d.width != d.fit.baseWidth { _ = d.set(width: d.fit.baseWidth, place: false) }
         var got = fill(e, d)
         // An app with a minimum size stays larger: a wider mode of the same shape holds it, and the picture scales.
         if let g = got {
@@ -130,9 +132,18 @@ final class PhoneScreenSession {
         AX.focus(e, pid: key.pid)
         placed = key
         let app = NSRunningApplication(processIdentifier: key.pid)
+        // Terminals and editors: bigger text while on the phone (PhoneScreenZoom), noted before the keys go so a crash
+        // still undoes it.
+        let steps = PhoneScreenZoom.steps(for: app?.bundleIdentifier)
+        if steps > 0, restore.record(pid: key.pid, window: key.id)?.zoom == nil {
+            restore.setZoom(steps, pid: key.pid, window: key.id)
+            _ = save()
+            AX.zoom(pid: key.pid, steps: steps)
+        }
         let w = PhoneScreenWindow(pid: key.pid, window: key.id, app: app?.localizedName ?? "", bundle: app?.bundleIdentifier,
                                   title: AX.string(e, kAXTitleAttribute) ?? "", placed: true, frame: got?.phoneRect)
-        return PhoneScreenReply(ok: true, display: d.rect, placed: w)
+        // The arrangement too: the display may have changed width, and the phone finds it on the picture by all of them.
+        return PhoneScreenReply(ok: true, display: d.rect, displays: Displays.arrangement(known: [d.id: 2]), placed: w)
     }
 
     /// The window over the display's area (a fitted window first goes back to the base width).
@@ -145,11 +156,19 @@ final class PhoneScreenSession {
         defer { if placed == key { placed = nil } }
         guard let r = restore.record(pid: key.pid, window: key.id) else { return }
         if let e = AX.element(key) {
+            if let z = r.zoom, z > 0 { // the text size back first: the keys go to the app's front window
+                AXUIElementPerformAction(e, kAXRaiseAction as CFString)
+                AX.set(e, kAXMainAttribute, kCFBooleanTrue)
+                AX.zoom(pid: key.pid, steps: -z)
+            }
             AX.move(e, to: CGRect(r.frame))
             if r.fullScreen { AX.setFullScreen(e, true) }
             if r.minimized { AX.setMinimized(e, true) }
         } else if NSRunningApplication(processIdentifier: key.pid) != nil, AX.windows(pid: key.pid) == nil {
             return // its app does not answer: keep the record for the next try
+        } else if let z = r.zoom, z > 0, let app = NSRunningApplication(processIdentifier: key.pid),
+                  PhoneScreenZoom.appWide.contains(app.bundleIdentifier ?? "") {
+            AX.zoom(pid: key.pid, steps: -z) // the window is gone, but the app's text size is the app's: back too
         }
         restore.remove(pid: key.pid, window: key.id)
         _ = save()
@@ -157,6 +176,15 @@ final class PhoneScreenSession {
 
     private func putBackLeftovers() {
         for r in restore.records { putBack(WindowKey(pid: r.pid, id: r.window)) }
+    }
+
+    /// `--phone-screen-restore` (#9500): what a helper that died left on its display, put back without a session (the
+    /// node runs it when it starts, and after a session ended with records still there). How many records it handled
+    /// and how many it kept (an app that didn't answer).
+    func restoreOnly() -> (done: Int, kept: Int) {
+        let had = restore.records.count
+        putBackLeftovers()
+        return (had - restore.records.count, restore.records.count)
     }
 
     // MARK: end
@@ -217,6 +245,35 @@ nonisolated enum RestoreFile {
         } catch {
             return false
         }
+    }
+}
+
+/// `--phone-screen-restore`: put back what the records say, then exit (0, or 1 without Accessibility). The records are
+/// read off the main thread, the windows moved on it.
+enum PhoneScreenRestoreRun {
+    static func run() -> Never {
+        DispatchQueue.global().async {
+            let left = RestoreFile.load()
+            DispatchQueue.main.async {
+                guard !left.records.isEmpty else {
+                    print("phone_screen_restore: nothing")
+                    exit(0)
+                }
+                guard AX.trusted else {
+                    print("phone_screen_restore: no accessibility")
+                    exit(1)
+                }
+                let r = MainActor.assumeIsolated { () -> (done: Int, kept: Int) in
+                    let s = PhoneScreenSession()
+                    s.adopt(left)
+                    return s.restoreOnly()
+                }
+                print("phone_screen_restore: put back \(r.done), kept \(r.kept)")
+                exit(0)
+            }
+        }
+        RunLoop.main.run()
+        exit(0)
     }
 }
 

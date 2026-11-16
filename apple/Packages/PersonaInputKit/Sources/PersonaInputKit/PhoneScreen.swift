@@ -208,10 +208,14 @@ public struct PhoneScreenRestore: Codable, Equatable, Sendable {
         public var frame: PhoneScreenRect
         public var minimized: Bool
         public var fullScreen: Bool
+        /// Steps of ⌘+ the helper gave the window's app (PhoneScreenZoom), undone with as many ⌘− when it goes back;
+        /// nil: none. Absent from a record a helper before it wrote.
+        public var zoom: Int?
 
-        public init(pid: Int32, window: UInt32, app: String, frame: PhoneScreenRect, minimized: Bool, fullScreen: Bool) {
+        public init(pid: Int32, window: UInt32, app: String, frame: PhoneScreenRect, minimized: Bool, fullScreen: Bool,
+                    zoom: Int? = nil) {
             self.pid = pid; self.window = window; self.app = app; self.frame = frame
-            self.minimized = minimized; self.fullScreen = fullScreen
+            self.minimized = minimized; self.fullScreen = fullScreen; self.zoom = zoom
         }
     }
 
@@ -224,12 +228,43 @@ public struct PhoneScreenRestore: Codable, Equatable, Sendable {
         if !records.contains(where: { $0.pid == r.pid && $0.window == r.window }) { records.append(r) }
     }
 
+    /// Notes the zoom given to a window that has a record.
+    public mutating func setZoom(_ steps: Int?, pid: Int32, window: UInt32) {
+        guard let i = records.firstIndex(where: { $0.pid == pid && $0.window == window }) else { return }
+        records[i].zoom = steps
+    }
+
     public mutating func remove(pid: Int32, window: UInt32) {
         records.removeAll { $0.pid == pid && $0.window == window }
     }
 
     public func record(pid: Int32, window: UInt32) -> Record? {
         records.first { $0.pid == pid && $0.window == window }
+    }
+}
+
+/// Bigger text for the apps that are read at phone size most (#9314's follow-up): the display can't be narrower than 540
+/// points at 2× (macOS marks narrower 2× modes not usable for the desktop, measured), so its text is about three
+/// quarters of the Mac's on a phone. Terminals and editors get ⌘+ `steps` times while their window is on the display
+/// and as many ⌘− when it goes back, as Snug does. Browsers are left out: their zoom is per site, so it would follow the
+/// user's other tabs of that site, and a page at 540 points is already laid out for a narrow screen.
+public enum PhoneScreenZoom {
+    public static let steps = 2
+
+    /// Bundle ids whose ⌘+ / ⌘− zoom the text of the front window (or the whole app) and nothing else.
+    public static let apps: Set<String> = [
+        "com.mitchellh.ghostty", "com.apple.Terminal", "com.googlecode.iterm2",
+        "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.todesktop.230313mzl4w4u92", // Cursor
+        "dev.zed.Zed", "dev.zed.Zed-Preview",
+    ]
+
+    /// Apps whose zoom is one for the whole app, not the window's: when the window went away while zoomed, the app
+    /// still gets its ⌘− (Zed keeps the size for all its windows).
+    public static let appWide: Set<String> = ["dev.zed.Zed", "dev.zed.Zed-Preview"]
+
+    /// How many steps of ⌘+ a window of this app gets: `steps` for the apps above, else 0.
+    public static func steps(for bundle: String?) -> Int {
+        bundle.map { apps.contains($0) } == true ? steps : 0
     }
 }
 
