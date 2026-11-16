@@ -80,6 +80,19 @@ object MachineManagementModule {
         override suspend fun put(value: TriageSwitches) = HttpAgentTriage(runtime.connection()).put(value)
     }
 
+    /** Settings › Standing Authorizations: the selected group's hub, the same client the readiness checklist uses. */
+    @Provides @Singleton fun standingAuthorizations(runtime: ConnectionRuntime): StandingAuthorizationsSource = object : StandingAuthorizationsSource {
+        private fun api(): AssistantManagement {
+            val connection = runtime.connection()
+            val route = connection.route.value ?: throw HubFailure(HubError.NoNetwork)
+            return persona.core.hub.HttpAssistantManagement(route.endpoint.url, connection.token, connection.http.client) {
+                connection.route.value === route
+            }
+        }
+        override suspend fun list() = api().standingAuthorizations()
+        override suspend fun revoke(id: String) = api().revokeStandingAuthorization(id)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Provides @Singleton fun knowledgeSelection(runtime: ConnectionRuntime, application: Application): KnowledgeSelection = object : KnowledgeSelection {
         private fun api() = HttpKnowledgeSelection(runtime.connection())
