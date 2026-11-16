@@ -208,17 +208,18 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
 	// can offer to let it start these by itself, and that schedule's grant may start them now. Never in the health
 	// space, whose plans always wait for Start.
-	var round string
-	var roundItems []proto.Item
+	if scope == nil && s.roundUnderWay(machine, sessionID) {
+		// A round the hub started has no message of the owner's: "the user asked for this" is only the model's word.
+		for i := range a.Tasks {
+			a.Tasks[i].UserRequested = false
+		}
+	}
+	var round Task
+	var inRound bool
 	if scope == nil && !s.inHealth(ctx, sessionID) {
-		round, roundItems = s.scheduledRoundOf(ctx, machine, sessionID)
-		if round != "" {
-			title, basis := "", ""
-			if st, ok := s.scheduledTask(ctx, round); ok {
-				title, basis = st.labelIn(s.lang(ctx)), st.grantBasis()
-			}
-			for i := range a.Tasks {
-				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round, title, basis
+		if round, inRound = s.scheduledRoundOf(ctx, machine, sessionID); inRound && round.grantEligible() {
+			for i := range a.Tasks { // the card offers to let this schedule start these by itself
+				a.Tasks[i].Schedule, a.Tasks[i].ScheduleTitle, a.Tasks[i].ScheduleBasis = round.ID, round.labelIn(s.lang(ctx)), round.grantBasis()
 			}
 		}
 	}
@@ -258,8 +259,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return b.String(), nil
 	}
 	var granted func() func(PlanTask) bool
-	if round != "" {
-		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, machine, sessionID, round, roundItems) }
+	if inRound {
+		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
 	if health || !s.planStartsAtOnceUnder(ctx, p.Tasks, granted) {
 		s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSuggestion(ctx, p, s.lang(ctx))})

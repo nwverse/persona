@@ -294,6 +294,8 @@ type schedule struct {
 	waitTold map[string]string
 	// rounds: by machine NUL conversation, the rounds the hub is sending there (schedule_grant.go noteRound); in memory only.
 	rounds map[string][]schedRound
+	// clean: by conversation, the scheduled task whose clean round it is (schedule_grant.go noteCleanRound).
+	clean map[string]string
 	// limitWait: tests' wait before retrying a run a usage limit stopped (nil: until the reset, limitRetryWait).
 	limitWait func(reset, now time.Time) time.Duration
 }
@@ -1755,6 +1757,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
+	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
+	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant.
+	clean := t.SessionID == "" && t.Space == "" && t.liveGrant() != nil
 	if t.SessionID != "" {
 		if m, ok := s.device(ctx, t.MachineID); ok {
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
@@ -1803,7 +1808,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 				s.tellWaitingSkip(ctx, t, m)
 			}
 			return proto.Session{}, err
-		case fresh:
+		case fresh || clean:
 			// Keep the prior session for busy detection, then start a new one below.
 		default:
 			params := map[string]any{"session_id": t.RunSessionID, "text": taskPrompt(t, due, now, loc, manual, kb, true), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode, "resume_only": true}
@@ -1823,8 +1828,16 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 			s.logf("task %s into its conversation %s: %v; starting a new one", t.ID, short(t.RunSessionID), err)
 		}
 	}
-	sess, err := s.startConversation(ctx, startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
-		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID})
+	sp := startParams{Text: taskPrompt(t, due, now, loc, manual, kb, false), Source: taskMessageSource(t), PermissionMode: t.PermissionMode,
+		Purpose: "task." + t.ID, Space: t.Space, Origin: OriginTask, OriginRef: t.ID}
+	if clean {
+		sp.NewSessionID = newGuestSessionID()
+		s.noteCleanRound(sp.NewSessionID, t.ID) // before it starts: its first message's context asks
+	}
+	sess, err := s.startConversation(ctx, sp)
+	if clean && (err != nil || sess.SessionID != sp.NewSessionID) {
+		s.endCleanRound(sp.NewSessionID) // another agent picked its own id: an ordinary round, its plans ask
+	}
 	if err != nil {
 		s.logf("task %s: %v", t.ID, err)
 		run.Status, run.Error = runFailed, err.Error()

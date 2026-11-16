@@ -76,7 +76,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		// Remembered by startTaskAgent once admission fixed the folder that runs: its repository is the kind, never
 		// the one the plan was made from when the workspace is in another (#8259).
 		p.Tasks[i].rememberKind = remember
-		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !s.inHealth(ctx, p.Conversation) {
+		if scheduleGrants(ctx) && ownerStarts(ctx) && p.Tasks[i].Schedule != "" && !p.Tasks[i].Readonly && !s.inHealth(ctx, p.Conversation) {
 			p.Tasks[i].grantSchedule = p.Tasks[i].Schedule // added once admission fixed the folder (startTaskAgent)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,57 +25,49 @@ import (
 // A round the hub starts for a scheduled task has no message from the owner, so a writable task it hands out with
 // task_plan used to wait on its card however much the owner wanted the schedule to do that work. The owner can now say,
 // on the card of one of that schedule's own rounds, "let this scheduled task start these by itself": the kind of each
-// task (trustKey: machine + repository or folder + read or edit, as the trust list's) is added to the schedule's
-// StartGrant. From then on a task_plan call made in a round the hub started for that schedule starts a task of a kind
-// in the grant without the card. Everything else keeps the card:
+// writable task (trustKey: machine + repository or folder + edit, as the trust list's) is added to the schedule's
+// StartGrant. Everything else keeps the card:
 //
-//   - the grant is the schedule's only: another schedule's rounds, follow-ups the assistant set up for itself, every
-//     other conversation and every turn the hub did not start for that schedule ask as before;
-//   - only the owner adds to it (Start on the card, POST /api/v1/task-plans/{id}/start with schedule_grant): no tool
-//     call and no app body sets or widens it (editTask keeps the hub's copy); the schedule's page shows it and removes
-//     it (DELETE /api/v1/assistant/tasks/{id}/start-grant);
-//   - it holds while the schedule's prompt and target (the machine and conversation its runs go to, its space) are the
-//     ones it was given under: a change of any of them drops it (dropStaleGrants, and liveGrant at use);
-//   - a round that may have read untrusted outside content never uses it (roundReadsOutside): a schedule whose runs
-//     are given the briefing's facts (Inbox matters) or a saved state note, a conversation with anything in it but
-//     that schedule's own rounds and the owner's own words, or a tool call outside the short list of Persona's
-//     own tools that read nothing from outside (grantSafeTools). What the hub cannot read or tell keeps the card.
+//   - the grant is the schedule's only, and only the owner adds to it (Start on the card with schedule_grant, which
+//     no tool call and no app body can stand in for); the schedule's page shows it and removes it;
+//   - it holds while the schedule is what it was given under (grantBasis: its prompt, where its runs go, its space
+//     and whether it is given the briefing's facts or the north star's report); any change drops it;
+//   - a schedule that may read untrusted outside content never offers or uses it (grantEligible): no facts, report or
+//     saved state note, runs in a conversation of its own, not the health space;
+//   - it is used only in a clean round (cleanRound): one the hub started in a new conversation of its own, under an id
+//     it chose, whose context leaves out the live snapshot (Lark messages, Inbox items, agent lines: context.go), and
+//     whose whole conversation is that one prompt and the agent's own work with Persona's own tools that read nothing
+//     from outside (grantSafeTools). What the hub cannot read or tell keeps the card.
 
 // StartGrant is what the owner let one scheduled task's rounds start without the card.
 type StartGrant struct {
-	// Kinds are trust keys (trustKey): machine|repository or folder|read or edit. One covers its folder tree as a
-	// remembered kind does (trustCovers).
+	// Kinds are trust keys (trustKey): machine|repository or folder|edit. One covers its folder tree as a remembered
+	// kind does (trustCovers).
 	Kinds []string `json:"kinds"`
-	// What the schedule was when the owner gave it: the prompt's digest and where its runs go. Another one drops it.
-	PromptDigest string    `json:"prompt_digest"`
-	MachineID    string    `json:"machine_id,omitempty"`
-	SessionID    string    `json:"session_id,omitempty"`
-	Space        string    `json:"space,omitempty"`
-	GrantedAt    time.Time `json:"granted_at"`
+	// Basis is the schedule's grantBasis when the owner gave it: another one drops it.
+	Basis     string    `json:"basis"`
+	GrantedAt time.Time `json:"granted_at"`
 }
 
-func promptDigest(prompt string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(prompt)))
+// grantBasis names what a grant is given under: t's prompt, where its runs go, its space and what the hub adds to its
+// prompt. A plan keeps its round's (PlanTask.ScheduleBasis), so a Start after the schedule changed grants nothing.
+func (t Task) grantBasis() string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{strings.TrimSpace(t.Prompt), t.MachineID, t.SessionID, t.Space,
+		strconv.FormatBool(t.Facts), strconv.FormatBool(t.Report)}, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 
-// grantFor is a new, empty grant for t as it is now.
-func grantFor(t Task, now time.Time) *StartGrant {
-	return &StartGrant{PromptDigest: promptDigest(t.Prompt), MachineID: t.MachineID, SessionID: t.SessionID, Space: t.Space,
-		GrantedAt: now.UTC()}
+// grantEligible: t's rounds can use a grant at all (and its cards offer one): nothing the hub adds to their prompt
+// comes from outside (the briefing's facts list Inbox matters, the report's lines, a state note an earlier run
+// wrote), they run in a conversation of their own, outside the health space.
+func (t Task) grantEligible() bool {
+	return !t.Facts && !t.Report && t.SessionID == "" && t.Space == "" && (t.StateNote == nil || strings.TrimSpace(t.StateNote.Text) == "")
 }
 
-// grantBasis names what a grant is given under: t's prompt and where its runs go. A plan keeps its round's
-// (PlanTask.ScheduleBasis), so a Start after the schedule changed grants nothing.
-func (t Task) grantBasis() string {
-	return promptDigest(t.Prompt + "\x00" + t.MachineID + "\x00" + t.SessionID + "\x00" + t.Space)
-}
-
-// liveGrant is t's grant while it still applies: given under t's current prompt and target, with a kind in it.
+// liveGrant is t's grant while it still applies: given under t as it is now, with a kind in it.
 func (t Task) liveGrant() *StartGrant {
 	g := t.StartGrant
-	if g == nil || len(g.Kinds) == 0 || g.PromptDigest != promptDigest(t.Prompt) || g.MachineID != t.MachineID ||
-		g.SessionID != t.SessionID || g.Space != t.Space {
+	if g == nil || len(g.Kinds) == 0 || g.Basis != t.grantBasis() {
 		return nil
 	}
 	return g
@@ -115,14 +108,14 @@ func (s *Service) grantScheduleKind(ctx context.Context, id string, t PlanTask) 
 		return
 	}
 	i := sc.indexLocked(id)
-	if i < 0 || sc.tasks[i].Space == SpaceHealth || sc.tasks[i].grantBasis() != t.ScheduleBasis {
+	if i < 0 || !sc.tasks[i].grantEligible() || sc.tasks[i].grantBasis() != t.ScheduleBasis {
 		sc.mu.Unlock() // gone, or no longer the schedule whose round the owner saw: nothing granted
 		return
 	}
 	tasks := slices.Clone(sc.tasks)
 	g := tasks[i].liveGrant()
 	if g == nil {
-		g = grantFor(tasks[i], time.Now())
+		g = &StartGrant{Basis: tasks[i].grantBasis(), GrantedAt: time.Now().UTC()}
 	} else {
 		cp := *g
 		cp.Kinds = slices.Clone(g.Kinds)
@@ -236,10 +229,13 @@ func (s *Service) noteRound(machine, session, task string, at time.Time) {
 	s.sched.rounds[k] = append(list, schedRound{task: task, at: at})
 }
 
-// endRound forgets task's round in session once its turn ended (watchScheduledRun).
+// endRound forgets task's round in session once its turn ended (watchScheduledRun), and its clean mark.
 func (s *Service) endRound(machine, session, task string) {
 	s.sched.mu.Lock()
 	defer s.sched.mu.Unlock()
+	if s.sched.clean[session] == task {
+		delete(s.sched.clean, session)
+	}
 	k := roundKey(machine, session)
 	list := slices.DeleteFunc(s.sched.rounds[k], func(r schedRound) bool { return r.task == task })
 	if len(list) == 0 {
@@ -247,6 +243,42 @@ func (s *Service) endRound(machine, session, task string) {
 		return
 	}
 	s.sched.rounds[k] = list
+}
+
+// noteCleanRound marks session, a conversation the hub is about to start under that id for a round of task, as a
+// clean round's: its context leaves out the live snapshot (Context) and its plans may use task's grant.
+func (s *Service) noteCleanRound(session, task string) {
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	if s.sched.clean == nil {
+		s.sched.clean = map[string]string{}
+	}
+	s.sched.clean[session] = task
+}
+
+// endCleanRound drops session's clean mark: it did not start under that id (another agent picks its own).
+func (s *Service) endCleanRound(session string) {
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	delete(s.sched.clean, session)
+}
+
+// cleanRoundSession: session is a clean round's conversation while its round is under way (noteCleanRound).
+func (s *Service) cleanRoundSession(session string) bool {
+	if session == "" {
+		return false
+	}
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	_, ok := s.sched.clean[session]
+	return ok
+}
+
+// roundUnderWay: the hub has a scheduled round under way in session on machine.
+func (s *Service) roundUnderWay(machine, session string) bool {
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	return len(s.sched.rounds[roundKey(machine, session)]) > 0
 }
 
 // liveRound is the one round the hub has under way in session, false when there is none or more than one (two tasks'
@@ -267,35 +299,36 @@ func (s *Service) liveRound(machine, session string, now time.Time) (schedRound,
 }
 
 // scheduledRoundOf is the scheduled task whose round the turn task_plan is called in is, from what the hub knows
-// (liveRound) and what the conversation says (its latest turn began with the scheduler's own prompt, sent after the
-// round began, and no other message came into it). "" for every other turn. items is that turn as read.
-func (s *Service) scheduledRoundOf(ctx context.Context, machine, session string) (task string, items []proto.Item) {
+// (liveRound) and what the conversation says (its latest turn began with that task's own scheduled prompt, sent after
+// the round began, and no other message came into it). "" for every other turn.
+func (s *Service) scheduledRoundOf(ctx context.Context, machine, session string) (task Task, ok bool) {
 	r, ok := s.liveRound(machine, session, time.Now())
 	if !ok {
-		return "", nil
+		return Task{}, false
 	}
 	t, ok := s.scheduledTask(ctx, r.task)
 	if !ok {
-		return "", nil
+		return Task{}, false
 	}
 	items, read := s.lastTurnItems(ctx, machine, session)
 	if !read {
-		return "", nil
+		return Task{}, false
 	}
 	_, turn := splitLastTurn(items)
 	if !roundTurn(turn, r.at, t.label()) {
-		return "", nil
+		return Task{}, false
 	}
-	return r.task, items
+	return t, true
 }
 
 // roundEarly is how much earlier than the hub's note of a round its prompt's own time may be (clocks of the hub and
 // a machine apart).
 const roundEarly = 2 * time.Minute
 
-// roundTurn: turn (its items, prompt first) began with a scheduled prompt (the scheduler's message source, which an
-// app's or another conversation's message never carries: prompts.MessageSourceText, ProtectUserMessage) written no
-// earlier than the round, and nothing else came into it from outside the agent's own work.
+// roundTurn: turn (its items, prompt first) began with the scheduled prompt of the task called label (the
+// scheduler's message source, which an app's or another conversation's message never carries:
+// prompts.MessageSourceText, ProtectUserMessage) written no earlier than the round, and nothing else came into it from
+// outside the agent's own work.
 func roundTurn(turn []proto.Item, at time.Time, label string) bool {
 	if len(turn) == 0 {
 		return false
@@ -316,7 +349,7 @@ func roundTurn(turn []proto.Item, at time.Time, label string) bool {
 }
 
 // scheduledPrompt: it is the run prompt of the scheduled task called label (patrol or follow-up), by its message
-// source. Another task's (which may carry the briefing's facts) is not.
+// source.
 func scheduledPrompt(it proto.Item, label string) bool {
 	src := prompts.ItemSource(it)
 	return src != nil && (src.Kind == proto.SourcePatrol || src.Kind == proto.SourceFollowup) && src.Title == label
@@ -324,13 +357,12 @@ func scheduledPrompt(it proto.Item, label string) bool {
 
 // ---- outside content ----
 
-// grantSafeTools are Persona's own tools a round may call and still use its schedule's grant: each reads nothing
+// grantSafeTools are Persona's own tools a clean round may call and still use its schedule's grant: each reads nothing
 // written outside Persona (no mail, Inbox, web page, chat, agent transcript or file) and only says where work can run
-// or plans and schedules it. Any other tool, built-in or not, keeps the card.
+// or plans it. Any other tool, built-in or not, keeps the card.
 var grantSafeTools = map[string]bool{
 	"task_plan": true, "task_plan_withdraw": true, "machines_list": true, "repositories_list": true,
-	"repository_get": true, "todo_repositories_get": true, "list_followups": true, "schedule_followup": true,
-	"cancel_followup": true, "schedule_state_set": true, "notify_user": true,
+	"repository_get": true, "todo_repositories_get": true, "notify_user": true,
 }
 
 // grantSafeBuiltins are the agent's own tools that read nothing: Claude Code's to-do list and its loading of a
@@ -349,10 +381,9 @@ func grantSafeTool(name string) bool {
 	return grantSafeTools[compat.Tool(rest[i+2:])]
 }
 
-// grantSafeItem: it carries nothing from outside into a conversation a schedule's grant may start work from. Turn
-// prompts are a scheduled task's or the owner's own words (no source, no relay, no injected notice); the rest is the
-// agent's own text, its safe tools and their results.
-func grantSafeItem(it proto.Item, label string) bool {
+// grantSafeAfterPrompt: an item of a clean round after its prompt carries nothing from outside: the agent's own text,
+// its safe tools and their results, the transcript's own notices.
+func grantSafeAfterPrompt(it proto.Item) bool {
 	switch it.Role {
 	case "assistant":
 		switch it.Kind {
@@ -363,85 +394,53 @@ func grantSafeItem(it proto.Item, label string) bool {
 		}
 		return false
 	case "user":
-		switch it.Kind {
-		case proto.KindToolResult:
-			return true // the result of a tool use checked above
-		case proto.KindText:
-			if scheduledPrompt(it, label) {
-				return true
-			}
-			return it.ClientMsgID != "" && it.From == "" && it.Injected == nil && !it.Wake && it.Source == nil &&
-				prompts.ItemSource(it) == nil // a message the owner sent from an app
-		}
+		return it.Kind == proto.KindToolResult // the result of a tool use checked above
+	}
+	return it.Kind == proto.KindNotice
+}
+
+// cleanRound: the round of t in session is one its grant may start work from. The hub started session for it under
+// the id it chose, with no live snapshot (cleanRoundSession), and the whole conversation, as its machine reads it now,
+// is that round's prompt and the agent's own safe work. Anything the hub cannot read or tell is not clean.
+func (s *Service) cleanRound(ctx context.Context, t Task, machine, session string) bool {
+	if !t.grantEligible() || !s.cleanRoundSession(session) {
 		return false
 	}
-	return it.Kind == proto.KindNotice // the transcript's own notices (a compaction, a stop)
+	s.sched.mu.Lock()
+	mine := s.sched.clean[session] == t.ID
+	s.sched.mu.Unlock()
+	if !mine {
+		return false
+	}
+	var res struct {
+		Items   []proto.Item `json:"items"`
+		HasMore *bool        `json:"has_more"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": session, "turns": 10}, &res); err != nil {
+		return false
+	}
+	if res.HasMore == nil || *res.HasMore || len(res.Items) == 0 {
+		return false // more than the page: not one round's alone, or a node that does not say
+	}
+	first := slices.IndexFunc(res.Items, func(it proto.Item) bool { return it.Role == "user" })
+	if first < 0 || !scheduledPrompt(res.Items[first], t.label()) || res.Items[first].Queued {
+		return false
+	}
+	for i, it := range res.Items {
+		if i != first && (i < first && it.Kind != proto.KindNotice || i > first && !grantSafeAfterPrompt(it)) {
+			return false
+		}
+	}
+	return true
 }
 
-// grantHistoryPages bounds how far back roundReadsOutside reads a conversation (session.items pages of up to 10
-// turns): one longer than that keeps the card ("New chat next time" starts the schedule a new one).
-const grantHistoryPages = 10
-
-// roundReadsOutside: the round of t in session may have read untrusted outside content, or the hub cannot tell that
-// it did not (latest: its turn, as scheduledRoundOf read it). True keeps the card.
-func (s *Service) roundReadsOutside(ctx context.Context, t Task, machine, session string, latest []proto.Item) bool {
-	if t.Facts || t.Space != "" || (t.StateNote != nil && strings.TrimSpace(t.StateNote.Text) != "") {
-		return true // its prompt carries the Inbox's matters, a note an earlier run wrote, or health data
-	}
-	safe := func(items []proto.Item) bool {
-		for _, it := range items {
-			if !grantSafeItem(it, t.label()) {
-				return false
-			}
-		}
-		return true
-	}
-	if len(latest) == 0 || !safe(latest) {
-		return true
-	}
-	before := latest[0].Seq
-	for range grantHistoryPages {
-		switch {
-		case before <= 0:
-			return true // no seqs to page back by: unknown
-		case before == 1:
-			return false // read back to the conversation's start
-		}
-		var res struct {
-			Items   []proto.Item `json:"items"`
-			HasMore *bool        `json:"has_more"`
-		}
-		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": session, "turns": 10, "before_seq": before}, &res)
-		cancel()
-		if err != nil {
-			return true
-		}
-		page := slices.DeleteFunc(res.Items, func(it proto.Item) bool { return it.Seq >= before })
-		if !safe(page) {
-			return true
-		}
-		more := res.HasMore == nil || *res.HasMore
-		if len(page) == 0 || !more {
-			return more // the start was read; a node that says there is more but gives nothing earlier: unknown
-		}
-		before = page[0].Seq
-	}
-	return true // too long to read whole
-}
-
-// scheduleGrantCover is what the grant of the round task_plan is called in lets start without the card: nil when the
-// turn is no round the hub started, the schedule has no live grant, or the round may have read outside content.
-func (s *Service) scheduleGrantCover(ctx context.Context, machine, session, task string, latest []proto.Item) func(PlanTask) bool {
-	if task == "" {
-		return nil
-	}
-	t, ok := s.scheduledTask(ctx, task)
-	if !ok {
-		return nil
-	}
+// scheduleGrantCover is what the grant of t, whose round task_plan is called in, lets start without the card: nil when
+// t has no live grant or the round is not clean.
+func (s *Service) scheduleGrantCover(ctx context.Context, t Task, machine, session string) func(PlanTask) bool {
 	g := t.liveGrant()
-	if g == nil || s.roundReadsOutside(ctx, t, machine, session, latest) {
+	if g == nil || !s.cleanRound(ctx, t, machine, session) {
 		return nil
 	}
 	have := map[string]bool{}
@@ -450,7 +449,7 @@ func (s *Service) scheduleGrantCover(ctx context.Context, machine, session, task
 	}
 	homes := s.trustHomes(ctx)
 	return func(p PlanTask) bool {
-		return trustCovers(have, homes, trustKey(p)) || trustCovers(have, homes, trustFolderKey(p))
+		return !p.Readonly && (trustCovers(have, homes, trustKey(p)) || trustCovers(have, homes, trustFolderKey(p)))
 	}
 }
 

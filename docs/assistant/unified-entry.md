@@ -1058,34 +1058,36 @@ Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `n
 
 ### A scheduled task's own start grant
 
-A round the hub starts for a scheduled task (a routine, a follow-up, Run now) has no message from the owner, so it can't
-set `user_requested`, and a writable task it hands out used to wait on its card however much the owner wanted the
-schedule to do that work (#8045). The owner's consent to a schedule is now recorded on the schedule itself
-(`assistant/schedule_grant.go`):
+A round the hub starts for a scheduled task (a routine, a follow-up, Run now) has no message from the owner, so a
+writable task it hands out used to wait on its card however much the owner wanted the schedule to do that work
+(#8045). The owner's consent to a schedule is now recorded on the schedule itself (`assistant/schedule_grant.go`):
 
 - **Set**: only by the owner, on the card of one of that schedule's own rounds: "Let “<scheduled task>” start these by
-  itself" (`schedule_grant: true` on Start). Each task's kind, as "Start These Directly" names it (computer + repository
-  or folder + read or edit, resolved once admission fixed the folder that runs), is added to the task's `start_grant`.
-  No tool call (`schedule_routine`, `schedule_followup`, `task_plan`), no app body (`PUT` / `POST` on the task) and no
-  Start that is not the owner's sets or widens it. It is not added to `tasks.trust`. The plan keeps the schedule's
-  prompt and target as its round had them (`schedule_basis`): a Start after either changed grants nothing.
-- **Used**: only by `task_plan` in a turn the hub can tell is a round it started for that schedule: it noted the round
-  as it sent it (in memory, so not after a hub restart), the turn began with the scheduler's own prompt (its message
-  source and the task's name, which no app or relayed message carries) written after that, nothing else came into the turn, and no other
-  scheduled task has a round under way in that conversation. A writable task whose kind the grant covers (as a
-  remembered kind covers its folder tree) then starts without the card; everything else keeps it: other scheduled
-  tasks, follow-ups the assistant set up for itself, every other conversation and turn, and the health space.
-- **Never after outside content**: a round that may have read untrusted outside content keeps the card even with a
-  grant. The schedule's runs must not get the briefing's facts (they list Inbox matters) or a saved state note (an
-  earlier run wrote it), and the round's conversation must hold nothing but that schedule's rounds and the owner's own
-  messages, whose only tool calls are Persona's own that read nothing from outside (`grantSafeTools`: planning,
-  listing computers and repositories, follow-ups, `notify_user`, Claude Code's `ToolSearch` and `TodoWrite`). Mail,
-  Inbox, web pages, shell commands, files, agent transcripts, a relayed message or a picture anywhere in it keep the
-  card. The hub reads the conversation back up to 10 pages of 10 turns; a longer one, or one it can't read, keeps the
-  card ("New chat next time" starts a new one).
-- **Lifetime**: no expiry. It holds while the schedule's prompt and target (the computer and conversation its runs go
-  to, its space) are the ones it was given under; editing any of them drops it, and so does deleting the task. The
-  scheduled task's page lists the kinds with Remove (`DELETE /api/v1/assistant/tasks/{id}/start-grant`).
+  itself" (`schedule_grant: true` on Start). Each writable task's kind, as "Start These Directly" names it (computer +
+  repository or folder + edit, resolved once admission fixed the folder that runs), is added to the task's
+  `start_grant`. No tool call (`schedule_routine`, `schedule_followup`, `task_plan`), no app body (`PUT` / `POST` on
+  the task) and no Start that is not the owner's sets or widens it, and it is not added to `tasks.trust`. The plan keeps
+  the schedule as its round had it (`schedule_basis`): a Start after the schedule changed grants nothing.
+- **Only for schedules that read nothing from outside**: a schedule whose runs get the briefing's facts (Inbox
+  matters), the north star's report or a saved state note (an earlier run wrote it), that runs into the conversation it
+  came from, or that is in the health space never offers or uses one.
+- **Only in a clean round**: a schedule with a grant starts each round in a new conversation of its own, under an id
+  the hub picks before it starts, and that conversation's context leaves out the live snapshot (Lark messages,
+  calendar, the Inbox matters followed, agents' lines: `Context`). `task_plan` there starts a writable task whose kind
+  the grant covers (as a remembered kind covers its folder tree) without the card only when the hub noted the round as
+  it sent it (in memory, so not after a hub restart), the turn began with that schedule's own prompt written after
+  that, and the whole conversation, as its machine reads it, is that prompt and the agent's own work with Persona's
+  own tools that read nothing from outside (`grantSafeTools`: planning, listing computers and repositories,
+  `notify_user`, Claude Code's `ToolSearch` and `TodoWrite`). Mail, Inbox, web pages, shell commands, files, agent
+  transcripts, a relayed message or a picture keep the card, and so does anything the hub cannot read or tell
+  (another agent that picks its own conversation id, a node that does not say the page is whole).
+- **`user_requested` in a round**: a round the hub started has no message of the owner's, so `task_plan` ignores
+  `user_requested` in a conversation while a scheduled round is under way there, with or without a grant.
+- **Everything else keeps the card**: other scheduled tasks' rounds, every turn the hub did not start for that
+  schedule, kinds outside the grant.
+- **Lifetime**: no expiry. It holds while the schedule's prompt, target (the computer and conversation its runs go
+  to), space, `facts` and `report` are the ones it was given under; editing any of them drops it, and so does deleting
+  the task. The scheduled task's page lists the kinds with Remove (`DELETE /api/v1/assistant/tasks/{id}/start-grant`).
 
 ### Chat activity
 

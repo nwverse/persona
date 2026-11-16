@@ -61,7 +61,7 @@ struct ScheduleGrantTests {
     }
 
     @Test func aTaskReadsItsGrantIntoKindsAndNeverSendsIt() throws {
-        let json = #"{"id":"t1","title":"Weekly report","prompt":"p","repeat":"daily","time":"09:00","enabled":true,"start_grant":{"kinds":["m1|/home/me/notes|edit","m1|/home/me/notes|read","old|id|/srv|edit"],"prompt_digest":"x","machine_id":"m1","granted_at":"2026-11-10T09:00:00Z"}}"#
+        let json = #"{"id":"t1","title":"Weekly report","prompt":"p","repeat":"daily","time":"09:00","enabled":true,"start_grant":{"kinds":["m1|/home/me/notes|edit","m1|/home/me/notes|read","old|id|/srv|edit"],"basis":"x","granted_at":"2026-11-10T09:00:00Z"}}"#
         let task = try JSON.decoder.decode(APIClient.ScheduledTask.self, from: Data(json.utf8))
         let kinds = try #require(task.startGrant?.kinds)
         #expect(kinds.map(\.key) == ["m1|/home/me/notes|edit", "m1|/home/me/notes|read", "old|id|/srv|edit"])
