@@ -148,9 +148,11 @@ function GroupRows<T>({ group, dimension, scope, source, renderRow }: {
     {rows.map((row) => <div key={identity(row)} data-session-row="">
       {nesting?.nested.has(row) ? <div data-nested-session className={SESSION_LIST_STYLE.nestedRow}>{renderRow(row, dimension, group)}</div> : renderRow(row, dimension, group)}
     </div>)}
-    {page.loading && !page.loaded && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
+    {page.loading && (!page.loaded || page.loadingMore) && <p role="status" className="px-2 py-1 text-xs text-ink-3">{t("sidebar.loading")}</p>}
     {page.error && <div className="px-2 py-1"><p role="alert" className="text-xs text-red">{page.error}</p><Button onClick={() => void list.retry().catch(() => {})}>{t("sidebar.retry")}</Button></div>}
     {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-1 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
-    {(page.rows.length > limit || page.hasMore) && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
+    {/* not hidden by a background refresh (only `loading`): on a busy fleet one is nearly always out, and the button
+        vanished under the pointer (#9215). A click during one queues its page. */}
+    {(page.rows.length > limit || page.hasMore) && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={more} />}
   </>;
 }

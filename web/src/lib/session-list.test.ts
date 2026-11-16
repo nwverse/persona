@@ -41,7 +41,7 @@ describe("SessionList baseline, filters and structural sharing", () => {
     expect(PAGE_SIZE).toBe(50);
     const list = make();
     const snapshot = list.getSnapshot();
-    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
+    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
     expect(list.getSnapshot()).toBe(snapshot);
     expect(api).not.toHaveBeenCalled();
   });
@@ -1004,6 +1004,40 @@ describe("generation isolation and inflight coalescing", () => {
       refresh.resolve(page([], { revision: "delta" }));
       await paging;
       expect(requestParams().slice(3).map((p) => p.cursor ? "page" : "refresh")).toEqual(["page", "refresh"]);
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a page is loading only for a page someone asked for, and counts a window from when a slow read came back", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const slow = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(slow.promise);
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      // a background refresh: Load more stays (loadingMore is what hides it)
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: false, hasMore: true });
+      await vi.advanceTimersByTimeAsync(1_500);
+      slow.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      const settled = pages.mock.calls.length;
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(1_000); // 2.5 s after the read went out, 1 s after it came back
+      expect(pages.mock.calls.length).toBe(settled);
+      await vi.advanceTimersByTimeAsync(1_000); // 2 s after it came back
+      expect(pages.mock.calls.length).toBeGreaterThan(settled);
+      const next = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(next.promise);
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: true });
+      next.resolve(page(rows(50, 50)));
+      await paging;
+      expect(list.getSnapshot()).toMatchObject({ loading: false, loadingMore: false });
       expect(list.getSnapshot().rows).toHaveLength(100);
     } finally {
       vi.useRealTimers();

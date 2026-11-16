@@ -74,6 +74,9 @@ export interface ListSnapshot<T> {
   rows: T[];
   loaded: boolean;
   loading: boolean;
+  /** A page someone asked for is being read (Load more, infinite scroll). A background refresh sets only `loading`, so
+   *  a Load more stays where it is while the list refreshes, and a click then queues its page (#9215). */
+  loadingMore: boolean;
   error: string | null;
   total: number;
   counts: ListCounts | null;
@@ -121,7 +124,8 @@ export class SessionList<T> {
   private invalidationQueued = false;
   /** The next scheduled invalidation's read, shared by every hint in its window (`invalidate`). */
   private invalidationTimer?: ReturnType<typeof setTimeout>;
-  /** When the last invalidation's read went out (0 when none): a hint inside the window waits for the trailing read. */
+  /** When the last invalidation's read went out, then when it came back (0 when none): a hint inside the window waits
+   *  for the window's end. */
   private invalidatedAt = 0;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
@@ -240,7 +244,7 @@ export class SessionList<T> {
   }
 
   private empty(): ListSnapshot<T> {
-    return { rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
+    return { rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
   }
 
   private clearBaseline(): void {
@@ -279,8 +283,14 @@ export class SessionList<T> {
           const next = work.more ? "more" : "load";
           work[next] = false;
           work.kind = next;
-          if (next === "load") await this.refresh(work.generation);
-          else await this.readMore(work.generation);
+          this.publish({ loadingMore: next === "more" });
+          if (next === "more") await this.readMore(work.generation);
+          else {
+            await this.refresh(work.generation);
+            // the next window counts from when this read came back, not when it went out: a slow read still leaves
+            // the list idle between a busy fleet's reads
+            if (this.invalidatedAt && this.current(work.generation)) this.invalidatedAt = Date.now();
+          }
         }
       } catch (error) {
         if (!this.current(work.generation)) return;
@@ -291,7 +301,7 @@ export class SessionList<T> {
       } finally {
         work.kind = null;
         work.promise = undefined;
-        if (this.current(work.generation)) this.publish({ loading: false });
+        if (this.current(work.generation)) this.publish({ loading: false, loadingMore: false });
       }
     });
     return work.promise;
