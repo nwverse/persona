@@ -1738,7 +1738,7 @@
     },
     {
       "name": "agent_filter_repository",
-      "value": "リポジトリ"
+      "value": "プロジェクト"
     },
     {
       "name": "agent_filter_worktree",
@@ -2062,7 +2062,7 @@
     },
     {
       "name": "agent_group_flat",
-      "value": "グループ化なし"
+      "value": "グループなし"
     },
     {
       "name": "restore_draft",
@@ -4611,6 +4611,58 @@
     {
       "name": "interaction_question_cancel",
       "value": "質問を取り消す"
+    },
+    {
+      "name": "agent_group_state",
+      "value": "状態別"
+    },
+    {
+      "name": "agent_group_space",
+      "value": "プロジェクト別"
+    },
+    {
+      "name": "agent_group_pinned",
+      "value": "ピン留め"
+    },
+    {
+      "name": "agent_group_unread",
+      "value": "未読"
+    },
+    {
+      "name": "agent_group_awaiting",
+      "value": "返信待ち"
+    },
+    {
+      "name": "agent_group_background",
+      "value": "バックグラウンド待機"
+    },
+    {
+      "name": "agent_group_waiting",
+      "value": "起動待ち"
+    },
+    {
+      "name": "agent_group_muted",
+      "value": "ミュート"
+    },
+    {
+      "name": "agent_group_idle",
+      "value": "確認済み"
+    },
+    {
+      "name": "agent_group_more_idle",
+      "value": "件の待機"
+    },
+    {
+      "name": "agent_group_quiet_spaces",
+      "value": "待機中のプロジェクト"
+    },
+    {
+      "name": "agent_expand",
+      "value": "展開"
+    },
+    {
+      "name": "agent_collapse",
+      "value": "折りたたむ"
     }
   ]
 }
