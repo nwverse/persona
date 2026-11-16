@@ -61,7 +61,8 @@ extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 th
 the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
 each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
 its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
-the grid's width one under another, and the "Needs me" rows one a line. Only the mock's own requests leave the browser. Screenshots
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
 (the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
 run, and the last line is the verdict.
 

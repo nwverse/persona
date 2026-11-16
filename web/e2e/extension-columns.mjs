@@ -27,12 +27,13 @@ const check = (name, ok, detail) => {
 };
 
 const browser = await chromium.launch(executable ? { executablePath: executable } : { channel: "chrome" });
-async function page({ width, height, theme }) {
+async function page({ width, height, theme, textSize }) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme, deviceScaleFactor: 2, serviceWorkers: "block" });
-  await context.addInitScript((theme) => {
+  await context.addInitScript(([theme, textSize]) => {
     localStorage.setItem("persona.theme", theme);
     localStorage.setItem("persona.language", "en");
-  }, theme);
+    if (textSize) localStorage.setItem("persona.text-size", textSize);
+  }, [theme, textSize]);
   // nothing leaves the loopback origin
   await context.route("**/*", (route) => (new URL(route.request().url()).origin === new URL(root).origin ? route.continue() : route.abort()));
   const p = await context.newPage();
@@ -135,6 +136,15 @@ try {
       await fullShot(p, 390, join(shots, `today-390-full-${theme}.png`));
       await p.context().close();
     }
+  }
+  // Settings › Appearance's Large text: the same columns, and nothing wider than its card
+  for (const [width, height, columns] of [[1440, 900, 2], [390, 844, 1]]) {
+    const p = await page({ width, height, theme: "light", textSize: "large" });
+    const m = await measure(p);
+    const overflow = await p.evaluate(() => [...document.querySelectorAll("[data-columns] > div")].filter((c) => c.scrollWidth > c.clientWidth).length);
+    check(`${width} large text: ${columns} column(s), no card overflows`, m.columns === columns && overflow === 0, { columns: m.columns, overflow });
+    await p.screenshot({ path: join(shots, `today-${width}-large-light.png`) });
+    await p.context().close();
   }
 } catch (e) {
   failed = true;
