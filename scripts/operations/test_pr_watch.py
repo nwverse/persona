@@ -79,7 +79,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_p1_findings_are_published_then_repaired_instead_of_merging(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
-        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr()] + [pr(head=SHA_B)] * 4), \
                 patch.object(pr_watch, "semantic_review", return_value=findings), \
                 patch.object(pr_watch, "verify") as verify, \
                 patch.object(self.watcher, "merge") as merge, \
@@ -91,9 +91,13 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         verify.assert_not_called()
         merge.assert_not_called()
-        worker.assert_called_once()
-        self.assertEqual(api.call_count, 1)
-        self.assertEqual(api.call_args.args[0][:2], ["gh", "api"])
+        self.assertEqual(worker.call_count, 2)
+        self.assertEqual(worker.call_args_list[0].args[1]["headRefOid"], SHA_A)
+        self.assertEqual(worker.call_args_list[1].args[1]["headRefOid"], SHA_B)
+        self.assertEqual(api.call_count, 2)
+        self.assertTrue(all(call.args[0][:2] == ["gh", "api"] for call in api.call_args_list))
+        self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
         self.assertEqual(len(self.comments), 1)
         self.assertIn("pushed an automated repair", self.comments[0])
 
@@ -174,7 +178,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_blocking_findings_repair_consumes_one_round_and_reviews_new_head(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=1)
-        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(head=SHA_B)]), \
                 patch.object(pr_watch, "checked", return_value=""), \
                 patch.object(pr_watch_repair, "repair_with_model") as worker, \
                 patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])) as publish:
@@ -184,7 +188,8 @@ class WatcherTests(unittest.TestCase):
         worker.assert_called_once()
         publish.assert_called_once()
         self.assertEqual(self.watcher.state.get("example/one", 7)["repair_rounds"], 2)
-        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "repair_published")
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+        self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
 
     def test_three_round_exhaustion_persists_and_publishes_the_last_reason(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)

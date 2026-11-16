@@ -49,6 +49,7 @@ class RecoveryIntegrationTests(unittest.TestCase):
         stale = self.worktrees / "persona-7-old"
         stale.mkdir()
         (stale / "file").write_text("old")
+        (stale / ".git").write_text("gitdir: " + str(self.checkout / ".git/worktrees/persona-7-old") + "\n")
         os.utime(stale, (1, 1))
         active = self.worktrees / "persona-8-active"
         active.mkdir()
@@ -58,7 +59,10 @@ class RecoveryIntegrationTests(unittest.TestCase):
             str(stale): {"active": False, "heartbeat": 1},
             str(active): {"active": True, "heartbeat": 1},
         }})
-        with patch.object(pr_watch_recovery, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+        def fake_run(argv, **kwargs):
+            code = 1 if argv[:3] == ["git", "worktree", "remove"] else 0
+            return subprocess.CompletedProcess(argv, code, "", "stale registration" if code else "")
+        with patch.object(pr_watch_recovery, "run", side_effect=fake_run):
             self.assertTrue(pr_watch_recovery.recover_worktree_failure(
                 self.checkout, self.state, "fatal: Out of diskspace", protected=[active]))
         self.assertFalse(stale.exists())
@@ -77,6 +81,19 @@ class RecoveryIntegrationTests(unittest.TestCase):
             self.checkout, self.state, "fatal: no space left", protected=[active]))
         self.assertTrue(stale.exists())
         self.assertTrue(active.exists())
+
+    def test_registered_worktree_is_not_recursively_deleted_after_a_remove_failure(self):
+        registered = self.worktrees / "persona-7-live"
+        registered.mkdir()
+        (registered / ".git").write_text("gitdir: " + str(self.checkout / ".git/worktrees/persona-7-live") + "\n")
+        registration = self.checkout / ".git/worktrees/persona-7-live"
+        registration.parent.mkdir(parents=True)
+        registration.mkdir()
+        with patch.object(pr_watch_recovery, "run", return_value=subprocess.CompletedProcess([], 1, "", "registered")):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_recovery.remove_worktree(self.checkout, self.state, registered)
+        self.assertTrue(registered.exists())
+        self.assertTrue(registration.exists())
 
     def test_missing_worktree_registration_is_pruned_before_fallback_cleanup(self):
         broken = self.worktrees / "persona-7-broken"

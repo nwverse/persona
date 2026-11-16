@@ -172,7 +172,11 @@ class Watcher:
         digest = fingerprint("configuration", 0, "0" * 40, "config", self.config)
         marker = Path(self.config["state"]).with_suffix(".config")
         marker.parent.mkdir(parents=True, exist_ok=True)
-        previous = self.state.data.get("config_fingerprint", digest)
+        previous = self.state.data.get("config_fingerprint")
+        if previous is None and not self.state.data.get("prs"):
+            previous = digest
+        elif previous is None and marker.exists():
+            previous = marker.read_text(encoding="utf-8").strip()
         if previous != digest and not self.allow_config_migration:
             raise WatchError("watcher configuration changed; use a fresh state file or --migrate-config while the service is stopped")
         path = Path(self.config["state"]).with_suffix(".lock")
@@ -524,13 +528,20 @@ class Watcher:
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), reason, self.config["reviewer"])
         new_number, checks = pr_watch_repair.commit_and_push_repair(
             repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
-        self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
-                       repair_rounds=rounds + 1, outcome="repair_published", failure=None,
-                       checks=checks)
+        if new_number == number:
+            published = pr_snapshot(repo, number)
+            published_head = published["headRefOid"]
+            if published_head == pr["headRefOid"]:
+                raise WatchError("the repair push returned without advancing the PR head")
+            published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
+            self.state.put(repo, number, published_head, evidence_key=published_key,
+                           base=published["baseRefOid"], repair_rounds=rounds + 1,
+                           outcome="retry", retry_after=0, failure=None, checks=checks)
+        else:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           outcome="continuation", continuation=new_number, failure=None)
         self.comment(repo, number, "The watcher pushed an automated repair for the P0/P1 semantic findings. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
-                           outcome="continuation", continuation=new_number)
             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
         return False
 
@@ -600,13 +611,20 @@ class Watcher:
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
         new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
-        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                       repair_rounds=rounds + 1, outcome="repair_published", failure=str(error),
-                       checks=repair_checks)
+        if new_number == number:
+            published = pr_snapshot(repo, number)
+            published_head = published["headRefOid"]
+            if published_head == pr["headRefOid"]:
+                raise WatchError("the repair push returned without advancing the PR head")
+            published_key = repo + "#" + str(number) + "@" + published["baseRefOid"] + ".." + published_head
+            self.state.put(repo, number, published_head, evidence_key=published_key,
+                           base=published["baseRefOid"], repair_rounds=rounds + 1,
+                           outcome="retry", retry_after=0, failure=None, checks=repair_checks)
+        else:
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                           outcome="continuation", continuation=new_number, failure=None)
         self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
-            self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                           outcome="continuation", continuation=new_number)
             self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
         return False
 
@@ -668,7 +686,8 @@ class Watcher:
             # The completed backoff permits a fresh independent review budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, retry_after=0)
-        if old.get("outcome") in ("continuation", "repair_published", "base_updated"):
+        if old.get("outcome") in ("continuation", "repair_published", "base_updated") \
+                and old.get("head") == head and old.get("evidence_key") == evidence_key:
             return
         if old.get("outcome") == "base_comment_pending":
             if not self.dry_run:

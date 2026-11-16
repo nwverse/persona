@@ -49,42 +49,59 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400):
         candidates.append(path)
     if not candidates:
         return 0
-    result = run(["git", "worktree", "remove", "--force", *map(str, candidates)],
-                 cwd=checkout, timeout=180)
-    if result.returncode:
-        # A missing/corrupt administrative entry should not pin an otherwise
-        # private temporary directory. Prune only Git's stale metadata next.
-        run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     removed = 0
-    run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     latest = json.loads(Path(state_file).read_text(encoding="utf-8")).get("worktree_leases", {})
     for path in candidates:
         lease = latest.get(str(path), {})
         if (path in keep or lease.get("active")
                 or time.time() - float(lease.get("heartbeat", 0)) < older_than):
             continue
-        if not path.exists():
+        try:
+            remove_worktree(checkout, state_file, path)
             removed += 1
+        except WatchError:
             continue
-        path = owned_path(state_file, path)
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(str(path))
-            removed += 1
     run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
     return removed
 
 
+def registration_path(checkout, candidate):
+    """Resolve only this checkout's own administrative worktree file."""
+    marker = Path(candidate) / ".git"
+    if not marker.is_file() or marker.is_symlink():
+        return None
+    text = marker.read_text(encoding="utf-8").strip()
+    if not text.startswith("gitdir: "):
+        return None
+    destination = Path(text[len("gitdir: "):])
+    if not destination.is_absolute():
+        destination = candidate / destination
+    destination = destination.resolve(strict=False)
+    common_text = checked(["git", "rev-parse", "--git-common-dir"], cwd=checkout).strip()
+    common = (Path(checkout).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
+    if destination.parent != common / "worktrees" or destination.name != candidate.name:
+        raise WatchError("worktree registration escapes the trusted checkout")
+    return destination
+
+
 def remove_worktree(checkout, state_file, path):
-    """Remove one known temporary checkout and its possibly stale registration."""
+    """Remove one known checkout; never delete a still-registered Git worktree."""
     if not path:
         return
     candidate = owned_path(state_file, path)
+    registration = registration_path(checkout, candidate)
     result = run(["git", "worktree", "remove", "--force", str(candidate)], cwd=checkout, timeout=90)
     if result.returncode:
-        run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
-        candidate = owned_path(state_file, candidate)
         if candidate.exists():
-            shutil.rmtree(str(candidate))
+            if registration is not None and registration.exists():
+                raise WatchError("refusing to delete a registered worktree: " + bounded(result.stderr, 800))
+            # A missing registration is the only case where a directory can be
+            # residual debris. Prune stale metadata, then verify once more.
+            run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
+            if registration is not None and registration.exists():
+                raise WatchError("worktree registration remains after pruning: " + bounded(result.stderr, 800))
+            if candidate.exists():
+                shutil.rmtree(str(candidate))
     run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
 
 
