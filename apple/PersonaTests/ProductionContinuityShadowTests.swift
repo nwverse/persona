@@ -143,6 +143,39 @@ struct ProductionContinuityShadowTests {
         ProductionContinuityShadow.shared.close(store)
     }
 
+    @Test func independentFoldCompletionDoesNotEraseAnotherOutstandingFold() async throws {
+        ProductionContinuityShadow.shared.installForTests()
+        let shadow = ProductionContinuityShadow.shared
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "independent-fold-state"))
+        let first = fold(2, through: 3), second = fold(5, through: 6), third = fold(8, through: 9)
+        _ = store.apply(.batch(.latest, items: [first, second, third], span: ItemSpan(), backlog: true))
+        _ = store.apply(.event(.openFold, fold: first))
+        _ = store.apply(.event(.openFold, fold: second))
+        _ = store.apply(.event(.openFold, fold: third))
+        // A delayed completion for one fold must not clear the other outstanding fold's scheduling evidence.
+        _ = store.apply(.range([item(2, kind: .toolUse), item(3, kind: .toolResult)], fold: first, more: false))
+        _ = store.apply(.range([item(5, kind: .toolUse), item(6, kind: .toolResult)], fold: second, more: false))
+        _ = store.apply(.range([item(8, kind: .toolUse), item(9, kind: .toolResult)], fold: third, more: false))
+        let result = try await shadow.compare(store)
+        #expect(result.compared == 7)
+        #expect(result.mismatches == 0)
+        shadow.close(store)
+    }
+
+    @Test func prefetchFillKeepsNativeNextFillRequestEvidence() async throws {
+        ProductionContinuityShadow.shared.installForTests()
+        let shadow = ProductionContinuityShadow.shared
+        let store = ChatStore(key: SessionKey(machineID: "fixture", sessionID: "prefetch-fill"))
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 1, to: 3)))
+        var prefetch = NativeContinuityInput.batch(.after, items: [item(2), item(3)], span: ItemSpan(history: "h", from: 0, to: 3))
+        prefetch.followsWithFill = true
+        _ = store.apply(prefetch)
+        let result = try await shadow.compare(store)
+        #expect(result.compared == 2)
+        #expect(result.mismatches == 0)
+        shadow.close(store)
+    }
+
     @Test func shapeCountsAndPresenceFlagsNeverCarrySequences() {
         let input = NativeContinuityInput.batch(.pushed, items: [item(982451653)],
             span: ItemSpan(history: "private-history", from: 1234567, to: 9876543), backlog: true, hasMore: nil, moreAfter: true)

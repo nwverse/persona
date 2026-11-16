@@ -16,6 +16,8 @@ nonisolated struct NativeContinuityInput: Sendable {
     var moreAfter = false
     var rangeMore = false
     var fold: Item?
+    /// DEBUG-only observation of the caller's next scheduling decision; it never changes native transport.
+    var followsWithFill = false
 
     static func batch(_ kind: Kind, items: [Item], span: ItemSpan, backlog: Bool = false,
                       hasMore: Bool? = nil, moreAfter: Bool = false) -> Self {
@@ -82,9 +84,15 @@ extension ChatStore: ChatContinuityAdapting {
         guard let hook = Self.shadowHook, continuityShadowEnabled else { return }
         let snapshot = initialContinuitySnapshot ?? nativeSnapshot()
         let result = nativeResult()
-        initialContinuitySnapshot = nativeSnapshot()
+        if initialContinuitySnapshot == nil { initialContinuitySnapshot = snapshot }
         var core = input
-        core.items = Self.withImageRefs(core.items.publicRefusals(), key)
+        let needsNormalization = core.items.contains { item in
+            item.modelRefusal != nil || item.image?.lazy == true || item.fold?.images?.isEmpty == false ||
+                (item.role == "user" && (item.text ?? "").contains("<persona-view-errors"))
+        }
+        if needsNormalization {
+            core.items = Self.withImageRefs(core.items.publicRefusals(), key)
+        }
         hook(self, input, .init(snapshot: snapshot, native: result, gap: gap, coreInput: core))
     }
 

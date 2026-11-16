@@ -2069,10 +2069,13 @@ final class AppModel {
     /// Native continuity through its adapter. DEBUG instrumentation is isolated here; Release executes the same
     /// ChatStore methods directly and never carries the shadow's types or launch switches.
     private func applyBatch(_ store: ChatStore, kind: NativeContinuityInput.Kind, items: [Item], span: ItemSpan,
-                            backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false) -> ChatStore.Gap {
+                            backlog: Bool = false, hasMore: Bool? = nil, moreAfter: Bool = false,
+                            followsWithFill: Bool = false) -> ChatStore.Gap {
         #if DEBUG
-        return store.apply(.batch(kind, items: items, span: span, backlog: backlog,
-                                  hasMore: hasMore, moreAfter: moreAfter)) ?? .none
+        var input = NativeContinuityInput.batch(kind, items: items, span: span, backlog: backlog,
+                                                hasMore: hasMore, moreAfter: moreAfter)
+        input.followsWithFill = followsWithFill
+        return store.apply(input) ?? .none
         #else
         return store.apply(items, span: span, backlog: backlog, hasMore: hasMore, moreAfter: moreAfter)
         #endif
@@ -2103,10 +2106,10 @@ final class AppModel {
         #endif
     }
 
-    /// Applies a background catch-up through the same production adapter as a push; this is an after page, not a
-    /// duplicate core fill (the core already requested that page when the push exposed its gap).
+    /// Applies a background catch-up through the same production adapter as a push. The HTTP read is independent of
+    /// an existing fill: native may immediately request the next page, which the shadow must not treat as redundant.
     func applyPrefetch(_ store: ChatStore, items: [Item], span: ItemSpan, moreAfter: Bool) -> ChatStore.Gap {
-        applyBatch(store, kind: .after, items: items, span: span, moreAfter: moreAfter)
+        applyBatch(store, kind: .after, items: items, span: span, moreAfter: moreAfter, followsWithFill: true)
     }
 
     func loadInitial(_ key: SessionKey) async {

@@ -31,7 +31,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         var items: [Item] = []
         var filling = false
         var loadingOlder = false
-        var openingFolds = false
+        var openingFolds: Set<String> = []
         var compared = 0
         var mismatches = 0
     }
@@ -199,6 +199,8 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         for id in failedChats { removeChat(id) }
         generations.removeAll()
         stores.removeAll()
+        failedChats.removeAll()
+        reports.removeAll()
         effects.values.withLock { $0.removeAll() }
     }
 
@@ -310,12 +312,12 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
         let filling = chats[id]?.filling == true
         let loadingOlder = chats[id]?.loadingOlder == true
-        let openingFolds = chats[id]?.openingFolds == true
+        let openingFolds = chats[id]?.openingFolds ?? []
         let kind = input.value.kind
         // `.after` can finish a fill or ask for its next page; its own effects decide. `.reloaded` and failures
         // always end it. A push never expires a response that is still outstanding.
         if kind == .after {
-            chats[id]?.filling = requests.contains(.after) || requests.contains(.latest)
+            chats[id]?.filling = input.value.followsWithFill || requests.contains(.after) || requests.contains(.latest)
         }
         if kind == .reloaded || kind == .fillFailed {
             chats[id]?.filling = false
@@ -323,8 +325,8 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         if kind == .older || kind == .olderFailed {
             chats[id]?.loadingOlder = false
         }
-        if kind == .range || kind == .rangeFailed {
-            chats[id]?.openingFolds = false
+        if kind == .range || kind == .rangeFailed, let foldID = input.fold?.id {
+            chats[id]?.openingFolds.remove(foldID)
         }
         let needed: RequestKind? = switch kind {
         case .latest, .pushed:
@@ -337,7 +339,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         // the explicit scheduling input can require a new older request. Do not invent one for every response.
         case .loadOlder: loadingOlder ? nil : .older
         case .reconnected: .subscribe
-        case .openFold: openingFolds ? nil : .range
+        case .openFold: input.fold.map { openingFolds.contains($0.id) ? nil : .range } ?? .range
         default: nil
         }
         if let needed, !requests.contains(needed) {
@@ -349,8 +351,8 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         if kind == .loadOlder, loadingOlder || requests.contains(.older) {
             chats[id]?.loadingOlder = true
         }
-        if kind == .openFold, openingFolds || requests.contains(.range) {
-            chats[id]?.openingFolds = true
+        if kind == .openFold, let foldID = input.fold?.id, openingFolds.contains(foldID) || requests.contains(.range) {
+            chats[id]?.openingFolds.insert(foldID)
         }
         if (chats[id]?.compared ?? 0).isMultiple(of: 10) {
             Self.logger.debug("continuity shadow compared=\(self.chats[id]?.compared ?? 0, privacy: .public) mismatches=\(self.mismatches, privacy: .public)")
