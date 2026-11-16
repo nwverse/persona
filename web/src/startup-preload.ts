@@ -352,7 +352,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // 480,872 B; en 477,659 B to 477,743 B, zh-Hans 478,478 B to 478,562 B): readView keeps the columns layout and a
 // section's span, icon, link and columns (lib/extension-ui.ts readSection8), as it reads every other field, because the
 // assistant's cards read views on the first screen too. Drawing them is a chunk loaded on intent (ViewBody8.tsx).
-export const FIRST_SCREEN_BUDGET = 480_872;
+// #9071: the start page adds 322 B in each language, measured in one environment against main fbf032bb4 (ja 480,831 B
+// to 481,153 B; en 477,702 B to 478,024 B, zh-Hans 478,521 B to 478,843 B): an opening at the root address goes to the
+// chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
+// when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk. Main's 41 B of room is kept.
+export const FIRST_SCREEN_BUDGET = 481_194;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

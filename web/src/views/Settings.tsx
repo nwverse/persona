@@ -31,6 +31,7 @@ import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
+import { StartPageGroup } from "./settings/StartPage";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
@@ -645,6 +646,7 @@ function General({ onModel }: { onModel: () => void }) {
       </Group>
 
       <DesktopSettings />
+      <StartPageGroup />
       <SidebarPagesGroup />
 
       <section id="settings-translation" className="scroll-mt-4">
