@@ -422,6 +422,18 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Source-derived WebSocket envelope tolerance (#8955).**
+  - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
+    wrong-typed known keys, extra and duplicate keys, raw JSON fields, `mesh` / `fleet` leniency and the routing
+    requirements of six event types. Every case cites its Swift source; none was generated from Rust or run on iOS.
+  - `persona_core::wire_envelope` is a separate pure diagnostic projection, not the continuity `decode_frame` path:
+    it returns accepted / ignored / dropped (or out-of-scope for unprojected event payloads) without routing an event.
+    The existing continuity behavior and 17 wire cases remain unchanged.
+  - Rust and real host Kotlin/JNI replay compare every complete expected object against the same fixture, preserving
+    duplicate-key input bytes and checking malformed input and wrong expectations. This is host evidence only; no
+    Swift, production adapter, simulator or physical-device claim is made. Full nested models, numeric literal
+    compatibility, subscription pre-routing and C/NAPI/Swift bindings stay out of this slice.
+
 - **Agents list sort, recents and state decoding (#7579).**
   - `persona_core::sort` projects the Agents list from a JSON input: rank, grouping (state / machine / space),
     quick filters (all, needsYou, unread, working, backgroundWaiting), search with caller-supplied `now` for
