@@ -2868,6 +2868,18 @@ the list reads the record on its first appearance only, landing on the item's se
 pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
 walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.
 
+## A scroll to an id lands on the item that owns it, not on a frame widened around it (2026-11-17, #9053)
+
+The Inbox's section bar must scroll a chosen chip clear of the strip's edge fade (`.edgeFade()`, 24 pt). Giving each chip
+a clear background widened by the fade and an id of its own, then `ScrollViewProxy.scrollTo` that id, moved the strip
+exactly as far as scrolling to the chip itself: the chip stopped under the fade. Neither order helped (the id on the
+padding, whose own frame stays the chip's, or on the widened `Color.clear` inside it). `scrollTo` has no margin, and an
+anchor only lines up the same unit point of the chip and the strip. What works: measure the chips in the content's
+coordinate space (`onGeometryChange` into a store that redraws nothing), read the offset in view
+(`onScrollGeometryChange`), work out the least offset that clears the fade (`CapsuleReveal.offset`, pure and tested),
+and set it through `ScrollPosition.scrollTo(x:)`. `InboxSectionBarUITests.testAChosenChoiceComesWhollyIntoViewAtTheLargestText`
+checks the chip's frame against the strip's.
+
 ## A place chosen again while in front keeps its page and its state (2026-11-16, #9053)
 
 `AssistantView.show` returns the place in front to its root by `backToRoot()` then appending the place's route again, in
