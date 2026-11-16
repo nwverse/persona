@@ -72,6 +72,9 @@ struct Patches {
     chats: HashMap<String, ChatPatch>,
     /// Chats whose latest changes have not been drained. One chat's drain cannot consume another's wake-up.
     woken: HashSet<String>,
+    /// The last patch committed to each client, with no pending operations. An unchanged drain returns this state
+    /// rather than mixing a newly emptied pending patch with the next input's state.
+    drained: HashMap<String, ChatPatch>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -154,7 +157,11 @@ impl Runtime {
         {
             diagnostics::measure_patch_held(&self.shared, || {
                 let started = Instant::now();
-                let patch = patches.chats.get(chat).cloned().unwrap_or_default();
+                let patch = if patches.woken.contains(chat) {
+                    patches.chats.get(chat).cloned().unwrap_or_default()
+                } else {
+                    patches.drained.get(chat).cloned().unwrap_or_default()
+                };
                 if let Some(diagnostics) = self.shared.diagnostics.get() {
                     diagnostics::add(&diagnostics.counters.patch_clone, started);
                 }
@@ -165,18 +172,27 @@ impl Runtime {
                 }
                 if patches.woken.remove(chat) {
                     patches.chats.remove(chat);
+                    let mut committed = patch;
+                    committed.ops.clear();
+                    patches.drained.insert(chat.to_owned(), committed);
                 }
                 encoded
             })
         }
         #[cfg(not(any(target_os = "android", feature = "test-support")))]
         {
-            let patch = patches.chats.get(chat).cloned().unwrap_or_default();
+            let patch = if patches.woken.contains(chat) {
+                patches.chats.get(chat).cloned().unwrap_or_default()
+            } else {
+                patches.drained.get(chat).cloned().unwrap_or_default()
+            };
             let encoded = wire::encode(&patch);
-            if let Some(patch) = patches.chats.get_mut(chat) {
-                patch.ops.clear();
+            if patches.woken.remove(chat) {
+                patches.chats.remove(chat);
+                let mut committed = patch;
+                committed.ops.clear();
+                patches.drained.insert(chat.to_owned(), committed);
             }
-            patches.woken.remove(chat);
             encoded
         }
     }
@@ -534,6 +550,7 @@ impl Worker {
                 patch.verified = state.session.verified();
                 patch.acked = state.acked;
                 patches.version += 1;
+                patches.woken.insert(chat.to_owned());
                 let version = patches.version;
                 patches.chats.get_mut(chat).expect("patch inserted above").version = version;
                 // Every real change wakes this chat, even if a previous frame's patch is still pending. The client
@@ -567,6 +584,7 @@ impl Worker {
         patch.verified = state.session.verified();
         patch.acked = state.acked;
         patches.version += 1;
+        patches.woken.insert(chat.to_owned());
         let version = patches.version;
         patches.chats.get_mut(chat).expect("patch inserted above").version = version;
         drop(patches);

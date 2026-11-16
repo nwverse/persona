@@ -227,6 +227,13 @@ impl Reducer {
             .filter(|item| item.is_work())
             .map(|item| (*item).clone())
             .collect();
+        if evidence.is_empty() {
+            return if deduplicated {
+                Self::newest_copies(items)
+            } else {
+                items
+            };
+        }
         let items = if deduplicated {
             Self::newest_copies(items)
         } else {
@@ -253,6 +260,10 @@ impl Reducer {
         let deduplicated = self.items.len() != self.ids.len();
         let incoming = new.into_iter().map(Arc::new).collect::<Vec<_>>();
         self.items = Self::retain_promotion(std::mem::take(&mut self.items), &self.opened, &incoming, deduplicated);
+        if deduplicated {
+            self.items = Self::newest_copies(std::mem::take(&mut self.items));
+            self.ids = self.items.iter().map(|item| item.id.clone()).collect();
+        }
         if deduplicated {
             self.items.sort_by_key(|item| item.key());
         }
@@ -292,7 +303,6 @@ impl Reducer {
         self.ids.extend(fresh.iter().map(|item| item.id.clone()));
         let incoming_ids: HashSet<&str> = fresh.iter().map(|item| item.id.as_str()).collect();
         self.items.retain(|item| !incoming_ids.contains(item.id.as_str()));
-        self.items.extend(fresh.iter().cloned());
         for item in fresh {
             self.insert_shared(item);
         }
@@ -311,15 +321,37 @@ impl Reducer {
     }
 
     fn merge_shared(&mut self, items: Vec<Arc<Item>>) {
-        for item in items {
-            self.insert_shared(item);
+        let mut by_id: std::collections::HashMap<String, usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.id.clone(), index))
+            .collect();
+        for item in Self::newest_copies(items) {
+            if let Some(index) = by_id.get(&item.id).copied()
+                && self.items[index].seq == item.seq
+                && self.items[index].part() == item.part()
+            {
+                if self.items[index].json() != item.json() {
+                    self.items[index] = item;
+                }
+            } else {
+                by_id.insert(item.id.clone(), self.items.len());
+                self.ids.insert(item.id.clone());
+                self.items.push(item);
+            }
         }
+        self.items.sort_by_key(|item| item.key());
     }
 
     fn insert_shared(&mut self, item: Arc<Item>) {
         // A repeated full item replaces the old copy, including changed receipt metadata. Keep its Arc when nothing
         // changed so the runtime's incremental diff stays cheap for append-only pushes.
-        if let Some(old) = self.items.iter_mut().find(|old| old.id == item.id) {
+        if let Some(old) = self
+            .items
+            .iter_mut()
+            .find(|old| old.id == item.id && old.seq == item.seq && old.part() == item.part())
+        {
             if old.json() != item.json() {
                 *old = item;
             }

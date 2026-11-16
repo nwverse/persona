@@ -261,14 +261,58 @@ fn drain_commits_one_complete_patch_instead_of_mixing_state_with_old_ops() {
         let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
         assert_eq!(patch.ops.len(), 1);
         assert_eq!(patch.covered, seq);
-        assert_eq!(patch.loaded_once, false);
+        assert!(!patch.loaded_once);
         let idle: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
         assert!(idle.ops.is_empty());
-        assert_eq!(idle.version, patch.version);
+        assert_eq!(
+            idle.version, patch.version,
+            "an unchanged drain keeps the committed version"
+        );
         assert_eq!(idle.covered, patch.covered);
         assert_eq!(idle.history, patch.history);
         assert_eq!(idle.loaded_once, patch.loaded_once);
     }
+}
+
+#[test]
+fn appending_to_one_cached_item_does_not_duplicate_it() {
+    let host = Arc::new(Recorder::default());
+    let runtime = Runtime::new(host);
+    let initial = r#"[{"id":"1#0","seq":1,"role":"user","kind":"text","text":"synthetic"}]"#;
+    assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
+        chat: "a".into(),
+        snapshot: ChatSnapshot {
+            items_json: initial.into(),
+            covered: 12,
+            loaded_once: true,
+            ..ChatSnapshot::default()
+        },
+    })));
+    assert!(runtime.flush(Duration::from_secs(5)));
+    let _ = runtime.drain("a");
+    let batch = WireBatch {
+        items_json: r#"[{"id":"13#0","seq":13,"role":"assistant","kind":"text","text":"new"}]"#.into(),
+        history: Some("h".into()),
+        from_seq: Some(12),
+        to_seq: Some(15),
+        ..WireBatch::default()
+    };
+    assert!(runtime.dispatch(&wire::encode(&Action::Chat {
+        chat: "a".into(),
+        event: ChatEvent::Pushed { batch }
+    })));
+    assert!(runtime.flush(Duration::from_secs(5)));
+    let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+    let kinds: Vec<&str> = patch
+        .ops
+        .iter()
+        .map(|op| match op {
+            ListOp::Insert { .. } => "insert",
+            ListOp::Update { .. } => "update",
+            ListOp::Remove { .. } => "remove",
+        })
+        .collect();
+    assert_eq!(kinds, ["insert"], "one retained cached item plus one new item");
 }
 
 #[test]
