@@ -2134,6 +2134,19 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
 
+## A chosen page that is not there now (#9071)
+
+A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
+the sidebar, an extension's included) keeps the user's choice when its target goes away, and the product uses the default
+meanwhile, without a toast or a dialog at the moment it happens. The setting itself says so: its menu keeps the choice
+selected under a plain name (**A page that isn't available now**, not its id), and the row's line under the label, the
+`Row` hint in `--ink-3`, changes from what the setting does to why it falls back and until when (**…opens on the main chat
+until it's back**). Choosing anything else in the same menu replaces it. Reason: the target is usually away for a while
+(an extension turned off, another default assistant), so clearing the choice would undo the user's decision behind their
+back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
+The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
+`server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
+
 ## Values a form fills in by itself (#4975)
 
 Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read
