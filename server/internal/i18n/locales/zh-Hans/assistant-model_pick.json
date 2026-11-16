@@ -2,7 +2,7 @@
   "err_role": "更改对话的模型需要完整权限。",
   "err_launcher_required": "请为这个对话选择一个模型供应商",
   "err_effort": "不认识的思考等级 {effort}",
-  "err_main_only": "只有主对话能单独选模型，其他助手对话跟随默认设置。",
+  "err_not_assistant": "只有助手对话能单独选模型。",
   "err_not_main_chat": "「{launcher}」能在 {machine} 上开 Agent，但跑不了助手对话。请换一个。",
   "err_locked": "「{launcher}」自己指定了模型，不能再为它选别的模型。请不带模型选择它。",
   "err_no_model": "「{launcher}」不支持选择模型。请不带模型选择它。",
