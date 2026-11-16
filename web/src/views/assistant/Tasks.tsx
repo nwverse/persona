@@ -482,6 +482,9 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
       return item.ref && !isLater ? <MessageCard item={item} /> : null;
     case "inbox_suggestion":
       return item.ref ? <Suspense fallback={null}><LazyHandoffCard item={item} /></Suspense> : null;
+    case "urgent_call":
+      // an urgent call (docs/assistant/urgent-call.md): its row, loaded with the first one
+      return <Suspense fallback={null}><LazyUrgentCallLine item={item} /></Suspense>;
     case "notice": {
       // a line the hub wrote (#4305): small and centered, as the chat's own notices
       const text = feedNotice(item);
@@ -665,6 +668,7 @@ function useSayToPersona(conversation: string) {
 const LazyMessageDraft = lazy(() => import("./MessageDraft"));
 // a hand-off conversation's write-back (#5932): loaded with the first such card
 const LazyHandoffCard = lazy(() => import("./HandoffCard").then((m) => ({ default: m.HandoffCard })));
+const LazyUrgentCallLine = lazy(() => import("./UrgentCallLine").then((m) => ({ default: m.UrgentCallLine })));
 export const draftTasks = { useTodo, useTaskNow, progressOf, TaskMark, openTask };
 
 function MessageCard({ item }: { item: FeedItem }) {
