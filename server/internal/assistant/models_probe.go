@@ -526,6 +526,9 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		path = "chat/completions"
 		payload = map[string]any{"model": t.model, "messages": []any{map[string]any{"role": "user", "content": "ping"}}, "stream": true, "max_tokens": 256}
 	}
+	if t.api == "chat" && ai.OmitChatEffort(t.base, t.key, t.model, t.via, t.effort) {
+		t.effort = ""
+	}
 	if !ai.ApplyReasoningEffort(payload, t.api, t.model, t.effort) {
 		out["error"] = i18n.T(i18n.From(ctx), "assistant-models.err_effort_unsupported")
 		out["code"] = "unsupported_effort"
@@ -544,7 +547,10 @@ func (s *Service) providerTest(ctx context.Context, in probeInput) map[string]an
 		raw, readErr := io.ReadAll(io.LimitReader(res.Body, 4096))
 		res.Body.Close()
 		noRetry := ai.NoRetry(res.Header)
-		if readErr == nil && !noRetry && !droppedEffort && payload["reasoning_effort"] != nil && ai.ChatRejectsReasoningEffort(raw) {
+		fieldRejected := ai.ChatRejectsReasoningEffort(raw)
+		offValueRejected := !fieldRejected && ai.ChatNoThinking(t.effort) && ai.ChatRejectsNoEffortValue(raw)
+		if readErr == nil && !noRetry && !droppedEffort && payload["reasoning_effort"] != nil && (fieldRejected || offValueRejected) {
+			ai.RememberChatEffortRejection(t.base, t.key, t.model, t.via, offValueRejected)
 			droppedEffort = true
 			delete(payload, "reasoning_effort")
 			t.effort = "" // the answer did not verify the requested effort
