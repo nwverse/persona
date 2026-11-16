@@ -31,6 +31,12 @@ final class InboxAssistantMarkdownUITests: XCTestCase {
                 let marks = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "**")).firstMatch
                 let body = app.descendants(matching: .any)["inbox.body"].firstMatch
                 XCTAssertTrue(body.waitForExistence(timeout: 20), "\(name) \(scheme): no Markdown text\n\(app.debugDescription)")
+                // Opened is kept for the row (an earlier run opened it): folded again first, as a new one shows.
+                let collapse = app.buttons["message.collapse"].firstMatch
+                if collapse.exists {
+                    collapse.tap()
+                    XCTAssertTrue(app.buttons["message.expand"].firstMatch.waitForExistence(timeout: 5), "\(name) \(scheme): Collapse did nothing")
+                }
                 XCTAssertTrue(text("今天的课").exists, "\(name) \(scheme): the briefing's words are not shown")
                 XCTAssertFalse(marks.exists, "\(name) \(scheme): a Markdown mark is shown: \(marks.label)")
                 shot(app, "assistant-body-\(env["PERSONA_PHASE"] ?? "after")-\(name)-\(scheme)", env)
@@ -53,6 +59,7 @@ final class InboxAssistantMarkdownUITests: XCTestCase {
                 XCTAssertTrue(open.exists, "\(name) \(scheme): the received entry cannot open\n\(app.debugDescription)")
                 open.tap()
                 XCTAssertTrue(text("数据结构辅导课").waitForExistence(timeout: 5), "\(name) \(scheme): the message did not open")
+                app.swipeUp() // the opened message above the bottom bar
                 XCTAssertFalse(marks.exists, "\(name) \(scheme): a Markdown mark is shown: \(marks.label)")
                 shot(app, "assistant-body-\(env["PERSONA_PHASE"] ?? "after")-\(name)-\(scheme)-timeline", env)
                 app.terminate()

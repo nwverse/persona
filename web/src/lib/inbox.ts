@@ -334,9 +334,10 @@ export function markdownBody(it: InboxItem): string | undefined {
 }
 
 /** Markdown run into one line, as words: its marks go (`plainMarkdown`), and so do the list markers the lost line
- *  breaks left between words. Only for an older assistant row's text: a plain line's own dashes are not touched. */
+ *  breaks left between words and a mark the cut left alone ("Classes*…"). Only for an older assistant row's text: a
+ *  plain line's own dashes are not touched. */
 export function withoutMarks(text: string): string {
-  return plainMarkdown(text).split(/\s+/).filter((w) => w && w !== "-" && w !== "*" && w !== "+").join(" ");
+  return plainMarkdown(text).replace(/\*+…/g, "…").split(/\s+/).map((w) => w.replace(/^\*+|\*+$/g, "")).filter((w) => w && w !== "-" && w !== "+").join(" ");
 }
 
 /** The summary as a line or two of the list draws it: an older assistant row's without its marks. */

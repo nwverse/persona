@@ -9,7 +9,7 @@ vi.mock("./store", () => ({
 }));
 vi.mock("../ui/atoms", () => ({ toast: vi.fn() }));
 
-import { badgeCount, bulkMessage, cardText, connectorReference, connectorSources, contextXML, openTitle, openURL, conversationRoute, fromLine, getInbox, lineSummary, markdownBody, markdownInSummary, interactionAsk, interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, reloadInbox, resetInboxForTests, sections, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, muteCovers, muteItem, unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage } from "./inbox";
+import { badgeCount, bulkMessage, cardText, connectorReference, connectorSources, contextXML, openTitle, openURL, conversationRoute, fromLine, getInbox, lineSummary, markdownBody, markdownInSummary, withoutMarks, interactionAsk, interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, reloadInbox, resetInboxForTests, sections, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, muteCovers, muteItem, unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage } from "./inbox";
 import { bulkScope, bulkScopeName, canDraft, sourceLine, docChangeLine, emojiLabel, repeatsSummary, handOffMessage, momentText, nextLarkPosition, partRuns, replyLarkMessage, sendLarkMessage, TRIAGE_SETTINGS, listInboxMutes, muteLine, muteShortName, muteTitle, unmuteInbox } from "./inbox-page";
 import { toast } from "../ui/atoms";
 import type { AgentMutes } from "./agent-groups";
@@ -1035,6 +1035,7 @@ describe("an assistant row's Markdown (#9041)", () => {
     expect(markdownBody(old)).toBe(raw);
     expect(lineSummary(old)).toBe("Briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20 Short quiz, no make-…");
     expect(fromLine(old)).toBe("Briefing · Mon Today: one tutorial. Classes Tut…");
+    expect(withoutMarks("Classes - **Tutorial** Due*…")).toBe("Classes Tutorial Due…"); // a mark the cut left alone goes too
   });
   it("leaves other rows' summaries alone", () => {
     const lark = item("lark:f1:1", { summary: "10:00 - 11:00 **review** moved" });

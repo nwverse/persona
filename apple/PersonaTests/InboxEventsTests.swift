@@ -49,6 +49,7 @@ struct InboxEventsTests {
         #expect(it.lineSummary == "早报 · 周一 结论：上午一节课。 今天的课 辅导课：10:30–12:20 有小测，不补…")
         #expect(it.linePreview == "早报 · 周一 结论：上午一节课。 今天的课 辅导…")
         #expect(it.repeatsSummary)
+        #expect(InboxItem.withoutMarks("今天的课 - **辅导课** 本周要交*…") == "今天的课 辅导课 本周要交…", "a mark the cut left alone goes too")
     }
 
     /// Any other row keeps its AI summary as it is, dashes and all, and has no Markdown text.
