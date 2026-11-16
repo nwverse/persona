@@ -1,3 +1,6 @@
+import com.android.build.api.variant.HasUnitTestBuilder
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+
 plugins {
     id("persona.android.application")
     id("persona.compose")
@@ -57,14 +60,28 @@ val generateLocaleConfig by tasks.registering(GenerateLocaleConfig::class) {
     languages.from(languageFiles)
     outputDirectory.set(layout.buildDirectory.dir("generated/languages/res"))
 }
-androidComponents.onVariants { variant ->
-    variant.sources.res?.addGeneratedSourceDirectory(generateLocaleConfig, GenerateLocaleConfig::outputDirectory)
+androidComponents {
+    beforeVariants { variant ->
+        if (variant is HasUnitTestBuilder && variant.name == "release") {
+            variant.javaClass.getMethod("setEnableUnitTest", Boolean::class.javaPrimitiveType).invoke(variant, true)
+        }
+    }
+    onVariants { variant ->
+        variant.sources.res?.addGeneratedSourceDirectory(generateLocaleConfig, GenerateLocaleConfig::outputDirectory)
+    }
 }
 
 android {
     namespace = "persona.android"
     buildFeatures { buildConfig = true }
     testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions.unitTests.all { test ->
+        // Robolectric under JDK 21 needs the same raw FileDescriptor access as the library modules.
+        test.jvmArgs(
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+            "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+        )
+    }
     lint {
         baseline = file("lint-baseline.xml")
     }
@@ -131,6 +148,9 @@ dependencies {
     implementation(libs.compose.preview)
     implementation(libs.coil.compose)
     debugImplementation(libs.compose.tooling)
+    debugImplementation(project(":core:rustcore"))
+    debugImplementation(project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
+    debugImplementation(project(path = ":core:domain", configuration = "shadowRuntimeElements"))
 
     implementation(libs.androidx.work)
     implementation(libs.androidx.core)
@@ -151,4 +171,20 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test.ext:junit:1.3.0")
+}
+
+// Only DEBUG can link the separately compiled answer observer. Release never evaluates a shadow/native dependency.
+val answerFriend = configurations.create("answerFriend")
+dependencies {
+    add("answerFriend", project(":core:domain"))
+    add("answerFriend", project(path = ":core:domain", configuration = "shadowRuntimeElements"))
+    add("answerFriend", project(":core:rustcore"))
+    add("answerFriend", project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
+}
+tasks.matching { it.name == "compileDebugKotlin" || it.name == "compileDebugUnitTestKotlin" }.configureEach {
+    val compile = this as KotlinJvmCompile
+    compile.dependsOn(":core:domain:domainShadowJar")
+    compile.compilerOptions.freeCompilerArgs.add(provider {
+        "-Xfriend-paths=" + answerFriend.joinToString(",") { jar -> jar.absolutePath }
+    })
 }
