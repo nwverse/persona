@@ -5,5 +5,7 @@
   "delivery_failed": "已确认未送达",
   "not_confirmed": "页面关闭前没确认送达，重试不会发两遍",
   "not_confirmed_images": "页面关闭前没确认送达，图片也没留下",
-  "waits_on_computer": "已发送。电脑上的那个问题答完后，Agent 才会读到这条消息"
+  "waits_on_computer": "已发送。电脑上的那个问题答完后，Agent 才会读到这条消息",
+  "relayed_busy": "Agent 正忙，这条经它的消息通道转交：它可能不会把这当作你本人的同意。需要你点头的事，等 Agent 停下来等你时再发一次",
+  "relayed_plugin": "这条经 Agent 的消息通道转交，不是作为你本人的输入：它可能不会把这当作你本人的同意"
 }

@@ -5,5 +5,7 @@
   "delivery_failed": "Confirmed failure",
   "not_confirmed": "Not confirmed before the page closed. Retry won't send it twice",
   "not_confirmed_images": "Not confirmed before the page closed, and its pictures weren't kept",
-  "waits_on_computer": "Sent. The Agent will read it after the question on the computer is answered"
+  "waits_on_computer": "Sent. The Agent will read it after the question on the computer is answered",
+  "relayed_busy": "Sent through the Agent's message inbox while it was busy: it may not take this as your approval. If it needs your go-ahead, send it again once the Agent is waiting for you",
+  "relayed_plugin": "Sent through the Agent's message inbox, not as your own input: it may not take this as your approval"
 }
