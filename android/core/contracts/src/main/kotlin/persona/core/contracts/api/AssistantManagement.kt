@@ -120,6 +120,14 @@ interface AssistantManagement {
     suspend fun saveMemory(name: String, content: String)
     suspend fun deleteMemory(name: String)
     /**
+     * Saved places (GET /api/v1/assistant/places, #1598 / #9293): home, the office, and other spots reminders use.
+     * Defaults keep transports and fakes written before the page compiling.
+     */
+    suspend fun places(): List<SavedPlace> = throw UnsupportedOperationException("Saved places unavailable")
+    /** Adds [place] (no id yet, POST) or saves edits (PUT); returns it as the hub has it. */
+    suspend fun savePlace(place: SavedPlace): SavedPlace = throw UnsupportedOperationException("Saved places unavailable")
+    suspend fun deletePlace(id: String): Unit = throw UnsupportedOperationException("Saved places unavailable")
+    /**
      * The skills on the machine that runs the assistant (GET /api/v1/skills), read only. A hub that cannot read them
      * (no assistant machine, the node did not answer) throws [AssistantRefused] with its own words.
      */

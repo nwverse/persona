@@ -221,6 +221,25 @@ class HttpAssistantManagement private constructor(
         assistant("PUT", "memory", memoryName(name), body = buildJsonObject { put("content", content) })
     }
     override suspend fun deleteMemory(name: String) { assistant("DELETE", "memory", memoryName(name)) }
+    override suspend fun places(): List<SavedPlace> = assistant("GET", "places").list("places")
+    private fun placeId(id: String): String {
+        require(id.isNotBlank() && id != "." && id != ".." && '/' !in id && '\\' !in id)
+        return id
+    }
+    private fun SavedPlace.writeBody(): JsonObject = buildJsonObject {
+        put("name", name)
+        put("address", address)
+        put("latitude", latitude)
+        put("longitude", longitude)
+        put("radius_meters", radiusMeters)
+    }
+    override suspend fun savePlace(place: SavedPlace): SavedPlace {
+        val body = place.writeBody()
+        val out = if (place.id.isBlank()) assistant("POST", "places", body = body)
+        else assistant("PUT", "places", placeId(place.id), body = body)
+        return JsonCodec.decodeFromJsonElement(out.getValue("place"))
+    }
+    override suspend fun deletePlace(id: String) { assistant("DELETE", "places", placeId(id)) }
     override suspend fun skills(): AssistantSkills = try {
         val out = request("GET", listOf("api", "v1", "skills"))
         AssistantSkills((out["machine_id"] as? JsonPrimitive)?.contentOrNull.orEmpty(), (out["machine"] as? JsonPrimitive)?.contentOrNull,

@@ -36,7 +36,7 @@ object AssistantSettingsPreview {
     @Volatile var open: String? = null
 }
 
-private enum class SettingsPart { Home, Notes, Memory, MemoryFile, Proactive, Skills }
+private enum class SettingsPart { Home, Notes, Memory, MemoryFile, Places, PlaceEditor, Proactive, Skills }
 private enum class SettingsSheet { Machine, Zone }
 
 /**
@@ -85,11 +85,14 @@ private fun AssistantSettingsDetails(
     var part by rememberSaveable { mutableStateOf(when (preview) {
         "notes" -> SettingsPart.Notes
         "memory", "memory-file", "memory-edit", "memory-delete" -> SettingsPart.Memory
+        "places", "places-empty", "places-delete", "place" -> SettingsPart.Places
+        "new-place" -> SettingsPart.PlaceEditor
         "proactive" -> SettingsPart.Proactive
         "skills" -> SettingsPart.Skills
         else -> SettingsPart.Home
     }) }
     var memoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    var placeId by rememberSaveable { mutableStateOf<String?>(null) }
     var sheet by remember { mutableStateOf(when (preview) {
         "machine" -> SettingsSheet.Machine
         "timezone" -> SettingsSheet.Zone
@@ -98,15 +101,19 @@ private fun AssistantSettingsDetails(
     LaunchedEffect(controller) {
         controller.load()
         controller.loadMemory()
+        controller.loadPlaces()
     }
     // Read each time the page opens, like iOS: a skill put on the machine shows up without a refresh.
     LaunchedEffect(part == SettingsPart.Skills) {
         if (part == SettingsPart.Skills) controller.loadSkills()
     }
     // Captures of a memory file and of the move warning wait for the data they show.
-    LaunchedEffect(state.memory.entries, state.config, machines) {
+    LaunchedEffect(state.memory.entries, state.places.entries, state.config, machines) {
         if (preview in setOf("memory-file", "memory-edit", "memory-delete") && memoryName == null) state.memory.entries?.firstOrNull()?.let {
             memoryName = it.file.name; part = SettingsPart.MemoryFile
+        }
+        if (preview == "place" && placeId == null) state.places.entries?.firstOrNull()?.let {
+            placeId = it.id; part = SettingsPart.PlaceEditor
         }
         if (preview == "move" && state.move == null && state.config != null) {
             machines.firstOrNull { it.id != state.config?.machineId }?.let { controller.requestMove(it, machines) }
@@ -122,6 +129,7 @@ private fun AssistantSettingsDetails(
         when (part) {
             SettingsPart.Home -> onBack()
             SettingsPart.MemoryFile -> part = SettingsPart.Memory
+            SettingsPart.PlaceEditor -> part = SettingsPart.Places
             else -> part = SettingsPart.Home
         }
     }
@@ -133,6 +141,7 @@ private fun AssistantSettingsDetails(
         scope.launch {
             controller.load()
             controller.loadMemory()
+            controller.loadPlaces()
         }
     }
     when (part) {
@@ -151,6 +160,20 @@ private fun AssistantSettingsDetails(
         SettingsPart.MemoryFile -> MemoryFilePart(shown, memoryName, preview, onBack = { part = SettingsPart.Memory },
             onSave = { name, content -> controller.saveMemory(name, content) },
             onDelete = { name -> if (controller.deleteMemory(name)) part = SettingsPart.Memory })
+        SettingsPart.Places -> PlacesPart(
+            if (preview == "places-empty") shown.copy(places = PlacesState(entries = emptyList())) else shown,
+            onBack = { part = SettingsPart.Home },
+            onRefresh = { scope.launch { controller.loadPlaces() } },
+            onOpen = { id -> placeId = id; part = SettingsPart.PlaceEditor },
+            onDelete = { place -> controller.deletePlace(place) },
+            previewDelete = preview == "places-delete",
+        )
+        SettingsPart.PlaceEditor -> SavedPlaceEditorPart(
+            shown, placeId,
+            onBack = { part = SettingsPart.Places },
+            onSave = { place -> controller.savePlace(place) },
+            onDelete = { place -> controller.deletePlace(place) },
+        )
         SettingsPart.Skills -> SkillsPart(shown.skills, machineName, onBack = { part = SettingsPart.Home },
             onRefresh = { scope.launch { controller.loadSkills() } })
         // Keeps its own sub-pages and back; back on its first page returns here (the handler above).
@@ -273,6 +296,7 @@ private fun SettingsHome(
 
             item("you") { JSectionHeader(stringResource(R.string.assistant_settings_you_header)) }
             val memoryCount = state.memory.entries?.size
+            val placesCount = state.places.entries?.size
             rows("you", listOf(
                 { JRow(stringResource(R.string.assistant_settings_notes), value = stringResource(when {
                     !config.notes.isNullOrBlank() -> R.string.assistant_settings_notes_filled
@@ -285,6 +309,13 @@ private fun SettingsHome(
                     state.memory.failed -> stringResource(R.string.assistant_settings_memory_unreadable)
                     else -> null
                 }, leadingIcon = PhIcons.Brain, onClick = { open(SettingsPart.Memory) }) },
+                { JRow(stringResource(R.string.assistant_settings_places), value = when {
+                    placesCount != null && placesCount > 0 ->
+                        pluralStringResource(R.plurals.assistant_settings_places_count, placesCount, placesCount)
+                    placesCount == 0 -> null
+                    state.places.failed -> stringResource(R.string.assistant_settings_places_unreadable)
+                    else -> null
+                }, leadingIcon = PersonaIcons.place, enabled = ready, onClick = { open(SettingsPart.Places) }) },
             ))
             item("you-caption") {
                 Caption(stringResource(R.string.assistant_settings_you_caption, machineName))
