@@ -212,8 +212,13 @@ export class SessionList<T> {
       if (!this.work.promise && this.invalidatedAt !== 0) {
         const wait = this.invalidatedAt + 2_000 - Date.now();
         if (wait > 0) {
-          // invalidationQueued stays set: further hints of this window return at once
-          this.invalidationTimer = setTimeout(() => { this.invalidationTimer = undefined; this.invalidate(); }, wait);
+          // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
+          // first, or its own invalidate would return at once too and no hint would ever read again.
+          this.invalidationTimer = setTimeout(() => {
+            this.invalidationTimer = undefined;
+            this.invalidationQueued = false;
+            this.invalidate();
+          }, wait);
           return;
         }
       }

@@ -996,6 +996,32 @@ describe("generation isolation and inflight coalescing", () => {
     }
   });
 
+  it("reads a hint that lands inside a quiet window when the window ends, and keeps reading the hints after it", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const calls = () => pages.mock.calls.length;
+      const before = calls();
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      const opened = calls();
+      expect(opened).toBeGreaterThan(before);
+      list.invalidate(); // inside the window, no read out: waits for the window's end
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBe(opened);
+      await vi.advanceTimersByTimeAsync(2_000); // the window's end reads it
+      expect(calls()).toBeGreaterThan(opened);
+      const settled = calls();
+      await vi.advanceTimersByTimeAsync(5_000);
+      list.invalidate(); // a later hint, after its window: read at once, never stuck behind the old one
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBeGreaterThan(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not leave the throttle's timer behind a reset (filters, projection), and a fresh window reads at once", async () => {
     vi.useFakeTimers();
     try {
