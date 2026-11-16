@@ -1193,6 +1193,20 @@ export class InboxWorkspace {
     else await this.loadLegacyLarkMessages(owner, this.currentConversation, this.currentAccount, start, this.isTopicList);
   }
 
+  private receiptEntry(receipt: Record<string, Object>): Record<string, Object> {
+    return Wire.has(receipt, 'item') ? Wire.object(receipt, 'item') : receipt;
+  }
+
+  private acknowledgeEntry(row: ResourceRow, requireItem: boolean = false): (receipt: Record<string, Object>) => boolean {
+    const expectedId = row.id;
+    return (receipt: Record<string, Object>): boolean => {
+      if ((requireItem && !Wire.has(receipt, 'item')) || !expectedId || Wire.text(this.receiptEntry(receipt), 'id') !== expectedId) {
+        throw new HttpFailure(200, 'result_unknown', true);
+      }
+      return true;
+    };
+  }
+
   async replyInbox(text: string, confirmation: string): Promise<boolean> {
     if (!this.canWrite()) return false;
     if (this.referenceMode) return false;
@@ -1211,13 +1225,9 @@ export class InboxWorkspace {
     let acknowledged = false;
     try {
       const result = await owner.repo.call(path, 'POST', body, clientId, () => this.admitWrite(owner), false,
-        (receipt: Record<string, Object>): boolean => {
-          const item = Wire.object(receipt, 'item');
-          this.detailRow(Object.keys(item).length ? item : receipt, row);
-          return true;
-        });
+        this.acknowledgeEntry(row));
       if (!this.owns(owner)) return false;
-      const item = Wire.object(result, 'item'), data = Object.keys(item).length ? item : result;
+      const data = this.receiptEntry(result);
       const updated = this.detailRow(data, row); this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
       this.items = updateResourceList(this.items, updated);
       this.replyDraft = ''; this.writeState = 'sent'; acknowledged = true;
@@ -1245,11 +1255,10 @@ export class InboxWorkspace {
     const row = this.selected, owner = this.capture(row), nextDone = !done(row), path = this.targetActionPath(row, 'done');
     this.writeOutbound = false; this.writeState = 'saving'; this.error = '';
     try {
-      const result = await owner.repo.call(path, 'POST', Wire.payload(['done'], [nextDone]), '', () => this.admitWrite(owner));
+      const result = await owner.repo.call(path, 'POST', Wire.payload(['done'], [nextDone]), '', () => this.admitWrite(owner), false, this.acknowledgeEntry(row));
       if (!this.owns(owner)) return false;
-      const updated = this.detailRow(result, row);
-      if (updated.id && updated.id !== row.id) throw new Error('identity_changed');
-      updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = result; this.items = updateResourceList(this.items, updated);
+      const data = this.receiptEntry(result), updated = this.detailRow(data, row);
+      this.selected = updated; this.selectedKey = updated.key(); this.detail = data; this.items = updateResourceList(this.items, updated);
       this.writeState = ''; return true;
     } catch (error) { if (this.owns(owner)) { this.writeState = this.writeFailureState(error as Error); this.error = this.errorCode(error as Error); } return false; }
   }
@@ -1261,7 +1270,7 @@ export class InboxWorkspace {
     const row = this.selected, owner = this.capture(row), clientId = util.generateRandomUUID();
     const path = this.targetActionPath(row, 'handoff'); this.handoffBusy = true; this.writeOutbound = false; this.writeState = 'sending'; this.handoffDraft = value; this.error = '';
     try {
-      const response = await owner.repo.call(path, 'POST', Wire.payload(['text', 'client_id'], [value, clientId]), clientId, () => this.admitWrite(owner));
+      const response = await owner.repo.call(path, 'POST', Wire.payload(['text', 'client_id'], [value, clientId]), clientId, () => this.admitWrite(owner), false, this.acknowledgeEntry(row, true));
       if (!this.owns(owner)) return undefined;
       this.writeState = 'handed_off'; this.handoffDraft = '';
 

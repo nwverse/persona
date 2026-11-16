@@ -949,3 +949,58 @@ test('attachment receipt accepts an empty object or a bounded Unicode message id
   assert.equal(await workspace.sendAttachment(),true);assert.equal(workspace.writeState,'sent');assert.equal(workspace.attachment,undefined);assert.equal(f.byteCalls.length,1);assert.equal(await workspace.sendAttachment(),false);assert.equal(f.byteCalls.length,1);await workspace.close();
  }
 });
+
+test('item writes keep malformed receipts unknown across restored storage without clearing drafts or dispatching twice', async () => {
+  const session = { machine_id: 'server', session_id: 'untrusted-target' };
+  for (const operation of ['reply', 'done', 'handoff']) {
+    const receipts = ['', '{}', 'null', '[]', '42', '""', '{"id":""}', '{"id":42}', '{"id":"other-item"}',
+      '{"item":{}}', '{"item":null}', '{"id":"mail-1","item":null}', '{"id":"mail-1","item":{}}', '{"item":[]}', '{"item":{"id":42}}', JSON.stringify({ item: { id: 'other-item' }, session })];
+    if (operation === 'handoff') receipts.push(JSON.stringify({ id: 'mail-1', session }));
+    for (const raw of receipts) {
+      const data = mailDetail(), f = makeHarness({ rows: [data], details: { [data.id]: data } });
+      const originalRequest = f.repo.transport.request.bind(f.repo.transport);
+      f.repo.transport.request = async (path, method = 'GET', body = '', op = '') => {
+        if (method === 'POST' && pathOnly(path).endsWith('/' + operation)) {
+          f.calls.push({ path, method, body: body ? JSON.parse(body) : {}, op });
+          return raw;
+        }
+        return originalRequest(path, method, body, op);
+      };
+      const run = (workspace) => operation === 'reply' ? workspace.replyInbox('Retain this draft', workspace.replyConfirmationSnapshot('Retain this draft')) :
+        operation === 'done' ? workspace.processInbox() : workspace.handoff('Retain this draft');
+      const workspace = new InboxWorkspace(); await workspace.open(f.client, rowFor(data));
+      workspace.setReplyDraft('Retain this draft'); await workspace.draftWrite;
+      assert.equal(await run(workspace), operation === 'handoff' ? undefined : false, operation + ':' + raw);
+      assert.equal(workspace.writeState, 'unknown'); assert.equal(workspace.replyDraft, 'Retain this draft');
+      if (operation === 'handoff') assert.equal(workspace.handoffDraft, 'Retain this draft');
+      const blocked = f.repo.mutations.blocked(); assert.equal(blocked.length, 1); assert.equal(blocked[0].state, 'unknown');
+      await workspace.close();
+
+      // A new store owner must restore the persisted journal, rather than use its in-memory records.
+      const restoredLocal = { get: key => f.local.get(key), put: (key, value) => f.local.put(key, value), remove: key => f.local.remove(key) };
+      const restoredRepo = new HubRepository(new EndpointConfig('https://hub.example.test', 'hub-1', '', '', 'work'), restoredLocal);
+      f.state.repo = restoredRepo;
+      const reopened = new InboxWorkspace(); await reopened.open(f.client, rowFor(data));
+      assert.equal(reopened.replyDraft, 'Retain this draft');
+      assert.equal(await run(reopened), operation === 'handoff' ? undefined : false);
+      assert.equal(reopened.writeState, 'unknown'); assert.equal(restoredRepo.mutations.blocked()[0].state, 'unknown');
+      assert.equal(f.calls.filter(call => call.method === 'POST').length, 1, operation + ':' + raw);
+      assert.equal(reopened.replyDraft, 'Retain this draft'); await reopened.close();
+    }
+  }
+});
+
+test('reply and process accept a matching direct entry or item envelope before completing their journal', async () => {
+  for (const operation of ['reply', 'done']) for (const wrapped of [false, true]) {
+    const data = mailDetail(), updated = { ...data, done: operation === 'done' };
+    const f = makeHarness({ rows: [data], details: { [data.id]: data }, handle: async call =>
+      call.method === 'POST' && pathOnly(call.path).endsWith('/' + operation) ? (wrapped ? { item: updated } : updated) : undefined });
+    const workspace = new InboxWorkspace(); await workspace.open(f.client, rowFor(data));
+    workspace.setReplyDraft('One reply'); await workspace.draftWrite;
+    assert.equal(operation === 'reply' ? await workspace.replyInbox('One reply', workspace.replyConfirmationSnapshot('One reply')) : await workspace.processInbox(), true);
+    assert.equal(workspace.detail.id, data.id); assert.equal(f.repo.mutations.blocked().length, 0);
+    if (operation === 'reply') { assert.equal(workspace.writeState, 'sent'); assert.equal(workspace.replyDraft, ''); }
+    else assert.equal(workspace.detail.done, true);
+    await workspace.close();
+  }
+});
