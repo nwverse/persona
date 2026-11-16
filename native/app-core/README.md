@@ -82,7 +82,8 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. On Linux, `scripts/test-c-abi.sh` compiles
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
 `libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
-unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
+unchanged fixtures through every pure C projection: sort's `empty_list` and the three iOS-derived held cases (#9033),
+`persona_core_project_answer` and
 `persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 22 fence + 19 marker/boundary + 39
@@ -207,12 +208,12 @@ and counts/flags/enum values: never titles, paths, queries, identifiers or excep
 The core's `state`, `machine` and `space` projections compare complete published outputs. `Repo` and `MachineSpace`
 use the core's `space` projection for their inner list and separately report the unsupported outer repository/computer
 headers; to-do, direction and history extensions are not silently called parity. Input conversion preserves multi-hub
-identity and includes the core's `held` field from the shell's visible Agent chat when the row remains Unread. The
-production Kotlin path still owns range preprocessing, `retainOpenedRows`, history and children. A caller-supplied
-instant makes `since:` searches deterministic. The 30 checked-in `agents_list` fixtures pass through both production
-Kotlin and the real host JNI projection; additional real-JNI cases found #9027 (multi-hub pin identity in the core)
-and #9033 (Android does not yet implement iOS's `heldInList`). Those differences are recorded, not hidden or changed
-to match Rust.
+identity and includes the core's `held` field from the shell's visible Agent chat and its entry-time Unread capture
+while its held row remains open. The production Kotlin path still owns range preprocessing, `retainOpenedRows`, history
+and children. A caller-supplied
+instant makes `since:` searches deterministic. The 33 checked-in `agents_list` fixtures pass through both production
+Kotlin and the real host JNI projection, including three State, Space and quiet-fold cases for the production
+`heldInList` behavior aligned with iOS (#9033). The separate multi-hub pin identity issue is #9027.
 
 Release has no sort-shadow implementation and its native library does not export `Java_..._projectSort`. The app still
 packages the other core entry points for the existing packaging work: this is a strict boundary for this shadow, not a
@@ -220,7 +221,8 @@ claim that the whole native library is absent. `buildAndroidReleaseCore` builds 
 ABIs with `scripts/check-android-sort-shadow.py`; Release JVM tests additionally prove that no shadow class is on the
 classpath and the factory remains Kotlin even when the debug property is set. Conversion, redaction, native failure,
 production entry and old-vs-new Kotlin behavior have focused JVM tests. This is host and packaged-artifact evidence,
-not a physical-device shadow run, UI change, Rust promotion or iOS behavior change.
+not a physical-device shadow run, Rust promotion or iOS behavior change. The production held-row alignment changes
+which existing row and section the Android list displays; its host Compose captures are not device evidence.
 ## HarmonyOS Agents-list core (#8957, #8966)
 
 `CoreAgentListAdapter` calls the synchronous pure `coreProjectSort` NAPI function directly. It is the only production
@@ -236,9 +238,10 @@ and exposes the existing failure state instead of presenting an empty successful
 sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
 
 `harmony/tests/core-host/agent-sort-adapter.test.mjs` drives the production adapter's real native-import contract and
-the real core through all 30 unchanged `agents_list` fixtures. The complete expected objects match **30/30**. Host
-workspace tests also exercise frozen-reading identity, explicit folds, filters and offline-history membership. The
-portable suite provides a synchronous fake for the same NAPI boundary, not evidence of an actual HAP NAPI callback.
+the real core through all 33 checked-in `agents_list` fixtures, including the three held cases (#9033). The complete
+expected objects match **33/33**. Host workspace tests also exercise frozen-reading identity, explicit folds, filters
+and offline-history membership. The portable suite provides a synchronous fake for the same NAPI boundary, not
+evidence of an actual HAP NAPI callback.
 Physical-device and HAP/NAPI execution remain **blocked: no physical device**; this host environment has no
 `devecocli`, so a release HAP was not built.
 ## Android answer adapter and shadow (#9143)
