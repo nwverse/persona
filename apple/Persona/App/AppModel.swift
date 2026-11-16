@@ -2173,14 +2173,24 @@ final class AppModel {
     /// Starts the chat over from the latest page (the hole was too big, or the transcript was replaced).
     func reload(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
         guard shouldApply?() ?? true, let api = api(key.group) else { return }
+        #if DEBUG
+        var completed = false
+        let store = chat(key)
+        defer {
+            if !completed { ProductionContinuityShadow.shared.failed(.fillFailed, in: store) }
+        }
+        #endif
         do {
             let page = try await api.items(key, beforeSeq: nil)
             guard shouldApply?() ?? true else { return }
             replaceBatch(chat(key), items: page.items, hasMore: page.hasMore, span: page.span)
+            #if DEBUG
+            completed = true
+            #endif
             ChatTrace.shared.note(key, "reload n=\(page.items.count) to=\(page.span.to.map(String.init) ?? "?") kept=\(chat(key).items.count - page.items.count)")
         } catch {
             #if DEBUG
-            ProductionContinuityShadow.shared.failed(.fillFailed, in: chat(key))
+            ProductionContinuityShadow.shared.failed(.fillFailed, in: store)
             #endif
         }
     }
