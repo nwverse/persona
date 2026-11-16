@@ -9,8 +9,8 @@ loading/failure control readable. Use the item's stable source identity while th
 translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
 not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
 
-The request/cache module loads only on the translation click, not with the first screen. Keep the owner/item/unmount
-check after both the full-text and module loads; moving it before either asynchronous load can charge a stale reply.
+Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
+owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
 
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 

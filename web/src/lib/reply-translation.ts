@@ -45,17 +45,14 @@ export function useReplyTranslation(text: string, source?: ReplyTranslationSourc
       }
       setState({ key, shown: false, pending: true });
       const active = () => mounted.current && current.current === key && credentialOwner() === owner;
-      const translate = async () => {
-        const complete = source ? await source.load() : text;
-        const { translateReply } = await import("./reply-translation-request");
-        // Both loads can outlive this answer or owner; neither may start a stale model request.
-        if (!active()) return;
-        const translated = await translateReply(complete, target, manager);
-        if (active()) setState({ key, text: translated, shown: true, pending: false });
-      };
-      void translate().catch((error: unknown) => {
-        if (active()) setState({ key, shown: false, pending: false, error: errorText(error) });
-      });
+      void import("./translate")
+        .then(({ translateSelection }) => translateSelection(source?.load ?? text, target, manager, active))
+        .then((text) => {
+          if (text !== undefined && active()) setState({ key, text, shown: true, pending: false });
+        })
+        .catch((error: unknown) => {
+          if (active()) setState({ key, shown: false, pending: false, error: errorText(error) });
+        });
     },
   };
 }

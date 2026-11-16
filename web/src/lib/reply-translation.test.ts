@@ -6,7 +6,7 @@ vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")
 
 import { setToken } from "./api";
 import { initI18n } from "../i18n";
-import { translateReply } from "./reply-translation-request";
+import { translateReply } from "./translate";
 
 let owner = 0;
 beforeEach(async () => {
