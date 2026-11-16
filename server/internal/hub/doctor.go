@@ -21,6 +21,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/netaddr"
 )
 
@@ -389,19 +390,29 @@ func (d *doctorReport) running(ctx context.Context, cfg *Config) []Endpoint {
 	return nil
 }
 
-// doctorLoopback GETs a path from the running hub with the master token. Never resolves a configured host or sends
-// the token outside loopback.
+// doctorLoopback GETs a path from the running hub with the master token where this machine's own commands call it
+// (managerconf.CLIHubURL, from loopback: CLIDial): the address listen names when it is this machine's, else loopback,
+// IPv4 and IPv6 in the order listen's family suggests. Never resolves a configured host or sends the token off this
+// machine.
 func doctorLoopback(cfg *Config, port string) func(ctx context.Context, path string) (*http.Response, error) {
-	client := &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}, Timeout: 5 * time.Second,
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: managerconf.CLIDial}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	host, _, _ := net.SplitHostPort(cfg.Listen)
-	loopbacks := []netip.Addr{netip.AddrFrom4([4]byte{127, 0, 0, 1}), netip.IPv6Loopback()}
-	if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
-		loopbacks[0], loopbacks[1] = loopbacks[1], loopbacks[0]
+	bases := []string{managerconf.CLIHubURL(cfg.Listen)}
+	if v4 := "http://" + net.JoinHostPort("127.0.0.1", port); bases[0] == v4 {
+		bases = append(bases, "http://"+net.JoinHostPort("::1", port))
+		host, _, _ := net.SplitHostPort(cfg.Listen)
+		if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
+			bases[0], bases[1] = bases[1], bases[0]
+		}
 	}
 	return func(ctx context.Context, path string) (resp *http.Response, err error) {
-		for _, ip := range loopbacks {
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(ip.String(), port)+path, nil)
+		for _, base := range bases {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+			if reqErr != nil {
+				err = reqErr
+				continue
+			}
 			req.Header.Set("Authorization", "Bearer "+cfg.Token)
 			if resp, err = client.Do(req); err == nil {
 				return resp, nil

@@ -337,7 +337,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 476,545 B to 476,604 B, zh-Hans 477,527 B to 477,586 B). The budget stays.
 // Parallel Agent worktrees add a Run again action and its shared launcher wiring; the measured first screen is
 // en 477,537 B, ja 480,666 B, zh-Hans 478,356 B, so the budget accounts for the 27 B ja overage.
-export const FIRST_SCREEN_BUDGET = 480_666;
+// #9146: a table cell's short code chips kept whole (ui/ReplyBlocks.tsx rehypeLinkedCode marks them data-chip; styles.css
+// keeps them on one line) add 69 B in each language, measured in one environment against main c53557621 (ja 480,666 B
+// to 480,735 B; en 477,537 B to 477,606 B, zh-Hans 478,356 B to 478,425 B). The cells' 40em cap is the same bytes.
+export const FIRST_SCREEN_BUDGET = 480_735;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

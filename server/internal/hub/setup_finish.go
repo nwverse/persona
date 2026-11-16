@@ -15,6 +15,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 // --- running it ---------------------------------------------------------------------------------------------------
@@ -45,18 +46,20 @@ func (e *setupEnv) health(ctx context.Context, cfg *setupConfig) error {
 	return e.fail("health", i18n.T(e.l, "hub-setup.health_timeout", i18n.Args{"count": int(wait.Seconds()), "port": portOf(cfg.Listen)}), next)
 }
 
+// loopbackClient calls the hub on this machine from loopback (managerconf.CLIDial).
 func loopbackClient() (*http.Client, func()) {
-	transport := &http.Transport{Proxy: nil}
+	transport := &http.Transport{Proxy: nil, DialContext: managerconf.CLIDial}
 	return &http.Client{Timeout: 5 * time.Second, Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, transport.CloseIdleConnections
 }
 
-// hubAnswers: the hub this hub.json describes answers on loopback (with its token: another hub on the port does not).
+// hubAnswers: the hub this hub.json describes answers where this machine's commands call it (managerconf.CLIHubURL,
+// from loopback: loopbackClient), with its token: another hub on the port does not.
 func (e *setupEnv) hubAnswers(ctx context.Context, cfg *Config) bool {
 	client, done := loopbackClient()
 	defer done()
 	for _, path := range []string{"/api/v1/health", "/api/v1/endpoints"} {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort("127.0.0.1", portOf(cfg.Listen))+path, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, managerconf.CLIHubURL(cfg.Listen)+path, nil)
 		if err != nil {
 			return false
 		}

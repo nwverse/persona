@@ -9,11 +9,13 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // A reply to a subscription's row goes to the connector the subscription reads, by the thread and id that connector
-// knows the item by (#6198); a row whose item is gone can't be replied to, and a connector's own rows are as before.
+// knows the item by (#6198); a row whose item is gone can't be replied to (inbox_cannot_reply, #9194), and a
+// connector's own rows are as before.
 func TestASubscriptionsRowIsRepliedToThroughItsConnector(t *testing.T) {
 	h := newTestManager(t)
 	ctx := context.Background()
@@ -48,8 +50,14 @@ func TestASubscriptionsRowIsRepliedToThroughItsConnector(t *testing.T) {
 	if got := c.replies[0]; got.Thread != "example-org/example-repo#12" || got.Last != "c2" || got.ItemID != "sub_example:1a2b" || got.Text != "Thanks" {
 		t.Fatalf("the connector got %+v", got)
 	}
-	if err := reply(sub.ID, connector.InboxReply{Thread: "sub:sub_example:x", Last: "gone", Text: "Thanks"}); !errors.Is(err, errCannotReply) {
+	// A row whose item is gone is one that cannot be answered, not a source that is not here (#9194); a subscription that
+	// is gone is that.
+	var re *rpc.Error
+	if err := reply(sub.ID, connector.InboxReply{Thread: "sub:sub_example:x", Last: "gone", Text: "Thanks"}); !errors.As(err, &re) || re.Code != assistantwire.CodeInboxCannotReply {
 		t.Fatalf("a row whose item is gone: %v", err)
+	}
+	if err := reply("sub_gone", connector.InboxReply{Thread: "sub:sub_gone:x", Last: "c2", Text: "Thanks"}); !errors.As(err, &re) || re.Code != assistantwire.CodeInboxSourceUnavailable {
+		t.Fatalf("a row of a subscription that is gone: %v", err)
 	}
 	if err := reply(c.ID(), connector.InboxReply{Thread: "chat:C1", Text: "Own"}); err != nil || len(c.replies) != 2 || c.replies[1].Thread != "chat:C1" {
 		t.Fatalf("the connector's own row: %v %+v", err, c.replies)
