@@ -198,6 +198,22 @@ func leaderToolList() []proto.Tool {
 	return []proto.Tool{leaderPlanTool(), {Name: "task_review", Description: r.Description, InputSchema: r.InputSchema}}
 }
 
+// runtimeLeaderTools supplies plugin registration schemas and checks individual sessions at tool activation.
+func (s *Service) runtimeLeaderTools(ctx context.Context, machine, session string, guestHint bool) []proto.Tool {
+	if s.isWorkMachine(machine) || guestHint {
+		return nil
+	}
+	if session != "" {
+		if _, guest, err := s.guestOf(ctx, machine, session); err != nil || guest {
+			return nil
+		}
+		if _, _, ok := s.leaderTask(ctx, machine, session); !ok {
+			return nil
+		}
+	}
+	return leaderToolList()
+}
+
 // leaderTools are the tools only a task leader's agent gets, on top of any agent's: none for any other agent.
 func (s *Service) leaderTools(ctx context.Context, machine, session string) []proto.Tool {
 	if session == "" {

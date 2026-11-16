@@ -76105,6 +76105,29 @@
       },
       "extractionState" : "manual"
     },
+    "In Progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "In Progress [Action Bar]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -106609,6 +106632,29 @@
         }
       }
     },
+    "Nothing Done Yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Done Yet"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了したものはまだありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有已处理的"
+          }
+        }
+      }
+    },
     "Nothing Here" : {
       "localizations" : {
         "en" : {
@@ -106631,6 +106677,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Nothing in Progress" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing in Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中のものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有进行中的"
+          }
+        }
+      }
     },
     "Nothing Muted" : {
       "localizations" : {
@@ -107067,6 +107136,29 @@
       },
       "extractionState" : "manual"
     },
+    "Nothing Needs You" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing Needs You"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応が必要なものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有需要你处理的"
+          }
+        }
+      }
+    },
     "Nothing needs you [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -107292,6 +107384,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有需要记的：没有提到要点、决定或待办。"
+          }
+        }
+      }
+    },
+    "Nothing to Read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing to Read"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読むものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有要看的"
           }
         }
       }
@@ -133301,6 +133416,29 @@
       },
       "extractionState" : "manual"
     },
+    "Return Key Sends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Return Key Sends"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returnキーで送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按回车发送"
+          }
+        }
+      }
+    },
     "Review" : {
       "localizations" : {
         "en" : {
@@ -136377,6 +136515,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SOCKS5 代理"
+          }
+        }
+      }
+    },
+    "Send with Return; Shift-Return starts a new line" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send with Return; Shift-Return starts a new line"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Returnで送信、Shift + Returnで改行"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回车直接发送，Shift + 回车换行"
           }
         }
       }
@@ -159078,6 +159239,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "The rest are in the other sections above." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The rest are in the other sections above."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "残りは上のほかの区分にあります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其余的在上面的其他分区里。"
+          }
+        }
+      }
     },
     "The SSH server didn't accept this device's public key. Add the line from Copy authorized_keys Line to ~/.ssh/authorized_keys for %@ on the server (Warpgate: add it to this user's public keys), then try again." : {
       "localizations" : {
@@ -190089,6 +190273,29 @@
       },
       "extractionState" : "manual"
     },
+    "What you mark done shows up here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What you mark done shows up here."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "対応済みにしたものがここに表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标为已处理的会出现在这里。"
+          }
+        }
+      }
+    },
     "What you say goes to this chat" : {
       "localizations" : {
         "en" : {
@@ -199952,19 +200159,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "appearance display color theme style text size layout dark light glow"
+            "value" : "appearance display color theme style text size layout dark light glow return enter keyboard send"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外观 显示 颜色 主题 风格 字号 布局 深色 浅色 发光"
+            "value" : "外观 显示 颜色 主题 风格 字号 布局 深色 浅色 发光 回车 键盘 发送"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外観 表示 色 テーマ スタイル 文字サイズ レイアウト ダーク ライト"
+            "value" : "外観 表示 色 テーマ スタイル 文字サイズ レイアウト ダーク ライト Return キーボード 送信"
           }
         }
       }

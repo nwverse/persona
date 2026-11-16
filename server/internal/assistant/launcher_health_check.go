@@ -289,13 +289,18 @@ func (s *Service) runHealthRecheck(ctx context.Context, machine, launcher string
 
 // launcherUnusableNow is launcherUnusable after one on-the-spot probe of a failing record, for a start about to
 // move or be refused because of it: the record can lag behind a fix, so a pass clears it and the start stays on the
-// asked machine (#2018). Two records cannot be settled by a probe: a subscription usage limit (the request would be
-// refused too) and a launcher the terminal's shell cannot run (the probe's login shell runs it fine); only a real
-// start clears those.
+// asked machine (#2018). Known usage-limit resets can be superseded by restored quota (#9386); fresh limit evidence
+// waits through the same throttle before probing. Unknown resets keep their periodic cadence. A terminal-shell
+// failure cannot be settled by the probe's login shell; only a real start clears it.
 func (s *Service) launcherUnusableNow(ctx context.Context, machine, launcher string) (LauncherHealth, bool) {
 	r, bad := s.launcherUnusable(ctx, machine, launcher)
-	if !bad || r.Kind == errKindUsageLimit || r.Kind == errKindNotInTerminal {
+	if !bad || r.Kind == errKindNotInTerminal {
 		return r, bad
+	}
+	if r.Kind == errKindUsageLimit {
+		if _, known := r.limitReset(); !known || time.Since(r.CheckedAt) < healthRecheckThrottle {
+			return r, bad
+		}
 	}
 	if res, got, checked := s.recheckLauncherNow(ctx, machine, launcher); checked && got && res.ok {
 		return LauncherHealth{}, false

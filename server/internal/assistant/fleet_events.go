@@ -160,12 +160,16 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		return out, true, err
 	case "mcp.tools":
 		var p struct {
-			Assistant bool   `json:"assistant"`
-			SessionID string `json:"session_id"`
-			Guest     bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
-			Revision  string `json:"revision"`
+			Assistant  bool   `json:"assistant"`
+			SessionID  string `json:"session_id"`
+			Guest      bool   `json:"guest"` // the node's word that it is a guest conversation (guest.go)
+			Revision   string `json:"revision"`
+			LeaderOnly bool   `json:"leader_only"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if p.LeaderOnly {
+			return map[string]any{"tools": s.runtimeLeaderTools(ctx, machine, p.SessionID, p.Guest)}, true, nil
+		}
 		return s.sessionMCPToolsSince(ctx, machine, p.SessionID, p.Assistant, p.Guest, p.Revision), true, nil
 	case "mcp.call":
 		var p struct {
@@ -207,7 +211,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	s.fleetStart(context.WithoutCancel(ctx))
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
-	s.fleet.sent = nil
+	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
 	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
 	for _, m := range s.fleetMachines() {

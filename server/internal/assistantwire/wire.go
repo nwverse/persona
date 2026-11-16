@@ -56,6 +56,9 @@ type Hello struct {
 	// SecretHandoffGate: the hub lets only a device that may approve a hand-off card say yes to one, and names it in
 	// HTTPRequest.HandoffApprover. An older hub never sends it; a manager then shows no hand-off card at all.
 	SecretHandoffGate bool `json:"secret_handoff_gate,omitempty"`
+	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
+	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
+	ArchivedApart bool `json:"archived_apart,omitempty"`
 	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
 	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never

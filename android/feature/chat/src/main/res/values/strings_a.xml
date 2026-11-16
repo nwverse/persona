@@ -254,6 +254,12 @@
         <item quantity="one">Show all (%1$d line)</item>
         <item quantity="other">Show all (%1$d lines)</item>
     </plurals>
+    <plurals name="chat_diff_unchanged_lines">
+        <item quantity="one">… %1$d unchanged line</item>
+        <item quantity="other">… %1$d unchanged lines</item>
+    </plurals>
+    <string name="chat_diff_line_added">Added</string>
+    <string name="chat_diff_line_removed">Removed</string>
     <plurals name="chat_todos_progress">
         <item quantity="one">%1$d/%2$d to-do done</item>
         <item quantity="other">%1$d/%2$d to-dos done</item>
