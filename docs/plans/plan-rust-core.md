@@ -551,8 +551,26 @@ Phase 3 lands in several PRs.
     object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
     client source or release library fails rather than skips.
   - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
-    performance claim. The Swift adapters and the real-C XCTest still need macOS and remain with #6793 / #7401; the
+    performance claim. The Swift adapters and their real-C replay are covered by #8952; the
     turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
+
+- **The six pure projections reach the Swift C binding (#8952).**
+  - `PersonaCoreProjections` calls `persona_core_project_sort`, `persona_core_project_answer`,
+    `persona_core_display_answer`, `persona_core_project_stream_chunks`, `persona_core_project_turns` and
+    `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
+    every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
+    production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
+    applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
+    complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact
+    scalar types; exact-name manifests, malformed inputs and deliberately wrong expectations are checked per domain.
+  - Fixture reads and the overlay live in `PersonaCoreTestSupport`, not the shipped library. This is **macOS-host
+    SwiftPM evidence, not iOS simulator or physical-device evidence**. It does not establish production adapters,
+    rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
+    projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
+    **26.0 not verified**.
 
 ### Migration rules (each domain)
 

@@ -392,6 +392,9 @@ func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
 	if pending && g.Key == key || told || listedAsk(t, s, todo.ID) == nil {
 		t.Fatalf("the lookup failure ended the decision: %+v", g)
 	}
+	if listedAsk(t, s, todo.ID) == nil {
+		t.Fatal("the transient failure left no decision to retry")
+	}
 	f.sessionsFail["box"] = 0
 	result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量")
 	if err != nil || !result.taken || result.undelivered != nil {
