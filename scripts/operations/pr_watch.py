@@ -819,7 +819,7 @@ class Watcher:
                              and not old.get("success_posted")):
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
-                    and old.get("verification") in ("passed", "base_failure") and old.get("success_posted"):
+                    and old.get("verification") in ("passed", "base_failure") and old.get("success_posted") and config["merge"]:
                 if old.get("merge_attempts", 0) > 0 and old.get("retry_after", 0) > time.time():
                     return
                 with self.merging(repo):
@@ -832,9 +832,11 @@ class Watcher:
                     self.finish_merge(config, current_pr, old)
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
-                    and old.get("verification") in ("passed", "base_failure") and not old.get("success_posted"):
+                    and old.get("verification") in ("passed", "base_failure") and not old.get("success_posted") and config["merge"]:
                 if old.get("findings") and not old.get("review_posted"):
-                    self.comment_findings(repo, number, pr, old["findings"])
+                    published = old.get("published_findings", [])
+                    if published != old["findings"]:
+                        self.comment_findings(repo, number, pr, old["findings"])
                     old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          review_posted=True, published_findings=old["findings"],
                                          published_fingerprint=old.get("review_fingerprint"))
