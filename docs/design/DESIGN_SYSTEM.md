@@ -1161,6 +1161,11 @@ Where a conversation scrolls under the chrome that floats over it, the content f
 
 ### 3.13 Watch-face complications
 
+Extension progress in `accessory_circular` uses a system circular capacity gauge. Its center shows the label on one
+line, shrinking to `ExtensionSurfaceTokens.circularLabelMinimumScale` when needed, or the percentage for an empty
+label. VoiceOver reads the label and percentage; finite ratios are clamped to 0–1 and nonfinite ratios become zero.
+Other extension widget families retain their existing progress view.
+
 The watch widget extension doesn't build `Theme`, so complications take their fonts, marks and colors from `WatchFaceTokens` (`apple/Shared/Design/WatchFaceTokens.swift`, the documented fixed-size exception in 2.2), whose symbols mirror `Theme.Icon` with an `// icon:` note. A complication only draws what its app last wrote (a snapshot file in the watch App Group); all-day recording reloads only its own kind's timeline (`AllDaySnapshot.widgetKind`), not the other faces'.
 
 - **All-Day Recording** (#4741, `AllDayRecordingComplication`; circular, corner, rectangular, inline, the Smart Stack): five faces, each in words and a mark, never by color alone. Off: "All-Day Recording" (the corner says "All-Day"), "Tap to start". Recording: "Recording all day" with the running time (`Text(_:style: .timer)`, so it needs no reload), in red as the system shows a microphone in use. Paused (by the user or a call): "Paused", "Tap to continue", `allDayPausedSymbol`, orange. Stopped by itself: "Stopped", "Tap to continue", the triangle, orange.

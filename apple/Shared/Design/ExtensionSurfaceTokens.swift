@@ -10,6 +10,7 @@ nonisolated enum ExtensionSurfaceTokens {
     static let chartBar: CGFloat = 12
     static let chartRadius: CGFloat = 4
     static let chartWash = 0.1
+    static let circularLabelMinimumScale = 0.5
     static let label = Font.system(.caption)
     static let body = Font.system(.body)
     static let value = Font.system(.title2, design: .rounded, weight: .semibold)

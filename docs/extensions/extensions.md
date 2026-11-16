@@ -2617,7 +2617,8 @@ The returned View is checked as usual (`Fit`), then `FitWidget` trims it to what
 | family | Allowed content |
 | --- | --- |
 | `small` / `medium` / `large` | `metric`, `stat_grid` (at most 2 stats for `small`, 4 otherwise), `progress`, `chart`, `text` (at most 3 lines, 200 characters), `row` (at most 4, not tappable); at most 2 sections, 4 items for `small`, 6 for `medium`, 12 for `large`. `markdown` becomes text, `empty` / `loading` one line of secondary text; `button`, `link`, `field`, `segmented`, `table`, `divider`, `search`, `filter`, `more`, actions, avatars and thumbnails are removed; `refresh_after` unused |
-| `accessory_circular` / `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines for `rectangular`, 1 for `circular`) |
+| `accessory_circular` | First `metric`, `progress` or `text` (1 text line); progress is a circular capacity ring with its label in the center (percentage when the label is empty) |
+| `accessory_rectangular` | First `metric`, `progress` or `text` (at most 3 text lines); progress uses the default progress view |
 | `accessory_inline` | First `metric` or one line of `text` (no progress) |
 
 Returns 502 if nothing drawable remains. Prefer drawing directly for `size`: a `metric` plus `stat_grid` for small, add a compact `chart` for medium, one `progress` or sentence for watch faces.
