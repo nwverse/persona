@@ -193,12 +193,14 @@ class WatcherTests(unittest.TestCase):
         notice = "This PR has had no substantive progress for more than seven days"
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice},
                     {"createdAt": "2026-11-08T00:00:01Z", "body": "I am still working on this"}]
-        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
-            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {}, ignore_notice=notice)
+        with patch.object(pr_watch, "gh_json", side_effect=[comments, []]):
+            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
+                                                         {"stale_head": SHA_A}, ignore_notice=notice)
         self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
-        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], [], []]):
-            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {}, ignore_notice=notice)
-        self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
+        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], []]):
+            activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
+                                                         {"stale_head": SHA_A}, ignore_notice=notice)
+        self.assertEqual(activity, old)
 
     def test_recent_pr_activity_prevents_stale_close(self):
         self.github_pr = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-14T00:00:00Z")
