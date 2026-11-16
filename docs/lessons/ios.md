@@ -370,6 +370,17 @@ this by changing a locale, allowing an address or rearranging the generated plis
 - Set `--remap-path-prefix=$HOME=/build/home --remap-path-prefix=$ROOT=/build/persona` in `native/app-core/scripts/build-apple.sh` for every Apple target. This changes only debug/panic paths, not the runtime code or the privacy scanner's exemptions; verify the actual exported archive with `check_bundle_privacy.py`.
 - A successful archive does not prove the package can ship: the bundle privacy scan runs after it, before export and upload. Keep that gate.
 
+## Resuming an interrupted TestFlight archive (#8890)
+
+A retained release worktree is not clean just because its source is unchanged: `release.sh` generates
+`apple/Persona.xcodeproj`, and an unignored generated project makes `testflight_action.py` reject its own next run.
+Ignore that generated directory, never delete an unrecognized untracked file to make the check pass. The action must
+also recognize `PERSONA_OPERATION_LOCKS` as well as `PERSONA_OPERATION_RELEASE_LOCKED`; otherwise it nests the lock
+wrapper before doing any work. An `upload_started` checkpoint with no remote build means the upload did not complete
+or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
+never uploaded a second time. A locked login screen can leave extension `codesign` waiting indefinitely for keychain
+authorization; that is not archive success or a TestFlight upload.
+
 ## Device names in Siri intent descriptions (#3113)
 
 App Store Connect can commit an upload but reject it before the build appears in TestFlight. Validation code 90626 rejected a meeting-recording App Intent description containing `iPhone`, even though archive, export, purpose strings and entitlements passed. Keep the intent description device-neutral in Swift and in every catalog translation; changing a permission purpose string does not fix Siri metadata. If a committed upload never appears, inspect the upload's state and errors instead of re-uploading the same package or treating the wait timeout as success.

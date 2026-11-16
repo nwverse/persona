@@ -612,7 +612,8 @@ gets anyone else's audio: this is the other direction from meetings, its audio h
   `transcription.cancel {job}`. Unknown fields are `invalid_params`.
 - **How it runs**: a job on the contribution's `replay` mode (speed 4), as a meeting's final pass but with no transcript of record to check against: the built-in
   adapter runs three sessions a window and takes a window's text only when two agree. A window where they do not (noise, music, crosstalk) comes back in
-  `gaps`, never as a guess; its upstream bills about three times the audio's length. `transcription.audio` returns once its audio is sent and no more than
+  `gaps`, never as a guess; its upstream bills about three times the audio's length. The built-in Volcengine speech returns a window that
+  failed three times as a gap too, and goes on ([volcengine-speech.md](volcengine-speech.md) "Recognition", #8887). `transcription.audio` returns once its audio is sent and no more than
   60 seconds wait past the contribution's last `ack`, so calling it again as soon as it returns paces the job. `finish` waits for the contribution's `done`,
   up to 5 minutes without a frame.
 - **Limits**: one job per extension and two across extensions at a time (`busy`), meetings' jobs not counted and not held up; at most 15 minutes of audio a
