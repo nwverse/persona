@@ -45,7 +45,7 @@ public enum ContinuityJSON: Equatable, Sendable {
 
     public func encoded() throws -> String {
         if case .number(let text) = self {
-            guard isExactJSONNumber(text) else {
+            guard Self.isExactJSONNumber(text) else {
                 throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
             }
             return text
