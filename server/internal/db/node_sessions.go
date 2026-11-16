@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // ---- node sessions ----
@@ -13,17 +15,19 @@ import (
 // rows without a launcher or directory; newer nodes ignore those rows when loading
 // and write no rows for sessions they did not start (#5510).
 type NodeSession struct {
-	CreationID       string    `json:"creation_id,omitempty"`
-	Incarnation      string    `json:"incarnation,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	ModelFingerprint string    `json:"model_fingerprint,omitempty"`
-	ModelEffort      string    `json:"model_effort,omitempty"`
-	ConfigDir        string    `json:"config_dir,omitempty"` // the assistant's explicit Claude profile
-	Pane             string    `json:"pane,omitempty"`
-	Launcher         string    `json:"launcher"`
-	Cwd              string    `json:"cwd"`
-	StartedAt        time.Time `json:"started_at"`
-	Tasks            []string  `json:"tasks,omitempty"` // an assistant conversation's running background tasks
+	CreationID       string          `json:"creation_id,omitempty"`
+	Incarnation      string          `json:"incarnation,omitempty"`
+	Model            string          `json:"model,omitempty"`
+	ModelFingerprint string          `json:"model_fingerprint,omitempty"`
+	ModelEffort      string          `json:"model_effort,omitempty"`
+	ConfigDir        string          `json:"config_dir,omitempty"` // the assistant's explicit Claude profile
+	Pane             string          `json:"pane,omitempty"`
+	Launcher         string          `json:"launcher"`
+	Cwd              string          `json:"cwd"`
+	StartedAt        time.Time       `json:"started_at"`
+	StopCause        proto.StopCause `json:"stop_cause,omitempty"`
+	StopCauseAt      int64           `json:"stop_cause_at,omitempty"`
+	Tasks            []string        `json:"tasks,omitempty"` // an assistant conversation's running background tasks
 	// The permission mode / effort the app set on an assistant conversation (node/modes.go); kept with the model.
 	AppMode   string `json:"app_mode,omitempty"`
 	AppEffort string `json:"app_effort,omitempty"`
@@ -37,6 +41,18 @@ type NodeSession struct {
 	// PendingSwitch: a switch to another launcher waiting for the next message (node/launcher_switch.go), opaque here
 	// like UltracodeProcess, kept with the model so a node restart neither loses it nor carries it out by itself.
 	PendingSwitch json.RawMessage `json:"pending_switch,omitempty"`
+	// EngineHistory: the conversation's earlier stretches this session continues after a switch between Claude Code
+	// and Codex (node/engine_switch.go), opaque here like PendingSwitch, kept with the model so the session list leaves
+	// those sessions out after a node restart too.
+	EngineHistory json.RawMessage `json:"engine_history,omitempty"`
+	// PendingHandoff: a switch's handoff that waits for the next message to the session (its first one was held back
+	// by a dialog, node/engine_switch.go), opaque here like EngineHistory, kept so a node restart does not lose it.
+	PendingHandoff json.RawMessage `json:"pending_handoff,omitempty"`
+	// ModelRecovery: the node's own model recovery has the conversation on another model or its chain was exhausted
+	// (#7824). Opaque here like PendingSwitch; node-owned state, never a configured-model change.
+	ModelRecovery json.RawMessage `json:"model_recovery,omitempty"`
+	// FollowsSetting: a leader/supervisor conversation follows the main chat model setting (node/session_state.go).
+	FollowsSetting bool `json:"follows_setting,omitempty"`
 }
 
 func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSession) error {
@@ -55,10 +71,9 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 	if err != nil {
 		return err
 	}
-	var pendingSwitch json.RawMessage // SQL NULL for none: the key holds a JSON null
-	if len(s.PendingSwitch) > 0 && string(s.PendingSwitch) != "null" {
-		pendingSwitch = s.PendingSwitch
-	}
+	// SQL NULL for none: the key holds a JSON null.
+	pendingSwitch, engineHistory, pendingHandoff := jsonOrNil(s.PendingSwitch), jsonOrNil(s.EngineHistory), jsonOrNil(s.PendingHandoff)
+	modelRecovery := jsonOrNil(s.ModelRecovery)
 	_, err = d.pool.Exec(ctx, `WITH saved AS (
 		INSERT INTO node_sessions (machine_id, session_id, pane, launcher, cwd, started_at, tasks, updated_at, creation_id, incarnation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $15, $16)
@@ -71,10 +86,19 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		jsonb_build_object('model', $8::text, 'model_fingerprint', $9::text, 'model_effort', $10::text,
 			'app_mode', $11::text, 'app_effort', $12::text, 'ultracode_process', $13::jsonb,
 			'started_at_unknown', $14::bool, 'guest', $17::jsonb, 'guest_kind', $18::text, 'config_dir', $19::text,
-			'pending_switch', $20::jsonb), now() FROM saved
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+			'pending_switch', $20::jsonb, 'engine_history', $21::jsonb, 'pending_handoff', $22::jsonb,
+			'model_recovery', $23::jsonb, 'follows_setting', $24::boolean,
+			'stop_cause', $25::text, 'stop_cause_at', $26::bigint), now() FROM saved
+		ON CONFLICT (key) DO UPDATE SET value = CASE
+			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
+				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
+					AND settings.value->>'stop_cause' = 'user' AND $25 <> 'user')
+			THEN EXCLUDED.value || jsonb_build_object('stop_cause', settings.value->'stop_cause',
+				'stop_cause_at', settings.value->'stop_cause_at')
+			ELSE EXCLUDED.value END, updated_at = now()`,
 		machine, id, s.Pane, s.Launcher, s.Cwd, s.StartedAt, tasks, s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort,
-		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch)
+		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
+		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt)
 	return err
 }
 
@@ -103,6 +127,20 @@ type nodeModel struct {
 	Guest            []string        `json:"guest"`
 	GuestKind        string          `json:"guest_kind"`
 	PendingSwitch    json.RawMessage `json:"pending_switch"`
+	EngineHistory    json.RawMessage `json:"engine_history"`
+	PendingHandoff   json.RawMessage `json:"pending_handoff"`
+	ModelRecovery    json.RawMessage `json:"model_recovery"`
+	FollowsSetting   bool            `json:"follows_setting"`
+	StopCause        proto.StopCause `json:"stop_cause"`
+	StopCauseAt      int64           `json:"stop_cause_at"`
+}
+
+// jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
+func jsonOrNil(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
 }
 
 // NodeSessions returns a machine's sessions from the last 60 days.
@@ -123,12 +161,11 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.Model, s.ModelFingerprint, s.ModelEffort, s.AppMode, s.AppEffort = m.Model, m.ModelFingerprint, m.ModelEffort, m.AppMode, m.AppEffort
 		s.Guest, s.GuestKind = m.Guest, m.GuestKind
 		s.ConfigDir = m.ConfigDir
-		if len(m.UltracodeProcess) > 0 && string(m.UltracodeProcess) != "null" {
-			s.UltracodeProcess = m.UltracodeProcess
-		}
-		if len(m.PendingSwitch) > 0 && string(m.PendingSwitch) != "null" {
-			s.PendingSwitch = m.PendingSwitch
-		}
+		s.UltracodeProcess, s.PendingSwitch, s.EngineHistory = jsonOrNil(m.UltracodeProcess), jsonOrNil(m.PendingSwitch), jsonOrNil(m.EngineHistory)
+		s.PendingHandoff = jsonOrNil(m.PendingHandoff)
+		s.ModelRecovery = jsonOrNil(m.ModelRecovery)
+		s.FollowsSetting = m.FollowsSetting
+		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		if m.StartedAtUnknown {
 			s.StartedAt = time.Time{}
 		}

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// By Repository (`RepoPlace`, `RepoTree`): the repository and working tree a working directory names, and the machines →
 /// repositories → working trees the Agents list draws. The path rules are the web's (`web/src/lib/agent-repos.test.ts`).
@@ -372,6 +373,65 @@ struct AgentRepoTreeTests {
                       parentSourceID: parent, index: 1, group: group)
     }
 
+    private func paseoWorkspace(_ id: String, project: String = "app", pin: TimeInterval? = nil) -> HostWorkspace {
+        HostWorkspace(machineID: "machine-a", source: "paseo", sourceID: id, title: id, cwd: "/code/" + id,
+                      projectID: project, projectName: project, projectPath: "/code/" + project, isMain: false,
+                      pinnedAt: pin.map { Date(timeIntervalSince1970: $0) })
+    }
+
+    @Test func paseoPinsLeadWithinAndAcrossProjectsAndUnpinRestoresTheOrder() throws {
+        var main = paseoWorkspace("main", project: "zeta"), old = paseoWorkspace("old", project: "zeta", pin: 10)
+        var newest = paseoWorkspace("newest", project: "zeta", pin: 20)
+        main.isMain = true
+        let alpha = paseoWorkspace("alpha", project: "alpha")
+        let before = RepoTree.build([], machines: machines, workspaces: [old, alpha, main, newest])[0].repos
+        #expect(before.map(\.name) == ["zeta", "alpha"], "the project containing the newest pin is reachable first")
+        #expect(before[0].worktrees.map(\.name) == ["newest", "old", "main"])
+        #expect(before[0].sessions.isEmpty, "empty pinned workspaces keep a container, without inventing sessions")
+        #expect(before[0].worktrees[2].workspace?.pinnedAt == nil, "pinning one task does not pin the project's main checkout")
+        let ids = Set(before.flatMap(\.worktrees).map(\.id))
+        old.pinnedAt = nil; newest.pinnedAt = nil
+        let after = RepoTree.build([], machines: machines, workspaces: [newest, main, alpha, old])[0].repos
+        #expect(after.map(\.name) == ["alpha", "zeta"])
+        #expect(after[1].worktrees.map(\.name) == ["main", "newest", "old"])
+        #expect(Set(after.flatMap(\.worktrees).map(\.id)) == ids, "a pin never changes navigation identity")
+    }
+
+    @Test func paseoPinsKeepSameFolderTasksAndSourceMachineAndHubIdentitiesIndependent() throws {
+        var a = paseoWorkspace("a", pin: 10), b = paseoWorkspace("b", pin: 10)
+        a.cwd = "/same"; b.cwd = "/same"; a.title = "Task"; b.title = "Task"
+        var otherSource = a, otherMachine = a, otherHub = a
+        otherSource.source = "orca"; otherSource.pinnedAt = nil
+        otherMachine.machineID = "machine-b"; otherMachine.pinnedAt = nil
+        otherHub.group = "work"; otherHub.pinnedAt = nil
+        let sessions = [placed("for-b", "/same", ["space_kind": "paseo", "workspace_id": "b", "space_id": "app"]),
+                        placed("for-a", "/same", ["space_kind": "paseo", "workspace_id": "a", "space_id": "app"])]
+        let tree = RepoTree.build(sessions, machines: machines, workspaces: [b, otherHub, otherSource, otherMachine, a])
+        let repos = tree.flatMap(\.repos)
+        #expect(repos.count == 4, "the same project ID in another engine, computer or hub is another project")
+        let own = try #require(repos.first { $0.worktrees.contains { $0.workspace?.key == a.key } })
+        #expect(own.worktrees.map(\.workspace?.key) == [a.key, b.key], "equal pins use full identity, even with the same title and path")
+        #expect(own.worktrees.map { $0.sessions.map(\.sessionID) } == [["for-a"], ["for-b"]])
+        #expect(repos.filter { $0.id != own.id }.allSatisfy { $0.latestPinnedAt == nil && $0.sessions.isEmpty })
+        let reversed = RepoTree.build(Array(sessions.reversed()), machines: machines, workspaces: [a, otherMachine, otherSource, otherHub, b])
+        #expect(reversed.flatMap(\.repos).flatMap(\.worktrees).map(\.id) == tree.flatMap(\.repos).flatMap(\.worktrees).map(\.id))
+    }
+
+    @Test func aNestedNativePinLiftsOnlyItsAncestorPathAndStillHonorsFilters() {
+        let alpha = paseoWorkspace("alpha", project: "alpha")
+        let root = paseoWorkspace("root", project: "zeta")
+        var child = paseoWorkspace("child", project: "nested", pin: 20)
+        child.parentSourceID = root.sourceID
+        let tree = RepoTree.build([], machines: machines, workspaces: [alpha, child, root])
+        #expect(tree[0].repos.map(\.name) == ["zeta", "alpha"])
+        let top = tree[0].repos[0].worktrees[0]
+        #expect(top.latestPinnedAt == child.pinnedAt)
+        #expect(top.workspace?.pinnedAt == nil, "only the pinned workspace gets the pin badge")
+        #expect(top.children.map(\.workspace?.key) == [child.key])
+        #expect(RepoTree.build([], machines: machines, workspaces: [alpha, child, root], includeEmpty: false).isEmpty)
+        #expect(RepoTree.build([], machines: machines, workspaces: [alpha, child, root], search: "missing").isEmpty)
+    }
+
     @Test func catalogRetainsExistingEmptyAncestorsAndIndependentEmptyWorkspaces() throws {
         let catalog = [workspace("root"), workspace("child", parent: "root"), workspace("leaf", parent: "child"), workspace("empty")]
         let tree = RepoTree.build([orca("agent", "/work/leaf", space: "leaf")], machines: machines, workspaces: catalog)
@@ -511,6 +571,35 @@ struct AgentRepoTreeTests {
         #expect(badge(child, parent: parent, inheritedName: "app") == nil)
         #expect(badge(child, parent: parent, inheritedName: "other") == "app")
         #expect(badge(child, parent: nil) == nil, "A grouped root already has its repository heading")
+    }
+
+    // MARK: One folder in two repositories
+
+    /// A Codex App chat names its project's folder (`repo_root` ~/work) while git places its working tree in the
+    /// repository inside it, the main checkout of that repository's own agents. Each repository lists its own agents: the
+    /// two trees' ids differ, so the list's rows and quiet state for one are not the other's (2026-11-12: "14 agents"
+    /// over the other repository's one agent).
+    @Test func aFolderTwoRepositoriesClaimKeepsEachOnesAgents() throws {
+        let inner = "/home/me/work/code/app"
+        let own = (1...3).map { placed("own\($0)", inner, ["repo_root": inner, "worktree": inner, "branch": "feat/x"]) }
+        let codex = placed("codex", inner, ["repo_root": "/home/me/work", "worktree": inner, "branch": "feat/x",
+                                            "state": "unread", "status": "done"])
+        let all = own + [codex]
+        let repos = try #require(RepoTree.build(all, machines: machines).first?.repos)
+        let app = try #require(repos.first { $0.path == inner })
+        let work = try #require(repos.first { $0.path == "/home/me/work" })
+        #expect(app.worktrees.map(\.id) == ["tree/machine-a/" + inner], "the main checkout keeps the path's id")
+        #expect(work.worktrees.count == 1 && work.worktrees[0].id != app.worktrees[0].id)
+        #expect(app.worktrees[0].sessions.map(\.sessionID).sorted() == ["own1", "own2", "own3"])
+        #expect(work.worktrees[0].sessions.map(\.sessionID) == ["codex"])
+
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        let projection = AgentListProjection.build(.init(sessions: all, machines: [], settings: settings))
+        let rows = try #require(projection.rows[app.worktrees[0].id])
+        #expect(rows.all.flatMap(\.sessions).map(\.sessionID).sorted() == ["own1", "own2", "own3"])
+        #expect(projection.quietWorktrees[app.worktrees[0].id] == true, "its agents are all idle")
+        #expect(projection.rows[work.worktrees[0].id]?.all.flatMap(\.sessions).map(\.sessionID) == ["codex"])
     }
 
 }

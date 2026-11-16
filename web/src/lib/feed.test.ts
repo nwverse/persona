@@ -20,11 +20,13 @@ import {
   sendRouted,
   setRoute,
   startFailure,
+  startInFlight,
   type FeedItem,
   type TaskPlan,
 } from "./feed";
 import { conversationCards } from "./assistant-views";
-import { refreshTodos } from "./store";
+import { getPanel, openPanel } from "./panel";
+import { markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -144,6 +146,17 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
     expect(startFailure(todo(), {})).toBeUndefined(); // may still be starting
   });
 
+  it("is starting only while a dispatch is in flight, never for a to-do nobody dispatched (#7552)", () => {
+    const own = todo({ origin: undefined, plan_id: undefined });
+    expect(startInFlight(own, {})).toBe(false); // todo_create, made by hand: no plan, no start
+    expect(startInFlight(todo(), {})).toBe(true); // a plan made it and its start has not failed
+    expect(startInFlight(todo(), plans)).toBe(false); // that start failed
+    expect(startInFlight(todo({ start_error: "launcher not found" }), {})).toBe(false);
+    const taking = { p2: { id: "p2", conversation: "c1", state: "started" as const, tasks: [{ title: "", prompt: "", machine: "box", cwd: "/code/app", todo_id: "t1" }] } };
+    expect(startInFlight(own, taking)).toBe(true); // a plan took over the to-do (it keeps no plan_id)
+    expect(startInFlight(own, { p2: { ...taking.p2, state: "dismissed" } })).toBe(false);
+  });
+
   describe("removing it", () => {
     const ok = (body: unknown) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
     afterEach(() => vi.unstubAllGlobals());
@@ -154,14 +167,16 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
       return fetcher;
     };
 
-    it("deletes a task that never had an agent at once, and drops its route", async () => {
+    it("deletes a task that never had an agent at once, and drops its route and its panel", async () => {
       const fetcher = stub();
       setRoute("c1", "t1");
+      openPanel({ kind: "task", todo: "t1" });
       const ask = vi.fn((_message: string) => true);
       expect(await removeTask(todo({ start_error: "x", done_at: "2026-11-04T10:00:05Z" }), ask)).toBe(true);
       expect(ask).not.toHaveBeenCalled();
       expect(fetcher.mock.calls.some(([url, init]) => String(url).endsWith("/todos/t1") && init?.method === "DELETE")).toBe(true);
       expect(getFeedState().routes.c1).toBeUndefined();
+      expect(getPanel()).toBeNull();
     });
 
     it("retries it in place: one POST however many taps, the todo the hub answers put in at once (#1396)", async () => {
@@ -213,6 +228,32 @@ describe("routing the next message to a task", () => {
     vi.stubGlobal("localStorage", { getItem: () => "test" });
     await refreshTodos();
   };
+
+  it("addresses the original decision round and refreshes its card after a chat answer", async () => {
+    await tasks("task-decision");
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ok())
+      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ todos: [] }) });
+    vi.stubGlobal("fetch", fetcher);
+    setRoute("decision-chat", "task-decision", "2026-11-10T12:00:00.123456Z");
+    expect(await sendRouted("decision-chat", "Use the alternative, but keep the current limits.")).toBe(true);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual({
+      todo_id: "task-decision", asked_at: "2026-11-10T12:00:00.123456Z",
+      text: "Use the alternative, but keep the current limits.",
+    });
+    expect(getFeedState().routes["decision-chat"]).toBeUndefined();
+    expect(fetcher.mock.calls.some(([url]) => url === "/api/v1/todos")).toBe(true);
+  });
+
+  it("keeps the decision round attached when its answer fails to send", async () => {
+    await tasks("task-decision");
+    const fetcher = vi.fn().mockResolvedValue({ ok: false, status: 409, text: async () => JSON.stringify({ error: "offline" }) });
+    vi.stubGlobal("fetch", fetcher);
+    setRoute("decision-retry", "task-decision", "2026-11-10T12:00:00Z");
+    await expect(sendRouted("decision-retry", "Use the alternative.")).rejects.toThrow("offline");
+    expect(getFeedState().routes["decision-retry"]).toEqual({ todoId: "task-decision", askedAt: "2026-11-10T12:00:00Z" });
+    setRoute("decision-retry", null);
+  });
 
   it("keeps the route after a 503 so the retry still goes to the task", async () => {
     const fetcher = vi.fn()
@@ -447,4 +488,19 @@ describe("loading a conversation's feed (docs/protocol/protocol.md: since, oldes
     expect(cards.actions["item-1/0"]?.client_msg_id).toBe("cid-1");
     expect(cards.blocks["item-1/0"]).toBe(true);
   });
+});
+
+it("discards a feed response arriving after deletion, including its plan and cards", async () => {
+  const sid = "deleted-feed-race";
+  let release!: (r: Response) => void;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => { release = r; })));
+  const read = loadFeed(sid);
+  markConversationDeleted("hub", sid);
+  release(Response.json({ items: [{ id: "late", conversation: sid, kind: "plan", at: new Date().toISOString() }], plans: { late: { id: "late", conversation: sid, tasks: [], state: "open" } }, task_cards: [] }));
+  await read;
+  expect(getFeedState().feeds[sid]).toBeUndefined();
+  expect(getFeedState().plans.late).toBeUndefined();
+  expect(getFeedState().taskCards[sid]).toBeUndefined();
+  reset();
 });

@@ -472,7 +472,7 @@ func TestAssistantBypassCLIControls(t *testing.T) {
 		`$C im +messages-send --text hello`,
 		`$(printf '%s' "$C") im +messages-send --text hello`,
 		"`printf '%s' \"$C\"` im +messages-send --text hello",
-		`lark-cli docs +fetch --doc-id "$DOCUMENT"`,
+		`lark-cli docs +create --title "$DOCUMENT"`, // a read with a variable flag value runs (#8119); a write is confirmed whole
 		`lark-cli im +messages-send --text hello < /home/me/message.txt`,
 		`echo hi > "/tmp/$(lark-cli im +messages-send --text hello)"`,
 		`$C im +messages-send --text hello <<< input`,
@@ -612,7 +612,7 @@ func TestAssistantBypassShellNames(t *testing.T) {
 	}
 }
 
-func assertAssistantBypassClassification(t *testing.T, command string, cards int) {
+func assertAssistantBypassClassification(t *testing.T, command string, cards int, gates ...proto.CommandGate) {
 	t.Helper()
 
 	for _, adapter := range []string{"claude", "codex"} {
@@ -624,6 +624,9 @@ func assertAssistantBypassClassification(t *testing.T, command string, cards int
 			p.id, c.threadID = testThread, testThread
 			n.procs[testThread] = p
 			n.larkCfg, n.larkCfgAt = olCfg(), time.Now().Add(time.Hour)
+			if len(gates) > 0 {
+				n.larkCfg.Gates = gates
+			}
 			n.larkCfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
 			// Seed metadata without starting the CLI or executing the classified commands.
 			n.larkRisks = map[string]string{"\x00docs +fetch": "read", "\x00docs +create": "write"}

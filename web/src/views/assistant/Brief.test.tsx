@@ -161,6 +161,14 @@ describe("a brief item", () => {
     expect([...host.querySelectorAll("button")].some((b) => b.textContent === "通过")).toBe(false);
   });
 
+  it("says when the decision is recorded for the supervisor because no Agent can take it", async () => {
+    api.mockResolvedValueOnce({ ok: true, delivered: "none" });
+    drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
+    const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "按推荐来")!;
+    await act(async () => take.click());
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
+  });
+
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {
     draw(item());
     api.mockRejectedValueOnce(new ApiError(409, "已经处理过了", {}));
@@ -277,6 +285,18 @@ describe("a brief item", () => {
     act(() => setup[0].querySelector("button")!.click());
     expect(api).not.toHaveBeenCalled();
     expect(location.search).toBe("?tab=persona");
+  });
+
+  it("opens the background supervisor's model purpose from the lower-tier line, and changes nothing", () => {
+    draw(item(body({ setup: [
+      { id: "supervisor_tier", setting: "assistant.supervise", count: 24, text: "A lower tier for the background supervisor: … 24 acceptances on big-model …" },
+    ] })));
+    const setup = rows("setup");
+    expect(setup.map((r) => r.querySelector("div")?.textContent)).toEqual(["A lower tier for the background supervisor: … 24 acceptances on big-model …"]);
+    expect(setup[0].querySelectorAll("button").length).toBe(1);
+    act(() => setup[0].querySelector("button")!.click());
+    expect(api).not.toHaveBeenCalled();
+    expect(location.search).toBe("?tab=models&purpose=assistant.supervise");
   });
 
   it("has no setup section on a briefing without the block", () => {

@@ -369,7 +369,7 @@ func TestParsePasteCindy(t *testing.T) {
 			want: pasteResult{Format: "cindy", Notes: []pasteNote{}, Drafts: []pasteDraft{{
 				Label: "Example AI",
 				Provider: pastedProvider{Kind: "launcher", Agent: "claude", API: "messages", DisplayName: "Example AI",
-					BaseURL: "https://example.invalid/anthropic", Auth: "api_key", APIKey: pasteKeyA, Model: "m1", Headers: "X-Tenant: example",
+					BaseURL: "https://example.invalid/anthropic", APIKey: pasteKeyA, Model: "m1", Headers: "X-Tenant: example",
 					Models: []proto.ProviderModel{{ID: "m1"}, {ID: "m2", Name: "M Two", ContextWindow: 1000000, Efforts: []string{"low", "high"},
 						DefaultEffort: "high"}, {ID: "m3", Efforts: []string{"low"}}}},
 				Notes: notes(pasteNote{Code: noteCindyEndpoint, Name: "openai-responses"}),
@@ -416,7 +416,7 @@ func TestParsePasteCindy(t *testing.T) {
 				pasteNote{Code: noteCindyKind, Name: "preset"}, pasteNote{Code: noteCindyKind, Name: "builtin"},
 				pasteNote{Code: noteCindyAuth, Name: "oauth"}, pasteNote{Code: noteURLUser, Name: "U"}),
 				Drafts: []pasteDraft{{Label: "Good", Provider: pastedProvider{Kind: "launcher", Agent: "claude", API: "messages", DisplayName: "Good",
-					BaseURL: "https://example.invalid/good", Auth: "api_key", APIKey: pasteKeyB}}}},
+					BaseURL: "https://example.invalid/good", APIKey: pasteKeyB}}}},
 		},
 		{name: "invalid JSON", text: `{"kind": "custom", "endpoints": [}`, want: pasteResult{Notes: notes(pasteNote{Code: noteInvalidJSON}), Drafts: []pasteDraft{}}},
 	}

@@ -77,6 +77,7 @@ const (
 	peerUnreachable = "peer_unreachable" // the inbox is not there, or its key is missing
 	peerTooLong     = "peer_too_long"    // longer than the inbox takes in one line
 	peerUnconfirmed = "peer_unconfirmed" // written, but the session has not taken it (held, dropped): delivery unknown
+	peerHeld        = "peer_held"        // written to a bypass permissions session, which holds it for approval at the computer: delivery unknown
 	peerCommand     = "peer_command"     // a slash command, which the inbox does not run
 )
 
@@ -121,6 +122,7 @@ const (
 	peerTooLongMsg     = "消息太长，会话之间的消息通道一次放不下：分成几条发。这次没有发送。"
 	peerWriteBrokeMsg  = "给这个 Claude 的消息写到一半连接断了，不知道它收到没有：先在电脑上看一眼再决定要不要重发。"
 	peerUnconfirmedMsg = "消息已交给这个 Claude，但它还没有收下：可能在等电脑上批准（权限模式是跳过确认的会话会先扣下其他会话发来的消息），也可能和上一条重复被丢掉了。先在电脑上看一眼再决定要不要重发。"
+	peerHeldMsg        = "消息已交给这个 Claude，但它在等电脑上批准：这个会话的权限模式是跳过确认，会先扣下 Persona 发来的消息，在电脑上允许后它才会收下。不用重发。"
 	peerCommandMsg     = "会话之间的消息通道只送普通消息，不执行斜杠命令：命令请在电脑上输入。这次没有发送。"
 )
 
@@ -129,6 +131,21 @@ const (
 // (peerTaken). Refusals come back as *errPeer (nothing sent); any other error came after the line was written (the
 // inbox may have it): the caller looks at the transcript before calling it unknown.
 func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
+	return peerSendAt(ctx, p, sessionID, text, peerNext)
+}
+
+// The priorities a message to the inbox goes at. peerNext queues it behind a running turn, or runs it when the session
+// rests. peerNow cuts the running turn — and a question or permission prompt the session waits on (their tool call
+// ends "Tool permission request aborted") — and runs it at once: Claude Code's own "send now", its queue aborting the
+// turn for a command of priority now (measured with Claude Code 2.1.311 in the desktop app, 2026-11-12: a reply cut
+// at its 481st character, the new message answered 2 s later).
+const (
+	peerNext = "next"
+	peerNow  = "now"
+)
+
+// peerSendAt is peerSend at priority (peerNext, peerNow).
+func peerSendAt(ctx context.Context, p claudePeer, sessionID, text, priority string) error {
 	if p.socket == "" {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg}
 	}
@@ -145,7 +162,7 @@ func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
 		}
 		token = "" // auth is optional on this platform: an inbox whose key file is missing takes the line without it
 	}
-	msg, err := peerMessage(sessionID, text)
+	msg, err := peerMessageAt(sessionID, text, priority)
 	if err != nil {
 		return &errPeer{code: peerUnsupported, msg: peerNoInboxMsg, cause: err}
 	}
@@ -182,13 +199,18 @@ func peerSend(ctx context.Context, p claudePeer, sessionID, text string) error {
 // peerSender, for sessionID; msgV 1, a fresh msg_id, priority next (queued behind a running turn, or run when the
 // session rests).
 func peerMessage(sessionID, text string) ([]byte, error) {
+	return peerMessageAt(sessionID, text, peerNext)
+}
+
+// peerMessageAt is peerMessage at priority.
+func peerMessageAt(sessionID, text, priority string) ([]byte, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("empty message")
 	}
 	return marshalNoEscape(map[string]any{
 		"type":       "user",
 		"message":    map[string]string{"role": "user", "content": peerEnvelope(prompts.RenderPeerMessage(prompts.PeerMessage{Text: text}))},
-		"priority":   "next",
+		"priority":   priority,
 		"msgV":       1,
 		"msg_id":     peerMsgID(),
 		"session_id": sessionID,

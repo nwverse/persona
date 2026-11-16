@@ -27,6 +27,16 @@ class SessionSourceTest {
         assertFalse(missing.canRead || missing.canSend || missing.canInterrupt || missing.canApprove || missing.canTerminal || missing.canAttach)
     }
 
+    /** The engine an agent ran in made its own worktree, and is the one asked about it and to remove it (#6115). */
+    @Test fun theEngineThatMadeAnAgentsWorktree() {
+        assertEquals("herdr", session("""{"session_id":"s1","pane_id":"w1:p1"}""").worktreeKind)
+        assertEquals("orca", session("""{"session_id":"s1","pane_id":"orca:t1"}""").worktreeKind)
+        assertEquals("paseo", session("""{"session_id":"s1","source_kind":"runtime","space_kind":"paseo"}""").worktreeKind)
+        assertNull(session("""{"session_id":"s1","pane_id":"botmux:x1"}""").worktreeKind) // a Feishu topic, no engine
+        assertNull(session("""{"session_id":"s1","source_kind":"runtime","space_kind":"dsh"}""").worktreeKind)
+        assertNull(session("""{"session_id":"s1"}""").worktreeKind)
+    }
+
     @Test fun historyIsReadOnlyAndResumesByItsThread() {
         val history = session(
             """{"machine_id":"m","session_id":"opaque","cwd":"/tmp/project","source_kind":"codex_history","source_thread_id":"thread",""" +
@@ -85,6 +95,28 @@ class SessionSourceTest {
         assertEquals("身份冲突", (conflict.sourceSubtitle).zhAny())
     }
 
+    // #6294, as the web and iOS: the node's word on close and rename wins; without it, a terminal's rule, as before.
+    @Test fun closeAndRenameGoByTheNodesWordElseByTheTerminal() {
+        val paseo = session(
+            """{"session_id":"paseo","status":"idle","agent":"claude","source_kind":"runtime","slot_name":"release",""" +
+                """"capabilities":{"read":true,"send":true,"close":true,"rename":true}}""",
+        )
+        assertFalse(paseo.canTerminal)
+        assertTrue(paseo.canClose && paseo.canRename)
+        val refused = paseo.copy(capabilities = paseo.capabilities!!.copy(close = false, rename = false))
+        assertFalse(refused.canClose || refused.canRename)
+        // An older node says neither: a runtime's session has no terminal, so neither, as before.
+        val older = paseo.copy(capabilities = SessionCapabilities(read = true, send = true))
+        assertFalse(older.canClose || older.canRename)
+        // A pane keeps both without a word (an old row, or a node's row that says terminal), and the node's no still wins.
+        val pane = session("""{"session_id":"s","status":"idle","pane_id":"w1:p1"}""")
+        assertTrue(pane.canClose && pane.canRename)
+        val stated = pane.copy(capabilities = SessionCapabilities(read = true, terminal = true))
+        assertTrue(stated.canClose && stated.canRename)
+        assertFalse(stated.copy(capabilities = stated.capabilities!!.copy(close = false)).canClose)
+        assertTrue(stated.copy(capabilities = stated.capabilities!!.copy(close = false)).canRename)
+    }
+
     @Test fun claudeOnlyControlsArePositive() {
         val claude = session("""{"session_id":"s","status":"idle","pane_id":"w1:p1"}""")
         assertTrue(claude.canChangeModes && claude.canTypeClaudeCommands)
@@ -109,6 +141,16 @@ class SessionSourceTest {
         assertFalse(claude.copy(agent = "traex").steersQueue)
         assertFalse(claude.copy(assistant = true).steersQueue)
         assertFalse(claude.copy(sourceKind = "claude_cli", capabilities = SessionCapabilities(read = true, send = true)).steersQueue)
+    }
+
+    // iOS QueueSteerTests' own count: the relayed messages are the queue's last ones.
+    @Test fun theUsersOwnQueuedMessagesComeBeforeTheRelayedOnes() {
+        val queue = """{"session_id":"main","assistant":true,"status":"working","queued":["一","二","来自另一个对话"]"""
+        assertEquals("an older hub has only the user's own messages", 3, session("$queue}").ownQueued)
+        assertEquals(2, session("""$queue,"queued_relayed":1}""").ownQueued)
+        assertEquals("a stale count cannot make the own count negative", 0, session("""$queue,"queued_relayed":99}""").ownQueued)
+        assertEquals("a malformed negative count is none", 3, session("""$queue,"queued_relayed":-2}""").ownQueued)
+        assertEquals(0, session("""{"session_id":"idle","queued_relayed":1}""").ownQueued)
     }
 
     @Test fun modeCapabilityHidesUnsupportedClaude() {

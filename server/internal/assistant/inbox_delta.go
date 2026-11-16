@@ -21,7 +21,8 @@ import (
 //
 // The manager keeps the last lists it answered with a cursor: per item, a sum of the bytes it was listed with. A delta
 // is the list now against the list then: an item whose bytes differ, or that is new, is in `items`; an id the list no
-// longer has is in `removed`, whatever took it out (filed long enough ago, forgotten, dropped, a rollback). A list
+// longer has is in `removed`, whatever took it out (filed long enough ago or
+// past the newest inboxListDone done, forgotten, dropped, a rollback). A list
 // answered again with the same items gets the cursor it had (inboxSnapshots.note), so repeated reads by several apps
 // keep the few kept lists apart. A cursor this run did not hand out, one dropped (more than inboxSnapshotsMax newer
 // lists) or left unused for inboxSnapshotTTL, and one for a list of another shape (`sources`, `chain`), get the whole

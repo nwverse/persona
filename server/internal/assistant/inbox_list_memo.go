@@ -113,13 +113,14 @@ func (s *Service) inboxListBytes(shape inboxShape, withIDs bool) ([][]byte, []st
 	b.mu.Lock()
 	now := time.Now()
 	cutoff := now.Add(-inboxKeepDone)
+	cut := b.listedDoneCut(cutoff, all)
 	if m.kept == nil {
 		m.kept = make(map[string]inboxListed, len(b.items))
 	}
 	rows := make([]inboxListRow, 0, len(b.items))
 	misses := 0
 	for _, it := range b.items {
-		if it.DoneAt != nil && it.DoneAt.Before(cutoff) || !all && it.Connector != nil {
+		if !inboxShows(it, cutoff, cut, all) {
 			continue
 		}
 		it.arrived(now)

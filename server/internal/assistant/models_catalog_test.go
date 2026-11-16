@@ -153,6 +153,20 @@ func TestCatalogPricesAreExactOnly(t *testing.T) {
 	if !ok || exact.Price == nil || exact.Price.Input != 4 || exact.Price.Output != 20 || exact.Price.CacheRead == nil || *exact.Price.CacheRead != 0.2 {
 		t.Fatalf("exact catalog price: %+v", exact)
 	}
+	// Cache writes as cindy prices them (#5426): 5-minute and 1-hour, or only the one it states, or none.
+	for id, want := range map[string][2]float64{"claude-opus-5-5": {5, 8}, "claude-haiku-4-5": {1.25, 2}, "MiniMax-M2.7": {0.375, -1}, "glm-5.3": {-1, -1}} {
+		m, _ := catalogModel(id)
+		got := [2]float64{-1, -1}
+		if m.Price != nil && m.Price.CacheWrite != nil {
+			got[0] = *m.Price.CacheWrite
+		}
+		if m.Price != nil && m.Price.CacheWrite1h != nil {
+			got[1] = *m.Price.CacheWrite1h
+		}
+		if m.Price == nil || got != want {
+			t.Errorf("%s: cache writes %v, want %v (price %+v)", id, got, want, m.Price)
+		}
+	}
 	inherited, ok := catalogModel("claude-opus-5-6")
 	if !ok || inherited.InheritedFrom == "" || inherited.Price != nil {
 		t.Fatalf("a different model must not inherit a price: %+v", inherited)

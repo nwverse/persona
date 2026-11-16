@@ -54,6 +54,8 @@ beforeEach(() => {
 });
 afterEach(() => { reset(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const settle = () => vi.advanceTimersByTimeAsync(0);
+/** Past the invalidation window (session-list.ts INVALIDATE_THROTTLE_MS): a hint's trailing read has gone out. */
+const settleThrottled = () => vi.advanceTimersByTimeAsync(2_100);
 function hello(features: string[]) {
   connect();
   Socket.last.push({ type: "hello", features });
@@ -71,7 +73,7 @@ describe("negotiated bounded runtime lists", () => {
     expect(getState().sessionSummaries).toHaveLength(50);
     expect(getState().sessionCounts?.total).toBe(8000);
     expect(getState().sessions).toEqual({});
-    expect(Socket.last.url).toContain("features=sessions_list,sessions_delta,session_live");
+    expect(Socket.last.url).toContain("features=sessions_list,sessions_list_changes,sessions_delta,session_live");
   });
 
   it("keeps chat details separate and consumes title-only invalidations via since", async () => {
@@ -94,12 +96,12 @@ describe("negotiated bounded runtime lists", () => {
     const sid = "row/<&>/with/slashes";
     changed = [session(sid, { updated_at: "2027-01-01T00:00:00Z" })];
     Socket.last.push({ type: "sessions_list", revision: "r2" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(true);
     changed = [];
     removed = [JSON.stringify(["demo", sid])];
     Socket.last.push({ type: "sessions_list", revision: "r3" });
-    await settle();
+    await settleThrottled();
     expect(runtimeSessions.getSnapshot().rows.some((s) => s.session_id === sid)).toBe(false);
   });
 

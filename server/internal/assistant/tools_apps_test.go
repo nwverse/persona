@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/dialogwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -31,6 +32,28 @@ func runTool(s *Service, self, name string, args any) (string, error) {
 }
 
 // ---- kb_* ----
+
+func TestKBProjectNoteRoundTrip(t *testing.T) {
+	s := newKBService(t, newFakeHub())
+	out, err := runTool(s, "c1", "kb_update", map[string]any{
+		"kind": "projects", "id": "Project note", "note": "  First line\n second line  ",
+		"project_kind": "invalid", "status": "invalid", "projects": []string{"other"},
+		"importance": "invalid", "relevance": 101,
+		"chats": []string{"missing"},
+	})
+	// A project does not use projects: said, not dropped silently. Invalid values of fields it does use are still
+	// dropped as before (projectUpdate).
+	if err != nil || out != "Saved projects/project-note.\nNot saved: projects (projects entries do not use projects)." {
+		t.Fatalf("update: %q %v", out, err)
+	}
+	out, err = runTool(s, "c1", "kb_get", map[string]any{"kind": "projects", "id": "Project note"})
+	if err != nil || !strings.Contains(out, `"note": "First line second line"`) {
+		t.Fatalf("get note: %q %v", out, err)
+	}
+	if !strings.Contains(out, "\"locked_fields\": [\n    \"note\"\n  ]") || strings.Contains(out, `"locked": true`) {
+		t.Fatalf("get locks: %q", out)
+	}
+}
 
 // The kb_* tools read the assistant's knowledge base and write what the model reads: defaults and caps of their
 // arguments, the lines, the list, an entry with its meta.json as the file has it and dates in the user's zone.
@@ -225,6 +248,9 @@ func TestInteractionAnswerRefusesApprovals(t *testing.T) {
 		{Kind: proto.IxPermission, ToolName: "Bash", Summary: "rm -rf"},
 		{Kind: proto.IxPlan, Plan: "1. do it"},
 		{Kind: proto.IxScreen},
+		// Claude Code's Bypass Permissions confirmation read off the terminal: the user's choice, never the assistant's.
+		{Kind: proto.IxScreen, Dialog: &dialogwire.Dialog{Question: "WARNING: Claude Code running in Bypass Permissions mode",
+			Options: []dialogwire.Option{{Key: "1", Label: "No, exit", Keys: []string{"enter"}}, {Key: "2", Label: "Yes, I accept", Keys: []string{"down", "enter"}}}}},
 	} {
 		s, _, q, _ := answerService(t)
 		ix.ID, ix.MachineID, ix.SessionID = "ix_"+ix.Kind, "mac", "abcdef12-agent"

@@ -247,6 +247,10 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		return
 	}
 	for _, r := range out {
+		r.Level = s.leaderReportLevel(ctx, r.Kind)
+		if r.Plan != "" && r.Level == assistantwire.LevelP0 {
+			r.Level = assistantwire.LevelP1 // a plan waiting for Start is P1, as its own push (tasks_plan.go)
+		}
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
 	}
 	if len(stuckSigs) > 0 {
@@ -322,9 +326,22 @@ func (s *Service) openPlans(ctx context.Context, conversation string, since time
 // taskStuck is the one stuck rule (#3485, #4352): by the To-dos SOP it sits in Waiting on you, or stopped unfinished
 // (PR to merge, Other open, Shelved), and nothing of it moved for leaderStuckAfter. reached: every machine its agents are
 // on answered (one that did not may be running it). leader.report kind stuck and the direction tree's stuck both read it.
+// A to-do no agent has worked on yet (notStarted) is stuck only in Waiting on you: elsewhere it has not started, it is
+// not stopped (#5846).
 func taskStuck(t Todo, tr todoTriage, reached bool, now time.Time) bool {
+	if notStarted(t) && tr.Section != triageWaiting {
+		return false
+	}
 	return reached && t.DoneAt == nil && !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter &&
 		slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+}
+
+// notStarted: no agent has ever worked on to-do t (none linked, not even one let go since), and it is not a concern
+// (#5846): a piece of a direction a leader recorded with todo_create and has not handed out, a Lark topic's to-do, a
+// to-do the user made. The direction tree shows it as planned, and it is stuck only while it waits on the owner
+// (taskStuck). A concern waits for the main conversation's answer (concerns.go) and keeps the rules it had.
+func notStarted(t Todo) bool {
+	return len(t.Agents) == 0 && !t.isConcern()
 }
 
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,

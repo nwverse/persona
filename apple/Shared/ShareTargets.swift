@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Where Share › Persona sends (#1460): Persona's main conversation, another of its conversations, an agent, or a new
 /// chat. The rules are here, not in the extension, so PersonaTests can hold them; the extension (`PersonaShare/`) draws
@@ -69,9 +70,9 @@ nonisolated enum ShareTargets {
         var out = Listed()
         if let a = assistant {
             let mainID = a.main.flatMap { $0.isEmpty ? nil : $0 }
-            if let mainID {
-                let s = a.conversations.first { $0.sessionID == mainID }
-                out.main = ShareTarget(kind: .main, key: SessionKey(machineID: a.machineID, sessionID: mainID), title: "Persona",
+            if let key = a.mainKey() {
+                let s = a.conversations.first { $0.sessionID == key.sessionID }
+                out.main = ShareTarget(kind: .main, key: key, title: "Persona",
                                        state: s?.state ?? .idle, date: s?.updatedAt)
             }
             out.conversations = a.conversations
@@ -141,14 +142,15 @@ nonisolated enum ShareTargets {
     }
 
     /// Sends `text` and `images` to `target` as the composer would, the same `clientMsgID` on a retry; a new chat starts
-    /// with them as its first message. Returns the session it went to.
+    /// with them as its first message. Marked as the share sheet's (`via`): what another app hands over never counts as
+    /// typed in the app. Returns the session it went to.
     static func send(_ api: APIClient, to target: ShareTarget, text: String, images: [ImagePayload], clientMsgID: String) async throws -> SessionKey {
         switch target.kind {
         case .newChat:
-            return try await api.startConversation(prompt: text, images: images, opID: UUID(uuidString: clientMsgID)).key
+            return try await api.startConversation(prompt: text, images: images, via: .share, opID: UUID(uuidString: clientMsgID)).key
         case .main, .conversation, .agent:
             guard let k = target.key else { throw APIError(status: 404, message: "no session") }
-            try await api.send(k, text: text, images: images, clientMsgID: clientMsgID, opID: UUID(uuidString: clientMsgID))
+            try await api.send(k, text: text, images: images, clientMsgID: clientMsgID, via: .share, opID: UUID(uuidString: clientMsgID))
             return k
         }
     }
@@ -203,6 +205,12 @@ nonisolated extension ShareTargets {
     /// The most files one share takes, and the largest each may be (the composer's `FileUploads.limit`).
     static let maxFiles = 10
     static let fileLimit: Int64 = 200 << 20
+    /// From this total on, the sheet says the upload will take a while and to keep it open (#2282): 50 MB is about
+    /// 40 seconds at 10 Mbit/s up, a common phone uplink, and the upload runs only while the sheet is open (it goes away with the app it was shared from).
+    static let slowUpload: Int64 = 50 << 20
+
+    /// Whether files of `total` bytes take long enough to upload that the sheet should say so before Send.
+    static func takesAWhile(_ total: Int64) -> Bool { total >= slowUpload }
 
     /// The computer a target's files go to: the agent's own, the assistant's for Persona's conversations and a new chat.
     static func machine(for target: ShareTarget, assistantMachine: String?) -> String? {

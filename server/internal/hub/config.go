@@ -124,12 +124,8 @@ type AssistantProfile struct {
 	// one-time code (`persona-hub manager-code`, `persona-manager join --builtin`): the hub neither starts it nor gives
 	// it a new token (docs/assistant/managers.md "The built-in manager as its own service").
 	Mode string `json:"mode,omitempty"`
-	// PersonaView: the assistant is taught ```persona-view (a View of the extensions' components, #1850) instead of
-	// ```persona-card. Off until every app the user has draws it (UI version 3); a persona-card draws on all of them.
-	PersonaView bool `json:"persona_view,omitempty"`
-	// HTMLViews: cards' html components may run (sandboxed, where a client passed its security checks) and call the
-	// persona.reply / persona.open bridge. Only with PersonaView; nil (absent) is on, false turns them into fallback.
-	HTMLViews *bool `json:"html_views,omitempty"`
+	// assistant.persona_view and assistant.html_views are no longer read: the assistant's cards, HTML ones included,
+	// are always on (#5509, docs/assistant/assistant-views.md "Prompts"); sayRetiredKeys logs a hub.json that still has them.
 }
 
 // Built-in manager modes (AssistantProfile.Mode).
@@ -150,9 +146,6 @@ func (p AssistantProfile) ServiceBound() bool {
 	return !p.External && p.Mode == AssistantModeService
 }
 
-// HTMLViewsOn is assistant.html_views with its default (on); it means nothing while PersonaView is off.
-func (p AssistantProfile) HTMLViewsOn() bool { return p.HTMLViews == nil || *p.HTMLViews }
-
 type SharingConfig struct {
 	PublicOrigin string `json:"public_origin,omitempty"`
 	// IngressKey authenticates only loopback sharing-ingress peer IPs, never content or management access.
@@ -162,8 +155,16 @@ type SharingConfig struct {
 type Config struct {
 	// AutoUpdateNodes explicitly opts into fleet upgrades after Hub updates and node reconnects.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
+	// ScreenLinkOff: the hub never selects the live screen's session subprotocol (#6398, askScreenLink), so every live
+	// screen stays on the plain relay whatever the apps and nodes support: a switch for the hub's operator, read at
+	// start, for when direct routes misbehave and an app release would take too long.
+	ScreenLinkOff bool `json:"screen_link_off,omitempty"`
 	// Name is what people see this hub as (hubName); empty: its machine's host name.
 	Name string `json:"name,omitempty"`
+	// InitialLocale is the user's language until a device says one (locale.go, #5519): the language the installer ran
+	// in, written by a new install's `personad hub setup`. Once a device has said one (Postgres user_locale) it means
+	// nothing; empty, or a language the hub does not know, is zh-Hans as before.
+	InitialLocale i18n.Lang `json:"initial_locale,omitempty"`
 	// ShutdownTimeoutSeconds bounds the entire shutdown, including pool closure (default 8; policy, not a latency measurement).
 	ShutdownTimeoutSeconds int            `json:"shutdown_timeout_seconds,omitempty"`
 	Listen                 string         `json:"listen"`
@@ -182,6 +183,9 @@ type Config struct {
 	Assistant AssistantProfile `json:"assistant"`
 	// Notify tunes when "finished" pushes go out (notify.go); which ones a device gets is its own setting.
 	Notify NotifyConfig `json:"notify,omitempty"`
+	// InterceptReaders lists the extension IDs whose tokens may read GET /api/v1/push/intercepts, on top of the
+	// notify scope. Full credentials always may; an extension token not on this list is refused even with notify.
+	InterceptReaders []string `json:"intercept_readers,omitempty"`
 	// Public is how the hub is reached from outside its LAN: TLS, the addresses it hands out (config_public.go).
 	Public PublicConfig `json:"public,omitempty"`
 
@@ -374,11 +378,6 @@ func initConfigFile(dir string) error {
 	return err
 }
 
-// noPublicURLHint is what `hub pair` says when hub.json's public_url is empty.
-const noPublicURLHint = "hub 还不知道手机从哪个地址连它（public_url 是空的）：Docker 里在 .env 写上 " +
-	"PERSONA_PUBLIC_URL=http://<这台机器的局域网地址>:18660，再运行 docker compose up -d；" +
-	"不用 Docker 的，在 hub.json 里填 public_url 后重启 hub。也可以在管理界面的「网络」里填地址"
-
 func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
@@ -400,9 +399,10 @@ func Pair(ctx context.Context, legacy bool, android ...bool) error {
 }
 
 func (c *Config) printPair(ctx context.Context, legacy bool, out io.Writer, android ...bool) error {
+	l := i18n.Terminal()
 	withAndroid := len(android) > 0 && android[0]
 	if legacy && withAndroid {
-		return fmt.Errorf("--android 需要临时 token，不能与 --legacy 同时使用")
+		return errors.New(i18n.T(l, "hub-cli.pair_android_legacy_conflict"))
 	}
 	if legacy {
 		writePair(out, c)
@@ -412,14 +412,15 @@ func (c *Config) printPair(ctx context.Context, legacy bool, out io.Writer, andr
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "地址：%s\n配对链接：%s\n\n用 Persona App 扫码配对：\n\n", p.URL, p.PairURL)
+	fmt.Fprint(out, i18n.T(l, "hub-cli.pair_normal_intro", i18n.Args{"address": p.URL, "link": p.PairURL}))
 	qrterminal.GenerateHalfBlock(p.PairURL, qrterminal.L, out)
-	fmt.Fprintf(out, "\n有效期至：%s\n", p.ExpiresAt.UTC().Format(time.RFC3339))
+	fmt.Fprint(out, i18n.T(l, "hub-cli.pair_normal_expires", i18n.Args{"expires": p.ExpiresAt.UTC().Format(time.RFC3339)}))
 	if p.FP != "" {
-		fmt.Fprintf(out, "公钥指纹：%s\n", p.FP)
+		fmt.Fprint(out, i18n.T(l, "hub-cli.pair_normal_fingerprint", i18n.Args{"fingerprint": p.FP}))
 	}
 	if withAndroid {
-		fmt.Fprintf(out, "Android 安装包：%s/api/v1/app/android/apk?%s\n", strings.TrimRight(c.PublicURL, "/"), url.Values{"token": {p.Token}}.Encode())
+		download := strings.TrimRight(c.PublicURL, "/") + "/api/v1/app/android/apk?" + url.Values{"token": {p.Token}}.Encode()
+		fmt.Fprint(out, i18n.T(l, "hub-cli.pair_normal_android", i18n.Args{"url": download}))
 	}
 	return nil
 }
@@ -436,6 +437,7 @@ func PairMachine(ctx context.Context, machine string, add bool, name string) err
 }
 
 func (c *Config) printLinkPair(ctx context.Context, machine string, add bool, name string, out, help io.Writer) error {
+	l := i18n.Terminal()
 	body := map[string]any{"machine": machine}
 	if add {
 		body = map[string]any{"add": map[string]string{"id": machine, "name": name}}
@@ -444,14 +446,14 @@ func (c *Config) printLinkPair(ctx context.Context, machine string, add bool, na
 	if err != nil {
 		var e *pairRefusal
 		if !add && errors.As(err, &e) && e.code == "unknown_machine" {
-			return fmt.Errorf("hub.json 里没有要「电脑来连」的电脑「%s」；加 --add 自动添加：personad hub pair --machine %s --add [--name <名字>]", machine, machine)
+			return errors.New(i18n.T(l, "hub-cli.pair_unknown_machine", i18n.Args{"machine": machine}))
 		}
 		return err
 	}
 	// A hub that does not know "add" (an older binary still running) ignores it and makes an app's code, which trades
 	// for a full device credential: never hand that out as a computer's link.
 	if p.Machine != machine {
-		return fmt.Errorf("本机 hub 没有生成电脑「%s」的配对链接：hub 可能还没升级或没重启；升级并重启 hub 后再试", machine)
+		return errors.New(i18n.T(l, "hub-cli.pair_wrong_machine", i18n.Args{"machine": machine}))
 	}
 	fmt.Fprintln(out, p.PairURL)
 	shown := machine
@@ -459,11 +461,11 @@ func (c *Config) printLinkPair(ctx context.Context, machine string, add bool, na
 		shown = p.Name
 	}
 	if p.Added {
-		fmt.Fprintf(help, "\n已添加：%s\n", shown)
+		fmt.Fprint(help, i18n.T(l, "hub-cli.pair_added", i18n.Args{"name": shown}))
 	}
-	fmt.Fprintf(help, "\n这是给「%s」的 Persona Link 用的配对链接，%d 分钟内有效，只能用一次。\n"+
-		"在那台电脑上：菜单栏的 Persona Link › 配对 / 修改连接… 里粘贴；或者运行 persona-link pair '<链接>'（新装的也可以用 persona-link）。\n",
-		shown, max(1, int(time.Until(p.ExpiresAt).Round(time.Minute).Minutes())))
+	fmt.Fprint(help, i18n.T(l, "hub-cli.pair_machine_help", i18n.Args{
+		"name": shown, "count": max(1, int(time.Until(p.ExpiresAt).Round(time.Minute).Minutes())),
+	}))
 	return nil
 }
 
@@ -471,28 +473,38 @@ func (c *Config) printLinkPair(ctx context.Context, machine string, add bool, na
 type pairRefusal struct {
 	status    int
 	code, msg string
+	lang      i18n.Lang
 }
 
 func (e *pairRefusal) Error() string {
-	return fmt.Sprintf("本机 hub 没有生成配对链接（HTTP %d）：%s", e.status, e.msg)
+	return i18n.T(e.lang.Or(i18n.En), "hub-cli.pair_refusal", i18n.Args{"status": e.status, "error": e.msg})
 }
 
 func (c *Config) requestPairCode(ctx context.Context) (*pairCode, error) {
-	p, err := c.requestPairCodeWith(ctx, nil)
+	return c.requestPairCodeLang(ctx, i18n.Terminal())
+}
+
+// requestPairCodeLang uses the language of the command embedding pair setup, which may differ from the terminal's.
+func (c *Config) requestPairCodeLang(ctx context.Context, l i18n.Lang) (*pairCode, error) {
+	p, err := c.requestPairCodeWithLang(ctx, nil, l)
 	if err != nil {
 		return nil, err
 	}
 	return p.pairCode, nil
 }
 
-// requestPairCodeWith asks the running hub for a pairing code over loopback with the master token: body nil for an
-// app's, {"machine"} or {"add"} for a computer's.
+// requestPairCodeWith asks the running hub for a pairing code from loopback (managerconf.CLIHubURL, CLIDial) with the
+// master token: body nil for an app's, {"machine"} or {"add"} for a computer's.
 func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any) (*pairCodeReply, error) {
+	return c.requestPairCodeWithLang(ctx, reqBody, i18n.Terminal())
+}
+
+func (c *Config) requestPairCodeWithLang(ctx context.Context, reqBody map[string]any, l i18n.Lang) (*pairCodeReply, error) {
 	_, port, err := net.SplitHostPort(c.Listen)
 	if n, parseErr := strconv.Atoi(port); err != nil || parseErr != nil || n <= 0 || n > 65535 {
-		return nil, fmt.Errorf("hub listen 配置没有有效端口；请检查配置，或用 --legacy 打印旧格式二维码")
+		return nil, errors.New(i18n.T(l, "hub-cli.pair_listen_invalid"))
 	}
-	endpoint := "http://" + net.JoinHostPort("127.0.0.1", port) + "/api/v1/auth/pair-codes"
+	endpoint := managerconf.CLIHubURL(c.Listen) + "/api/v1/auth/pair-codes"
 	var body io.Reader
 	if reqBody != nil {
 		b, _ := json.Marshal(reqBody)
@@ -503,13 +515,14 @@ func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
-	transport := &http.Transport{Proxy: nil}
+	req.Header.Set("Accept-Language", string(l))
+	transport := &http.Transport{Proxy: nil, DialContext: managerconf.CLIDial}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Timeout: 5 * time.Second, Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("无法连接本机 hub：hub 可能未运行，或未监听回环地址；请先启动 hub，或用 --legacy 打印旧格式二维码")
+		return nil, errors.New(i18n.T(l, "hub-cli.pair_hub_unreachable"))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -520,19 +533,19 @@ func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any
 			}
 			_ = json.Unmarshal(b, &e)
 			// With the cause the hub moved to detail (#5728).
-			return nil, &pairRefusal{status: resp.StatusCode, code: e.Code, msg: apierr.Describe(b)}
+			return nil, &pairRefusal{status: resp.StatusCode, code: e.Code, msg: apierr.Describe(b), lang: l}
 		}
-		return nil, fmt.Errorf("本机 hub 生成临时 token 失败（HTTP %d）；请确认 hub 已升级且配置一致，或用 --legacy 打印旧格式二维码", resp.StatusCode)
+		return nil, errors.New(i18n.T(l, "hub-cli.pair_token_failed", i18n.Args{"status": resp.StatusCode}))
 	}
 	p := pairCodeReply{pairCode: &pairCode{}}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&p)
 	if err == nil && p.Token != "" && p.URL == "" && time.Now().Before(p.ExpiresAt) {
 		// A hub that does not know its own address (a first Docker start leaves public_url empty: the container cannot
 		// see the NAS's LAN address, docs/operations/docker.md): the code is fine, the address a phone would dial is missing.
-		return nil, errors.New(noPublicURLHint)
+		return nil, errors.New(i18n.T(l, "hub-cli.pair_no_public_url"))
 	}
 	if err != nil || p.Token == "" || p.URL == "" || !time.Now().Before(p.ExpiresAt) {
-		return nil, fmt.Errorf("本机 hub 返回了无效的配对信息；请升级 hub，或用 --legacy 打印旧格式二维码")
+		return nil, errors.New(i18n.T(l, "hub-cli.pair_invalid_response"))
 	}
 	p.PairURL = p.pairURL()
 	return &p, nil
@@ -541,9 +554,47 @@ func (c *Config) requestPairCodeWith(ctx context.Context, reqBody map[string]any
 // writePair prints the server, token, the pairing QR code for the iPhone and the same link for the Mac (no camera:
 // it pastes the link into "Connect hub").
 func writePair(w io.Writer, cfg *Config) {
-	fmt.Fprintf(w, "Server: %s\nToken:  %s\n\n用 Persona App 扫码配对：\n\n", cfg.PublicURL, cfg.Token)
+	l := i18n.Terminal()
+	fmt.Fprint(w, i18n.T(l, "hub-cli.pair_legacy_intro", i18n.Args{"server": cfg.PublicURL, "token": cfg.Token}))
 	qrterminal.GenerateHalfBlock(cfg.PairURL(), qrterminal.L, w)
-	fmt.Fprintf(w, "\nMac 上拷贝这条链接，在 Persona 的「连接 hub」里粘贴：\n%s\n", cfg.PairURL())
+	fmt.Fprint(w, i18n.T(l, "hub-cli.pair_legacy_footer", i18n.Args{"link": cfg.PairURL()}))
+}
+
+// retiredAssistantKeys are hub.json's assistant keys this hub no longer reads (#5509): the assistant's cards, HTML
+// ones included, are always on. A file that still has them works as before.
+var retiredAssistantKeys = []string{"persona_view", "html_views"}
+
+// sayRetiredKeys says once, as the hub starts, which retired keys hub.json still has, so an edit to one is not taken
+// for a switch.
+func (h *Hub) sayRetiredKeys() {
+	if h.cfg == nil || h.cfg.dir == "" {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(h.cfg.dir, "hub.json"))
+	if err != nil {
+		return
+	}
+	if found := retiredKeysIn(b); len(found) > 0 {
+		h.logf("config: hub.json's %s are no longer read and can be removed: the assistant's cards are always on",
+			strings.Join(found, ", "))
+	}
+}
+
+// retiredKeysIn is each of retiredAssistantKeys hub.json b has, as "assistant.<key>".
+func retiredKeysIn(b []byte) []string {
+	var file struct {
+		Assistant map[string]json.RawMessage `json:"assistant"`
+	}
+	if json.Unmarshal(b, &file) != nil {
+		return nil
+	}
+	var found []string
+	for _, k := range retiredAssistantKeys {
+		if _, ok := file.Assistant[k]; ok {
+			found = append(found, "assistant."+k)
+		}
+	}
+	return found
 }
 
 // sayMovedSections says once, as the hub starts, which of the manager's sections hub.json still has: the hub reads

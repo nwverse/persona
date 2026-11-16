@@ -92,6 +92,10 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 	var out json.RawMessage
 	if len(p) > 1 || len(ultra) == 1 {
 		if err := m.call(ctx, "session.modes", p, &out); err != nil {
+			if m.oldEngineRefusal(r.PathValue("sid"), p, err) {
+				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-machine.node_no_engine_switch"), nil)
+				return
+			}
 			callErr(w, err)
 			return
 		}
@@ -126,6 +130,28 @@ func modesLauncher(p map[string]any, s proto.Session) string {
 		return strings.TrimSpace(l)
 	}
 	return cmp.Or(s.Launcher, "claude")
+}
+
+// oldEngineRefusal says whether err, a node's refusal of POST …/modes with a launcher (p), is a node without
+// engine_switch (#5054) refusing a launcher of the other engine: a Claude Code session's pick of a launcher of another
+// agent (switch_other_agent), or a Codex session's pick of a launcher at all (switch_unsupported). The apps then say
+// the node needs an update rather than the node's own reason, which reads as if the pick could never work.
+func (m *Machine) oldEngineRefusal(sid string, p map[string]any, err error) bool {
+	if launcher, _ := p["launcher"].(string); strings.TrimSpace(launcher) == "" || m.hasCapability(nodeproto.EngineSwitch) {
+		return false
+	}
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	switch re.Code {
+	case proto.CodeSwitchOtherAgent:
+		return true
+	case proto.CodeSwitchUnsupported:
+		s, ok := m.session(sid)
+		return ok && s.Agent == "codex"
+	}
+	return false
 }
 
 // switchesLaunchers: the machine's node takes launcher in session.modes (capability launcher_switch), as its manager

@@ -323,7 +323,8 @@ func TestLauncherSwitchRefusals(t *testing.T) {
 		code   string
 	}{
 		{"launcher not on this computer", nil, map[string]any{"launcher": "nowhere"}, proto.CodeSwitchLauncherMissing},
-		{"launcher of another agent", nil, map[string]any{"launcher": "cx"}, proto.CodeSwitchOtherAgent},
+		// a Codex launcher is a switch to the other engine (engine_switch.go, #5054); a compatible CLI's is not
+		{"launcher of another agent", nil, map[string]any{"launcher": traexAgent}, proto.CodeSwitchOtherAgent},
 		{"another config directory", nil, map[string]any{"launcher": "elsewhere"}, proto.CodeSwitchConfigDir},
 		{"the shell's own config directory is another", func(t *testing.T, n *Node, f *fakeHerdr, home, cwd string) {
 			withLoginShellConfigDir(t, filepath.Join(home, ".claude-team"), true)

@@ -12,7 +12,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
         /**
          * [folding]: the main conversation folds its background rounds (#4314, [BackgroundFolding]); null leaves every
          * round as it was. [inline] (Glass, #4339 C13, iOS `ChatLines.lines`): a quiet round stays in the conversation
-         * rather than going to the background record: a supervision round folds into one "Supervision record" line
+         * rather than going to the background record: a supervision round folds into one "Handled in the background" line
          * (with [folding]), and the scheduled and follow-up rounds read as they are unless the background rounds fold.
          */
         fun project(lines: List<ChatLine>, items: List<Item>, folding: BackgroundFolding? = null, inline: Boolean = false): AssistantConversation {
@@ -64,6 +64,8 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                     is ChatLine.Work -> line.id in quietGroups
                     is ChatLine.Step -> line.groupId in quietGroups || line.step.originalId() in hints
                     is ChatLine.End -> line.groupId in quietGroups
+                    // What a quiet run's work looked at goes with its work line.
+                    is ChatLine.Viewed -> "w-" + line.id.removePrefix("vi-") in quietGroups
                     is ChatLine.ApiError -> line.id in quiet
                     is ChatLine.Recaps, is ChatLine.Wakes -> true
                     is ChatLine.Extra -> (line.payload as? AssistantExtra.Feed)?.item?.let(AssistantTaskCards::isBackgroundEvent) == true
@@ -98,6 +100,7 @@ data class AssistantConversation(val foreground: List<ChatLine>, val background:
                     ?.also { workRound[line.id] = it }
                 is ChatLine.Step -> workRound[line.groupId]
                 is ChatLine.End -> workRound[line.groupId]
+                is ChatLine.Viewed -> workRound["w-" + line.id.removePrefix("vi-")]
                 is ChatLine.ApiError -> roundOf[line.item.id]
                 else -> null
             }

@@ -75,6 +75,10 @@ struct HealthView: View {
     /// A conversation is being started (the Persona page shows it coming).
     var disabled: Bool
     @Binding var launcher: String?
+    /// The permission mode and effort a new conversation starts with: Persona's new conversation's, which `start` sends
+    /// for Health's too; picked here in the shell composer's model menu (#3825).
+    @Binding var mode: String
+    @Binding var effort: String
     /// Starts a health conversation with the message (`AssistantView.start(…, space:)`).
     var send: (String, [ImagePayload]) -> Void
     @State private var page = HealthModel()
@@ -103,9 +107,14 @@ struct HealthView: View {
         VStack(spacing: 0) {
             sections(HealthModel.merge(page.fetched, live: model.healthConversations))
                 .themedPage()
-            if !reports.items.isEmpty { UploadsBar(uploads: reports).padding(.horizontal, Theme.Space.page) }
+            if !reports.items.isEmpty { UploadsBar(uploads: reports).padding(.horizontal, Theme.Space.page).tabSwitchRoom() }
             Group {
-                if AppStyle.current.usesBeautifulUI {
+                if ChatComposerKind.padCard {
+                    // iPhone and iPad, every style: Persona's new conversation's composer (#3825), with the attach panel and
+                    // + menu (#3225, #3805) and the launcher, effort and permission mode in its model button.
+                    StarterComposer(disabled: disabled, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort, health: true),
+                                    placeholder: String(localized: "Ask about your health…"), uploadDest: Session.healthSpace, send: send)
+                } else if AppStyle.current.usesBeautifulUI {
                     BeautifulStarterComposer(disabled: disabled, launcher: $launcher, placeholder: String(localized: "Ask about your health…"), uploadDest: Session.healthSpace, send: send)
                 } else {
                     StarterComposer(disabled: disabled, placeholder: String(localized: "Ask about your health…"), uploadDest: Session.healthSpace, send: send)
@@ -114,11 +123,13 @@ struct HealthView: View {
             .padding(.horizontal, Theme.Space.m)
             .padding(.top, Theme.Space.s)
             .padding(.bottom, Theme.Space.s)
+            .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
             .frame(maxWidth: ChatView.readableWidth)
             .frame(maxWidth: .infinity)
             .background(Theme.groupedPage.ignoresSafeArea(edges: .bottom))
         }
         .background(Theme.groupedPage)
+        .keepsHeightUnderUndockedKeyboard() // the composer stays at the bottom under a floating keyboard (#2565)
         .pageTitle(String(localized: "Health"))
         .fileUploadPicker(isPresented: $showReports) { uploadReports($0) }
         #if DEBUG

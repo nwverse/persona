@@ -1,5 +1,6 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// The machine pages are pushed by value (MachineListRoute, MachineDetailRoute) and so are the chats they open
 /// (SessionKey): a page pushed with `NavigationLink { … }` that pushes by value puts the new page *under* itself, so a
@@ -78,7 +79,8 @@ struct MachinesView: View {
 
     var body: some View {
         // Behind another section (the Mac keeps the page, `MacPageStack`): as they are now, not followed push by push.
-        let machines = settingsScope ? settingsMachines : model.machines(inFront: inFront)
+        // The current assistant's computers, where the hub has several assistants; Settings lists its own scope's.
+        let machines = settingsScope ? settingsMachines : model.scopedMachines(inFront: inFront)
         let agents = MachineDetailView.agentsByMachine(model, inFront: inFront)
         let tallies = Dictionary(machines.map { ($0.ref, AgentTally(agents[$0.ref] ?? [])) }, uniquingKeysWith: { a, _ in a })
         let alerts = Dictionary(machines.map { ($0.ref, alertLevel($0)) }, uniquingKeysWith: { a, _ in a })
@@ -120,6 +122,7 @@ struct MachinesView: View {
             }
             .padding(Theme.Space.l)
         }
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         #if os(macOS)
         .modifier(MacBelowTitleRowIfAsked()) // under Machines' title in the window: the cards start below it (#1243)
         #endif
@@ -296,7 +299,6 @@ struct DotLabel: LabelStyle {
 /// One machine: on Machines with its numbers, and at the top of its page without them (the page has the charts).
 struct MachineCard: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dynamicTypeSize) private var typeSize
     var machine: Machine
     /// Its agents counted; nil counts them here.
     var tally: AgentTally?
@@ -411,17 +413,10 @@ struct MachineCard: View {
         }
     }
 
-    /// Side by side; at the accessibility text sizes one under another, where four in a row left each a quarter of the
-    /// card and broke its title a character a line (#1659).
+    /// Four columns while every value fits its share whole, two by two when one does not.
     private func metricsRow(_ s: MetricSample?) -> some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.m) { metricCells(s) }
-            } else {
-                HStack(alignment: .top, spacing: Theme.Space.m) { metricCells(s) }
-            }
-        }
-        .accessibilityElement(children: .combine)
+        EqualColumns { metricCells(s) }
+            .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private func metricCells(_ s: MetricSample?) -> some View {
@@ -474,7 +469,6 @@ struct MachineCard: View {
 /// computer's share as a bar in shades of the text ink (the four kinds' colors are the charts').
 struct TodayTokensCard: View {
     var shares: [(name: String, usage: UsageCard)]
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let today = shares.reduce(UsageTokens()) { $0 + $1.usage.today }
@@ -482,17 +476,10 @@ struct TodayTokensCard: View {
         let ranked = shares.filter { $0.usage.today.total > 0 }.sorted { $0.usage.today.total > $1.usage.today.total }
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             Text("Today's Tokens").font(Theme.Font.heading)
-            // Side by side; at the accessibility text sizes one under another, where a third of the card each cut them
-            // to a character (#1929).
-            let cells = Group {
+            EqualColumns {
                 cell(String(localized: "Total [Token Usage]"), TokenFormat.count(today.total))
                 cell(String(localized: "Now [Token Usage]"), TokenFormat.perMinute(perMinute))
                 cell(String(localized: "Cache Hit Rate"), today.hitRate.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
-            }
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.s) { cells }
-            } else {
-                HStack(alignment: .top, spacing: Theme.Space.m) { cells }
             }
             if today.total > 0 {
                 GeometryReader { g in
@@ -541,22 +528,13 @@ struct TodayTokensCard: View {
 /// Needs You / Working / Idle side by side, a dot and a count each; a state with none stays gray.
 struct AgentCounts: View {
     var tally: AgentTally
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        // Side by side; at the accessibility text sizes one under another, where three in a row kept a character of
-        // each state's word (#1929).
-        let items = Group {
+        // Side by side in equal shares; one under another when a word does not fit its share.
+        EqualColumns(spacing: Theme.Space.s, rowSpacing: Theme.Space.xs, fallbackColumns: 1) {
             item(tally.needsYou, StateName.needsYou.text, tone: StatusPalette.needsYou, ink: StatusPalette.needsYou.text)
             item(tally.working, StateName.working.text, tone: StatusPalette.working, ink: StatusPalette.working.text)
             item(tally.idle, String(localized: "Idle"), tone: StatusPalette.idle, ink: Color.primary)
-        }
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: Theme.Space.xs) { items }
-            } else {
-                HStack(spacing: Theme.Space.s) { items }
-            }
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
@@ -568,7 +546,7 @@ struct AgentCounts: View {
             Circle().fill(n > 0 ? tone.dot : StatusPalette.offline.dot).scaledFrame(width: Theme.Size.dotS, height: Theme.Size.dotS)
             Text("\(n)").font(Theme.Font.bodyStrong.monospacedDigit()).foregroundStyle(n > 0 ? ink : Color.secondary)
                 .contentTransition(.numericText(value: Double(n)))
-            Text(label).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1)
+            Text(label).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1).fixedSize()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
@@ -587,7 +565,7 @@ struct MetricCell<Chart: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.xs) {
-                Text(title).font(Theme.Font.label).foregroundStyle(Color.secondary)
+                Text(title).font(Theme.Font.label).foregroundStyle(Color.secondary).lineLimit(1).minimumScaleFactor(0.6)
                 if level > .normal {
                     ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.label).imageScale(.small).foregroundStyle(MetricColor.level(level))
                 }
@@ -597,6 +575,7 @@ struct MetricCell<Chart: View>: View {
             chart.scaledFrame(height: Theme.Size.wellS).padding(.top, Theme.Space.xxs)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .equalColumnShrink(0.7)
     }
 }
 

@@ -57,6 +57,33 @@ func outcomeKey(todoID string, doneAt time.Time) string {
 	return "outcome:" + todoID + ":" + doneAt.UTC().Format(time.RFC3339Nano)
 }
 
+// completionOfDecision recognizes only the rows written by outcomeDecisions, not manual or extension outcome notes.
+func completionOfDecision(d db.TodoDecisionRow) (time.Time, bool) {
+	if d.Source != db.DecisionOutcome {
+		return time.Time{}, false
+	}
+	key, ok := strings.CutPrefix(d.SourceMessage, "outcome:"+d.TodoID+":")
+	if !ok {
+		return time.Time{}, false
+	}
+	stamp, _, ok := strings.Cut(key, "#")
+	if !ok {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	return at, err == nil
+}
+
+func earlierPhase(t Todo, d db.TodoDecisionRow) (time.Time, bool) {
+	at, ok := completionOfDecision(d)
+	return at, ok && (t.DoneAt == nil || !at.Truncate(time.Microsecond).Equal(t.DoneAt.Truncate(time.Microsecond)))
+}
+
+func earlierOutcomeSummary(t Todo, d db.TodoDecisionRow) (time.Time, bool) {
+	at, earlier := earlierPhase(t, d)
+	return at, earlier && strings.HasSuffix(d.SourceMessage, "#o")
+}
+
 // recordTaskOutcome writes what task t came to; doneAt is when it was marked done. t is the todo as it was then, with
 // its agents. Nothing for a todo that is not a task (no origin), or one already recorded for this completion.
 func (s *Service) recordTaskOutcome(t Todo, doneAt time.Time) {
@@ -339,8 +366,12 @@ func outcomeLogLine(o taskOutcome) string {
 	return prefix + text + " " + strings.Join(links, " ")
 }
 
-// projectOutcomesMost is how many finished todos' outcomes a new agent for a project is handed.
-const projectOutcomesMost = 5
+// projectOutcomesMost is how many finished todos' outcomes a new agent for a project is handed; projectContextMost
+// how many projects' backgrounds.
+const (
+	projectOutcomesMost = 5
+	projectContextMost  = 2
+)
 
 // projectContext is the <persona-context> a new agent working in dir on machine gets before its first prompt: each of
 // its projects' one line and latest todo outcomes (todo/project); empty when the directory is no project's or the
@@ -353,16 +384,23 @@ func (s *Service) projectContext(ctx context.Context, machine, dir string) strin
 	if err != nil || e == nil {
 		return ""
 	}
+	projects := e.ProjectsForWork(machine, dir)
+	// What extensions wrote for these projects (extension_context.go): asked once for all of them.
+	var slugs []string
+	for _, p := range projects {
+		slugs = append(slugs, p.Slug)
+	}
+	fromExtensions := s.projectExtensionContext(ctx, slugs)
 	var blocks []string
-	for _, p := range e.ProjectsForWork(machine, dir) {
-		d := prompts.TodoProject{Name: contextText(oneLine(p.Name)), OneLine: contextText(oneLine(p.OneLine))}
+	for _, p := range projects {
+		d := prompts.TodoProject{Name: contextText(oneLine(p.Name)), OneLine: contextText(oneLine(p.OneLine)), Extensions: fromExtensions[p.Slug]}
 		for _, o := range e.Store.TodoOutcomes(p.Slug, projectOutcomesMost) {
 			d.Outcomes = append(d.Outcomes, prompts.TodoProjectOutcome{When: o.When, Title: contextText(o.Title), Text: contextText(o.Text)})
 		}
 		if b := prompts.RenderTodoProject(d); b != "" {
 			blocks = append(blocks, b)
 		}
-		if len(blocks) == 2 { // a directory in more projects than that: the first two (slug order) are enough
+		if len(blocks) == projectContextMost { // a directory in more projects than that: the first two (slug order) are enough
 			break
 		}
 	}

@@ -24,6 +24,9 @@ export interface ChatContextValue {
   workflowCalls?: WorkflowCalls;
   /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
+  /** What runs the chat's subagents, as its agent is called ("Claude Code", "Codex", a Paseo provider's label, #8142);
+   *  unset: Claude Code. */
+  harness?: string;
   /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`). */
   opening?: { id: string; origin: ExternalOrigin };
   /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
@@ -32,6 +35,9 @@ export interface ChatContextValue {
   /** The child sessions drawn as cards in this chat (#5120, lib/child-cards.ts), by the exchange each sits in. The same
    *  map while none moved: a child's own updates redraw only its card. */
   children?: ReadonlyMap<string, ChildPlace[]>;
+  /** The chat is drawn inside another page's panel (the Team panel's worker, ChatView `embedded`): what would open in
+   *  the side panel opens in place instead, since that panel is the one it is drawn in (a workflow card, #5421). */
+  embedded?: boolean;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

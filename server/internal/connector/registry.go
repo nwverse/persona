@@ -160,7 +160,7 @@ func (r *Registry) SetFeed(id string, f Feed, on bool) error {
 	if !ok {
 		return fmt.Errorf("no feed %q", f)
 	}
-	if !c.Manifest().Has(cp) {
+	if !c.Manifest().Has(cp) && !(f == FeedInbox && c.Manifest().InboxSwitch) {
 		return fmt.Errorf("%s has no %s", c.Name(), cp)
 	}
 	r.mu.Lock()
@@ -366,6 +366,13 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 		return proto.ErrorResult(kind, fmt.Sprintf("%s is not available: %s", c.Name(), why), 0)
 	}
 	if t, ok := As[ReadTools](c); ok && has(t.Tools(), name) {
+		if it, ok := t.(ImageTools); ok { // its answer may carry pictures for the model (#8484)
+			a, err := it.CallImages(ctx, name, args)
+			if err != nil {
+				return result(a.Text, err)
+			}
+			return ToolResult(a)
+		}
 		return result(t.Call(ctx, name, args))
 	}
 	a, ok := As[Actions](c)
@@ -458,7 +465,7 @@ func (r *Registry) Infos(ctx context.Context) []Info {
 		if c.Manifest().Has(CapArchive) {
 			info.Archive = new(r.Feeds(c.ID(), FeedArchive))
 		}
-		if c.Manifest().Has(CapInbox) {
+		if m := c.Manifest(); m.Has(CapInbox) || m.InboxSwitch {
 			info.Inbox = new(r.Feeds(c.ID(), FeedInbox))
 		}
 		out = append(out, info)

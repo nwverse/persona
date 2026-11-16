@@ -10,7 +10,7 @@ import { otherManager, parseOwnedSub, useChosenManager } from "../../lib/manager
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
 import { api, ApiError, enc, errorText } from "../../lib/api";
-import type { HubConnector } from "../../lib/connectors";
+import { listConnectors, setConnector, type HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
 import { accountTitle, type LarkAccount, type LarkAccountList } from "../../lib/lark-accounts";
 import { useLarkOn, useStore } from "../../lib/store";
@@ -20,7 +20,7 @@ import { Count, Monogram } from "../inbox/InboxParts";
 import { ConnectorDetail, ConnectorList } from "./HubConnector";
 import { LarkDisplaySettings } from "./LarkDisplaySettings";
 import { LarkHomeSwitch } from "./LarkHomeSwitch";
-import { Group, Pill, Row, RowConfirm } from "./SettingsParts";
+import { Group, Pill, Row, RowConfirm, Switch } from "./SettingsParts";
 import { SentSettings } from "./SentSettings";
 import { SENT_SUB } from "./nav";
 import { FeishuBot } from "./FeishuBot";
@@ -33,7 +33,9 @@ interface LarkStatus {
   last_event_at?: number;
 }
 
-export function Connectors({ open, onOpen, onChannel }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void }) {
+/** `headerBack`: the page's top bar has the way back (a phone), so an item's page draws no Back of its own. `openBeside`:
+ *  the item open beside this list (Settings' two columns), whose row the list marks. */
+export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: { open: string | null; onOpen: (id: string | null) => void; onChannel?: (id: string, manager?: string) => void; headerBack?: boolean; openBeside?: string | null }) {
   // An older hub has no connectors API (feature "connectors"): only mail and Feishu, as before.
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
@@ -44,7 +46,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (
     <>
-      <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>
+      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>}
       <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{t("settings-sent.entry_label")}</h2>
       <SentSettings />
     </>
@@ -52,7 +54,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   if (open && open !== "feishu-bot") {
     const { id, manager } = parseOwnedSub(open);
     // no `@manager` in the address: the current assistant's copy, as for an extension
-    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={() => onOpen(null)} onChannel={onChannel} />;
+    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={headerBack ? undefined : () => onOpen(null)} onChannel={onChannel} />;
   }
   return (
     <>
@@ -62,7 +64,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
       <Mail />
       {lark && <Feishu />}
       <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
-      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} />}
+      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
       </Group>
@@ -148,6 +150,7 @@ function Mail() {
             />
           </div>
         ))}
+        {accounts && accounts.length > 0 && <MailInboxSwitch />}
       </Group>
       <AddMail
         open={adding}
@@ -159,6 +162,41 @@ function Mail() {
         }}
       />
     </>
+  );
+}
+
+/** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
+ *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
+function MailInboxSwitch() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    listConnectors(true).then(
+      (list) => alive && setOn(list.find((c) => c.id === "mail")?.inbox ?? null),
+      () => {}, // an older hub, or none to say: no switch
+    );
+    return () => void (alive = false);
+  }, []);
+  if (on === null) return null;
+  const title = t("settings-hubconnector.to_inbox");
+  const change = async (v: boolean) => {
+    setBusy(true);
+    try {
+      const c = await setConnector("mail", { inbox: v });
+      setOn(c.inbox ?? v);
+    } catch (e) {
+      toast(t("settings-connectors.mail_inbox_failed", { error: errorText(e) }), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5">
+      <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{title}</span>
+      {busy && <Spinner />}
+      <Switch on={on} disabled={busy} label={title} onChange={(v) => void change(v)} />
+    </div>
   );
 }
 

@@ -26,10 +26,11 @@ import (
 const marketStale = 6 * time.Hour
 
 type markets struct {
-	mu      sync.Mutex
-	loaded  bool
-	byID    map[string]*marketState
-	reading map[string]bool
+	mu     sync.Mutex
+	loaded bool
+	byID   map[string]*marketState
+	// reading: the markets being read in the background, each with a channel closed when its read ends.
+	reading map[string]chan struct{}
 	// Client and GitHubAPI: tests point them at a fake.
 	client    *http.Client
 	githubAPI string
@@ -343,9 +344,9 @@ func (h *Manager) marketsDir() string { return filepath.Join(h.extensions.root, 
 // packageCache is where market packages are kept by their sha256, so installing one again does not download it again.
 func (h *Manager) packageCache() string { return filepath.Join(h.extensions.root, "cache", "packages") }
 
-// marketClient is how the hub reads markets: GitHub's hosts through hub.json's github.proxy when it is set (the
-// way the hub's other GitHub traffic goes; on a network that reaches GitHub badly a package download stalled for
-// minutes without it, #3277), everything else as the environment says (HTTPS_PROXY). Tests set their own.
+// marketClient is how the hub reads markets. extension_market.proxy sends all of them through its HTTP or SOCKS5
+// proxy. Without one, GitHub's hosts use github.proxy when set (#3277), and everything else follows HTTPS_PROXY.
+// Tests set their own client.
 func (h *Manager) marketClient() *http.Client {
 	ms := h.marketsState()
 	ms.mu.Lock()
@@ -354,16 +355,29 @@ func (h *Manager) marketClient() *http.Client {
 		return ms.client
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	var gh *url.URL
-	if h.cfg != nil && h.cfg.GitHub != nil {
-		gh, _ = netproxy.Parse(h.cfg.GitHub.Proxy) // a malformed one: as the environment says (the connector says it is wrong)
+	var upstream *url.URL
+	var upstreamErr error
+	if h.cfg != nil {
+		upstream, upstreamErr = netproxy.ParseHTTPOrSOCKS5(h.cfg.ExtensionMarket.Proxy)
 	}
-	if gh != nil {
-		t.Proxy = func(r *http.Request) (*url.URL, error) {
-			if githubHost(r.URL.Hostname()) {
-				return gh, nil
+	switch {
+	case upstreamErr != nil:
+		// An explicit but invalid proxy must never turn into a direct connection.
+		t.Proxy = func(*http.Request) (*url.URL, error) { return nil, upstreamErr }
+	case upstream != nil:
+		t.Proxy = http.ProxyURL(upstream)
+	default:
+		var gh *url.URL
+		if h.cfg != nil && h.cfg.GitHub != nil {
+			gh, _ = netproxy.Parse(h.cfg.GitHub.Proxy) // a malformed one: as the environment says (the connector says it is wrong)
+		}
+		if gh != nil {
+			t.Proxy = func(r *http.Request) (*url.URL, error) {
+				if githubHost(r.URL.Hostname()) {
+					return gh, nil
+				}
+				return envProxy(r)
 			}
-			return envProxy(r)
 		}
 	}
 	ms.client = &http.Client{Transport: t}
@@ -424,19 +438,56 @@ func (h *Manager) refreshStale() {
 
 // readLater reads market id again in the background, unless it is being read already (ms.mu held).
 func (ms *markets) readLater(h *Manager, id string) {
-	if ms.reading[id] {
+	if ms.reading[id] != nil {
 		return
 	}
 	if ms.reading == nil {
-		ms.reading = map[string]bool{}
+		ms.reading = map[string]chan struct{}{}
 	}
-	ms.reading[id] = true
+	done := make(chan struct{})
+	ms.reading[id] = done
 	go func() {
-		defer func() { ms.mu.Lock(); delete(ms.reading, id); ms.mu.Unlock() }()
+		defer func() { ms.mu.Lock(); delete(ms.reading, id); ms.mu.Unlock(); close(done) }()
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
 		if _, err := h.marketRead(ctx, id); err != nil {
 			h.logf("plugin market %s: %v", id, err)
 		}
 	}()
+}
+
+// firstReadWait bounds how long a request waits for a market's first read (awaitFirstReads).
+var firstReadWait = 10 * time.Second
+
+// awaitFirstReads waits, at most firstReadWait or until ctx ends, for the reads in flight of markets this hub has
+// never read (#5626). A new hub adds the official market on the first request and reads it in the background; without
+// the wait that request (a newcomer's first look at the catalog) gets the "not verified yet" placeholder as if the
+// market could not be read. A market read before, even one that failed, is answered as it stands.
+func (h *Manager) awaitFirstReads(ctx context.Context) {
+	ms := h.marketsState()
+	if ms == nil {
+		return
+	}
+	ms.mu.Lock()
+	var waits []chan struct{}
+	for id, s := range ms.byID {
+		if done := ms.reading[id]; done != nil && s.rec.FetchedAt == nil {
+			waits = append(waits, done)
+		}
+	}
+	ms.mu.Unlock()
+	if len(waits) == 0 {
+		return
+	}
+	limit := time.NewTimer(firstReadWait)
+	defer limit.Stop()
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-limit.C:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }

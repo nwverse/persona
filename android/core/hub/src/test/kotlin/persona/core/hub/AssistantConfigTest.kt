@@ -97,6 +97,26 @@ class AssistantConfigTest {
         }
     }
 
+    @Test fun mainChatUsesTheHubsAssistantListAndReadsModels() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"launchers":[
+                {"name":"messages","agent_type":"api","assistant":true},
+                {"name":"runtime","agent_type":"runtime","assistant":true,"model":"默认"}]}"""))
+            val launchers = api.assistantLaunchers("laptop")
+            assertEquals("/api/v1/machines/laptop/launchers?purpose=assistant", server.takeRequest().path)
+            assertEquals(listOf("messages", "runtime"), launchers.map { it.name })
+            assertTrue(launchers.all { it.assistant })
+
+            server.enqueue(MockResponse().setBody("""{"agent":"claude","models":[
+                {"id":"opus","name":"Opus"},{"id":"default","default":true}]}"""))
+            val models = api.launcherModels("laptop", "runtime")
+            assertEquals("/api/v1/machines/laptop/launchers/runtime/models", server.takeRequest().path)
+            assertEquals(listOf("opus", "default"), models?.models?.map { it.id })
+            assertEquals(true, models?.models?.last()?.isDefault)
+        }
+    }
+
     @Test fun listsTheLaunchersOfTheChosenMachine() = runBlocking {
         MockWebServer().use { server ->
             val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())

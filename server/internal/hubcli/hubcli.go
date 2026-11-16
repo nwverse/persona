@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/hub"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -23,7 +24,9 @@ const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.js
                            persona-hub) and switch to it once it is up, waiting at most --timeout; --status only says what
                            serves now; exit 0 switched, 1 it did not (the hub serves on), 3 no edge here (restart the service instead)
   personad hub setup [--yes] [--listen :18660] [--tls :18662] [--outside] [--no-service | --manager-service] [--json]
+                    [--lang en|zh-Hans|ja]
                                            set this machine up as the hub: hub.json, database, service, pairing (docs/assistant/onboarding.md);
+                                           --lang: a new hub's language until a device says one (default PERSONA_INSTALL_LANG, set by install.sh);
                                            --manager-service: an existing hub's built-in manager becomes a service of its own (a new one has that);
                                            PERSONA_SPLIT_PROGRAMS=0 keeps its services on personad (not persona-hub, persona-manager)
                                            and stays in their units until setup runs again without it (an installed Mac stays on personad)
@@ -134,13 +137,14 @@ func UpdateWatch(ctx context.Context, args []string) error { return runUpdateWat
 // pair is `hub pair`: an argument mistake is a clitext.UsageError (exit 2), found before hub.json is read; ctx (the
 // command's, Ctrl-C) ends the wait for the hub.
 func pair(ctx context.Context, args []string) error {
+	l := i18n.Terminal()
 	flags := flag.NewFlagSet(Word+"pair", flag.ContinueOnError)
-	legacy := flags.Bool("legacy", false, "使用主 token 打印旧格式二维码")
-	android := flags.Bool("android", false, "同时打印 Android 安装包的临时下载链接")
-	machine := flags.String("machine", "", "给 hub.json 里这台 kind 为 link 的电脑的 persona-link 配对")
-	add := flags.Bool("add", false, "和 --machine 一起用：hub.json 里没有这台时先添加（电脑来连，直接是已确认的）")
-	name := flags.String("name", "", "和 --add 一起用：新电脑的名字（可以是中文，默认同 id）")
-	peer := flags.Bool("peer", false, "生成和另一台 hub 互联的互联码（docs/server/mesh.md）")
+	legacy := flags.Bool("legacy", false, i18n.T(l, "hub-cli.pair_flag_legacy"))
+	android := flags.Bool("android", false, i18n.T(l, "hub-cli.pair_flag_android"))
+	machine := flags.String("machine", "", i18n.T(l, "hub-cli.pair_flag_machine"))
+	add := flags.Bool("add", false, i18n.T(l, "hub-cli.pair_flag_add"))
+	name := flags.String("name", "", i18n.T(l, "hub-cli.pair_flag_name"))
+	peer := flags.Bool("peer", false, i18n.T(l, "hub-cli.pair_flag_peer"))
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return err

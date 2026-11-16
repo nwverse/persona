@@ -157,7 +157,9 @@ func (a assistantRemote) Rename(ctx context.Context, machine, session string, pa
 // assistantSend fills p, a message for the assistant's conversation sid on m, as the assistant runs it. note is the
 // manager's word that it runs on another launcher than the one configured (#4659), for the app.
 func (h *Hub) assistantSend(ctx context.Context, m *Machine, sid string, p map[string]any) (note string, err error) {
+	sendTimingOf(ctx).mark("params_started", true)
 	out, err := h.asstOf(h.sessionOwner(m.cfg.ID, sid)).SendParams(ctx, m.cfg.ID, sid, p)
+	sendTimingOf(ctx).mark("params_done", err == nil)
 	if err != nil {
 		return "", err
 	}

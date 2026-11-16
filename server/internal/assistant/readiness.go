@@ -109,6 +109,7 @@ type ReadinessStep struct {
 	Version    string            `json:"version,omitempty"` // Claude Code's, when known
 	Title      string            `json:"title,omitempty"`
 	Detail     string            `json:"detail,omitempty"`
+	Occurrence string            `json:"occurrence,omitempty"` // rate_limited: main turn time, health-only reset window, or newest evidence time
 	Action     *ReadinessAction  `json:"action,omitempty"`
 	AltActions []ReadinessAction `json:"alt_actions,omitempty"`
 }
@@ -134,6 +135,8 @@ type readinessRecord struct {
 	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
 	// Probe is the last probe's result, for the machine and launcher it ran with.
 	Probe *readinessProbe `json:"probe,omitempty"`
+	// Success is completed main-chat evidence, independent of the process remaining online.
+	Success *readinessSuccess `json:"success,omitempty"`
 	// Start is the last coded refusal of a start (claude_missing, launcher_missing), cleared by a start that went.
 	Start *readinessStart `json:"start,omitempty"`
 	// AnsweredAt: the main conversation answered once (first_message stays ok after it).
@@ -308,10 +311,11 @@ func (s *Service) readinessRoutes() {
 // readinessEvidence is what something said of the model lately: it answered (ok), or failed with text (or, said
 // outright, code).
 type readinessEvidence struct {
-	at   time.Time
-	ok   bool
-	text string
-	code string
+	at         time.Time
+	ok         bool
+	text       string
+	code       string
+	occurrence string
 }
 
 // readiness works out the main conversation's readiness; probe runs the one-word check first (or reuses one made in
@@ -430,8 +434,8 @@ func readinessBlocks(st ReadinessStep) bool {
 	return false
 }
 
-// readinessKeep saves the result when it differs from the last one (the time aside), so that a client opening the
-// Persona tab does not write the database each time.
+// readinessKeep saves the result when it differs from the last one (the request time aside), so that a client opening the
+// Persona tab does not write the database each time. Evidence timestamps are retained: a later failure is a real change.
 func (s *Service) readinessKeep(ctx context.Context, r Readiness, last *Readiness) {
 	r.Suggestions, r.Probe = nil, nil
 	if last != nil {
@@ -491,6 +495,11 @@ func answeredWell(sess proto.Session) bool {
 func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, launcher string, rec readinessRecord,
 	main proto.Session, hasMain bool, auth claudeAuth) (ReadinessStep, bool) {
 	var ev []readinessEvidence
+	binding, fingerprint := s.readinessModelScope(ctx, launcher)
+	if success := rec.Success; success != nil && success.Machine == d.ID && success.Launcher == launcher &&
+		fingerprint != "" && success.Fingerprint == fingerprint {
+		ev = append(ev, readinessEvidence{at: success.At, ok: true})
+	}
 	if p := rec.Probe; p != nil && p.Machine == d.ID && p.Launcher == launcher {
 		ev = append(ev, readinessEvidence{at: p.At, ok: p.Check.OK, text: p.Check.Error})
 	}
@@ -498,8 +507,10 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 		switch {
 		case main.TurnError != "":
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, text: main.TurnError, code: sessionTurnErrorCode(main)})
-		case answeredWell(main):
+		case s.readinessReplySucceeded(ctx, d.ID, launcher, main, binding, fingerprint, rec.Success):
 			ev = append(ev, readinessEvidence{at: main.UpdatedAt, ok: true})
+			s.keepReadinessSuccess(ctx, readinessSuccess{Machine: d.ID, Launcher: launcher,
+				Fingerprint: fingerprint, At: main.UpdatedAt})
 		}
 	}
 	// A launcher only the terminal cannot run says nothing of the main conversation, which runs in the login shell.
@@ -508,7 +519,11 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 		case h.Kind == errKindUsageLimit:
 			// The subscription's limit, used up: it recovers on its own, and says nothing once it reset.
 			if h.unusable() {
-				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited})
+				occurrence := h.CheckedAt.UTC().Format(time.RFC3339Nano)
+				if reset, ok := h.limitReset(); ok {
+					occurrence = reset.UTC().Format(time.RFC3339Nano) // repeated checks of one reset window are one occurrence
+				}
+				ev = append(ev, readinessEvidence{at: h.CheckedAt, code: proto.TurnErrorRateLimited, occurrence: occurrence})
 			}
 		case time.Since(h.CheckedAt) >= healthStale:
 		case h.State == healthOK:
@@ -520,7 +535,7 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 	newestOf := func() *readinessEvidence {
 		var n *readinessEvidence
 		for i := range ev {
-			if n == nil || ev[i].at.After(n.at) {
+			if n == nil || ev[i].at.After(n.at) || ev[i].at.Equal(n.at) && n.ok && !ev[i].ok {
 				n = &ev[i]
 			}
 		}
@@ -565,6 +580,19 @@ func (s *Service) readinessModel(ctx context.Context, lang i18n.Lang, d Device, 
 				action = "" // recovery is a new conversation or the TUI's /model, neither is a model-settings action
 			}
 			st := s.readinessStep(lang, StepModel, StepProblem, code, d.Name, launcher, action)
+			if code == proto.TurnErrorRateLimited {
+				st.Occurrence = newest.occurrence
+				if st.Occurrence == "" {
+					st.Occurrence = newest.at.UTC().Format(time.RFC3339Nano)
+				}
+				if hasMain && (main.Launcher == "" || main.Launcher == launcher) && !main.UpdatedAt.IsZero() {
+					if reset, ok := usageLimitReset(main); ok && st.Occurrence == reset.UTC().Format(time.RFC3339Nano) {
+						// A newer health record can be this same turn settled. Keep the turn's identity so another turn
+						// within one reset window is still a new failure; health-only evidence keeps the reset identity.
+						st.Occurrence = main.UpdatedAt.UTC().Format(time.RFC3339Nano)
+					}
+				}
+			}
 			st.Machine = d.ID
 			if alt != "" {
 				st.AltActions = []ReadinessAction{{ID: alt}}
@@ -626,15 +654,21 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		}
 		s.clearStart(ctx, *st)
 	}
+	plain := launcher == "" || launcher == "claude"
 	if h, ok := s.launcherUnusable(ctx, d.ID, launcher); ok && !modelOK && h.Kind != errKindNotInTerminal {
 		switch missingCode(h.Error) { // the launcher's health record: its start or check found no such command
 		case proto.CodeClaudeMissing:
+			// One miss, from a node that found Claude Code on this connection, can be a check caught in Claude Code's
+			// npm self-update (the case below): the node's self-check decides. A second miss in a row stands. Only
+			// misses count (MissingFails): an earlier failure of another kind (auth, a timeout) is not one.
+			if plain && d.ClaudeVersion != "" && h.MissingFails < 2 {
+				break
+			}
 			return problem(proto.CodeClaudeMissing, "install_claude")
 		case proto.CodeLauncherMissing:
 			return problem(proto.CodeLauncherMissing, "connect_model")
 		}
 	}
-	plain := launcher == "" || launcher == "claude"
 	if !plain {
 		switch agent, found := s.readinessLauncher(ctx, d.ID, launcher); {
 		case found == launcherGone && !modelOK:
@@ -651,6 +685,12 @@ func (s *Service) readinessClaude(ctx context.Context, lang i18n.Lang, d Device,
 		return ReadinessStep{ID: StepClaude, State: StepChecking}
 	case seen.version != "":
 		return ReadinessStep{ID: StepClaude, State: StepOK, Version: seen.version}
+	case seen.known && plain && d.ClaudeVersion != "":
+		// The node found Claude Code on this connection, and its self-check now finds none. Claude Code updating
+		// itself through npm replaces its package and the claude link in place, so a check caught mid-update sees no
+		// claude for seconds to minutes: unknown, which does not stop the main conversation. A real removal still
+		// shows as soon as a start is refused (rec.Start above).
+		return ReadinessStep{ID: StepClaude, State: StepUnknown}
 	case seen.known && plain:
 		return problem(proto.CodeClaudeMissing, "install_claude")
 	}
@@ -752,7 +792,7 @@ func (s *Service) readinessProbe(ctx context.Context, machine, launcher string) 
 	cctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 	var res proto.LauncherCheck
-	if err := s.call(cctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": launcher}, &res); err != nil {
+	if err := s.call(cctx, machine, assistantwire.DeviceLaunchersCheck, map[string]any{"name": launcher, "purpose": "assistant"}, &res); err != nil {
 		// Not the model's answer (the machine could not be asked): said, not kept.
 		return &proto.LauncherCheck{Error: i18n.Localize(err, s.requestCtxLang(ctx))}
 	}

@@ -33,18 +33,15 @@ final class ComposerHold {
         run = UUID(); let mine = run
         Haptics.tap()
         withAnimation(reduceMotion ? nil : Theme.Motion.holdAppear) { holding = true }
-        Task {
-            let problem = await dictation.start(hints: [draft] + hints) { [weak self] words in
-                guard let self, self.run == mine else { return }
-                if self.locked { text.wrappedValue = DictationHold.joined(self.draft, words) } else { self.heard = words }
-            }
-            if let problem {
-                AppModel.shared.toast = Toast(problem, style: .error)
-                if run == mine { end(reduceMotion: reduceMotion) }
-            } else if run != mine || (!holding && !locked) {
-                dictation.stop() // the finger let go while the microphone was still being asked for
-            }
-        }
+        // A finger let go while the microphone is still asked for has stopped dictation (`finish`), which ends this
+        // start before it listens; it also takes over from a tap's start that is waiting or already listening (#3407).
+        dictation.start(hints: [draft] + hints, update: { [weak self] words in
+            guard let self, self.run == mine else { return }
+            if self.locked { text.wrappedValue = DictationHold.joined(self.draft, words) } else { self.heard = words }
+        }, failed: { [weak self] problem in
+            AppModel.shared.toast = Toast(problem, style: .error)
+            if let self, self.run == mine { self.end(reduceMotion: reduceMotion) }
+        })
     }
 
     func finish(_ outcome: DictationHold.Outcome, _ dictation: Dictation, text: Binding<String>, reduceMotion: Bool) {
@@ -80,6 +77,11 @@ struct ComposerHoldMic: View {
     var id: String
     /// What tells dictation the language spoken besides the draft: the owner's recent messages in this chat.
     var hints: () -> [String] = { [] }
+    /// What a tap does; nil: dictation into the draft on or off (`Dictation.toggle`).
+    var tap: (() -> Void)? = nil
+    /// The dictation bar is over it and shows the listening itself: the mic under it does not pulse (a hidden pulse still
+    /// stepped the window's animations every frame).
+    var quiet = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Counts the touch toward a hold; cancelled when the finger lifts first (a tap).
     @State private var pending: Task<Void, Never>?
@@ -89,7 +91,7 @@ struct ComposerHoldMic: View {
     @State private var decided = false
 
     var body: some View {
-        ComposerMicFace(listening: dictation.isListening && !hold.holding)
+        ComposerMicFace(listening: dictation.isListening && !hold.holding && !quiet)
             .gesture(press)
             .onChange(of: touching) { _, down in
                 guard !down else { return }
@@ -100,7 +102,9 @@ struct ComposerHoldMic: View {
                 if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(ComposerHold.space)) } action: { hold.micFrame = $0 }
-            .onDisappear { // the line's mic gone under the finger (the box opened): the hold carries on, as a taken-away touch does
+            .onDisappear {
+                // The mic gone under the finger (the page went away, or the box closed to a line of voice and stop): the
+                // hold carries on, as a taken-away touch does.
                 pending?.cancel()
                 pending = nil
                 if hold.holding { hold.finish(.lock, dictation, text: $text, reduceMotion: reduceMotion) }
@@ -109,9 +113,13 @@ struct ComposerHoldMic: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(dictation.isListening ? String(localized: "Stop Dictation") : String(localized: "Dictate"))
             .accessibilityHint("Touch and hold to dictate. Slide left to cancel, or up to keep dictating.")
-            .accessibilityAction { dictation.toggle(into: $text, hints: hints) }
+            .accessibilityAction { tapped() }
             .accessibilityIdentifier(id)
             .shellScaled()
+    }
+
+    private func tapped() {
+        if let tap { tap() } else { dictation.toggle(into: $text, hints: hints) }
     }
 
     private var press: some Gesture {
@@ -140,7 +148,7 @@ struct ComposerHoldMic: View {
                     hold.finish(DictationHold.onRelease(value.translation, velocity: value.velocity), dictation, text: $text,
                                 reduceMotion: reduceMotion)
                 } else if !decided {
-                    dictation.toggle(into: $text, hints: hints) // a tap
+                    tapped()
                 }
                 decided = false
             }

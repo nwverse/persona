@@ -48,15 +48,15 @@ func pluginToolsRule(dir string) string {
 	return ownToolsRule + ",Bash(sh " + filepath.Join(dir, "agent-plugin", "skills", "persona-office", "scripts", "office.sh") + " *)"
 }
 
-// resumeHeld are the two reports that give herdr the pane's resume command (herdrresume.go): the pane held as
-// Persona's, then the session with eval of cmd as its resume_argv.
+// resumeHeld are the two reports that give herdr the pane's resume command (herdrresume.go): any stale Persona
+// authority cleared so herdr's screen detection decides state (#4657), then the session with eval of cmd as resume_argv.
 func resumeHeld(pane, id, cmd string) [2]string {
 	return resumeHeldAgent("claude", pane, id, cmd)
 }
 
 func resumeHeldAgent(agent, pane, id, cmd string) [2]string {
 	return [2]string{
-		call("pane.report_agent", map[string]any{"pane_id": pane, "source": resumeSource, "agent": agent, "state": "idle", "seq": 7}),
+		call("pane.clear_agent_authority", map[string]any{"pane_id": pane, "source": resumeSource, "seq": 7}),
 		call("pane.report_agent_session", map[string]any{"pane_id": pane, "source": resumeSource, "agent": agent, "seq": 8,
 			"agent_session_id": id, "resume_argv": []string{"eval", cmd}}),
 	}
@@ -91,6 +91,13 @@ func waitCalls(t *testing.T, f *fakeHerdr, method string, n int) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// waitReports waits until the resume report for pane has completed its per-pane turn. It follows the actual
+// asynchronous work rather than sleeping for a guessed amount of time before asserting that nothing was sent.
+func waitReports(n *Node, pane string) {
+	unlock := n.resumes.lock(pane)
+	unlock()
 }
 
 func personaDir(home string) string { return filepath.Join(home, ".persona") }
@@ -264,7 +271,7 @@ func TestHerdrStartIntoAGivenWorkspaceReturnsOnABlockedClaude(t *testing.T) {
 		call("session.snapshot", nil),
 	})
 	f.reply("session.snapshot", snapshot(nil, nil, []any{claudeAgent(startID, proto.StatusIdle, "w2:p5", "w2:t5", "w2", home, "")}, nil))
-	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialog {
+	if l := listSessions(t, n); len(l) != 1 || l[0].Status != proto.StatusBlocked || l[0].AttentionReason != lostDialogHeld {
 		t.Errorf("listed %+v", l)
 	}
 }
@@ -341,6 +348,7 @@ func TestHerdrStartFailsWhenTheTabCannotBeMade(t *testing.T) {
 // before its first start, not on package variables: a start another test left running still reads its own node's.
 func withStartWaits(n *Node, start, ready time.Duration) {
 	n.claudeStart, n.claudeReady = start, ready
+	n.readyPoll = 0 // timing-sensitive tests keep the production cadence
 }
 
 // A busy machine's shell takes longer than claude's whole ready wait to run claude (#1396: ~/.zshrc took 54 s with a
@@ -531,10 +539,22 @@ func TestHerdrStartOfALiveSessionAndWithoutHerdr(t *testing.T) {
 }
 
 // session.send to an agent herdr does not prompt (agent.prompt: *_not_found, as for a compatible CLI): the text is typed and
-// enter pressed; other errors are returned as they are. A Codex pane is checked with one colored read of its end
-// (codexReady: a pane scrolled back reads the same).
+// enter pressed; other errors are returned as they are. A Codex pane is checked before typing and after submission
+// with colored reads of its end (a pane scrolled back reads the same).
 func TestHerdrSendFallsBackToTyping(t *testing.T) {
 	n, f, _ := herdrNode(t)
+	for _, pane := range []string{"w1:p1", "w1:p2"} {
+		f.setScreen(pane, cxEmpty)
+	}
+	f.after(func(c herdrCall) {
+		pane := str(c.Params["pane_id"])
+		switch {
+		case c.Method == "pane.send_text":
+			f.setScreen(pane, cxBox(unpaste(str(c.Params["text"]))))
+		case isKeys("enter")(c):
+			f.setScreen(pane, cxEmpty)
+		}
+	})
 	f.reply("pane.process_info", foreground([2]string{"zsh", "-zsh"}, [2]string{"node", "traex"}))
 	seedAgents(t, n, f,
 		agentOf("codex", sidA, proto.StatusIdle, "w1:p1", "w1:t1", "w1", "/tmp/c", ""),
@@ -568,11 +588,13 @@ func TestHerdrSendFallsBackToTyping(t *testing.T) {
 		call("pane.process_info", map[string]any{"pane_id": "w1:p1"}),
 		call("pane.send_text", map[string]any{"pane_id": "w1:p1", "text": pasteStart + "line one\nline two" + pasteEnd}),
 		sendKeys("w1:p1", "enter"),
+		readCodexEnd("w1:p1"),
 		readCodexEnd("w1:p2"),
 		call("agent.prompt", map[string]any{"target": "w1:p2", "text": "x"}),
 		call("pane.process_info", map[string]any{"pane_id": "w1:p2"}),
 		call("pane.send_text", map[string]any{"pane_id": "w1:p2", "text": pasteStart + "x" + pasteEnd}),
 		sendKeys("w1:p2", "enter"),
+		readCodexEnd("w1:p2"),
 		readCodexEnd("w1:p3"),
 		call("agent.prompt", map[string]any{"target": "w1:p3", "text": "y"}),
 	})

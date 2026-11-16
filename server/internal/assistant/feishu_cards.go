@@ -140,6 +140,7 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 	s.keepBotCardLocked(ix.ID, &botCard{}) // claimed: a second announce of the same card does not post twice
 	b.mu.Unlock()
 	reply, to, topic := s.interactionPlace(ix)
+	ctx = feishuSendAs(ctx, string(ix.Kind), ix.MachineID, ix.SessionID)
 	fallback := ""
 	switch ix.Kind {
 	case proto.IxQuestion:
@@ -152,6 +153,14 @@ func (s *Service) postInteractionCard(ctx context.Context, ix proto.Interaction)
 		fallback = "🖥 " + i18n.T(s.botLang(ctx), "assistant-feishu_cards.screen_summary")
 	}
 	card := s.interactionCard(ctx, ix)
+	if s.interactionEnded(ix.ID) {
+		// Answered while its card was being made (a program that answers cards at once): nobody needs to look at it,
+		// so nothing is posted and the claim goes (#5430). One that ends during the post is closed after it, below.
+		b.mu.Lock()
+		s.keepBotCardLocked(ix.ID, nil)
+		b.mu.Unlock()
+		return
+	}
 	// A card for a topic is a reply to its run's message and belongs under it: if that message is gone it would be a
 	// stray card in the group (the hub would send it into the chat), and the owner may not see it there. It goes to the
 	// owner instead, as with a chat that refused it.

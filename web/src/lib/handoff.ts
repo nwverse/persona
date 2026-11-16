@@ -1,10 +1,13 @@
-// Going from a Persona conversation to an Agent it handed work to (#5096, after cindy's SessionHandoffCard): the
-// Agent's own page, never a side panel. The Agent's page says where it came from ("Came from … · click to return",
-// ChatView's HandoffBack), and going back puts the conversation's chat where it was (ChatView takes the place `leaveChat`
-// kept on the conversation's history entry).
+// Going from a Persona conversation to an Agent it handed work to, or a task: where it opens is the browser's setting
+// (lib/agent-open.ts, #5424). By default the side panel beside the chat (TaskPanel / AgentPanel; on a phone-sized
+// window it covers the chat). Set to "Full page" (#5096, after cindy's SessionHandoffCard): the Agent's own page, which
+// says where it came from ("Came from … · click to return", ChatView's HandoffBack), and going back puts the
+// conversation's chat where it was (ChatView takes the place `leaveChat` kept on the conversation's history entry).
+import { agentOpenMode } from "./agent-open";
 import { onOverlayEntry } from "./back-close";
 import { stripBase } from "./base";
 import { REPIN_AT_BOTTOM } from "./disclosure";
+import { openPanel } from "./panel";
 import { navigate, routeAt, type Route } from "./router";
 import { getState, taskSessionLookup, type State } from "./store";
 import { mostUrgentAgent } from "./todos";
@@ -92,14 +95,17 @@ export function taskRoute(id: string, s: State = getState()): Route {
   return lead ? { name: "session", mid: lead.machine_id, sid: lead.session_id } : { name: "todos", id };
 }
 
-/** Opens a task from a conversation: its most pressing Agent's page, or the to-do's page while no Agent is on it. */
+/** Opens a task from a conversation: in the side panel (its Agent's chat, TaskPanel), or as a page, its most pressing
+ *  Agent's, or the to-do's while no Agent is on it. */
 export function openTask(id: string) {
-  leaveChat(taskRoute(id));
+  if (agentOpenMode() === "panel") openPanel({ kind: "task", todo: id });
+  else leaveChat(taskRoute(id));
 }
 
-/** Opens an Agent's page from a conversation. */
+/** Opens an Agent from a conversation: in the side panel (AgentPanel), or as its page. */
 export function openAgent(mid: string, sid: string) {
-  leaveChat({ name: "session", mid, sid });
+  if (agentOpenMode() === "panel") openPanel({ kind: "agent", mid, sid });
+  else leaveChat({ name: "session", mid, sid });
 }
 
 /**

@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, enc, errorText } from "./api";
 import { ago } from "./format";
-import { BUILTIN_MANAGER, chooseManager, chosenManager, notePickedName, onManagerChoice, setRosterDefault, settleRosterDefault } from "./manager-choice";
+import { BUILTIN_MANAGER, chooseManager, chosenManager, notePickedName, noteShownIdentity, onManagerChoice, setRosterDefault, settleRosterDefault, shownManager } from "./manager-choice";
 import { onHubEvent } from "./store";
 
 export interface Manager {
@@ -16,6 +16,10 @@ export interface Manager {
   default?: boolean;
   /** The assistant the hub runs itself. */
   builtin?: boolean;
+  /** The built-in one only: the user asked to keep it out of the switcher while it is not used (#9055). */
+  hide?: boolean;
+  /** That is in effect (not the default, no computer): the switcher leaves it out. An older hub says neither. */
+  hidden?: boolean;
   host?: string;
   os?: string;
   arch?: string;
@@ -59,6 +63,8 @@ export const createManager = (name: string) => api<InstallCode & { manager: Mana
 export const newInstallCode = (id: string) => api<InstallCode>(`/managers/${enc(id)}/code`, { method: "POST" });
 export const renameManager = (id: string, name: string) => api<{ manager: Manager }>(`/managers/${enc(id)}`, { method: "PATCH", json: { name } });
 export const makeDefault = (id: string) => api<{ manager: Manager }>(`/managers/${enc(id)}`, { method: "PATCH", json: { default: true } });
+/** Keeps the built-in assistant out of the switcher while it is not used, or shows it again (#9055). */
+export const hideManager = (id: string, hide: boolean) => api<{ manager: Manager }>(`/managers/${enc(id)}`, { method: "PATCH", json: { hide } });
 export const deleteManager = (id: string) => api<{ ok: boolean }>(`/managers/${enc(id)}`, { method: "DELETE" });
 
 /**
@@ -208,7 +214,10 @@ export function loadRoster(): Promise<void> {
  *  when the default moves: onDefaultManager). */
 function rosterFailed(e: unknown) {
   // a hub without a roster has one assistant: a pick kept from a newer hub at this address names nobody
-  if (unsupported(e)) chooseManager(null);
+  if (unsupported(e)) {
+    chooseManager(null);
+    noteShownIdentity(null);
+  }
   settleRosterDefault();
   const status = (e as { status?: unknown } | null)?.status;
   if (status === 404 || rosterRetries >= ROSTER_RETRIES) {
@@ -239,24 +248,28 @@ export function resetRoster() {
 }
 
 /** Puts a roster in place (tests set one directly); the current assistant follows a default that moved, and goes back
- *  to the default when the one picked left the roster (or is not installed). */
+ *  to the default when the one picked left the roster, is not installed, or is hidden from the switcher (#9055). */
 export function setRoster(next: ManagerList | null) {
   roster = next;
   if (next) {
     setRosterDefault(next.default);
     const chosen = chosenManager();
-    if (chosen && !installedManagers(next).some((m) => m.id === chosen)) chooseManager(null);
-    notePickName();
+    if (chosen && !switcherManagers(next).some((m) => m.id === chosen)) chooseManager(null);
+    noteCurrentAssistant();
   }
   rosterListeners.forEach((l) => l());
 }
 
-/** Keeps the pick's name as the roster gives it, for the sidebar's head before the roster is read after a reload. */
-function notePickName() {
+/** Keeps the pick's name and the head's display-only identity as the roster gives them. The latter includes the
+ *  default, and only an installed current manager: an empty or installing-only roster must not show a stale one. */
+function noteCurrentAssistant() {
   const picked = chosenManager();
   if (picked && roster) notePickedName(roster.managers.find((m) => m.id === picked)?.name ?? null);
+  if (!roster) return;
+  const current = installedManagers(roster).find((m) => m.id === shownManager());
+  noteShownIdentity(current ? { id: current.id, name: current.name } : null);
 }
-onManagerChoice(notePickName);
+onManagerChoice(noteCurrentAssistant);
 
 /** Reads the roster now and again on every hello and `managers` push. The app calls it once signed in, so the default
  *  is known before the pages that go by it ask anything (an inbox item opened from a link, the sidebar's badges). */
@@ -282,6 +295,12 @@ export function useRoster(): ManagerList | null {
 /** The managers that run (or ran): the ones still being installed have nothing to show yet. */
 export function installedManagers(list: ManagerList): Manager[] {
   return list.managers.filter((m) => !m.installing);
+}
+
+/** The installed managers the switcher lists, in its order: a hidden one (the built-in, kept out while it is not used,
+ *  #9055) is left out. It still counts as installed: scoping, badges and the Default tag go by `managerOrder`. */
+export function switcherManagers(list: ManagerList): Manager[] {
+  return managerOrder(list).filter((m) => !m.hidden);
 }
 
 /** Whether there is more than one manager: only then do the pages switch and group by manager. */

@@ -45,9 +45,9 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		var hits []kb.Hit
 		switch {
 		case a.Kind == "":
-			hits = e.Search(a.Query, messages, limit)
+			hits = e.Search(a.Query, messages, limit, profileSkip(ctx)...)
 		case kbRPCKind(a.Kind):
-			hits = e.SearchKind(a.Query, a.Kind, messages, limit)
+			hits = e.SearchKind(a.Query, a.Kind, messages, limit, profileSkip(ctx)...)
 		default:
 			return "", fmt.Errorf("kind %q: one of projects, chats, people, docs, meetings, events, recordings, topics", a.Kind)
 		}
@@ -186,6 +186,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if err := json.Unmarshal(args, &a); err != nil {
 			return "", err
 		}
+		ignored := kb.Unsupported(a.Kind, a.Update)
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {
 			return "", err
@@ -193,7 +194,11 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if a.Unmerge {
 			return "Unmerged " + a.Kind + "/" + id + ".", nil
 		}
-		return "Saved " + a.Kind + "/" + id + ".", nil
+		out := "Saved " + a.Kind + "/" + id + "."
+		for _, f := range ignored { // said, so the model does not take a dropped field for written
+			out += "\nNot saved: " + f.Field + " (" + f.Reason + ")."
+		}
+		return out, nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -246,6 +251,11 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		return "", interactionEnded(id, got.Status)
 	}
 	ix := got.Interaction
+	if ix.Kind == proto.IxScreen {
+		// A terminal dialog (Claude's Bypass Permissions confirmation, a safety check): its card offers the user its
+		// choices; it is never answered for them.
+		return "", fmt.Errorf("interaction %s is a screen (a terminal dialog), only the user can answer it in the app, where its card offers its choices", ix.ID)
+	}
 	if ix.Kind != proto.IxQuestion {
 		return "", fmt.Errorf("interaction %s is a %s (approval), only the user can answer it in the app", ix.ID, ix.Kind)
 	}

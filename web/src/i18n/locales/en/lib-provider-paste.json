@@ -45,5 +45,13 @@
   "cindy_endpoint_unknown": "One of its addresses isn't added, since Persona has no such kind of provider.",
   "drafts_limit": "Only the first {max} were read. The rest were left out.",
   "other_line": "Something on line {line} couldn't be used.",
-  "other": "Part of it couldn't be used."
+  "other": "Part of it couldn't be used.",
+  "link_invalid_at": "This import link is damaged or incomplete (at {name}). Ask whoever sent it for a new one.",
+  "link_invalid": "This import link is damaged or incomplete. Ask whoever sent it for a new one.",
+  "link_version": "This import link uses format version {name}, which Persona can't read yet.",
+  "link_version_unknown": "This import link uses a format version Persona can't read yet.",
+  "link_too_long": "This import link is longer than an import link can be.",
+  "link_field": "This import link has a field Persona doesn't know ({name}), so nothing from it was used.",
+  "link_field_unknown": "This import link has a field Persona doesn't know, so nothing from it was used.",
+  "cindy_request_path": "Its endpoint uses a request path of its own, which Persona can't set, so it works only if the gateway also answers at the usual path."
 }

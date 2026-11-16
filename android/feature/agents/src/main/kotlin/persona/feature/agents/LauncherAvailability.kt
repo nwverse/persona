@@ -13,9 +13,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.api.UnavailableLauncher
 import persona.core.designsystem.*
+import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.models.AgentModelPanel
 
 /**
  * Why New Agent grays out a launcher on the computer picked (#4530, iOS `LauncherBlock`, docs/server/launcher-health.md):
@@ -71,6 +74,22 @@ internal fun initialLauncher(saved: String?, launchers: List<AgentLauncher>): St
 }
 
 /**
+ * The providers New Agent lists off after [type]'s launchers (#8109, the web's `newAgentPanel`): the hub's `unavailable`
+ * for this computer ([NewAgentState.unavailable], the Persona-managed providers their own-service rule leaves out where
+ * the agent has a sign-in of its own), never one the computer lists already. Each goes under the type it runs (Claude
+ * Code when the hub names none), or under whichever type is shown when the computer has no launcher of its type, so it
+ * is never just missing. [query] finds them as it finds the launchers.
+ */
+internal fun leftOutLaunchers(unavailable: List<UnavailableLauncher>, launchers: List<AgentLauncher>, type: String, query: String = ""): List<UnavailableLauncher> {
+    val types = launchers.mapTo(mutableSetOf()) { it.agentType }
+    return unavailable.filter { u ->
+        val runs = AgentModelPanel.engineId(u.agent)
+        launchers.none { it.name == u.name } && (runs == type || runs !in types) &&
+            (query.isBlank() || u.name.contains(query, true) || u.title.contains(query, true))
+    }
+}
+
+/**
  * How to fix a launcher New Agent grays out (iOS `LauncherBlockedHelp`): why it can't start there, what to do about it,
  * the hub's own words under Details, and the ways on: Add Provider for one the terminal can't run ([onAddProvider],
  * null on a computer of another group of hubs, where a provider added in Settings would land on the wrong hub), or
@@ -85,8 +104,8 @@ internal fun LauncherBlockedSheet(
     JSheet(onDismiss = onDismiss, title = stringResource(block.title), scrollable = true, modifier = Modifier.testTag("launcher-help")) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.l)) {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.Top) {
-                JIcon(PhIcons.WarningCircle, null, size = 20.dp, tint = palette.cautionText, modifier = Modifier.padding(top = 2.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                JIcon(PhIcons.WarningCircle, null, size = 20.dp, tint = palette.cautionText, modifier = Modifier.padding(top = 2.dp.dense))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp.dense)) {
                     Text(launcher.name, style = PersonaTheme.type.headline, color = palette.ink, maxLines = 1)
                     Text(stringResource(block.reason), style = PersonaTheme.type.callout, color = palette.cautionText)
                 }
@@ -99,7 +118,7 @@ internal fun LauncherBlockedSheet(
                     else listOf(R.string.agents_launcher_help_fix_other)
                 steps.forEach { step ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.Top) {
-                        JIcon(PersonaIcons.success, null, size = 16.dp, tint = palette.accent, modifier = Modifier.padding(top = 3.dp))
+                        JIcon(PersonaIcons.success, null, size = 16.dp, tint = palette.accent, modifier = Modifier.padding(top = 3.dp.dense))
                         Text(stringResource(step), style = PersonaTheme.type.body, color = palette.ink)
                     }
                 }

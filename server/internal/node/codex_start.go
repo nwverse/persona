@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -131,26 +132,63 @@ func codexBypassArgs(argv []string) []string {
 	return slices.Insert(slices.Clone(argv), end, "--dangerously-bypass-approvals-and-sandbox")
 }
 
+// codexBypassArgv is launcher's words argv with the flag that runs Codex without approvals or sandbox, for a start in
+// bypassPermissions: a managed launcher whose own arguments end in "--" gets it through Launch (codexBypassEnv).
+func (n *Node) codexBypassArgv(launcher string, argv []string) []string {
+	if managed, ok := n.managedLauncher(launcher); ok && len(argv) >= 3 && slices.Equal(argv[:3], []string{n.bin, "launch", launcher}) {
+		// Only this wrapper executes managed Args; a same-name shell alias takes precedence.
+		args := append(slices.Clone(managed.Args), argv[3:]...)
+		if len(codexBypassArgs(args)) == len(args) {
+			return argv
+		}
+		if slices.Contains(managed.Args, "--") {
+			return append([]string{codexBypassEnv + "=1"}, argv...)
+		}
+	}
+	return codexBypassArgs(argv)
+}
+
+// insertBeforeDashDash puts extra in the option region of args, leaving the separator and prompt suffix in place.
+func insertBeforeDashDash(args, extra []string) []string {
+	end := slices.Index(args, "--")
+	if end < 0 {
+		end = len(args)
+	}
+	out := make([]string, 0, len(args)+len(extra))
+	out = append(out, args[:end]...)
+	out = append(out, extra...)
+	return append(out, args[end:]...)
+}
+
+// codexExecutionArgs is a Codex launcher's words argv running model execution e: its model in place of any the words
+// name, and its effort, which as the purpose's explicit choice takes precedence over the launcher's defaults.
+func codexExecutionArgs(argv []string, e modelExecution) []string {
+	var extra []string
+	if e.Model != "" {
+		argv = withoutModelArgs(argv)
+		extra = append(extra, "--model", e.Model)
+	}
+	if e.Effort != "" {
+		extra = append(extra, "-c", "model_reasoning_effort="+e.Effort)
+	}
+	return insertBeforeDashDash(argv, extra)
+}
+
 // startCodex starts a Codex launcher in a new tab with the first message and returns its session once the thread is
-// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go).
+// known. With no message it returns the waiting row once Codex's input box is up (codex_waiting.go). In a pane it was
+// given (adoptedPane: a switch from Claude Code, engine_switch.go) it starts there, and a start that fails leaves that
+// pane open: what it left in front is for the caller to clear.
 func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launcher string, argv []string, prompt, ws, tabName, mode string) (*proto.Session, error) {
 	waiting := strings.TrimSpace(prompt) == ""
 	if waiting {
 		prompt = ""
 	}
 	if mode == "bypassPermissions" {
-		if managed, ok := n.managedLauncher(launcher); ok && len(argv) >= 3 && slices.Equal(argv[:3], []string{n.bin, "launch", launcher}) {
-			// Only this wrapper executes managed Args; a same-name shell alias takes precedence.
-			args := append(slices.Clone(managed.Args), argv[3:]...)
-			if len(codexBypassArgs(args)) != len(args) {
-				if slices.Contains(managed.Args, "--") {
-					argv = append([]string{codexBypassEnv + "=1"}, argv...)
-				} else {
-					argv = codexBypassArgs(argv)
-				}
-			}
-		} else {
-			argv = codexBypassArgs(argv)
+		argv = n.codexBypassArgv(launcher, argv)
+	}
+	if n.codexOnSharedDaemon(argv) {
+		if err := codexDaemonSocketGone(n.codexHome()); err != nil {
+			return nil, err // a new tab would only show codex failing to connect, after a minute's wait
 		}
 	}
 	key := cwd + "\x00" + launcher
@@ -169,7 +207,7 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	file := filepath.Join(dir, "start.json")
 	owner, _ := launch.(interface{ Kind() string })
 	isolateHooks := owner != nil && owner.Kind() == host.Orca
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks})
+	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return nil, err
 	}
@@ -197,6 +235,9 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	}
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
+			return nil, unconfirmedStart(err) // a switch's message may be in it (engine_switch.go)
+		}
 		return nil, err
 	}
 	defer done()
@@ -217,8 +258,17 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		if strings.TrimSpace(shown) == "" { // a screen Codex draws from the top of a tall pane: the bottom rows are blank
 			shown, _ = n.readPane(ctx, pane, "visible", 30)
 		}
+		if adoptedPane(ctx) != nil && prompt != "" && n.codexMessageMayHaveGone(ctx, pane, file) {
+			// A switch's message (engine_switch.go) may be in the Codex the line started: no other start may get it too.
+			return nil, unconfirmedStart(fmt.Errorf("%v\n%s", err, lastLines(shown, 12)))
+		}
 		start := codexAbandonedStart{launch: launch, created: created, workspace: ws}
-		cleanupErr := closeCodexStart(ctx, start)
+		var cleanupErr error
+		// A pane it did not open (a switch from Claude Code, engine_switch.go) is the user's terminal and is never
+		// closed: the switch quits what the start left in it (clearPane).
+		if adoptedPane(ctx) == nil {
+			cleanupErr = closeCodexStart(ctx, start)
+		}
 		if cleanupErr != nil {
 			n.mu.Lock()
 			if n.codexAbandoned == nil {
@@ -240,10 +290,14 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 	if waiting {
 		return n.openCodexWait(ctx, pane, cwd, launcher, mode, began), nil
 	}
+	defer n.unclaimCodexThread(id)
 	n.bindPane(pane, id)
 	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC()}
 	if mode == "plan" {
 		st.AppMode = mode
+	}
+	if legs, ok := engineHistoryOf(ctx); ok { // a switch from Claude Code starts it (engine_switch.go)
+		st.EngineHistory = legs
 	}
 	n.state.put(id, st)
 	_ = n.refreshHosts(ctx)
@@ -266,11 +320,38 @@ func codexOnRemote(argv []string) bool {
 	return false
 }
 
+// claimCodexThread reserves a matched public thread ID for pane. Another pane's binding or in-flight claim wins without
+// making this waiter stop: it keeps scanning for the next matching rollout instead.
+func (n *Node) claimCodexThread(pane, id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for p, bound := range n.panes {
+		if bound == id && p != pane {
+			return false
+		}
+	}
+	if owner, ok := n.codexClaims[id]; ok && owner != pane {
+		return false
+	}
+	if n.codexClaims == nil {
+		n.codexClaims = map[string]string{}
+	}
+	n.codexClaims[id] = pane
+	return true
+}
+
+func (n *Node) unclaimCodexThread(id string) {
+	n.mu.Lock()
+	delete(n.codexClaims, id)
+	n.mu.Unlock()
+}
+
 // waitCodexThread waits for the thread a start made: a rollout in the directory (as given, or resolved: Codex records
 // the shell's resolved working directory, or -C as given), begun after the launch, whose first user message is the
 // prompt. Codex's own dialogs on the way are answered as the user would for a start they asked
 // for: the folder is trusted (they chose it), an update is skipped. A launcher that fails ends the wait at once.
 func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, began time.Time) (string, error) {
+	poll := n.readinessPoll()
 	deadline := time.Now().Add(codexStartWait)
 	resolved := cwd
 	if r, err := filepath.EvalSymlinks(cwd); err == nil {
@@ -286,7 +367,7 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(poll):
 		}
 		for _, home := range homes {
 			for _, r := range rollouts(home) {
@@ -295,7 +376,10 @@ func (n *Node) waitCodexThread(ctx context.Context, pane, cwd, prompt string, be
 				}
 				// A thread begun by this launch (not one resumed in the same directory) whose first message is ours.
 				if at, first := codexThreadStart(r.path); !at.Before(began.Add(-2*time.Second)) && strings.TrimSpace(first) == strings.TrimSpace(prompt) {
-					return n.codexPublicID(home, r.id), nil
+					id := n.codexPublicID(home, r.id)
+					if n.claimCodexThread(pane, id) {
+						return id, nil
+					}
 				}
 			}
 		}
@@ -410,8 +494,13 @@ func codexThreadStart(path string) (time.Time, string) {
 	return began, ""
 }
 
-// codexStartError starts what `personad codex-start` prints when it cannot run the launcher.
-const codexStartError = "personad codex-start:"
+// codexStartError starts what `personad codex-start` prints when it cannot run the launcher. codexStartNote starts
+// what it prints and goes on (the agent sandbox not wrapping the start): never read as a failure, since the Codex it
+// then runs has the message.
+const (
+	codexStartError = "personad codex-start:"
+	codexStartNote  = "personad codex-start (note):"
+)
 
 // codexStartFile is what `personad codex-start` runs: the launcher's words (variables set in front, `A=1 codex …`,
 // then the command and its arguments) and the first message.
@@ -423,17 +512,23 @@ type codexStartFile struct {
 	Agent string `json:"agent,omitempty"`
 	// Orca hooks belong to this terminal. A shared Codex daemon can retain another terminal's hook environment.
 	IsolateHooks bool `json:"isolate_hooks,omitempty"`
+	// Dir is the directory the words run in ("": the shell's): the conversation's. A start in a pane the shell of
+	// which is elsewhere (a switch from Claude Code, engine_switch.go) runs Codex there, which records it as the
+	// thread's directory, and a resume finds its thread's files from there. No cd is typed: nothing but codex-start
+	// and its file goes to the shell.
+	Dir string `json:"dir,omitempty"`
 }
 
-// CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words with the
-// message as one more argument after "--", in place of itself. No shell sees either. The file's agent replaces a
-// HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
+// CodexStart is `personad codex-start <file>`: it claims a codexStartFile (renames it away, then reads and removes
+// it), changes to its directory, then runs its words with the message as one more argument after "--", in place of
+// itself. No shell sees either. Claimed by a rename, the file is either this process's or withdrawn by the node (a
+// switch whose start gave up on it, codexMessageMayHaveGone): never both. The file's agent replaces a HERDR_AGENT the
+// shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
 func CodexStart(args []string) error {
 	if len(args) != 1 {
 		return errors.New(codexStartError + " usage: personad codex-start <file>")
 	}
-	b, err := os.ReadFile(args[0])
-	_ = os.Remove(args[0])
+	b, err := claimCodexStartFile(args[0])
 	var f codexStartFile
 	if err == nil {
 		err = json.Unmarshal(b, &f)
@@ -443,6 +538,14 @@ func CodexStart(args []string) error {
 	}
 	words := f.Argv
 	env := os.Environ()
+	if f.Dir != "" {
+		if err := os.Chdir(f.Dir); err != nil {
+			return fmt.Errorf("%s %v", codexStartError, err)
+		}
+		if _, set := os.LookupEnv("PWD"); set { // what the shell said its directory was: the one it runs in now
+			env = append(withoutEnv(env, []string{"PWD"}), "PWD="+f.Dir)
+		}
+	}
 	if f.Agent != "" {
 		env = append(withoutEnv(env, []string{herdrAgentEnv}), herdrAgentEnv+"="+f.Agent)
 	}
@@ -481,6 +584,40 @@ func CodexStart(args []string) error {
 	return osproc.Exec(path, argv, env)
 }
 
+// claimCodexStartFile takes codex-start's file at path: renamed away first, then read and removed. A file the node
+// withdrew first (codexMessageMayHaveGone) is gone: an error, and nothing of it runs. A rename another program holds
+// up for a moment (claimBusy: a scanner opening the new file on Windows) is tried again for claimWait.
+func claimCodexStartFile(path string) ([]byte, error) {
+	taken := path + ".taken"
+	deadline := time.Now().Add(claimWait)
+	for {
+		err := claimRename(path, taken)
+		if err == nil {
+			break
+		}
+		if !claimRetryable(err) || time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	defer os.Remove(taken)
+	return os.ReadFile(taken)
+}
+
+// claimWait bounds how long codex-start tries again a claim another program holds up; claimRename renames and
+// claimRetryable tells such a refusal (claimBusy), variables so a test can hold a claim up.
+var (
+	claimWait      = 2 * time.Second
+	claimRename    = os.Rename
+	claimRetryable = claimBusy
+)
+
+// codexStartNotef prints a note of codex-start's that it goes on after (codexStartNote): never what a start reads as
+// codex-start failing (codexStartError).
+func codexStartNotef(w io.Writer, format string, a ...any) {
+	fmt.Fprintf(w, codexStartNote+" "+format+"\n", a...)
+}
+
 // codexStartExec is what codex-start execs for its words (path, argv, env): in the agent sandbox when it is on
 // (agentsandbox.go), for a Codex only when it is sure to run danger-full-access in its own process (codexInner). A
 // managed launcher (`personad launch`) is left to Launch, which wraps its own start; other words (pi resumed by
@@ -491,8 +628,8 @@ func codexStartExec(path string, argv, env []string) (string, []string, []string
 	}
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
-	inner := func() string { return codexInner(argv, env, cwd, home) }
-	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad codex-start: "+format+"\n", a...) }
+	inner := func() *sandbox.StatusReason { return codexInnerReason(argv, env, cwd, home) }
+	logf := func(format string, a ...any) { codexStartNotef(os.Stderr, format, a...) }
 	wrapped, wenv, st := wrapAgent("codex-start", home, identity.DataDir(home), cwd, nil, inner, append([]string{path}, argv[1:]...), env, logf)
 	if wrapped[0] == path {
 		return path, argv, env, st

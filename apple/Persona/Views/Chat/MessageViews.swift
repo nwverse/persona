@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 extension MarkdownUI.Theme {
     /// Reading-first markdown: system body text, roomy lists, quiet code blocks.
@@ -122,6 +123,7 @@ extension MarkdownUI.Theme {
                 .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(Theme.Level.code.size / Theme.Level.body.size)) }
                 .padding(Theme.Space.m)
         }
+        .clipped() // not past the block into the safe area beside it (`ReplyCodeBlock`, #8212)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
         .macHoverActions {
             MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
@@ -222,6 +224,7 @@ struct UserBubble: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
@@ -242,8 +245,11 @@ struct UserBubble: View, Equatable {
             if !shown.isEmpty || !quotes.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
-                        .messageLongPress(id: item.id) { UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead) }
+                    let fold = BubbleFoldKey(id: item.id)
+                    UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead, fold: fold)
+                        .messageLongPress(id: item.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                            UserBubbleBody(quotes: quotes, text: d.words, paths: d.pathRefs, comments: d.comments, lead: d.lead)
+                        }
                 }
             }
             if let openFile { FileChips(paths: d.chips, open: openFile) }
@@ -348,6 +354,7 @@ struct PeerMessage: View {
         Markdown(d.markdown)
             .markdownSoftBreakMode(.lineBreak)
             .markdownTheme(.persona)
+            .readingContent()
             .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: false)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -368,6 +375,8 @@ struct PendingBubble: View {
     var discard: () -> Void
     @Environment(\.viewImages) private var viewImages
     @Environment(\.chatImages) private var chatImages
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
 
     var body: some View {
         let parsed = ContextRef.parse(msg.text)
@@ -423,9 +432,11 @@ struct PendingBubble: View {
                     .accessibilityAction(named: Text("Delete"), discard)
                 }
                 let split = MessageComments.inBubble(shown)
-                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                let fold = BubbleFoldKey(id: "pending-" + msg.id.uuidString) // folded as a sent bubble is (#5676)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
                     .opacity(msg.state == .failed || msg.state == .waiting ? 0.6 : 1)
-                    .messageLongPress(id: msg.id.uuidString) {
+                    .messageLongPress(id: msg.id.uuidString, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
                         UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
                     }
             }
@@ -582,6 +593,7 @@ struct AssistantText: View, Equatable {
             // Inside the theme (applied first), or the theme's text style wins (docs/lessons/ios.md).
             .modifier(QuietMarkdown(on: quiet))
             .markdownTheme(.persona)
+            .readingContent()
             .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: quiet)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1060,6 +1072,7 @@ struct RecapDrawer: View {
                             }
                             Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(item.text ?? "")))))
                                 .markdownTheme(.persona)
+                                .readingContent()
                                 .markdownSoftBreakMode(.lineBreak)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1081,13 +1094,34 @@ struct RecapDrawer: View {
 /// The assistant's answer while it is still being generated, with a caret after its words (`StreamTail`).
 struct StreamingText: View {
     var text: String
+    /// The stream is over (`ChatStore.liveDone`): the whole text at once.
+    var done = false
+    /// What of `text` is shown, a few characters a frame (`StreamReveal`, #6651): read only by this view, so the frames
+    /// redraw the reply and nothing around it.
+    @State private var reveal = StreamRevealClock()
 
-    /// A delta comes every 80 ms with the whole text so far. Parsing and laying out all of it each time cost a long
-    /// reply 10–20 ms a delta on the simulator: the blocks already finished are their own Markdown views that stay as
-    /// they are (`StreamChunks`), and only the block being written is parsed and laid out again.
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("StreamingText")
+        #endif
+        StreamingMarkdown(text: done ? text : reveal.shown(of: text))
+            .onChange(of: text, initial: true) { _, new in reveal.receive(new) }
+            .onChange(of: done) { _, done in if done { reveal.finish() } }
+            .onAppear { reveal.resume() }
+            .onDisappear { reveal.stop() }
+    }
+}
+
+/// The reply as far as it is shown. A delta comes every 80 ms with the whole text so far, and the reveal adds a few
+/// characters a frame. Parsing and laying out all of it each time cost a long reply 10–20 ms on the simulator: the
+/// blocks already finished are their own Markdown views that stay as they are (`StreamChunks`), and only the block
+/// being written is parsed and laid out again.
+private struct StreamingMarkdown: View {
+    var text: String
+
+    var body: some View {
+        #if DEBUG
+        let _ = StreamCadence.shown = text.utf16.count
         #endif
         let parts = StreamChunks.split(AssistantCardText.replacingCards(text))
         VStack(alignment: .leading, spacing: 0) {
@@ -1101,8 +1135,97 @@ struct StreamingText: View {
         }
         .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
         .environment(\.replyStreaming, true) // its quotes fold once it is done
+        .readingContent()
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
+
+/// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
+/// (P9), 10 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
+/// as it comes.
+@MainActor @Observable
+final class StreamRevealClock {
+    /// Bumped when what is shown changed: the view's only dependency.
+    private var revision = 0
+    @ObservationIgnored private var reveal: StreamReveal?
+    #if os(iOS) || os(visionOS)
+    @ObservationIgnored private var link: CADisplayLink?
+    #endif
+
+    /// What of `text` to draw. `text` is the newest the view was given; `receive` takes it in right after this redraw,
+    /// so until then what was shown stays (or, first time, `StreamReveal`'s start; a text that does not continue it,
+    /// all of it).
+    func shown(of text: String) -> String {
+        _ = revision
+        guard let reveal else { return String(StreamReveal(text).shown) }
+        let shown = reveal.shown
+        return text.hasPrefix(shown) ? String(shown) : text
+    }
+
+    func receive(_ text: String) {
+        #if os(iOS) || os(visionOS)
+        let now = CACurrentMediaTime()
+        if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
+        revision &+= 1
+        if reveal?.caughtUp == false { start() }
+        #else
+        reveal = StreamReveal(text)
+        reveal?.finish()
+        revision &+= 1
+        #endif
+    }
+
+    func finish() {
+        reveal?.finish()
+        revision &+= 1
+        stop()
+    }
+
+    func stop() {
+        #if os(iOS) || os(visionOS)
+        link?.invalidate()
+        link = nil
+        #endif
+    }
+
+    /// Back on screen: what still waits goes on (a stream that paused meanwhile sends nothing to restart it).
+    func resume() {
+        #if os(iOS) || os(visionOS)
+        if reveal?.caughtUp == false { start() }
+        #endif
+    }
+
+    #if os(iOS) || os(visionOS)
+    private func start() {
+        guard link == nil else { return }
+        // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
+        let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
+        // 10 a second, the owner's choice between smoothness and power (#7135): each change re-measures the chat's rows
+        // and redraws the reply (about 4 ms of the main thread on the simulator), so the main thread's time while a
+        // reply streams follows the rate: 60 → about 300 ms a second, 30 → about 190. A step is then 2–15 characters.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 10, preferred: 10)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    fileprivate func tick(_ link: CADisplayLink) {
+        guard var r = reveal else { return stop() }
+        let moved = r.advance(to: link.timestamp, maxStep: 0.2) // a step is a tenth of a second
+        reveal = r
+        if moved { revision &+= 1 }
+        if r.caughtUp { stop() }
+    }
+
+    private final class Tick: NSObject {
+        weak var clock: StreamRevealClock?
+        init(_ clock: StreamRevealClock) { self.clock = clock }
+        @objc func tick(_ link: CADisplayLink) {
+            MainActor.assumeIsolated {
+                if let clock { clock.tick(link) } else { link.invalidate() }
+            }
+        }
+    }
+    #endif
 }
 
 /// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
@@ -1221,6 +1344,11 @@ nonisolated enum RowMemo {
 
     /// A chat's scope: its machine and session.
     static func scope(_ key: SessionKey) -> String { MemoScope.of(machine: key.machineID, session: key.sessionID) }
+
+    /// Whether rows are prewarmed while the app's scene is in `phase`: not in the background, where nothing draws them
+    /// and the app may be running only for a recording; iOS kills an app that uses too much CPU there, and the
+    /// recording with it (#9108: a row's path detection did). Back in front, the chat prewarms what came meanwhile.
+    static func prewarms(in phase: ScenePhase) -> Bool { phase != .background }
 
     /// Fills both memos off the main thread for messages just loaded (of the chat of `scope`), so a row scrolling
     /// into view only lays out.

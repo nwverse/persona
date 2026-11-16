@@ -39,5 +39,13 @@
   "cindy_endpoint_unknown": "它的一个地址没有添加，因为 Persona 没有这种类型的服务商。",
   "drafts_limit": "只读了前 {max} 个，其余没有带上。",
   "other_line": "第 {line} 行有内容没能用上。",
-  "other": "有一部分没能用上。"
+  "other": "有一部分没能用上。",
+  "link_invalid_at": "这个导入链接已损坏或不完整（出错位置：{name}）。请让发送者重新发一个。",
+  "link_invalid": "这个导入链接已损坏或不完整。请让发送者重新发一个。",
+  "link_version": "这个导入链接的格式版本是 {name}，Persona 暂时还读不了。",
+  "link_version_unknown": "这个导入链接的格式版本 Persona 暂时还读不了。",
+  "link_too_long": "这个导入链接超出了导入链接的长度上限。",
+  "link_field": "这个导入链接里有 Persona 不认识的字段（{name}），所以里面的内容都没有使用。",
+  "link_field_unknown": "这个导入链接里有 Persona 不认识的字段，所以里面的内容都没有使用。",
+  "cindy_request_path": "它的接口用的是自己的请求路径，Persona 没法设置，所以只有网关在常用路径上也能响应时才能用。"
 }

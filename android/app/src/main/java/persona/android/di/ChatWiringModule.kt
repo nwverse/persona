@@ -83,6 +83,7 @@ object ChatWiringModule {
                     embedded = options.embedded, showTopBar = options.showTopBar,
                     // The conversation's manager is offline: history only, its 最后同步于 where the composer was.
                     historyReadOnly = options.readOnlyNote != null,
+                    healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
             }
             CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
@@ -145,16 +146,23 @@ private class RoutedAssistantManagement(
     override suspend fun config() = api().config()
     override suspend fun updateConfig(update: AssistantConfigUpdate) = api().updateConfig(update)
     override suspend fun launchers(machineId: String) = api().launchers(machineId)
+    override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
+    override suspend fun assistantLauncherList(machineId: String) = api().assistantLauncherList(machineId)
+    override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
+    override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
+    override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
     override suspend fun unarchiveConversation(session: SessionKey) = api().unarchiveConversation(session)
     override suspend fun archivedConversations() = api().archivedConversations()
+    override suspend fun searchChats(query: String, limit: Int) = api().searchChats(query, limit)
     override suspend fun renameConversation(session: SessionKey, title: String) = api().renameConversation(session, title)
     override suspend fun makeDirection(session: SessionKey) = api().makeDirection(session)
     override suspend fun endDirection(session: SessionKey) = api().endDirection(session)
     override suspend fun newMainConversation(carrySummary: Boolean, expect: String?) =
         api().newMainConversation(carrySummary, expect)
+    override suspend fun clearMainConversation(expect: String?) = api().clearMainConversation(expect)
     override suspend fun tasks() = api().tasks()
     override suspend fun saveTask(task: ScheduledTask) = api().saveTask(task)
     override suspend fun deleteTask(id: String) = api().deleteTask(id)
@@ -166,7 +174,12 @@ private class RoutedAssistantManagement(
     override suspend fun memory() = api().memory()
     override suspend fun saveMemory(name: String, content: String) = api().saveMemory(name, content)
     override suspend fun deleteMemory(name: String) = api().deleteMemory(name)
+    override suspend fun places() = api().places()
+    override suspend fun savePlace(place: SavedPlace) = api().savePlace(place)
+    override suspend fun deletePlace(id: String) = api().deletePlace(id)
     override suspend fun skills() = api().skills()
     override suspend fun alwaysGrants(session: SessionKey) = api().alwaysGrants(session)
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = api().revokeAlwaysGrant(session, keyHash)
+    override suspend fun standingAuthorizations() = api().standingAuthorizations()
+    override suspend fun revokeStandingAuthorization(id: String) = api().revokeStandingAuthorization(id)
 }

@@ -49,6 +49,19 @@ type UIPlace struct {
 
 // uiPlaces are the plugins' UI of placement (every slot's but launcher sections' when it is empty); for launcher
 // sections, those whose hosts have the gateway at base.
+// localizeUI puts each place's title and extension name in l, as its extension's translations have them.
+func (ps *extensions) localizeUI(l i18n.Lang, places []UIPlace) []UIPlace {
+	for i, u := range places {
+		p := ps.reg.Snapshot(u.Extension)
+		if p == nil || len(p.L10n) == 0 {
+			continue
+		}
+		places[i].Title = p.L10n.UITitle(l, u.ID, u.Title)
+		places[i].ExtensionName = p.L10n.Name(l, u.ExtensionName)
+	}
+	return places
+}
+
 func (ps *extensions) uiPlaces(placement, base string) []UIPlace {
 	out := []UIPlace{}
 	if ps == nil {
@@ -174,8 +187,12 @@ type uiRequest struct {
 		// UIVersion is the UI version the app draws: 1 (the first eight items) when it says nothing.
 		UIVersion int `json:"ui_version,omitempty"`
 		// Assistant is the name the app shows for the assistant (its "Ask {name}…"), sent only to the manager's own
-		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams).
-		Assistant string `json:"assistant,omitempty"`
+		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams). Sent at all (even ""),
+		// it says the app opens their Set Up with … (#5661).
+		Assistant *string `json:"assistant,omitempty"`
+		// Graph: the app pushes its own view of Inbox Sources as relations (#5741, the iPhone), so the subscription pages
+		// draw its row; never handed to an extension either.
+		Graph bool `json:"graph,omitempty"`
 	} `json:"context"`
 	State  string            `json:"state,omitempty"`
 	Action string            `json:"action,omitempty"`
@@ -289,7 +306,7 @@ func (h *Manager) withUI(ctx context.Context, id, uiID string, in uiRequest, cal
 			return res, errNoMachine
 		}
 		m.mu.Lock()
-		params.Machine = &extension.UIMachine{ID: m.cfg.ID, Name: m.cfg.Name, OS: m.info.OS, Online: m.online}
+		params.Machine = &extension.UIMachine{ID: m.cfg.ID, Name: m.name(), OS: m.info.OS, Online: m.online}
 		m.mu.Unlock()
 	case "inbox_item":
 		if in.Context.Item == "" {
@@ -468,7 +485,7 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 				base = gw.base
 			}
 		}
-		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.uiPlaces(placement, base))})
+		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base)))})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {
 		if principalOf(r.Context()).Role != roleFull {

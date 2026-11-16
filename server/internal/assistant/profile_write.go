@@ -23,8 +23,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
-		Permission       json.RawMessage `json:"default_permission_mode"`
-		MinutesRetention json.RawMessage `json:"minutes_days"`
+		Permission             json.RawMessage `json:"default_permission_mode"`
+		Readonly               json.RawMessage `json:"readonly_mode"`
+		MinutesRetention       json.RawMessage `json:"minutes_days"`
+		TranscriptionMode      json.RawMessage `json:"meeting_transcription_default"`
+		Glossary               json.RawMessage `json:"meeting_glossary"`
+		TranscriptionExtension json.RawMessage `json:"meeting_transcription_extension"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
@@ -43,9 +47,31 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
 		return
 	}
+	if in.Readonly != nil {
+		if err := json.Unmarshal(in.Readonly, &in.ReadonlyMode); err != nil || !validReadonlyMode(in.ReadonlyMode) {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_readonly_mode"))
+			return
+		}
+		if !s.explicitSettingsTarget(w, r) {
+			return
+		}
+	}
 	if in.TaskWorkspacePreference != "" && !validWorkspacePreference(in.TaskWorkspacePreference) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("task_workspace_preference must be prefer-existing or prefer-new"))
 		return
+	}
+	if in.DispatchPolicy != nil && len(in.DispatchPolicy.Rules) > 0 {
+		if err := in.DispatchPolicy.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if in.StartDefaults != nil && len(in.StartDefaults.Rules) > 0 {
+		if err := in.StartDefaults.validate(true, time.Now().UTC()); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		in.StartDefaults.By = "owner" // this route is full credentials only
 	}
 	before := s.settings(ctx)
 	machine := before.MachineID
@@ -79,6 +105,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
+		return
+	}
+	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
+		apierr.WriteCode(w, http.StatusBadRequest, code, i18n.Err("assistant-meeting."+code))
 		return
 	}
 	if p := in.ReviewSamplePercent; p != nil && (*p < 0 || *p > 100) {
@@ -168,6 +198,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.TaskWorkspacePreference != "" {
 			v.TaskWorkspacePreference = in.TaskWorkspacePreference
 		}
+		if in.Readonly != nil {
+			v.ReadonlyMode = in.ReadonlyMode
+		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
 		}
@@ -180,8 +213,21 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
 		}
+		if in.RecentTaskChats != nil {
+			v.RecentTaskChats = in.RecentTaskChats
+		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
+		}
+		if in.MeetingTranscriptionDefault != nil {
+			v.MeetingTranscriptionDefault = in.MeetingTranscriptionDefault
+		}
+		if in.MeetingGlossary != nil {
+			v.MeetingGlossary = in.MeetingGlossary
+		}
+		if in.MeetingTranscriptionExtension != nil {
+			v.MeetingTranscriptionExtension = in.MeetingTranscriptionExtension
+			v.MeetingTranscriptionInstall = in.MeetingTranscriptionInstall // readMeetingTranscriptionSettings's, never the body's
 		}
 		if in.IdleCloseHours != nil {
 			v.IdleCloseHours = in.IdleCloseHours
@@ -213,6 +259,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
 		}
+		if in.InboxPost != nil {
+			v.InboxPost = in.InboxPost
+		}
 		if in.NextSuggestions != nil {
 			v.NextSuggestions = in.NextSuggestions
 		}
@@ -222,12 +271,33 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
 		}
+		if in.DispatchPolicy != nil {
+			// A non-empty policy was validated above before any other change; empty rules clear it.
+			if len(in.DispatchPolicy.Rules) == 0 {
+				v.DispatchPolicy = nil
+			} else {
+				v.DispatchPolicy = in.DispatchPolicy
+			}
+		}
+		if in.StartDefaults != nil { // the same for the start defaults (start_defaults.go)
+			if len(in.StartDefaults.Rules) == 0 {
+				v.StartDefaults = nil
+			} else {
+				v.StartDefaults = in.StartDefaults
+			}
+		}
 		return nil
 	}); err != nil {
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
 	}
 	s.settingsChanged(ctx)
+	if in.MeetingTranscriptionExtension != nil {
+		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
+	}
+	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
+		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }
 

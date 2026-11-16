@@ -39,7 +39,8 @@ internal fun chatAgentName(session: Session?): String = session?.agentLabel?.tak
 
 /** An Agent chat's empty composer names its agent (iOS `Composer` placeholder): "Message Claude", "Message Codex". */
 internal fun agentPlaceholder(res: Resources, session: Session?): String =
-    res.getString(R.string.chat_placeholder_agent, chatAgentName(session))
+    if (session?.awaitingFirstMessage == true) res.getString(R.string.chat_codex_first_message)
+    else res.getString(R.string.chat_placeholder_agent, chatAgentName(session))
 
 /** A message on its way to the agent: sending, or sent and not in the transcript yet (iOS `ChatAwaitingTurn.onItsWay`). */
 private val DeliveryState.onItsWay get() = this == DeliveryState.Sending || this == DeliveryState.Sent
@@ -54,12 +55,14 @@ private val DeliveryState.goingIn get() = onItsWay || this == DeliveryState.Queu
  * "Claude is getting ready…" under your newest message (iOS `startingTurn`): a message of yours is still going in, no
  * work line runs for it yet ([liveWork]), and the agent is at work or waiting on you, still starting up, or the message is
  * on its way while the hub may not have caught up (its status still idle or done, the start not failed). The turn's work
- * line takes over when it comes; null when the line doesn't show.
+ * line takes over when it comes; null when the line doesn't show. [name] says who: the agent, or in Persona's
+ * conversation Persona ("Persona is getting ready…", #4339 C18).
  */
-internal fun gettingReady(res: Resources, session: Session?, messages: List<OutboxMessage>, liveWork: Boolean): String? {
+internal fun gettingReady(res: Resources, session: Session?, messages: List<OutboxMessage>, liveWork: Boolean,
+                          name: String = chatAgentName(session)): String? {
     if (liveWork || messages.none { it.state.goingIn }) return null
     val status = session?.status
     val catchingUp = mayBeCatchingUp(status, !session?.startError.isNullOrBlank()) && messages.any { it.state.onItsWay }
     if (!isLiveStatus(status) && session?.starting != true && !catchingUp) return null
-    return res.getString(R.string.chat_getting_ready, chatAgentName(session))
+    return res.getString(R.string.chat_getting_ready, name)
 }

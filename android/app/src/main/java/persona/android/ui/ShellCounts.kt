@@ -8,7 +8,8 @@ import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.api.waiting
 import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.sort.AgentPreferences
-import persona.core.domain.sort.needsYouBadge
+import persona.core.domain.sort.NeedsYouRow
+import persona.core.domain.sort.needsYouBadgeRows
 import persona.core.domain.sort.needsYouCards
 import persona.core.domain.sort.needsYouRows
 import persona.core.domain.sort.needsYouWaiting
@@ -32,8 +33,8 @@ internal class ShellCounts(
 
     /** A card a count counts: not a quiet task's (#1731, told in the main conversation), not a muted session's. */
     fun countsCard(request: Interaction): Boolean {
-        val session = byKey[request.sessionKey]
-        return session?.quiet != true && !mutes.mutes(request.sessionKey.path, session?.spaceName?.let { "${request.machineId}/$it" })
+        val session = byKey[request.homeKey]
+        return session?.quiet != true && !mutes.mutes(request.homeKey.path, session?.spaceName?.let { "${request.machineId}/$it" })
     }
 
     /** A session the switcher's badges count: not quiet, not muted. */
@@ -45,17 +46,25 @@ internal class ShellCounts(
      * cards it has, and each card on no session, less quiet and muted ones (spec/fixtures/needs-you), the number iOS and
      * the web read. [requests] are its cards outside its own conversations.
      */
-    fun agentsWaiting(requests: List<Interaction>): Int {
+    fun agentsWaiting(requests: List<Interaction>): Int = agentRows(requests).size
+
+    /** The rows [agentsWaiting] counts, oldest first: what the blank page's Needs you lists on Glass (#4339 C17). */
+    fun agentRows(requests: List<Interaction>): List<NeedsYouRow> {
         val waiting = needsYouWaiting(sessions.filter { current.ownsOn(it.machineId, it.manager) })
-        return needsYouBadge(needsYouRows(needsYouCards(requests, byKey), waiting), byKey, mutes)
+        return needsYouBadgeRows(needsYouRows(needsYouCards(requests, byKey), waiting), byKey, mutes)
     }
 
     /** The current assistant's open to-dos, quiet ones left out: the sidebar's count beside To-dos. */
     fun todos(todos: List<Todo>): Int = todos.count { !it.isDone && !it.quiet && current.owns(it.manager) }
 
     /** What waits at each assistant ([waiting]): the switcher's badges. */
-    fun waiting(roster: ManagerRoster?, pending: List<Interaction>): Map<String, Int> =
-        roster?.waiting(pending, sessions, current.group, ::countsCard, ::countsSession).orEmpty()
+    fun waiting(roster: ManagerRoster?, pending: List<Interaction>): Map<String, Int> {
+        // A paged window may not hold the parent yet: its children's cards still count as one session there.
+        val missing = pending.filter { !it.foldedUnder.isNullOrBlank() && it.homeKey !in byKey }.distinctBy { it.homeKey }
+            .map { Session(it.machineId, it.homeKey.sessionId, state = "needs_you", manager = it.manager ?: byKey[it.sessionKey]?.manager) }
+        return roster?.waiting(pending.map { it.copy(sessionId = it.homeKey.sessionId) },
+            persona.core.domain.sort.foldedSessions(sessions + missing), current.group, ::countsCard, ::countsSession).orEmpty()
+    }
 
     /** The dot on the sidebar's button: something waits at another assistant than the current one. */
     fun othersWaiting(roster: ManagerRoster?, pending: List<Interaction>): Boolean = current.othersWaiting(waiting(roster, pending))

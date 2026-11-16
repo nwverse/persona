@@ -19,9 +19,11 @@ const (
 	sigUnjudged    = "unjudged"    // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou    = "needs_you"   // an agent waits for an answer
 	sigStalled     = "stalled"     // working, but nothing moved for long
+	sigAllStopped  = "all_stopped" // every current participant stopped with nothing scheduled to resume it
 	sigInterrupted = "interrupted" // the model service cut its turn off
 	sigFailed      = "failed"      // its agent did not start
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
+	sigPRConflict  = "pr_conflict" // the task's current open PR has merge conflicts at this head
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -38,6 +40,9 @@ var (
 	// superviseEvery is the least time between two supervision messages; superviseUrgentEvery when one waits on a decision.
 	superviseEvery       = 10 * time.Minute
 	superviseUrgentEvery = 2 * time.Minute
+	// superviseNoMainLogEvery is how often a digest that still finds no main conversation says so in the log: the
+	// watch's every pass (superviseTick) tries again, and each said it once before.
+	superviseNoMainLogEvery = time.Hour
 	// superviseNeedsAfter is how long an agent waits for an answer before the supervisor hears of it (the user was
 	// pushed; a quiet task's at once: the user was not).
 	superviseNeedsAfter = 3 * time.Minute
@@ -105,20 +110,29 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigEscalated && len(g.Cards) > 0 { // a leader's escalated cards, apart from its needs_user
 		return g.Todo + "|" + g.Kind + ":cards"
 	}
+	if g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "sent" {
+		return g.Todo + "|" + g.Kind + ":agent_copy" // delivered copies never absorb an earlier failed delivery
+	}
 	return g.Todo + "|" + g.Kind
 }
 
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
-		sigRecheck, sigUndecidable, sigOwnerCannot: // the owner waits on a decision they cannot answer as it is
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
+		sigParkDecided: // the owner answered: what they said is acted on soon
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
 	}
 	return false
 }
+
+// immediate: a signal that does not wait out the gap after the last message, only p.gather. A start that failed is
+// the supervisor's to retry and nobody else's; the gap is shared by every supervisor, so a message just sent to
+// another (the background supervisor) held it back for minutes while the task sat as if finished.
+func (g superviseSignal) immediate() bool { return g.Kind == sigFailed }
 
 type superviseBook struct {
 	mu      sync.Mutex
@@ -132,8 +146,11 @@ type superviseBook struct {
 	queued  map[string][]superviseSignal // conversation → the signals of the message still waiting in its queue
 	timer   *time.Timer
 	timerAt time.Time
-	hold    map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible map[string]bool      // an explicit user action makes the current triage turn visible
+	// noMainSince is when digests started finding no main conversation (zero: the last one found it), noMainLogged
+	// when that was last logged (sendDigest).
+	noMainSince, noMainLogged time.Time
+	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
+	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -174,12 +191,12 @@ func (s *Service) superviseTimings() superviseTimings {
 }
 
 // digestWait is how long until the pending signals are due (false: none): each waits p.gather after it came, and
-// p.every (p.urgent for an urgent one) after the last message (last; zero: none yet).
+// p.every (p.urgent for an urgent one) after the last message (last; zero: none yet), except an immediate one.
 func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimings) (time.Duration, bool) {
 	var due time.Time
 	for _, g := range pending {
 		at := g.At.Add(p.gather)
-		if !last.IsZero() {
+		if !last.IsZero() && !g.immediate() {
 			gap := p.every
 			if g.urgent() {
 				gap = p.urgent
@@ -208,6 +225,14 @@ func (s *Service) signal(g superviseSignal) {
 		g.At = time.Now()
 	}
 	b := &s.supervise
+	if turnSignalKind(g.Kind) && s.turnSignalled(g) {
+		// How its turn ended was told already, by this manager or by the one before a restart (task_turns.go).
+		b.mu.Lock()
+		b.init()
+		b.sent[g.id()] = g.Key
+		b.mu.Unlock()
+		return
+	}
 	b.mu.Lock()
 	b.init()
 	if b.sent[g.id()] == g.Key {
@@ -275,13 +300,14 @@ func (s *Service) retryDigestLocked(d time.Duration) {
 }
 
 // watchSignals are what t and its agents show now that the supervisor should hear of, by their state alone: a task
-// waiting for review (told once per review: again after a restart of the assistant, which forgot what it told), an
+// waiting for review (told once per review: the turns' ledger keeps that it was told across a restart of the
+// assistant, task_turns.go; a review no turn on the ledger raised is told again after one), an
 // agent waiting for an answer (at once for a quiet task), working without progress for long, or in any other state
 // with nothing new in its transcript for longer still (silentAfter, #5124). Nothing more for a
 // task waiting for review or for the user, only that its time came for a parked one, and nothing for one done or not
 // supervised. A task nobody works on any more
 // is told from what the minute pass found (orphanSignal, tasks_orphan.go), since that asks whether its computers answer.
-func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSignal {
+func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...superviseGroup) []superviseSignal {
 	v := t.Supervision
 	if v == nil || t.DoneAt != nil {
 		return nil
@@ -289,16 +315,25 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time) []superviseSign
 	switch v.state(t) {
 	case reviewPending:
 		return []superviseSignal{{Todo: t.ID, Kind: sigReview, Key: reviewKey(v)}}
-	case reviewNeedsUser:
-		return nil
 	case reviewParked: // nothing until its time, then that it came (parked.go)
 		if g, ok := parkedDueSignal(t, now); ok {
 			return []superviseSignal{g}
 		}
 		return nil
 	}
+	group := superviseGroup{tasks: []Todo{t}, sessions: agents}
+	if len(groups) > 0 {
+		group = groups[0]
+	}
+	if g, ok := allStoppedSignal(t, group.tasks, group.sessions, now); ok && !group.unknown {
+		return []superviseSignal{g} // one group diagnosis, not another silent signal for each member
+	}
+	if v.state(t) == reviewNeedsUser {
+		return nil
+	}
 	var out []superviseSignal
-	for _, c := range agents {
+	// An agent the task was handed over from is not watched: it would raise stalled from its last update forever (#6483).
+	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
 		base := superviseSignal{Todo: t.ID, Machine: c.MachineID, Session: c.SessionID}
 		switch {
 		case c.State == proto.StateNeedsYou || c.PendingInteractions > 0:
@@ -350,6 +385,7 @@ func silentAfter(expect int) time.Duration {
 func (s *Service) superviseLoop(ctx context.Context) {
 	t := time.NewTicker(superviseTick)
 	defer t.Stop()
+	s.turnOf(ctx, "") // the turns' ledger is kept from the manager's start, not from its first tick (task_turns.go)
 	for {
 		select {
 		case <-ctx.Done():
@@ -357,38 +393,56 @@ func (s *Service) superviseLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed is rehomed even with no signal of its own
+		s.handOverFormerMainTasks(ctx) // what a replaced main conversation still holds goes to the main one (main_handover.go)
 		s.backgroundStranded(ctx)      // what waits for a background supervisor that is gone is told again (supervise_background.go)
 		s.superviseWatch(ctx, time.Now())
 		s.drainHeldRelays(ctx, time.Now()) // nothing held for the owner is left behind (relay_presence.go)
 	}
 }
 
-// superviseWatch records what the supervised tasks' agents show now (watchSignals), and lets go of a hold on the
+// superviseWatch records what the supervised tasks' agents show now (watchSignals), hands a review a side
+// conversation left waiting to the main conversation's follow-up (handOverUnreviewed), and lets go of a hold on the
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
-	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
+	s.askTick(now)                 // cards held past their time go up a rung (ask_route.go)
+	s.handOverUnreviewed(ctx, now) // a review a side conversation left waiting goes to the main one's follow-up (side_handover.go)
 	routed := s.routedSessions()
-	tasks := s.todosOf(ctx, "*")
-	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	s.pruneTurns(ctx) // the turns' ledger: read before the first signal (what was told before a restart is not told again), closed tasks off it
+	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
+	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	s.pruneAllStoppedDedup(ctx)
+	lists := machineSessions{}     // each machine listed once for all the supervised tasks (#3029)
+	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
+	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
+	groups := allStoppedTaskGroups(tasks)
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
-		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
-		for _, g := range watchSignals(t, s.taskAgents(ctx, t), now) {
+		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
+		agents := s.taskAgentsIn(ctx, t, lists)
+		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
+		allStopped := false
+		for _, g := range watchSignals(t, agents, now, group) {
+			allStopped = allStopped || g.Kind == sigAllStopped
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
 			s.signal(g)
 		}
-		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
+		if g, ok := s.orphanSignal(t); ok && !allStopped { // a fresh complete group outranks the minute pass's orphan snapshot
+			s.signal(g)
+		}
+		s.parkDecidedRetry(ctx, t)             // a stored decision ends its parking when the ledger write missed it then (parked.go)
+		if g, ok := parkDecidedSignal(t); ok { // a decision ended its parking, and no message carried that yet (parked.go)
 			s.signal(g)
 		}
 		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
 			s.signal(g)
 		}
-		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
+		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
+		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

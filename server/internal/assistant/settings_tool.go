@@ -27,6 +27,8 @@ type ownSetting struct {
 	Setting
 	get func(ctx context.Context) (string, error)
 	set func(ctx context.Context, v json.RawMessage) (*ownChange, error)
+	// change is a setting's other actions (a list's add and remove: tasks.trust), in place of set.
+	change func(ctx context.Context, action string, v json.RawMessage) (*ownChange, error)
 }
 
 // ownChange is a change waiting for the phone: what the card says and how it is made (none: nothing to change).
@@ -69,6 +71,14 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
+		{Setting: Setting{Key: readonlyModeKey, Title: "Read-only task protection", Actions: getSet,
+			About: "sandbox (the default) keeps current runtime protection: Codex uses a read-only sandbox, while Claude uses " +
+				"bypassPermissions and a first-message read-only instruction. prompt keeps the instruction without forcing plan " +
+				"mode or a read-only sandbox; normal launcher permissions still apply. Instructions are not a security boundary. " +
+				"Applies to new task starts and retries, not running agents. Switch back to sandbox to restore the default",
+			Value: "sandbox or prompt"},
+			get: func(ctx context.Context) (string, error) { return readonlyModeOf(s.settings(ctx)), nil },
+			set: s.setReadonlyMode},
 		{Setting: Setting{Key: "assistant.task_workspace_preference", Title: "Task workspace preference", Actions: getSet,
 			About: "prefer-existing (default): reuse the task directory if free; prefer-new: isolate writable Git tasks. Read-only defaults to none, busy directories to new; explicit task workspace wins. Paths come from the machine engine",
 			Value: "prefer-existing or prefer-new"},
@@ -107,6 +117,14 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainBackgroundFolded(ctx)), nil },
 			set: s.setMainBackgroundFolded},
+		{Setting: Setting{Key: "assistant.recent_task_chats", Title: "Show scheduled task chats in Recent", Actions: getSet,
+			About: "off (the default): the sidebar's Recent in the apps leaves out the chats a scheduled task or the background " +
+				"supervisor started (they stay in All chats and under Scheduled Tasks); on: Recent lists them by last activity with " +
+				"the user's other chats, within its usual count. One value for all of the user's devices. Display only: what runs " +
+				"is unchanged",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recentTaskChats(ctx)), nil },
+			set: s.setRecentTaskChats},
 		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
 			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
 				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
@@ -114,6 +132,9 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "off, listener or participant"},
 			get: func(ctx context.Context) (string, error) { return s.meetingAttendanceDefault(ctx), nil },
 			set: s.setMeetingAttendanceDefault},
+		{Setting: Setting{Key: "assistant.meeting_transcription_default", Title: i18n.T(i18n.Default, "assistant-settings_tool.title_meeting_transcription_default"), Actions: getSet,
+			About: prompts.RenderMeetingTranscriptionSetting(), Value: "device or hub"},
+			get: s.getMeetingTranscriptionDefault, set: s.setMeetingTranscriptionDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
@@ -190,6 +211,16 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: modelTiersValue},
 			get: s.getModelTiers,
 			set: s.setModelTiers},
+		{Setting: Setting{Key: admissionSettingsKey, Title: "Execution Agent admission gate", Actions: getSet,
+			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
+				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
+				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
+				"direction_cap_by_project, which wins over direction_cap and the code default; get first and send the whole object",
+			Value: "the full AdmissionSettings JSON object from get; a nil pointer keeps the code default, every set line must be positive"},
+			get: s.getAdmission,
+			set: s.setAdmission},
+		s.trustSetting(),
+		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
 }
 
@@ -257,14 +288,18 @@ var settingCardWait = 15 * time.Minute
 
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
-	switch action {
-	case "get":
+	var change *ownChange
+	var err error
+	switch {
+	case action == "get":
 		return o.get(ctx)
-	case "set":
+	case action == "set" && o.set != nil:
+		change, err = o.set(ctx, value)
+	case action != "set" && o.change != nil && slices.Contains(o.Actions, action):
+		change, err = o.change(ctx, action, value)
 	default:
 		return "", fmt.Errorf("%s does not take %q (it takes %s)", o.Key, action, strings.Join(o.Actions, ", "))
 	}
-	change, err := o.set(ctx, value)
 	if err != nil {
 		return "", err
 	}
@@ -303,13 +338,16 @@ func orNone(s string) string {
 // settingTitles are the settings' titles for the card the user approves on, in this file's namespace (Title stays
 // what the assistant reads).
 var settingTitles = map[string]string{standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
+	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
 	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "assistant.inbox_signals": "title_inbox_signals", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "model_profiles.tiers": "title_model_tiers",
-	"assistant.meeting_attendance_default": "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
-	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded"}
+	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
+	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",
+	"assistant.kb_topics": "title_kb_topics", "assistant.main_background_folded": "title_main_background_folded",
+	"assistant.recent_task_chats": "title_recent_task_chats", admissionSettingsKey: "title_admission", trustSetting: "title_task_trust"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -416,6 +454,13 @@ func (s *Service) setMainBackgroundFolded(ctx context.Context, v json.RawMessage
 		return i18n.T(l, "assistant-settings_tool.change_main_background_folded", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainBackgroundFolded },
 		"assistant.main_background_folded is %v; the apps redraw the main conversation with it.")
+}
+
+func (s *Service) setRecentTaskChats(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.recentTaskChats, "assistant.recent_task_chats is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_recent_task_chats", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.RecentTaskChats },
+		"assistant.recent_task_chats is %v; the apps' sidebar Recent follows it on every device.")
 }
 
 func (s *Service) setKBTopics(ctx context.Context, v json.RawMessage) (*ownChange, error) {

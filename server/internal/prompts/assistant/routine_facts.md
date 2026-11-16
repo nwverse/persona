@@ -12,7 +12,11 @@ Persona 算好的事实（这次开跑时的快照，数字以此为准，别改
   - {{.Line}}{{if .Changed}}（改了：{{.Changed}}）{{end}}{{end}}
 {{if .LaterTotal}}- 可以晚点答的问题 {{.LaterTotal}} 件：Agent 留下的、不急的问题，列在早晚报的「可以晚点答」一节里。只说有几件，不要逐条再列，也不要替用户回答。
 {{end}}- 正在做的 {{.ProgressTotal}} 件{{range .Progress}}
-  - {{.Title}}{{if .Stage}}（阶段：{{.Stage}}）{{end}}{{end}}{{with .Leaders}}
+  - {{.Title}}{{if .Stage}}（阶段：{{.Stage}}）{{end}}{{end}}{{with .InboxWaiting}}
+- 收件箱里等对方超过一天的（只给你看，卡片、简报条目和推送里没有；即使上面有卡片，也要在回答里逐条提）：{{range .}}
+  - {{.Title}}{{with .Who}}；在等：{{.}}{{end}}{{with .Next}}；下一步：{{.}}{{end}}{{end}}{{end}}{{with .InboxDue}}
+- 收件箱里今天到点的（含已经到点但还没回看的，以及看过 3 次没动静或到了再看时间的；同样只给你看，要在回答里逐条提）：{{range .}}
+  - {{.Title}}{{with .Who}}；在等：{{.}}{{end}}{{with .Next}}；下一步：{{.}}{{end}}{{end}}{{end}}{{with .Leaders}}
 - 各方向（每个主管一行；有工作记账的进度卡工具就发卡，没有才在早晚报里每个方向照着各写一行，卡住的写明卡在哪、谁来解）：{{range .}}
   - {{.Name}}：在办 {{.Open}} 件{{if .Waiting}}，等用户拍板 {{.Waiting}} 件{{end}}{{if .Stuck}}，卡住超过一天 {{.Stuck}} 件{{end}}{{if or .Reached .Doing .NeedsYou}}；主管今天的小结：{{with .Reached}}达成 {{.}}；{{end}}{{with .Doing}}在做 {{.}}；{{end}}{{with .NeedsYou}}要用户做 {{.}}{{end}}{{else}}；主管今天还没写小结{{end}}{{end}}{{end}}{{with .Briefs}}
 - 派出去的事里要说的（用用户当初的原话开头，每件一行；没列出来的不需要用户做什么、也没有变化，不要提）：{{range .}}
@@ -29,5 +33,5 @@ Persona 算好的事实（这次开跑时的快照，数字以此为准，别改
     - {{.From}}–{{.To}} {{if .Meeting}}会议{{else}}会议以外{{end}}：{{.Title}}{{end}}{{end}}{{with .Actions}}
   - 还没确认的建议待办{{if $.Day.ActionsLeft}}（另有 {{$.Day.ActionsLeft}} 条没列）{{end}}：{{range .}}
     - {{if .Who}}{{.Who}}：{{end}}{{.What}}{{end}}{{end}}{{end}}{{with .Setup}}
-- 建议的设置（Persona 按过去 7 天的记录算出来的：哪个还没开的机制本可以让用户少被问几次、或让对话少跑几轮后台任务，后面是代价和在哪里开。{{if $.Card}}飞书卡片里已经原样列出，你不用再列。{{else}}请在回答的最后把这几行原样列出来，数字和措辞都不要改。{{end}}开不开由用户自己决定：你不要替用户打开其中任何一项，也不要为此调用设置工具）：{{range .}}
+- 建议的设置（Persona 按过去 7 天的记录算出来的：哪个还没开的机制本可以让用户少被问几次、或让对话少跑几轮后台任务，后面是代价和在哪里开；也可能有一行说后台督办用的模型可以换低一档，那一行按过去 30 天算，依据写在那一行里。{{if $.Card}}飞书卡片里已经原样列出，你不用再列。{{else}}请在回答的最后把这几行原样列出来，数字和措辞都不要改。{{end}}开不开、换不换由用户自己决定：你不要替用户打开或改动其中任何一项，也不要为此调用设置工具）：{{range .}}
   - {{.}}{{end}}{{end}}

@@ -31,7 +31,7 @@ func (s *Service) toolTodo(ctx context.Context, machine, self, name string, args
 	case "todo_list":
 		return s.toolTodoList(ctx, args)
 	case "todo_get":
-		return s.toolTodoGet(ctx, args)
+		return s.toolTodoGet(ctx, machine, self, args)
 	case "todo_create":
 		return s.toolTodoCreate(ctx, machine, self, args)
 	case "todo_update":
@@ -110,7 +110,7 @@ func (s *Service) toolTodoList(ctx context.Context, args json.RawMessage) (strin
 	s.todos.mu.RUnlock()
 	list = slices.DeleteFunc(list, func(t Todo) bool {
 		done := t.DoneAt != nil
-		if status == "open" && done || status == "done" && !done {
+		if status == "open" && done && t.StartError == "" || status == "done" && !done {
 			return true
 		}
 		by, hasDue := t.dueBy(loc)
@@ -151,7 +151,7 @@ func (s *Service) toolTodoList(ctx context.Context, args json.RawMessage) (strin
 	return b.String(), nil
 }
 
-func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string, error) {
+func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	t, err := s.toolTodoArg(args)
 	if err != nil {
 		return "", err
@@ -167,6 +167,9 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		}
 		b.WriteString("\n")
 	}
+	if t.StartError != "" {
+		fmt.Fprintf(&b, "failed to start: %s\n", clip(oneLine(t.StartError), 200))
+	}
 	if t.RemindAt != nil && t.RemindedAt != nil {
 		fmt.Fprintf(&b, "reminder pushed %s\n", t.RemindedAt.In(loc).Format(toolTimeLayout))
 	}
@@ -180,7 +183,11 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		b.WriteString("\n")
 	}
 	if t.Stage != "" || t.PRURL != "" {
-		fmt.Fprintf(&b, "stage %s %s\n", cmpOr(t.Stage, "-"), t.PRURL)
+		if _, canonical := s.store().(todoRepositoryStore); canonical {
+			fmt.Fprintf(&b, "stage %s\n", cmpOr(t.Stage, "-"))
+		} else {
+			fmt.Fprintf(&b, "stage %s %s\n", cmpOr(t.Stage, "-"), t.PRURL)
+		}
 	}
 	if strings.TrimSpace(t.Notes) != "" {
 		b.WriteString("notes:\n" + clip(strings.TrimSpace(t.Notes), 4000) + "\n")
@@ -218,13 +225,32 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 		if ds, err := st.ListTodoDecisions(ctx, t.ID, false); err == nil && len(ds) > 0 {
 			b.WriteString("decisions in force:\n")
 			for _, d := range ds {
-				fmt.Fprintf(&b, "- %s → %s", clip(oneLine(d.Question), 160), clip(oneLine(d.Choice), 160))
+				question := d.Question
+				if _, earlier := earlierOutcomeSummary(t, d); earlier {
+					question = "Earlier phase outcome"
+				}
+				fmt.Fprintf(&b, "- %s → %s", clip(oneLine(question), 160), clip(oneLine(d.Choice), 160))
+				if at, ok := completionOfDecision(d); ok {
+					_, earlier := earlierPhase(t, d)
+					phase := "current completion"
+					if earlier {
+						phase = "earlier phase"
+					}
+					fmt.Fprintf(&b, " [%s: %s; %s/%s]", phase, at.In(loc).Format(toolTimeLayout), d.SourceMachine, d.SourceSession)
+				}
 				if r := oneLine(d.Reason); r != "" {
 					fmt.Fprintf(&b, " (%s)", clip(r, 160))
 				}
 				b.WriteString("\n")
 			}
 		}
+	}
+	if _, ok := s.store().(todoRepositoryStore); ok {
+		set, err := s.readTodoRepositoriesForTool(ctx, machine, self, t.ID)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(formatTodoRepositoryContext(set))
 	}
 	return b.String(), nil
 }
@@ -233,16 +259,21 @@ func (s *Service) toolTodoGet(ctx context.Context, args json.RawMessage) (string
 
 func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		Title    string `json:"title"`
-		Notes    string `json:"notes"`
-		Due      string `json:"due"`
-		Remind   string `json:"remind"`
-		Priority string `json:"priority"`
-		Project  string `json:"project"`
-		Kind     string `json:"kind"`
+		Title              string          `json:"title"`
+		Notes              string          `json:"notes"`
+		Due                string          `json:"due"`
+		Remind             string          `json:"remind"`
+		Priority           string          `json:"priority"`
+		Project            string          `json:"project"`
+		Kind               string          `json:"kind"`
+		RepositoryBindings json.RawMessage `json:"repository_bindings"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
+	}
+	bindings, err := parseCreateBindings(a.RepositoryBindings)
+	if err != nil {
+		return "", err
 	}
 	title := strings.TrimSpace(a.Title)
 	if title == "" {
@@ -272,10 +303,13 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	if t, ok := s.openTodoLike(title, kind, plan); ok {
+		if bindings != nil {
+			return "", fmt.Errorf("to-do %s already exists; associations were not changed: read todo_repositories_get and edit with todo_repositories_set", t.ID)
+		}
 		return "Already there, not created again: " + todoLine(t, now, loc), nil
 	}
 	if kind == db.KindConcern {
-		t, err := s.createConcern(ctx, title, strings.TrimSpace(a.Notes), plan)
+		t, err := s.createConcern(ctx, title, strings.TrimSpace(a.Notes), plan, bindings)
 		if err != nil {
 			return "", fmt.Errorf("the concern could not be saved, nothing changed: %w", err)
 		}
@@ -284,7 +318,15 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
 		return todoNotAllowed(err)
 	}
-	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan)
+	if s.isLeader(ctx, self) {
+		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan, bindings)
+		if err != nil {
+			return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
+		}
+		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
+			"): " + todoLine(t, now, loc), nil
+	}
+	t, err := s.createPlainTodo(ctx, title, strings.TrimSpace(a.Notes), plan, bindings)
 	if err != nil {
 		return "", fmt.Errorf("the to-do could not be saved, nothing changed: %w", err)
 	}
@@ -521,7 +563,9 @@ const toolTimeLayout = "2006-01-02 Mon 15:04"
 func todoLine(t Todo, now time.Time, loc *time.Location) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %q [", t.ID, clip(oneLine(t.Title), 120))
-	if t.DoneAt != nil {
+	if t.StartError != "" {
+		b.WriteString("failed to start")
+	} else if t.DoneAt != nil {
 		b.WriteString("done")
 	} else {
 		b.WriteString("open")

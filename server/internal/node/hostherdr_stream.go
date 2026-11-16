@@ -25,21 +25,18 @@ func (h *herdrHost) CanControl() bool {
 	return h.has(&controlSupport, "terminal", "session", "control")
 }
 
+// PaneSize is the size the pane's programs see: its terminal's, else its rect in pane.layout. The layout alone is not:
+// while no herdr client is attached it holds herdr's default (120 × 40) while the pane keeps the last client's size, and
+// an observe at a smaller size than the pane's is its top left cut out (#5409; docs/integrations/terminal.md section 1).
 func (h *herdrHost) PaneSize(ctx context.Context, pane host.PaneRef) (int, int, error) {
 	t, err := h.target(ctx, pane.ID)
 	if err != nil {
 		return 0, 0, err
 	}
-	return t.c.PaneSize(ctx, t.id)
-}
-
-// TermSize is the size the pane's programs see now (host.TermSizer): its terminal's, not its layout's.
-func (h *herdrHost) TermSize(ctx context.Context, pane host.PaneRef) (int, int, error) {
-	t, err := h.target(ctx, pane.ID)
-	if err != nil {
-		return 0, 0, err
+	if cols, rows, err := t.c.TermSize(ctx, t.id); err == nil {
+		return cols, rows, nil
 	}
-	return t.c.TermSize(ctx, t.id)
+	return t.c.PaneSize(ctx, t.id)
 }
 
 func (h *herdrHost) Observe(ctx context.Context, pane host.PaneRef, cols, rows int, fn func(host.Frame)) error {

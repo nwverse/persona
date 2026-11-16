@@ -7,6 +7,9 @@ import Observation
         var group: String
         var owner: ObjectIdentifier
         var config: ServerConfig
+        /// The assistant whose agents the list shows of this group (`AppModel.assistantScope`): another one is another
+        /// list, started over at once like another hub's, with nothing of the one before kept behind a hold.
+        var scope: AssistantScope?
     }
 
     nonisolated struct Key: Equatable, Sendable {
@@ -14,10 +17,13 @@ import Observation
         var partitions: [Partition]
         var settings: AgentListProjection.Settings
         var workspaceRevision: UInt64 = 0
+        /// What waiting children ask, so a new card changes the parent row without waiting on a session revision.
+        var asks: [SessionKey: String] = [:]
     }
 
     static func partitions(_ model: AppModel) -> [Partition] {
-        model.links.map { Partition(group: $0.group, owner: ObjectIdentifier($0), config: $0.config) }
+        let scope = model.assistantScope
+        return model.links.map { Partition(group: $0.group, owner: ObjectIdentifier($0), config: $0.config, scope: $0.group == scope?.group ? scope : nil) }
     }
 
     /// The body observes publication, not the dictionaries or task bookkeeping mutated during lookup.

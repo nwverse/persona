@@ -11,6 +11,9 @@ export interface PanelPrice {
   input: number;
   output: number;
   cache_read?: number;
+  /** A 5-minute cache write; `cache_write_1h` a 1-hour one (absent: `cache_write`'s price). */
+  cache_write?: number;
+  cache_write_1h?: number;
 }
 
 /** One model of a provider, as the panel shows and picks it. */
@@ -24,6 +27,9 @@ export interface PanelModel {
   resolved?: string;
   /** Thinking efforts it takes, weakest first (lib/session-actions.ts EFFORTS / CODEX_EFFORTS ids); empty: no effort control. */
   efforts: string[];
+  /** The running session cannot change effort here; keep its actual value visible and explain why. */
+  effortUnavailable?: string;
+  effortNote?: string;
   /** The effort the model runs with when none is set: the slider marks it "Recommended". */
   defaultEffort?: string;
   /** A Fast (priority) speed exists for this model on this engine. */
@@ -45,8 +51,11 @@ export interface PanelProvider {
   id: string;
   /** What the rail tooltip, group header and second lines call it. */
   name: string;
-  /** The engine it runs (AgentMark ids): claude, codex, agy… */
+  /** The engine it runs (AgentMark ids): claude, codex, agy…; one of Paseo's providers is that provider (grok…, #8142). */
   engine: string;
+  /** What the engine is called when the app has no name of its own for it: the session's own provider's label ("Grok",
+   *  the row's agent_label); its mark and its name on the rows and in the flyout. */
+  engineLabel?: string;
   /** null: not read yet. */
   models: PanelModel[] | null;
   loading?: boolean;
@@ -61,6 +70,8 @@ export interface PanelProvider {
   /** The startup ID under a display name (#5029, lib/provider-names.ts providerIdNote): the group's header shows it small
    *  in monospace, the rail's tooltip after the name. */
   idNote?: string;
+  /** Another harness that can use it too, said after the group's name ("pi can use it too"). */
+  alsoNote?: string;
 }
 
 /** A setup: what a pick applies, what a favorite or a recent entry keeps. */
@@ -184,15 +195,15 @@ function runsNow(provider: Pick<PanelProvider, "id" | "models">, model: Pick<Pan
 const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) => (effort && model.efforts.includes(effort) ? effort : undefined);
 
 /**
- * The setup a model's row stands for, and what picking it sends. The model that runs now shows what runs (its effort,
- * then its override's, except for an Agent not started yet, whose form holds the whole setup; its Fast as it runs). Any
+ * The setup a model's row stands for, and what picking it sends. The model that runs now shows what runs, never a
+ * browser override for an unknown session value. An Agent not started yet keeps only supported form values. Any
  * other: its override's effort, else the effort running now when this model takes it, else none (the model's own
  * default); Fast only from its override, and only where the model has it.
  */
 export function rowSetup(provider: Pick<PanelProvider, "id" | "models">, model: PanelModel, state: Pick<PanelState, "current" | "starting">, override?: PanelOverride): PanelConfig {
   const current = state.current;
   const now = runsNow(provider, model, current);
-  const effort = now ? (takes(model, current?.effort) ?? (state.starting ? undefined : takes(model, override?.effort))) : (takes(model, override?.effort) ?? takes(model, current?.effort));
+  const effort = now ? (state.starting ? takes(model, current?.effort) : current?.effort) : (takes(model, override?.effort) ?? takes(model, current?.effort));
   // what runs is what runs: an unset Fast on the running model is Standard, not "unknown, take the override"
   const fast = model.fast ? (now ? current?.fast : override?.fast) : undefined;
   return cleanSetup({ provider: provider.id, model: model.id, effort, fast });
@@ -210,8 +221,11 @@ export const shownEffort = (setup: PanelConfig, model: Pick<PanelModel, "default
 
 /** Why a row of `provider` can't be picked now (undefined: it can): the chat is busy, the provider can't take a pick
  *  here, the launcher fixes its own model, or its list is still being read (no reason to say; a list shown from before
- *  and read again behind it does not wait). */
-export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy">): { reason: string } | undefined {
+ *  and read again behind it does not wait). The model that runs now (`current`) can always be picked back while a switch
+ *  waits, unless the chat is busy: that keeps it and drops the switch (#5035, #5054; an agent that can't change its model
+ *  while it runs has no other way back). */
+export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy" | "pending">, current = false): { reason: string } | undefined {
+  if (current && state.pending && !state.busy) return undefined;
   const reason = state.busy || provider.unavailable || provider.locked;
   if (reason) return { reason };
   if (provider.models === null) return { reason: "" };
@@ -221,7 +235,7 @@ export function rowBlock(provider: PanelProvider, state: Pick<PanelState, "busy"
 /** Whether a row's setup flyout opens. Recent rows and "Use “…”" have none. The model that runs now has one whenever the
  *  chat applies flyout edits at once (`live`), even while picks are off (busy, or a Codex session that changes only its
  *  effort and Fast); any other row only while it can be picked. */
-export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provider">, state: Pick<PanelState, "busy">, live: boolean): boolean {
+export function rowCustomizable(row: Pick<PanelRow, "kind" | "current" | "provider">, state: Pick<PanelState, "busy" | "pending">, live: boolean): boolean {
   if (row.kind === "recent" || row.kind === "typed" || row.kind === "preset") return false;
   if (row.kind === "model" && row.current && live) return true;
   return !rowBlock(row.provider, state);
@@ -275,7 +289,13 @@ export interface PanelSection {
   rows: PanelRow[];
   /** The provider's list is still being read: its header and a spinner. */
   loading?: boolean;
+  /** The All view shows only the group's first rows (ALL_GROUP_MAX): how many it has in all, for its "Show all N". */
+  total?: number;
 }
+
+/** A provider group's rows in the All view, not searching, when several providers are listed: the rest are a click away
+ *  in the provider's own view, so one long list does not bury the providers below it. */
+export const ALL_GROUP_MAX = 8;
 
 export interface SectionsInput {
   providers: PanelProvider[];
@@ -305,9 +325,10 @@ function resolveCopy(providers: PanelProvider[], copy: PanelConfig): { provider:
  * The list for a view (Cindy's buildUnifiedListSections). All: Favorites, the presets, Recommended (the model that runs
  * now, then the other models of the providers in `state.recommended`; those leave their own group; none for an Agent not
  * started yet), then one group per provider (an emptied group is left out; one whose list is being read shows a spinner).
- * A provider's view: its favorites and presets, then its models. Favorites: the favorites only. Recent: the last setups
- * applied. A search searches every provider, and a typed model ID none of whose models answers is offered as "Use “…”" in
- * the group of each provider that takes a pick here and takes typed IDs.
+ * Not searching, each provider group of an All view that lists several shows its first ALL_GROUP_MAX rows (and the one
+ * that runs now) with its `total`. A provider's view: its favorites and presets, then its models. Favorites: the
+ * favorites only. Recent: the last setups applied. A search searches every provider, and a typed model ID none of whose
+ * models answers is offered as "Use “…”" in the group of each provider that takes a pick here and takes typed IDs.
  */
 export function panelSections({ providers, state, view: chosen, query, favorites, recent, overrides, presets }: SectionsInput): PanelSection[] {
   const q = query.trim();
@@ -371,6 +392,7 @@ export function panelSections({ providers, state, view: chosen, query, favorites
   }
 
   const typed = cleanModelId(q);
+  const capped = view.kind === "all" && !q && shown.filter((p) => p.models !== null).length > 1;
   for (const p of shown) {
     if (p.models === null) {
       // a provider that can't take a pick here has no list to wait for; a list that failed shows why (not under a search)
@@ -388,7 +410,10 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       rows.push({ key: `typed:${p.id}\n${typed}`, kind: "typed", provider: p, model, setup: { provider: p.id, model: typed }, current: false, customized: false });
     }
     // a list on its way under rows already shown (the running model's while its list is read): the spinner too
-    if (rows.length) out.push({ key: `provider:${p.id}`, kind: "provider", provider: p, rows, ...(p.loading ? { loading: true } : {}) });
+    if (!rows.length) continue;
+    // the model that runs now stays, wherever it is in the list
+    const cut = capped && rows.length > ALL_GROUP_MAX ? rows.filter((r, i) => i < ALL_GROUP_MAX || r.current) : rows;
+    out.push({ key: `provider:${p.id}`, kind: "provider", provider: p, rows: cut, ...(p.loading ? { loading: true } : {}), ...(cut.length < rows.length ? { total: rows.length } : {}) });
   }
   return out;
 }

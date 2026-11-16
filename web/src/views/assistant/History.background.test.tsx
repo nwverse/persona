@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // "All chats" lists the background supervisor (#5082) with the scheduled tasks' chats, marked built in, and its menu only
-// copies its id: it is not renamed, archived or made 常驻.
+// copies its id: it is not renamed, archived or made 常驻. And it opens on All, each chat the hub opened by itself with its
+// origin's mark, decided as its filter is (#5195).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,11 +85,11 @@ describe("全部对话's background supervisor (#5082)", () => {
 
   it("only copies its id, while a scheduled task's chat keeps its whole menu", async () => {
     await mount("task");
-    expect(await menuOf("后台督办")).toEqual(["拷贝会话 ID"]);
+    expect(await menuOf("后台督办")).toEqual(["复制会话 ID"]);
     await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     const full = await menuOf("对话 morning");
-    expect(full).toHaveLength(4); // 设为常驻 (with its accelerator), 重命名…, 拷贝会话 ID, 归档
-    expect(full).toEqual(expect.arrayContaining(["重命名…", "拷贝会话 ID", "归档"]));
+    expect(full).toHaveLength(4); // 设为常驻 (with its accelerator), 重命名…, 复制会话 ID, 归档
+    expect(full).toEqual(expect.arrayContaining(["重命名…", "复制会话 ID", "归档"]));
   });
 
   it("goes by its origin on a hub that does not name it", async () => {
@@ -96,5 +97,27 @@ describe("全部对话's background supervisor (#5082)", () => {
     await mount("task");
     expect(titles()).toEqual(["后台督办", "对话 morning"]);
     expect(host.querySelector('[data-testid="built-in"]')).toBeNull();
+  });
+});
+
+describe("全部对话's filters and marks (#5195)", () => {
+  const mark = (title: string) => [...host.querySelectorAll("a")].find((a) => a.getAttribute("title")?.startsWith(title))!.querySelector("[data-origin-mark]");
+
+  it("opens on 全部, every chat with the mark of the filter it is under", async () => {
+    await mount();
+    const pressed = [...host.querySelectorAll('[role="group"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim());
+    expect(pressed).toEqual(["全部"]);
+    expect(mark("对话 morning")?.getAttribute("data-origin-mark")).toBe("task");
+    expect(mark("对话 morning")?.getAttribute("aria-label")).toBe("定时任务");
+    expect(mark("后台督办")?.getAttribute("data-origin-mark")).toBe("task");
+    expect(mark("对话 mine")).toBeNull();
+  });
+
+  it("marks the background supervisor as the scheduled tasks' whatever its row says", async () => {
+    const list = [conv("main"), conv("bg", { title: "后台督办" }), conv("mine", { origin: "user" })];
+    hub.fetched = list;
+    hub.state = { ...hub.state, assistant: { ...(hub.state.assistant as object), conversations: list }, sessions: { server: list } };
+    await mount();
+    expect(mark("后台督办")?.getAttribute("data-origin-mark")).toBe("task");
   });
 });

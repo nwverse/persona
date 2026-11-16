@@ -307,6 +307,19 @@ func (h *Manager) removeMailAccount(_ context.Context, id string) (*selfChange, 
 }
 
 func (h *Manager) toolPersonaSettings(ctx context.Context, machineID, sessionID string, args json.RawMessage) (string, error) {
+	out, err := h.personaSettings(ctx, machineID, sessionID, args)
+	// iPhone control's own setting read or changed while no iPhone is allowed: the rest of its setup (this iPhone's
+	// consent, pairing, Developer Mode) happens on the iPhone, in the guided setup (#8199).
+	var a struct {
+		Key string `json:"key"`
+	}
+	if err == nil && json.Unmarshal(args, &a) == nil && a.Key == "extension."+iphoneExtensionID && !h.iphoneSomeAllowed() {
+		out += "\n" + iphoneSetupHint
+	}
+	return out, err
+}
+
+func (h *Manager) personaSettings(ctx context.Context, machineID, sessionID string, args json.RawMessage) (string, error) {
 	var a struct {
 		Action string          `json:"action"`
 		Key    string          `json:"key"`
@@ -364,6 +377,11 @@ func (h *Manager) toolPersonaSettings(ctx context.Context, machineID, sessionID 
 		if !f.Optional && strings.TrimSpace(r.Values[f.Key]) == "" {
 			return "", fmt.Errorf("%s was left empty on the phone: nothing changed", f.Label)
 		}
+	}
+	// Whoever asked stopped waiting while the card was being answered (the hub's call ended, the bus dropped): it was
+	// told nothing came of the call, so nothing is changed now that nobody would hear of (#5907).
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("the change was approved after its caller stopped waiting: nothing changed (%w)", err)
 	}
 	return change.apply(ctx, r.Values)
 }

@@ -401,6 +401,11 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 		out = append(out, PermissionLine{Key: "recalls_sent", Title: permissionText(l, "recalls_sent_title"),
 			Detail: permissionText(l, "recalls_sent_detail", i18n.Args{"names": strings.Join(names, permissionText(l, "list_separator"))})})
 	}
+	// What its program writes for the assistant to read is shown, like recalls not agreed to: package instructions and
+	// skills are not either, and the user sees and switches each contribution in the extension's details.
+	if m.HasDataContent() {
+		out = append(out, permissionLine(l, "assistant_data"))
+	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string
 		for _, t := range topics {
@@ -444,7 +449,11 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 func Added(old, m *Manifest) []PermissionLine { return AddedIn(i18n.Default, old, m) }
 
 // AddedIn generates only the permissions added by an upgrade, in the requested language.
-func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
+func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine { return AddedWith(l, old, m, nil) }
+
+// AddedWith is AddedIn naming, for each "config:" entry it adds, the address the installed extension's saved settings
+// hold (config, nil when there are none), as ExplainWith does.
+func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []PermissionLine {
 	var out []PermissionLine
 	if m.Runtime != nil && old.Runtime == nil {
 		out = append(out, permissionLine(l, "runs_code"))
@@ -476,7 +485,7 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	if len(hosts) > 0 {
 		out = append(out, PermissionLine{Key: "network", Title: permissionText(l, "network_more_title"), Detail: strings.Join(hosts, permissionText(l, "list_separator"))})
 	}
-	out = append(out, configuredLines(l, m, configured, nil)...)
+	out = append(out, configuredLines(l, m, configured, config)...)
 	if m.Permissions.FullHub() && !old.Permissions.FullHub() {
 		out = append(out, permissionLine(l, "hub_api"))
 	} else if !m.Permissions.FullHub() {

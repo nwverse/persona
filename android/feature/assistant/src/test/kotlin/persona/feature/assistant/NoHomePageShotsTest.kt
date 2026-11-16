@@ -85,6 +85,8 @@ class NoHomePageShotsTest {
             NeedsYouLine.Agent(SessionKey("mac", "agent"), "r1", "plan", null, who = "weather-app", what = "Plan ready"),
             NeedsYouLine.Inbox("i1", lark = false, itemKind = "mail", who = "Alex", what = "Re: Q4 budget"),
         ), more = 1)
+        // Glass draws them over the composer (#4339 C17), all of them, as many as fit.
+        val shellNeeds = needs.lines + NeedsYouLine.Inbox("i2", lark = false, itemKind = "mail", who = "Sam", what = "Lunch on Friday?")
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 val configuration = Configuration(LocalConfiguration.current).apply {
@@ -100,7 +102,7 @@ class NoHomePageShotsTest {
                     Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
                         key(round) {
                             AssistantScreen(navigator, hub, hub, hub::start, composerService = null, mainConversationSender = hub,
-                                requestedSession = side, needsYou = needs, onOpenNeed = {}, onOpenInbox = {},
+                                requestedSession = side, needsYou = needs, shellNeedsYou = shellNeeds, onOpenNeed = {}, onOpenInbox = {},
                                 machines = listOf(Machine("mbp", name = "MacBook Pro", online = true)), phoneToolsAvailable = true,
                                 chatContent = { key -> StandInChat(key) })
                         }
@@ -133,6 +135,51 @@ class NoHomePageShotsTest {
             rule.onNodeWithText("Assistant").performClick()
             capture("$name-4-menu", dialog = true)
             back()
+        }
+    }
+
+    /**
+     * The page that starts the main chat, with no main conversation yet (iOS `ShellHome`): its lead says "This is your main
+     * chat", where New chat's says "Start a new side chat" (#4339 C18). Every style, light and dark.
+     */
+    @Test fun theBlankPageThatStartsTheMainChat() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val hub = object : AssistantRepository, MessageSender, MainConversationSender {
+            override val assistant = MutableStateFlow(AssistantSnapshot())
+            override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
+            override suspend fun refresh() = Unit
+            override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = Unit
+            override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
+        }
+        val sidebar = AssistantSidebarHost()
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val configuration = Configuration(LocalConfiguration.current).apply {
+                    uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                        if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+                }
+                val chrome = HomeChrome(listOf(NavItem("Persona", "Assistant", PhIcons.Sparkle), NavItem("Agents", "Agents", PhIcons.Terminal)),
+                    "Persona", {}, { JPersonaButton(PersonaState.Idle, "Chat history", {}) })
+                CompositionLocalProvider(LocalConfiguration provides configuration, LocalManagerRoster provides ManagerRoster(listOf(
+                    HubManager("assistant", "Helper", online = true, isDefault = true),
+                ), "assistant"), LocalHomeChrome provides chrome, LocalAssistantSidebarHost provides sidebar) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        AssistantScreen(navigator, hub, hub, { SessionKey("mac", "new") }, composerService = null, mainConversationSender = hub,
+                            machines = listOf(Machine("mbp", name = "MacBook Pro", online = true)), phoneToolsAvailable = true,
+                            chatContent = { key -> StandInChat(key) })
+                    }
+                }
+            }
+        }
+        val out = File(System.getProperty("persona.shots") ?: "build/no-home-shots").also { it.mkdirs() }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d
+            rule.waitForIdle()
+            rule.onNodeWithText("This is your main chat", substring = true).assertExists()
+            rule.onAllNodesWithText("Start a new side chat", substring = true).assertCountEquals(0)
+            val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            File(out, "no-main-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
 

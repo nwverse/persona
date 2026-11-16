@@ -26,6 +26,8 @@ type assistantCompaction struct {
 	// and the user's settings reach the agent as they are, so nothing is written over them.
 	pin         bool
 	ownSettings string
+	// profile: the conversation's Claude config directory as the policy resolves it, "" for none (assistantUserSetup).
+	profile string
 }
 
 // codexLimit is the model_auto_compact_token_limit a Codex start passes: a managed launcher's declared window, else none
@@ -155,7 +157,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if p, err := n.launcherProbe(ctx, launcher); err == nil {
+		if p, err := n.keptProbe(ctx, launcher); err == nil { // the probe the message's checks just read (#9097)
 			declare(contextLimit(p.Env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]), contextLimit(p.Env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]))
 			declare(0, codexCapacity(p.Args))
 			c.ownSettings = settingsArg(p.Args)
@@ -178,6 +180,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 			}
 		}
 	}
+	c.profile = configDir
 	if isCodex {
 		if codexHome == "" {
 			codexHome = n.codexHome()
@@ -262,11 +265,17 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 			s = map[string]any{}
 		}
 	}
+	// The launcher's own --settings goes under ours. A launcher that writes it to a temporary file for each start and
+	// removes it when claude exits left the probe a path that is gone by now: there is nothing of its own to merge,
+	// the start goes on with ours, and the launcher writes its file again when it runs claude.
+	var theirs map[string]any
 	if c.ownSettings != "" {
-		theirs, err := readLauncherSettings(c.ownSettings, cwd, n.home)
-		if err != nil {
+		var err error
+		if theirs, err = readLauncherSettings(c.ownSettings, cwd, n.home); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
+	}
+	if theirs != nil {
 		mergedEnv := map[string]any{}
 		if env, ok := theirs["env"].(map[string]any); ok {
 			for k, v := range env {
@@ -314,6 +323,7 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 		overrides[name] = "off"
 	}
 	s["skillOverrides"] = overrides
+	n.assistantUserSetup(s, cwd, c.profile) // a private profile: ~/.claude's instructions out, the user's skill switches in
 
 	b, err := json.Marshal(s)
 	if err != nil {

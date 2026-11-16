@@ -198,6 +198,31 @@ func TestTerminalControlHandOverThatFailsGivesTheSizeBack(t *testing.T) {
 	}
 }
 
+// #5409: a pane is mirrored at its terminal's size, which pane.layout (120 × 40 here, herdr's default while no client
+// is attached) is not; when the terminal changes size the observe starts over at the new one.
+func TestTerminalWatchObservesAtTheTerminalsSize(t *testing.T) {
+	shell, tty := paneShell(t, 189, 52)
+	bin, log := fakeHomeHerdr(t, shell.Process.Pid)
+	n, _, _ := controlNode(t, bin)
+	t.Cleanup(func() { n.terminalUnwatch("s1") })
+	res, err := n.terminalWatch(context.Background(), "s1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["cols"] != 189 || res["rows"] != 52 || res["control"] != false {
+		t.Fatalf("watch = %v", res)
+	}
+	waitFor(t, "the observe", func() bool { return strings.Contains(readLog(log), "observe w1:p1 --cols 189 --rows 52") })
+	if err := pty.Setsize(tty, &pty.Winsize{Cols: 150, Rows: 45}); err != nil { // a herdr client attached at its size
+		t.Fatal(err)
+	}
+	waitFor(t, "the observe at the new size", func() bool { return strings.Contains(readLog(log), "observe w1:p1 --cols 150 --rows 45") })
+	n.terminalUnwatch("s1")
+	if strings.Contains(readLog(log), "--cols 120") {
+		t.Fatalf("observed at the layout's size: %q", readLog(log))
+	}
+}
+
 func countFrames(events []termEvent) int {
 	k := 0
 	for _, e := range events {

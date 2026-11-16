@@ -259,12 +259,6 @@ type Releaser interface {
 	CloseAt(cols, rows int)
 }
 
-// TermSizer is a host that can say the size a pane's programs see now where PaneSize may not (herdr with no client
-// attached reports its default layout, while the pane keeps the size the last client gave it).
-type TermSizer interface {
-	TermSize(ctx context.Context, pane PaneRef) (cols, rows int, err error)
-}
-
 // Redrawer is a Control that can be asked for a whole frame of the screen as it is, the programs seeing no change
 // (herdr: a resize to the size it has). The node asks when a slow link falls behind (node/terminal.go frameGate).
 type Redrawer interface {

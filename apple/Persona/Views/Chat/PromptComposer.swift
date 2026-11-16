@@ -3,6 +3,7 @@ import BeautifulUI
 import OSLog
 import Speech
 import SwiftUI
+import PersonaWire
 
 /// The composer's box, shared by an agent's chat (`Composer`) and a new assistant conversation (`StarterComposer`):
 /// BeautifulUI's prompt bar laid out as a toolbar. The draft is on top; under it + (photos, camera, files), @, /, the
@@ -27,6 +28,9 @@ struct PromptComposer: View {
     var models: [PromptModel] = []
     /// The model shown; `pickModel` gets the one picked from the menu.
     var modelID = ""
+    /// A direct action instead of the catalog menu, with the effective model as its button title (#6542).
+    var assistantModelName: String? = nil
+    var assistantPick: (() -> Void)? = nil
     var pickModel: (String) -> Void = { _ in }
     var onAttach: (PromptSource) -> Void
     /// True when the caller took the mention (a quoted session); otherwise its `insert` is typed.
@@ -77,6 +81,8 @@ struct PromptComposer: View {
         o.onAttachSource = onAttach
         o.onPickSource = onMention
         o.onPickCommand = onCommand
+        o.modelAction = assistantPick
+        o.modelActionTitle = assistantModelName
         return VStack(alignment: .leading, spacing: 0) {
             if let quotes, !quotes.wrappedValue.isEmpty {
                 QuoteBar(refs: quotes)
@@ -152,15 +158,14 @@ struct PromptComposer: View {
     private func toggleDictation() {
         if dictation.isListening { stopDictation(); return }
         let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
-        Task {
-            if let problem = await dictation.start(hints: [text], update: { heard in text = base + heard }) {
-                AppModel.shared.toast = Toast(problem, style: .error)
-            }
+        dictation.start(hints: [text], update: { heard in text = base + heard }) { problem in
+            AppModel.shared.toast = Toast(problem, style: .error)
         }
     }
     #endif
 
-    private func stopDictation() { if dictation.isListening { dictation.stop() } }
+    /// Ends dictation, and a start still asking for permission with it (#3407).
+    private func stopDictation() { dictation.stop() }
 
     /// The keyboard's composition confirmed into the draft before it goes (`TypedText`, #2203).
     private func commitTyped() {
@@ -329,6 +334,24 @@ final class Dictation {
     @ObservationIgnored private var update: ((String) -> Void)?
     @ObservationIgnored private let microphoneOwner = UUID()
     @ObservationIgnored private var listeningRun = UUID()
+    /// The newest start's turn, taken when it was asked for: a start whose turn has passed (a newer start, or `stop()`,
+    /// while it waited for permission) ends without listening (#3407).
+    @ObservationIgnored private var startTurn = UUID()
+    /// Stands in for asking the person for the microphone and speech recognition (tests hold a start inside that wait);
+    /// nil asks the system.
+    @ObservationIgnored var permission: (() async -> Bool)?
+    #if DEBUG
+    /// `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
+    /// may have none), for screenshots and recordings of the composer's mic. Without `permission` nothing is asked.
+    @ObservationIgnored var sample = UserDefaults.standard.string(forKey: "showDictationSample")
+    #endif
+    /// The microphone's loudness, for the dictation bar's wave; nothing observes it (`DictationMeter`).
+    @ObservationIgnored let meter = DictationMeter()
+    /// Everything heard so far in this run, as the last update gave it.
+    @ObservationIgnored private(set) var heard = ""
+    /// `finish()` is waiting for the recognizer's last words; set when they came.
+    @ObservationIgnored private var finishing = false
+    @ObservationIgnored private var gotFinal = false
 
     /// A recognizer for the language the owner speaks (`DictationLanguage`): their choice, else the language of `hints`
     /// (the draft and their recent messages in this chat), else the last sure choice, else the interface language.
@@ -349,19 +372,39 @@ final class Dictation {
     private static let log = Logger(subsystem: "persona", category: "dictation")
 
     /// Starts listening; `update` gets the whole transcript so far. `hints` are what tells the language spoken: the
-    /// draft, then the owner's recent messages in this chat, newest first. Returns what went wrong, if it could not start.
-    func start(hints: [String] = [], update: @escaping (String) -> Void) async -> String? {
-        #if DEBUG
-        // `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
-        // may have none), for screenshots and recordings of the composer's mic.
-        if let sample = UserDefaults.standard.string(forKey: "showDictationSample"), !sample.isEmpty {
-            return startSample(sample, update: update)
+    /// draft, then the owner's recent messages in this chat, newest first. `failed` gets what went wrong, if it could not
+    /// start. The start takes its turn now, in the caller's step, and then waits for permission: the person's newest
+    /// action decides. A start asked for after it, or `stop()`, ends it in that wait: it never listens and says nothing
+    /// (a tap, then a hold, or a send, while the system still asks; #3407). A newer start takes over from an older one
+    /// already listening, which would otherwise hold the microphone and fail it as in use.
+    func start(hints: [String] = [], update: @escaping (String) -> Void, failed: @escaping (String) -> Void = { _ in }) {
+        let turn = UUID()
+        startTurn = turn
+        heard = ""
+        meter.reset()
+        Task {
+            if let problem = await listen(turn, hints: hints, update: update) { failed(problem) }
         }
+    }
+
+    /// `start`'s work in its task: what went wrong, or nil when it listens or its turn passed while it waited.
+    private func listen(_ turn: UUID, hints: [String], update: @escaping (String) -> Void) async -> String? {
+        #if DEBUG
+        let sample = self.sample.flatMap { $0.isEmpty ? nil : $0 }
+        #else
+        let sample: String? = nil
         #endif
         #if os(iOS) || os(visionOS)
-        guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
+        if sample == nil, RecordingCapture.shared.state != .idle { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
-        guard await Self.allowed() else { return String(localized: "No access to the microphone or speech recognition. Turn it on in Settings › Persona.") }
+        var granted = true
+        if let permission { granted = await permission() } else if sample == nil { granted = await Self.allowed() }
+        guard startTurn == turn else { return nil }
+        guard granted else { return String(localized: "No access to the microphone or speech recognition. Turn it on in Settings › Persona.") }
+        if isListening { stopListening() }
+        #if DEBUG
+        if let sample { return startSample(sample, update: update) }
+        #endif
         #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
         #endif
@@ -370,11 +413,20 @@ final class Dictation {
         }
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         #if os(iOS) || os(visionOS) // a Mac has no audio session to configure: the engine takes the input as it is
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
+        // On the audio queue, after any deactivation a closing bar left there (`stop(settling:)`).
+        let opened: Bool = await withCheckedContinuation { c in
+            Self.audioQueue.async {
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try session.setActive(true, options: .notifyOthersOnDeactivation)
+                    c.resume(returning: true)
+                } catch {
+                    c.resume(returning: false)
+                }
+            }
+        }
+        guard opened else {
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
         }
@@ -382,7 +434,7 @@ final class Dictation {
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        Self.tap(engine.inputNode, into: request)
+        Self.tap(engine.inputNode, into: request, meter: meter)
         engine.prepare()
         do { try engine.start() } catch {
             engine.inputNode.removeTap(onBus: 0)
@@ -400,8 +452,13 @@ final class Dictation {
         task = Self.recognize(recognizer, request) { [weak self] heard, done in
             Task { @MainActor in
                 guard let self, self.listeningRun == run else { return }
-                if let heard { self.update?(heard) }
-                if done { self.stop() }
+                if let heard {
+                    self.heard = heard
+                    self.update?(heard)
+                }
+                if done {
+                    if self.finishing { self.gotFinal = true } else { self.stop() }
+                }
             }
         }
         return nil
@@ -411,6 +468,7 @@ final class Dictation {
     private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         self.update = update
+        meter.reset(synthetic: true)
         isListening = true
         listeningRun = UUID(); let run = listeningRun
         let words = sample.split(separator: " ").map(String.init)
@@ -418,14 +476,49 @@ final class Dictation {
             for count in 1...max(1, words.count) {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard let self, self.listeningRun == run else { return }
-                self.update?(words.prefix(count).joined(separator: " "))
+                self.heard = words.prefix(count).joined(separator: " ")
+                self.update?(self.heard)
             }
         }
         return nil
     }
     #endif
 
-    func stop() {
+    /// Stops listening and returns everything heard: the microphone closes at once, then the recognizer gets up to
+    /// `Theme.DictationBar.finalWait` for its last words (the dictation bar's stop and send, which show "Transcribing").
+    func finish(settling: Bool = false) async -> String {
+        startTurn = UUID()
+        guard isListening else { return heard }
+        if engine != nil, task != nil {
+            finishing = true
+            gotFinal = false
+            engine?.stop()
+            engine?.inputNode.removeTap(onBus: 0)
+            request?.endAudio()
+            meter.reset()
+            let deadline = ContinuousClock.now + Theme.DictationBar.finalWait
+            while !gotFinal, isListening, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            finishing = false
+        }
+        let words = heard
+        stopListening(settling: settling)
+        return words
+    }
+
+    /// Ends dictation, and a start still waiting for permission (its turn passes). `settling`: the audio session is let
+    /// go a moment later, off the main thread, when the microphone is still free then; giving it up blocks for about
+    /// 50 ms, a dropped frame in the middle of the dictation bar closing. Callers that hand the audio to something else
+    /// straight away (a voice call) stop without settling.
+    func stop(settling: Bool = false) {
+        startTurn = UUID()
+        stopListening(settling: settling)
+    }
+
+    private func stopListening(settling: Bool = false) {
+        finishing = false
+        meter.reset()
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }
         listeningRun = UUID()
         engine?.stop()
@@ -438,13 +531,26 @@ final class Dictation {
         update = nil
         isListening = false
         #if os(iOS) || os(visionOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if settling {
+            Task { @MainActor in
+                try? await Task.sleep(for: Theme.DictationBar.settle)
+                guard RecordingMicrophone.shared.isFree else { return } // someone took it meanwhile: theirs now
+                Self.audioQueue.async { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+            }
+        } else {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
     }
 
+    #if os(iOS) || os(visionOS)
+    /// Dictation's audio session calls, in order, off the main thread.
+    private static let audioQueue = DispatchQueue(label: "persona.dictation.audio-session")
+    #endif
+
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
-            // Answered on a background queue: `@Sendable` keeps the block off the main actor (BackgroundCallbackTests).
+            // Answered on a background queue: `@Sendable` keeps the block off the main actor (test_apple_background_callbacks.py).
             SFSpeechRecognizer.requestAuthorization { @Sendable in c.resume(returning: $0) }
         }
         guard speech == .authorized else { return false }
@@ -453,9 +559,11 @@ final class Dictation {
 
     // The audio tap and the recognizer call back off the main thread: their closures are made here, outside the
     // main actor, so they are not taken for main-actor code.
-    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest) {
+    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest,
+                                        meter: DictationMeter) {
         input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
             request.append(buffer)
+            meter.take(buffer)
         }
     }
 

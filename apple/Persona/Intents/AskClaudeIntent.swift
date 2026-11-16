@@ -69,12 +69,12 @@ struct AskClaudeIntent: AppIntent {
         guard machine.online else { throw IntentFailure.offline(machine.name) }
         if newSession { return try await startSession(api, on: machine, text: text) }
 
-        let sessions = try await api.sessions()
+        let sessions = IntentSupport.folded(try await api.sessions())
         guard let session = IntentPicker.session(sessions, machine: machine.ref.id, group: machine.ref.group) else {
             throw IntentFailure.noSession(machine.name)
         }
         guard session.canSend else { throw IntentFailureSentence(session.sourceSubtitle ?? String(localized: "This session is view-only")) }
-        try await api.send(session.key, text: text)
+        try await api.send(session.key, text: text, via: .intent) // Siri's or a Shortcut's, not typed in the app
         return session
     }
 

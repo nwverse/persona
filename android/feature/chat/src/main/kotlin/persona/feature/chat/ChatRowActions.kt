@@ -40,6 +40,10 @@ internal class ChatRowActions(
     val imageDescription: String = "",
     /** A file's thumbnail from the session's machine (`file/thumb`): its cache key and loader; null: icons only. */
     val thumbnails: ((path: String) -> Pair<String, suspend (Int) -> ByteArray?>)? = null,
+    /** A picture of the session for the image viewer, called [description] (the turn's viewed images, `ViewedImagesRow`). */
+    val viewerImage: (item: Item, description: String) -> ViewerImage = { item, description -> chatViewerImage(session, item, null, description) },
+    /** The exhausted recovery chain the newest API error card explains (#7824, [exhaustedRecovery]); null: none. */
+    val exhausted: ExhaustedRecovery? = null,
 ) {
     /** Opens the viewer on the conversation's pictures at [item]; a picture not among them opens alone. */
     fun openPicture(item: Item) {

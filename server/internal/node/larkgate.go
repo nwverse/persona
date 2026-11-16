@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -45,6 +46,10 @@ type larkCall struct {
 	CLI  bool     // lark-cli
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
 	Args []string // lark-cli's arguments, for the phone card
+
+	relFile      bool // a relative @file body or query input, read from the conversation's directory (classifyLark, #8404)
+	queryUnknown bool // execution-time stdin, expansion, or -G data cannot be bound to a query-confirmed grant
+	dataInQuery  bool // -G moved the parsed data argument to the query, leaving the actual request body empty
 }
 
 // larkVerdict: what the gate makes of a whole Bash command.
@@ -83,6 +88,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
 	}
+	analysisCommand := normalizeLarkCommand(command, cwd, cfg.Gates)
 	v := classifyLark(command, cfg.Gates, cwd, n.larkCLIRisk(cfg))
 	if v.deny != "" {
 		return "deny", v.deny, nil
@@ -90,13 +96,30 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	health := n.gates().healthSession(session) || identity.InHealthSpace(cwd)
 	mode, _ := n.modesOf(session)
 	bypass := !health && mode == proto.ModeBypass && n.isAssistantSession(session) && n.guestOf(session) == nil
-	safe := len(v.calls) > 0 && !v.unparsed && !v.unknown && !v.unsure
+	// classified: every call read off the command and nothing else in it that the gate cannot follow.
+	classified := !v.unparsed && !v.unknown && !v.unsure
 	for _, c := range v.calls {
-		if larkDecision(cfg, c) == "deny" {
+		decision := larkDecision(cfg, c)
+		if decision == "deny" {
 			return "deny", "这个操作按配置不允许（" + c.Method + " " + c.Path + "）。", nil
 		}
-		safe = safe && larkBypassSafe(c)
+		if decision == "allow" && c.dataInQuery && c.Gate >= 0 && c.Gate < len(cfg.Gates) {
+			// firstLark matched the data as a request body, but curl -G sends it in the query with an empty body. A
+			// body-scoped allow therefore does not authorize the actual call, especially a direct non-Auth command.
+			if rule, ok := firstLark(cfg.Gates[c.Gate].Rules, c); ok && len(rule.Body) > 0 {
+				return "deny", "-G/--get 会把 data 移到查询并留下空请求体，实际请求不再满足按请求体放行的规则。", nil
+			}
+		}
+		// Only a rule-allowed call needs no query-bound grant. A confirmation-required GET needs one too, and a non-Auth
+		// script has no proxy backstop. Health writes always need confirmation. Refuse every unknown query in those cases
+		// rather than confirm different bytes.
+		needsConfirmation := decision != "allow" || (health && !larkRead(c))
+		if c.queryUnknown && needsConfirmation {
+			return "deny", "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。", nil
+		}
+		classified = classified && larkBypassSafe(c)
 	}
+	safe := len(v.calls) > 0 && classified
 	if v.other {
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
@@ -106,7 +129,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 		}
 		for _, g := range cfg.Gates {
-			if _, write := gateWrite([]proto.CommandGate{g}, command); write && g.Auth != nil {
+			if _, write := gateWrite([]proto.CommandGate{g}, analysisCommand); write && g.Auth != nil {
 				return "deny", "写操作要单独一条 `" + g.Command + " METHOD PATH [BODY]` 发：不放进循环、脚本或 $(…) 里，输出可以接 jq / head / grep，" +
 					"或者用 -o 写到 /tmp。这样手机上能逐条确认，确认过的才发得出去。", nil
 			}
@@ -118,10 +141,12 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		if bypass && safe {
 			return "allow", "Conversation permission mode allows these classified calls.", nil
 		}
-		g, write := gateWrite(cfg.Gates, command)
-		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(command) && !safe {
+		g, write := gateWrite(cfg.Gates, analysisCommand)
+		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
+		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
+		if write || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
 			ix.Kind = proto.IxPermission
-			title := wholeCommandTitle(cfg.Gates, v, command, g, write)
+			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
 				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上写（命令较复杂，整条显示）\n"+prettyBody(command)
 			} else {
@@ -176,7 +201,8 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		}
 		return "allow", "读操作", nil
 	}
-	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]), larkSummary(cfg.Gates, ask)
+	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]),
+		larkSummaryWithContext(cfg.Gates, ask, n.larkCardContexts(ctx, cfg, ask), i18n.From(ctx))
 	// The hub remembers these routes for assistant conversations and checks them again on every call.
 	ix.AlwaysKeys = nil
 	for _, c := range ask {
@@ -202,6 +228,9 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 // tells the manager once the API has taken one (the sent-as-user ledger).
 func (n *Node) grantGateCalls(cfg proto.AssistantLark, session string, calls []larkCall, through proto.LarkLetThrough) {
 	for _, c := range calls {
+		if c.queryUnknown {
+			continue // rule-allowed calls need no grant; larkCheck refused every confirmation-required unknown query
+		}
 		if !c.CLI && c.Gate >= 0 && c.Gate < len(cfg.Gates) && cfg.Gates[c.Gate].Auth != nil {
 			n.gates().grant(cfg.Gates[c.Gate].Command, session, c, through)
 		}

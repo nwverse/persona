@@ -15,8 +15,8 @@ struct MachineSpacesView: View {
 
     var body: some View {
         let machine = model.machine(ref)
-        // A subtask is its parent's, as the Agents list folds it (`Session.isNestedSubtask`).
-        let sessions = model.allSessions.filter { $0.machineRef == ref && $0.state.isLive && !$0.assistant && !$0.isNestedSubtask }
+        // A folded child is its parent's. A subtask the hub did not fold is too (`Session.isNestedSubtask`).
+        let sessions = ChildSessions.fold(model.allSessions).filter { $0.machineRef == ref && $0.state.isLive && !$0.assistant && !$0.isNestedSubtask }
         let groups = SpaceGroup.build(sessions)
         let pinned = groups.filter { model.isPinned($0) }
         // A space with an agent waiting on the user's reply (Awaiting Reply) is not idle (`AgentListOrder.isQuiet`).
@@ -53,6 +53,7 @@ struct MachineSpacesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .navigationTitle(machine?.title ?? ref.id)
         .navigationBarTitleDisplayMode(.large)

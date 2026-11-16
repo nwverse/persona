@@ -1,8 +1,10 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,7 +33,7 @@ func TestCardCollapseIDIsTheManagers(t *testing.T) {
 	sent := 0
 	push := func(from, id string) apnsCall {
 		t.Helper()
-		if err := h.deliverPushFrom(from, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
+		if _, err := h.deliverPushFrom(from, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
 			t.Fatalf("%s's card %q: %v", from, id, err)
 		}
 		sent++
@@ -87,7 +89,7 @@ func TestTheAssistantsCardKeepsItsIDUnlessTooLong(t *testing.T) {
 	sent := 0
 	push := func(id string) string {
 		t.Helper()
-		if err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{Kind: assistantwire.NotifyInput, Interaction: &proto.Interaction{ID: id}}); err != nil {
 			t.Fatalf("card %q: %v", id, err)
 		}
 		sent++
@@ -146,7 +148,7 @@ func TestManagerPushCollapsesOnItsID(t *testing.T) {
 	sent := 0
 	push := func(from, id string) apnsCall {
 		t.Helper()
-		if err := h.deliverPushFrom(from, assistantwire.Notification{ID: id, Kind: assistantwire.NotifyPush, Title: "Your day recap is ready"}); err != nil {
+		if _, err := h.deliverPushFrom(from, assistantwire.Notification{ID: id, Kind: assistantwire.NotifyPush, Title: "Your day recap is ready"}); err != nil {
 			t.Fatalf("%s's push %q: %v", from, id, err)
 		}
 		sent++
@@ -168,5 +170,39 @@ func TestManagerPushCollapsesOnItsID(t *testing.T) {
 	}
 	if managerPushCollapseID("", id) != first.Collapse || managerPushCollapseID("ab", "c") == managerPushCollapseID("a", "bc") {
 		t.Fatal("the manager is not kept apart from the id")
+	}
+}
+
+// A meeting's minutes push names the recording (#3862 phase 6): the push and the notify carry `recording_id`, so an
+// app that knows it opens the meeting's thread; one that is not a recording id is left out, and other pushes have none.
+func TestManagerPushCarriesItsRecording(t *testing.T) {
+	h, f, attempts := localizedHub(t)
+	if err := h.push.setPrefs("phone", NotifyPrefs{Input: true}); err != nil {
+		t.Fatal(err)
+	}
+	app := &client{device: "tablet", out: make(chan []byte, 8)}
+	h.mu.Lock()
+	h.clients[app] = struct{}{}
+	h.mu.Unlock()
+	h.onClientMessage(context.Background(), app, []byte(`{"type":"client_hello","features":["ws_notify"]}`))
+	<-app.out // client_hello_ack
+	const rid = "22222222-2222-4222-8222-222222222222"
+	for i, c := range []struct{ sent, want string }{{strings.ToUpper(rid), rid}, {"../not-a-recording", ""}, {"", ""}} {
+		if _, err := h.deliverPushFrom(assistantwire.AssistantID, assistantwire.Notification{ID: "ntf_minutes_" + strconv.Itoa(i),
+			Kind: assistantwire.NotifyPush, Title: "Minutes ready", RecordingID: c.sent}); err != nil {
+			t.Fatal(err)
+		}
+		var push, notify map[string]any
+		if err := json.Unmarshal(sentPushes(t, f, attempts, i+1)[i].Body, &push); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(<-app.out, &notify); err != nil {
+			t.Fatal(err)
+		}
+		for what, p := range map[string]map[string]any{"push": push, "notify": notify} {
+			if got, ok := p["recording_id"]; c.want == "" && ok || c.want != "" && got != c.want {
+				t.Fatalf("%q: the %s carries recording_id %v, want %q", c.sent, what, got, c.want)
+			}
+		}
 	}
 }

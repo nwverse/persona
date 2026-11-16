@@ -28,6 +28,11 @@ type codexRegistry struct {
 	remotes      map[string]*codexRemote
 	retries      map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
 	report       func(proto.CodexConfig)
+	// handed: the hub handed this connection the inventory it keeps for the computer (node.configure's codex, every
+	// connection: devices.connected). Until then the registry is a new Node's, without the threads the user joined, the
+	// homes and the app-servers the hub kept, and the hub would store it over what it kept: reports wait for it
+	// (rememberCodex), and held says one did.
+	handed, held bool
 	kick         chan struct{}
 	scan         func() []codexProcess
 	// checked lists the processes as scan does, and says whether it could (scanCodexProcessesChecked); nil: scan's
@@ -139,16 +144,39 @@ func (n *Node) codexInventory() proto.CodexConfig {
 	return cloneCodexConfig(n.codices.config)
 }
 
+// rememberCodex reports the inventory for the hub to keep, once the hub handed this connection what it kept
+// (codexHanded); before that it only notes that a report waits.
 func (n *Node) rememberCodex() {
 	r := n.codices
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
+	if !r.handed {
+		r.held = true
+		r.mu.Unlock()
+		return
+	}
 	cfg, report := cloneCodexConfig(r.config), r.report
 	r.mu.Unlock()
 	if report != nil {
 		report(cfg)
+	}
+}
+
+// codexHanded: node.configure handed the inventory the hub keeps (configureCodex merged it). A report that waited for
+// it goes now, with what the node found meanwhile added to the hub's.
+func (n *Node) codexHanded() {
+	r := n.codices
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	held := r.held && !r.handed
+	r.handed, r.held = true, false
+	r.mu.Unlock()
+	if held {
+		n.rememberCodex()
 	}
 }
 
@@ -421,6 +449,9 @@ type codexListPass struct {
 	// runtimes is the runtime session each Codex thread is listed as (thread → session, runtimecodex.go): the list
 	// has that session's row, so the thread's own is left out and its subagents hang off the session.
 	runtimes map[string]codexClaim
+	// paginated is codexPaginatedThreads by Codex home: each call globs the home for the App's databases and stats
+	// them, which every row's codexAppHistoryPath did (#5970).
+	paginated map[string]map[string]codexAppThread
 }
 
 // runtimeOf is the runtime session that names Codex thread as its conversation; the zero claim when none does.
@@ -437,7 +468,8 @@ type codexStat struct {
 }
 
 func newCodexListPass() *codexListPass {
-	return &codexListPass{real: map[string]string{}, stats: map[string]codexStat{}, desktop: map[string]bool{}}
+	return &codexListPass{real: map[string]string{}, stats: map[string]codexStat{}, desktop: map[string]bool{},
+		paginated: map[string]map[string]codexAppThread{}}
 }
 
 func (p *codexListPass) realPath(dir string) string {
@@ -474,6 +506,20 @@ func (p *codexListPass) desktopAvailable(home string) bool {
 		p.desktop[home] = up
 	}
 	return up
+}
+
+// paginatedThreadOf is codexPaginatedThreadOf with each home's paginated threads looked up once per pass.
+func (p *codexListPass) paginatedThreadOf(src codexSource) (codexAppThread, bool) {
+	if p == nil {
+		return codexPaginatedThreadOf(src)
+	}
+	threads, ok := p.paginated[src.home]
+	if !ok {
+		threads = codexPaginatedThreads(src.home)
+		p.paginated[src.home] = threads
+	}
+	t, ok := threads[src.thread]
+	return t, ok
 }
 
 func (p *codexListPass) assistantProject(n *Node) string {
@@ -536,15 +582,22 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		if n.programRun(id, src, pass) {
 			continue
 		}
+		if codexThreadOrigin(src).guardian { // an approval review of a tool call, not an Agent (#5486), its rollout gone too (#8191)
+			continue
+		}
 		if n.agentFiltered("codex", src.path) && !n.keptSessions()[id] { // another platform's runs (agentfilters.go)
 			continue
 		}
 		s := proto.Session{SessionID: id, Agent: "codex", SourceKind: "codex_history", SourceThreadID: src.thread, Status: proto.StatusOffline,
 			Capabilities: &proto.SessionCapabilities{Read: true}, ReadOnlyReason: "仅查看：未发现可共享的 app-server 入口，请在电脑上打开会话"}
 		var m quickMeta
-		if src.path != "" {
-			if st, err := pass.stat(src.path); err == nil {
-				m = n.meta(src.path, st)
+		readPath := src.path
+		if p := n.codexAppHistoryPath(src, pass); p != "" {
+			readPath = p
+		}
+		if readPath != "" {
+			if st, err := pass.stat(readPath); err == nil {
+				m = n.meta(readPath, st)
 				if !n.sessionScopeAllows(m.cwd) {
 					continue
 				}
@@ -553,6 +606,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				}
 				s.Cwd, s.Model, s.LastText, s.UpdatedAt, s.Rev = m.cwd, m.model, snippet(m.lastText), lastUsed(m, st), st.Size()
 				s.AgentSurface = m.surface
+				s.Effort = m.effort
 				m.turnErr.set(&s)
 				setContext(&s, m)
 				s.Title = threadTitle(src.home, src.thread)
@@ -593,6 +647,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			if t.cwd != "" {
 				s.Cwd = t.cwd
 			}
+			if t.model != "" {
+				s.Model = t.model
+			}
 			s.Capabilities.Send, s.Capabilities.Attach = t.parent == "", t.parent == ""
 			s.Capabilities.Approve, s.Capabilities.Interrupt = t.joined, t.turn != "" && t.parent == ""
 			s.ReadOnlyReason = ""
@@ -604,6 +661,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			}
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, m) // codex_effort.go
 			n.codexSpeedRow(&s)
+			n.codexRewindRow(id, &s)
 		} else if err != errCodexNoOwner {
 			s.ReadOnlyReason = err.Error()
 		} else if src.path == "" && codexDesktopChatIn(src, pass) {
@@ -613,7 +671,8 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			s.Capabilities.Send = true
 			s.ReadOnlyReason = ""
 			n.placeCodexDesktop(&s, src, src.thread, false)
-		} else if o := readCodexOrigin(src.path); o.desktop {
+			n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
 			switch {
 			case o.parent != "":
 				s.AgentName, s.ParentThreadID, s.AgentSurface = "Codex App", o.parent, transcript.SurfaceDesktop
@@ -626,6 +685,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Capabilities.Send = true
 				s.ReadOnlyReason = ""
 				n.placeCodexDesktop(&s, src, src.thread, false)
+				n.codexDesktopEffortRow(&s, src, m)
 			}
 		} else if o.cli {
 			s.AgentName, s.AgentSurface = "Codex CLI", transcript.SurfaceCLI
@@ -638,7 +698,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		}
 		n.decorateCodexSession(&s, src, cfg.LegacyHome, projects)
 		if s.IsSubagent && pass != nil && len(pass.runtimes) > 0 {
-			if root := readCodexOrigin(src.path).root; pass.runtimeOf(s.ParentThreadID).session != "" || pass.runtimeOf(root).session != "" {
+			if root := codexThreadOrigin(src).root; pass.runtimeOf(s.ParentThreadID).session != "" || pass.runtimeOf(root).session != "" {
 				adopted = append(adopted, adoption{len(out), s.ParentThreadID, root})
 			}
 		}
@@ -647,6 +707,10 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			// brings it back in a new tab (session.start, codex_resume.go).
 			s.Capabilities.Terminal = true
 			s.ReadOnlyReason = stoppedReason
+			s.Capabilities.StopCause = n.stopCause(id)
+		}
+		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) {
+			s.Capabilities.Takeover = n.codexTakeoverRow(id, src, m, liveRollouts[id] != "")
 		}
 		if n.codexBlocked(id) {
 			markCodexConflict(&s)

@@ -2,6 +2,7 @@
 // cindy's bar under a turn's last reply (#5314): shown by the pointer or keyboard focus, lingering after the pointer
 // leaves, kept by an open ⋯; Copy message turns into ✓ until the next hover; the time only ticks under the pointer.
 // SegmentView gives it to a finished turn's last reply only: never narration in a work summary, nor words still coming.
+// After the time, what the exchange cost or its tokens (#5426), with cindy's usage card or tooltip.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,14 +10,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
 import type { Segment } from "../../lib/turns";
 import type { Item } from "../../lib/types";
+import { usageKey } from "../../lib/turn-usage";
+import type { ModelTokens } from "../../lib/turn-cost";
 import { REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
 import { MessageActions } from "./MessageActions";
+import { ReplyBar } from "./ReplyBar";
+import { forgetPrices } from "../../lib/turn-cost";
 import { Answer, SegmentView } from "./SegmentView";
 import { StepView, type WorkProps } from "./WorkGroup";
 
 const copied = vi.hoisted(() => vi.fn(async (..._: unknown[]) => true));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), copyText: copied }));
+// the hub's catalog: Opus and Sonnet have prices, Haiku none (server/internal/assistant/models_catalog.json)
+const PRICES: Record<string, object> = {
+  "claude-opus-5-5": { input: 4, output: 20, cache_read: 0.2, cache_write: 5, cache_write_1h: 8 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
+};
+const catalog = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/api", async (original) => ({ ...(await original<typeof import("../../lib/api")>()), api: catalog }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,6 +39,9 @@ let root: Root;
 beforeEach(async () => {
   await initI18n("zh-Hans");
   copied.mockClear();
+  forgetPrices();
+  catalog.mockReset();
+  catalog.mockImplementation(async (_path: string, init: { json: { ids: string[] } }) => ({ models: init.json.ids.flatMap((id) => (PRICES[id] ? [{ id, price: PRICES[id] }] : [{ id }])) }));
   vi.useFakeTimers({ now: new Date("2026-11-12T10:00:00Z") });
   host = document.createElement("div");
   document.body.append(host);
@@ -40,10 +55,10 @@ afterEach(() => {
 });
 
 /** The reply with the bar, once its code is in (it loads after the first screen). */
-async function draw({ actions = chat, itemId = "r1#0" as string | null } = {}) {
+async function draw({ actions = chat, itemId = "r1#0" as string | null, usage = undefined as string | undefined, usageMs = undefined as number | undefined } = {}) {
   await act(async () => root.render(
     <ChatActionsContext.Provider value={actions}>
-      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar>
+      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar usage={usage} usageMs={usageMs}>
         <p data-message>All done.</p>
       </MessageActions>
     </ChatActionsContext.Provider>,
@@ -164,6 +179,185 @@ describe("the reply bar", () => {
     leave();
     wait(REPLY_BAR_LINGER_MS);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+const tokens = (m: Partial<ModelTokens>): ModelTokens => ({ model: "claude-opus-5-5", in: 0, out: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0, ...m });
+// $0.35 of Opus: 2 input, 3,400 output, 1.2M read from the cache, 9,000 written to it
+const OPUS_TURN = usageKey({ entries: [tokens({ in: 2, out: 3400, cache_read: 1_200_000, cache_write: 9000 })] });
+const pointer = (type: string, el: Element, pointerType = "mouse") => act(() => {
+  const e = new MouseEvent(type, { bubbles: true, relatedTarget: document.body });
+  Object.defineProperty(e, "pointerType", { value: pointerType });
+  el.dispatchEvent(e);
+});
+const usageText = () => host.querySelector<HTMLButtonElement>("[data-reply-bar] [data-turn-usage]");
+const card = () => document.querySelector<HTMLElement>("[data-usage-card]");
+const cardLines = () => card()?.textContent?.split("\n");
+
+describe("what the exchange cost, after the time", () => {
+  it("says what it is worth, after the time, and opens cindy's card 250 ms into a hover", async () => {
+    await draw({ usage: OPUS_TURN, usageMs: 65_000 });
+    expect(catalog).toHaveBeenCalledExactlyOnceWith("/launchers/catalog", expect.objectContaining({ method: "POST", json: { ids: ["claude-opus-5-5"] } }));
+    expect(bar().lastElementChild).toBe(usageText());
+    expect(usageText()?.previousElementSibling?.tagName).toBe("TIME");
+    expect(usageText()?.textContent).toBe("价值 $0.35");
+    expect(usageText()?.className).toContain("ml-1.5");
+    enter();
+    pointer("pointerover", usageText()!);
+    wait(240);
+    expect(card()).toBeNull();
+    wait(10);
+    expect(card()?.dataset.usageCard).toBe("hover");
+    expect(card()?.getAttribute("role")).toBe("dialog");
+    expect(cardLines()).toEqual(["本轮明细", "本轮 token 价值：$0.35", "Tokens：共 1.2M · 输入 2 · 输出 3.4k", "缓存拆分：读取 1.2M · 写入 9.0k · 命中率 99.3%", "耗时 1m 5s", "模型：Opus 5.5"]);
+    // the pointer crosses to the card and stays: open; it leaves the card: gone 220 ms later
+    pointer("pointerout", usageText()!);
+    pointer("pointerover", card()!);
+    wait(500);
+    expect(card()).not.toBeNull();
+    pointer("pointerout", card()!);
+    wait(210);
+    expect(card()).not.toBeNull();
+    wait(20);
+    expect(card()).toBeNull();
+  });
+
+  it("on the chat's last reply, whose time stays (#5285), comes with the pointer like the buttons", async () => {
+    await act(async () => root.render(<div><ReplyBar text="All done." ts="2026-11-12T09:59:01Z" more={[]} pinned usage={OPUS_TURN} /></div>));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+    const fade = () => host.querySelector<HTMLElement>("[data-usage-fade]")!;
+    expect(usageText()?.textContent).toBe("价值 $0.35");
+    expect(fade().previousElementSibling?.tagName).toBe("TIME");
+    expect(fade().className).toContain("opacity-0");
+    expect(bar().className).not.toContain("opacity-0"); // the time stays
+    enter();
+    expect(fade().className).toContain("opacity-100");
+    leave();
+    wait(REPLY_BAR_LINGER_MS);
+    expect(fade().className).toContain("opacity-0");
+  });
+
+  it("keeps the bar while its card is open, pins it with a click, and Esc or a click elsewhere closes it", async () => {
+    await draw({ usage: OPUS_TURN });
+    enter();
+    act(() => usageText()!.click());
+    expect(card()?.dataset.usageCard).toBe("pinned");
+    expect(usageText()?.getAttribute("aria-expanded")).toBe("true");
+    leave();
+    pointer("pointerout", usageText()!);
+    wait(REPLY_BAR_LINGER_MS * 4);
+    expect(card()).not.toBeNull();
+    expect(shown()).toBe(true);
+    act(() => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(card()).toBeNull();
+    act(() => usageText()!.click());
+    act(() => void document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(card()).toBeNull();
+  });
+
+  it("opens at keyboard focus", async () => {
+    await draw({ usage: OPUS_TURN });
+    act(() => usageText()!.focus());
+    expect(card()?.dataset.usageCard).toBe("hover");
+    act(() => usageText()!.blur());
+    wait(230);
+    expect(card()).toBeNull();
+  });
+
+  it("shows each model's cost when the exchange used two, the subagent's included", async () => {
+    await draw({ usage: usageKey({ entries: [tokens({ out: 5000 }), tokens({ model: "claude-sonnet-5-5", out: 2000 })] }) });
+    expect(usageText()?.textContent).toBe("价值 $0.12");
+    act(() => usageText()!.click());
+    expect(cardLines()?.slice(0, 5)).toEqual(["本轮明细", "本轮 token 价值：$0.12", "按模型拆分：", "· Opus 5.5 $0.10", "· Sonnet 5.5 $0.02"]);
+    expect(cardLines()?.some((l) => l.startsWith("模型："))).toBe(false);
+  });
+
+  it("without a price for every model, says the tokens, their lines in a tooltip that cannot be pinned", async () => {
+    await draw({ usage: usageKey({ entries: [tokens({ in: 100, out: 23_300 }), tokens({ model: "claude-haiku-5-5", out: 10 })] }) });
+    expect(usageText()?.textContent).toBe("23.4k tokens");
+    expect(usageText()?.dataset.turnUsage).toBe("tokens");
+    enter();
+    pointer("pointerover", usageText()!);
+    wait(490);
+    expect(card()).toBeNull();
+    wait(10);
+    expect(card()?.getAttribute("role")).toBe("tooltip");
+    expect(usageText()?.getAttribute("aria-describedby")).toBe(card()?.id);
+    expect(cardLines()).toEqual(["Tokens：共 23.4k · 输入 100 · 输出 23.3k", "缓存拆分：读取 0 · 写入 0 · 命中率 0%", "模型：2 个模型", "本轮费用暂不可用，仅显示用量"]);
+    pointer("pointerout", usageText()!);
+    expect(card()).toBeNull();
+    // a click closes a tooltip rather than pinning it
+    pointer("pointerover", usageText()!);
+    wait(500);
+    act(() => usageText()!.click());
+    expect(card()).toBeNull();
+  });
+
+  it("says the tokens when the catalog cannot be asked, and nothing at all without usage", async () => {
+    catalog.mockRejectedValue(new Error("offline"));
+    await draw({ usage: OPUS_TURN });
+    expect(usageText()?.textContent).toBe("1.2M tokens");
+    await draw();
+    expect(usageText()).toBeNull();
+  });
+
+  it("in a Persona conversation: only the cost in plain words, nothing about tokens, and nothing without a cost", async () => {
+    await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000 });
+    expect(usageText()?.textContent).toBe("约 $0.35");
+    act(() => usageText()!.click());
+    expect(card()?.getAttribute("aria-label")).toBe("这条回复的估算费用");
+    expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
+    await draw({ actions: { ...chat, assistant: true }, usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 10 })] }) });
+    expect(usageText()).toBeNull();
+  });
+});
+
+describe("on a touch screen", () => {
+  let touchScreen = false;
+  beforeEach(() => {
+    touchScreen = true;
+    vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q === "(hover: none)" && touchScreen; }, addEventListener() {}, removeEventListener() {} }));
+  });
+  afterEach(() => {
+    touchScreen = false;
+    vi.unstubAllGlobals();
+  });
+
+  it("ends the copy + ⋯ row, and a tap opens the card pinned", async () => {
+    await draw({ usage: OPUS_TURN });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const row = [...host.querySelectorAll<HTMLElement>("[data-turn-usage]")].find((el) => !el.closest("[data-reply-bar]"));
+    expect(row?.textContent).toBe("价值 $0.35");
+    expect(row?.parentElement?.lastElementChild).toBe(row);
+    expect(row?.className).toContain("touch-hit");
+    pointer("pointerover", row!, "touch");
+    wait(1000);
+    expect(card()).toBeNull();
+    act(() => row!.click());
+    expect(card()?.dataset.usageCard).toBe("pinned");
+    // a second tap on the text lets it go (cindy's popover trigger), as a press anywhere else does
+    act(() => row!.click());
+    expect(card()).toBeNull();
+    act(() => row!.click());
+    act(() => void document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(card()).toBeNull();
+  });
+
+  it("holds the tokens' lines on a tap, and lets them go on the next", async () => {
+    await draw({ usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 1200 })] }) });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const row = [...host.querySelectorAll<HTMLElement>("[data-turn-usage]")].find((el) => !el.closest("[data-reply-bar]"));
+    expect(row?.textContent).toBe("1.2k tokens");
+    act(() => row!.click());
+    expect(card()?.getAttribute("role")).toBe("tooltip");
+    act(() => row!.click());
+    expect(card()).toBeNull();
   });
 });
 

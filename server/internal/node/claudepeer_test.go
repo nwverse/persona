@@ -34,7 +34,8 @@ func TestOutsideClaudeListedLive(t *testing.T) {
 			s.LastText != "on it" || s.ReadOnlyReason != "" {
 			t.Errorf("%s: %+v", c.entrypoint, s)
 		}
-		if cp := s.Capabilities; cp == nil || !cp.Read || !cp.Send || cp.Interrupt || cp.Approve || cp.Terminal || cp.Attach ||
+		// Busy: the phone's Stop cuts its turn through the inbox (interruptOutside).
+		if cp := s.Capabilities; cp == nil || !cp.Read || !cp.Send || !cp.Interrupt || cp.Approve || cp.Terminal || cp.Attach ||
 			cp.Modes == nil || *cp.Modes {
 			t.Errorf("%s capabilities = %+v", c.entrypoint, cp)
 		}
@@ -177,11 +178,64 @@ func TestOutsideClaudeSendNotTaken(t *testing.T) {
 	writeOutsideClaude(t, home, sidA, "cli", "idle", inbox, nil)
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "still there?", "client_msg_id": "m-1"})
-	if !maybeDelivered(err) || !strings.Contains(err.Error(), "还没有收下") {
+	if !maybeDelivered(err) || !strings.Contains(err.Error(), "还没有收下") || refusalCode(err) != peerUnconfirmed {
 		t.Fatalf("held message: %v", err)
 	}
 	if len(inbox.users()) != 1 {
 		t.Fatalf("the inbox read %d messages", len(inbox.users()))
+	}
+}
+
+// A session in bypass permissions mode (what the desktop app's sessions often run in) holds Persona's message for the
+// person at the computer to approve. The send says that (peer_held), not only that it was not confirmed, and stays
+// delivered unknown: it goes in once approved there, so the app must neither call it failed nor resend it.
+func TestOutsideClaudeSendHeldInBypassMode(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 500*time.Millisecond)
+	cwd, _ := json.Marshal(home) // a Windows path's backslashes
+	p := writeTranscript(t, home, home, sidA, time.Now(),
+		`{"type":"user","uuid":"u1","timestamp":"2026-11-16T03:00:00Z","cwd":`+string(cwd)+`,"sessionId":"`+sidA+`","permissionMode":"bypassPermissions","message":{"role":"user","content":"deploy it"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2026-11-16T03:00:05Z","sessionId":"`+sidA+`","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}`,
+		strings.Repeat(" ", 4096))
+	inbox := newFakeInbox(t, p)
+	inbox.setMode("hold")
+	writeOutsideClaude(t, home, sidA, "claude-desktop-3p", "idle", inbox, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "still there?", "client_msg_id": "m-1"})
+	if !maybeDelivered(err) || refusalCode(err) != peerHeld {
+		t.Fatalf("held in bypass mode: %v (code %q)", err, refusalCode(err))
+	}
+	// The same session taking it (approved at once, or crossSessionInbound accept): an ordinary success.
+	inbox.setMode("take")
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "and now?", "client_msg_id": "m-2"}); err != nil {
+		t.Fatalf("taken: %v", err)
+	}
+}
+
+// A session waiting on a permission prompt or another dialog takes the message into its queue, but reads it only once
+// that is answered at the computer: the send succeeds and says so (waits_on_computer); one that is working or idle
+// does not. (One waiting on its own question takes the message as the answer: claudepeer_stop_test.go.)
+func TestOutsideClaudeSendBehindDialog(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	shortPeerWait(t, 3*time.Second)
+	p := bgTranscript(t, home, home, sidA, "plan")
+	inbox := newFakeInbox(t, p)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	for i, c := range []struct {
+		status string
+		waits  bool
+	}{{"waiting", true}, {"busy", false}, {"idle", false}} {
+		writeOutsideClaude(t, home, sidA, "cli", c.status, inbox, nil)
+		res, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "why nothing to tap? " + c.status,
+			"client_msg_id": "m-" + strconv.Itoa(i)})
+		if err != nil {
+			t.Fatalf("%s: %v", c.status, err)
+		}
+		if res["ok"] != true || (res["waits_on_computer"] == true) != c.waits {
+			t.Errorf("%s: answer %v", c.status, res)
+		}
 	}
 }
 
@@ -347,8 +401,8 @@ func TestEchoTiesAPeerSend(t *testing.T) {
 		peer("p1", "Persona", "reply with OK"),
 		queued,
 	)
-	l.match("s", items)
-	sameTags(t, l.tag("s", items), map[string]string{"p1#0": "P", "q1#0": "Q"})
+	l.match("s", echoInTranscript, items)
+	sameTags(t, l.tag("s", echoInTranscript, items), map[string]string{"p1#0": "P", "q1#0": "Q"})
 }
 
 // A mode or effort change for a Claude outside Persona's terminals is refused with a reason that says where to change
