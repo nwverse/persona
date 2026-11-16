@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
 import fixture from "../../../spec/fixtures/task-repositories/contract.json";
+import linkValidation from "../../../spec/fixtures/task-repositories/link-validation.json";
+import { parseRepository } from "./repository-identity";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDraft, repositoryDuplicateLink, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, repositoryRequestContext, validRepositoryAlias, validRepositoryDraft, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
 import { credentialOwner } from "./api";
 
@@ -191,6 +193,28 @@ it("creates exactly once after a duplicate is corrected, keeping the chosen titl
   expect(body.repository_bindings.repositories[0].links).toEqual([{ kind: "issue", number: "7", title: "Keep this title" }]);
   await expect(pending).resolves.toMatchObject({ id: "t1" });
   vi.unstubAllGlobals();
+});
+
+it("shares normalized link validation and duplicate cases with the manager", () => {
+  for (const item of linkValidation) {
+    const identity = parseRepository(item.repository_url, item.provider);
+    expect(identity, item.name).toBeTruthy();
+    const links = item.links as import("./task-repositories").RepositoryLinkInput[];
+    const views = links.map((link) => repositoryLinkView(identity!, link));
+    const rows = [{ repo_id: "repo", requested_ref: { kind: "default" as const }, links }];
+    const identities = new Map([["repo", identity!]]);
+    if (item.valid) {
+      expect(views.every(Boolean), item.name).toBe(true);
+      expect(views.map((view) => view ? {
+        kind: view.kind, number: view.number, canonical_url: view.url, ...(view.title ? { title: view.title } : {}),
+      } : null), item.name).toEqual(item.expected);
+      expect(validRepositoryDraft(rows, identities), item.name).toBe(true);
+      expect(repositoryDuplicateLink(rows, identities), item.name).toBe(false);
+    } else {
+      expect(views.some((view) => view === null) || repositoryDuplicateLink(rows, identities), item.name).toBe(true);
+      expect(validRepositoryDraft(rows, identities), item.name).toBe(false);
+    }
+  }
 });
 
 it("validates a saved response's link against the repository it claims", () => {
