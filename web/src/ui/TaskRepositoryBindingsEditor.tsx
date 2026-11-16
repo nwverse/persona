@@ -1,10 +1,10 @@
 // Repositories and their Issue/PR links: the to-do detail shows them as rows (the Agent keeps this store), and editing
 // opens a dialog. The store is metadata only: nothing here creates folders or moves a task's stage.
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { ApiError, errorText } from "../lib/api";
 import {
-  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView, repositoryRequestContext,
+  cleanRepositoryDraft, loadRepositoryCatalog, loadTaskRepositories, repositoryDraft, repositoryLinkView, useRepositoryRequestContext,
   saveTaskRepositories, validRepositoryAlias,
   type CreateRepositoryBindings, type RepositoryCatalog, type RepositoryRequestContext, type RepositoryLinkInput, type RequestedRef,
   type RepositoryLinkView, type TaskRepository, type TaskRepositoryInput, type TaskRepositorySet,
@@ -15,14 +15,6 @@ import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } f
 import { Icon } from "./icons";
 import { RepositoryMark } from "./RepositoryMark";
 import { SearchField } from "./SearchField";
-
-function useRequestContext(manager: string, owner: string) {
-  const alive = useRef(true);
-  const identity = useRef("");
-  identity.current = `${manager}:${owner}`;
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  return useMemo(() => repositoryRequestContext(manager, owner, () => alive.current && identity.current === `${manager}:${owner}`), [manager, owner]);
-}
 
 const hostOf = (identity: RepositoryIdentity) => { try { return new URL(identity.instance_url).host; } catch { return identity.instance_url; } };
 const linkTag = (identity: RepositoryIdentity, view: RepositoryLinkView) => `${identity.provider === "gitlab" && view.kind === "pull_request" ? "!" : "#"}${view.number}`;
@@ -246,7 +238,7 @@ export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
 function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], version }: TodoRepositoryBindingsProps) {
-  const context = useRequestContext(manager, owner);
+  const context = useRepositoryRequestContext(manager, owner);
   const [catalog, setCatalog] = useState<RepositoryCatalog>();
   const [saved, setSaved] = useState<TaskRepositorySet>();
   const [draft, setDraft] = useState<TaskRepositoryInput[]>([]);
@@ -466,5 +458,3 @@ export function NewTodoRepositoryBindings({ context, value, onChange, pending }:
     </>}
   </div>;
 }
-
-export { useRequestContext as useRepositoryRequestContext };

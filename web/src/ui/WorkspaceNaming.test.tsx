@@ -7,6 +7,7 @@ import { initI18n } from "../i18n";
 import { credentialOwner, setToken } from "../lib/api";
 import { WorkspaceNaming, WorkspaceNamingPreview } from "./WorkspaceNaming";
 import type { WorkspaceNamingPreview as Preview } from "../lib/workspace-naming";
+import type { TaskRepository } from "../lib/task-repositories";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
@@ -130,6 +131,40 @@ const taskRuleCalls = () => calls.filter((call) => call.path.endsWith("/workspac
 const taskRepositoryCalls = () => calls.filter((call) => call.path.endsWith("/repositories"));
 const taskSettings = { ...settings, effective_workspace_rules: defaults };
 const taskRepositories = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 0, repositories: [] };
+
+it("drops removed repositories on reload while preserving the draft and explicit preview selection", async () => {
+  const repo = (id: string): TaskRepository => ({ repo_id: id, requested_ref: { kind: "default" }, links: [], source_snapshot: {
+    identity: { provider: "github", instance_url: "https://github.com", path: `example/${id}`, canonical_url: `https://github.com/example/${id}` },
+    clone_url: `https://github.com/example/${id}`, transport_origin: "canonical_default", catalog_revision: 0,
+  } });
+  const checkbox = (id: string) => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((node) => node.parentElement?.textContent === `example/${id}`)!;
+  const ruleRecord = { todo_id: "todo_example", revision: 0, workspace_rules: {} };
+  await render("assistant", "todo_example"); await click("Workspace naming");
+  await answer(calls[0], taskSettings);
+  await answer(taskRuleCalls()[0], ruleRecord);
+  await answer(taskRepositoryCalls()[0], { ...taskRepositories, repositories: [repo("removed"), repo("kept"), repo("excluded")] });
+  await act(async () => checkbox("excluded").click());
+  await type("draft/{task-id}");
+  await click("Preview naming");
+  expect(JSON.parse(calls.at(-1)!.init.body as string).selected_repo_ids).toEqual(["removed", "kept"]);
+  // An adjacent editor or another client removes a repository after this panel loaded.
+  await answer(calls.at(-1)!, { code: "task_repositories_not_found", error: "not found" }, 404);
+  await click("Reload saved settings");
+  await answer(calls.at(-1)!, taskSettings);
+  await answer(taskRuleCalls().at(-1)!, ruleRecord);
+  await answer(taskRepositoryCalls().at(-1)!, { ...taskRepositories, revision: 1, repositories: [repo("kept"), repo("excluded"), repo("added")] });
+  expect(document.querySelectorAll("input")[1].value).toBe("draft/{task-id}");
+  expect(checkbox("removed")).toBeUndefined();
+  expect(checkbox("kept").checked).toBe(true);
+  expect(checkbox("excluded").checked).toBe(false);
+  expect(checkbox("added").checked).toBe(false);
+  await act(async () => checkbox("added").click());
+  await click("Preview naming");
+  expect(JSON.parse(calls.at(-1)!.init.body as string).selected_repo_ids).toEqual(["kept", "added"]);
+  await answer(calls.at(-1)!, named("container", [["kept", "kept", "persona/todo_example"], ["added", "added", "persona/todo_example"]]));
+  expect(document.querySelector("[data-naming-root]")?.textContent).toBe(rootPath);
+  expect(document.querySelector("[role=alert]")).toBeNull();
+});
 
 it("keeps a cleared task override after a failed save and reload, then retries with the saved revision", async () => {
   await render("assistant", "todo_example"); await click("Workspace naming");

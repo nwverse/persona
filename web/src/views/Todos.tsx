@@ -1,6 +1,5 @@
-import { WorkspaceNaming } from "../ui/WorkspaceNaming";
-import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
-import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { NewTodoRepositoryBindings, TodoRepositoryBindings } from "../ui/TaskRepositoryBindingsEditor";
+import { createTodoWithRepositories, useRepositoryRequestContext, type CreateRepositoryBindings } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -23,6 +22,7 @@ import { composing } from "../lib/send-history";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { useScoped } from "../lib/current-assistant";
+import { lazyPage } from "../lib/lazy-page";
 import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/store";
 import {
   addTodoDecision,
@@ -1904,6 +1904,7 @@ function askText(ix: Interaction | undefined): string {
 
 // A task's brief (#3822) comes with the first to-do that has one, not with the page.
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
+const WorkspaceNaming = lazyPage(() => import("../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));
 const BriefResultExtras = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.BriefResultExtras })));
 
@@ -2217,7 +2218,9 @@ function TodoDetail({
 
       <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
         legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
-      <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+      <Suspense fallback={<Loading />}>
+        <WorkspaceNaming manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id} />
+      </Suspense>
 
       <ThreadSection todo={todo} />
 

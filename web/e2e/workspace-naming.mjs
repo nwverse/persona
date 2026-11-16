@@ -164,6 +164,39 @@ try {
         await editor.locator("details").first().screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-options.jpg`) });
         await editor.locator("[aria-live]").screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}-preview.jpg`) });
       } else await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `task-${scheme}-${width}.jpg`) });
+      // Repository associations can change in another editor while this panel stays open.
+      const repositoriesURL = `${origin}/api/v1/todos/${encodeURIComponent(todo.id)}/repositories`;
+      const bindings = await (await context.request.get(repositoriesURL, { headers: fixtureHeaders })).json();
+      const catalog = await (await context.request.get(origin + "/api/v1/assistant/repositories", { headers: fixtureHeaders })).json();
+      const inputRows = bindings.repositories.map(({ repo_id, directory_alias, requested_ref }) => ({ repo_id, directory_alias, requested_ref }));
+      const retained = bindings.repositories[1];
+      const remove = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
+        expected_revision: bindings.revision, expected_catalog_revision: catalog.catalog_revision, repositories: inputRows.slice(1),
+      } });
+      assert(remove.ok(), "remove one repository in the isolated fixture");
+      const removed = await remove.json();
+      await field.fill("recovered/{task-id}");
+      const previewPath = `/todos/${encodeURIComponent(todo.id)}/workspace-naming/preview`;
+      const failedPreview = page.waitForResponse((response) => response.url().endsWith(previewPath));
+      await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
+      assert.equal((await failedPreview).status(), 404, "stale repository selection is rejected by the real manager");
+      await editor.getByRole("button", { name: "Reload saved settings", exact: true }).click();
+      await editor.getByRole("checkbox", { name: bindings.repositories[0].source_snapshot.identity.path, exact: true }).waitFor({ state: "detached" });
+      assert.equal(await field.inputValue(), "recovered/{task-id}", "reload preserves the unsaved rule draft");
+      assert(await editor.getByRole("checkbox", { name: retained.source_snapshot.identity.path, exact: true }).isChecked(), "reload keeps the remaining explicit selection");
+      const recoveredPreview = page.waitForResponse((response) => response.url().endsWith(previewPath));
+      await editor.getByRole("button", { name: "Preview naming", exact: true }).click();
+      const recovered = await recoveredPreview;
+      assert.equal(recovered.status(), 200, "preview recovers after reload");
+      assert.deepEqual(recovered.request().postDataJSON().selected_repo_ids, [retained.repo_id], "removed repository is absent from the retry");
+      await editor.locator("[data-naming-root]").waitFor();
+      assert.equal(await editor.locator("[data-naming-repo]").count(), 1);
+      assert.equal(await editor.locator("[data-naming-branch]").innerText(), `recovered/${todo.id}`);
+      await editor.screenshot({ type: "jpeg", quality: 80, path: join(shots, `recovered-${scheme}-${width}.jpg`) });
+      const restored = await context.request.put(repositoriesURL, { headers: fixtureHeaders, data: {
+        expected_revision: removed.revision, expected_catalog_revision: catalog.catalog_revision, repositories: inputRows,
+      } });
+      assert(restored.ok(), "restore this fixture's repositories for the next viewport");
       await context.close();
       console.log(`PASS workspace naming ${scheme} ${width}px: real settings/override reload, blank defaults, clear-save fallback, task fallback, root/container preview, invalid draft, overflow`);
     }

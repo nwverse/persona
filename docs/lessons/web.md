@@ -1227,6 +1227,11 @@ own and reloads when idle (docs/web/web.md "New versions"). When verifying a web
 before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
+Naming-preview retries must reconcile selected repository IDs after reloading task associations (#7100). Keeping a
+draft does not mean keeping IDs for removed repositories: an invisible stale ID made every retry fail even after
+reloading. Intersect the selection with the fetched associations, preserve unchecked choices, and leave newly added
+repositories unselected. Verify the request after a real association removal, not only the rendered checkbox list.
+
 An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
 
 The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.

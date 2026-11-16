@@ -1118,6 +1118,12 @@ resolution, recovery and existing cleanup semantics.
 
 Web reuses `WorkspaceRulesEditor`, `WorkspaceNamingPreview`, settings inputs,
 Group and Button. Saves confirm returned values; failures keep drafts and can
-reload the saved baseline without discarding local edits. Edits and computer or
-assistant changes invalidate pending preview responses. These controls never
-select a creation mode or start an Agent.
+reload the saved baseline without discarding local edits. Reloading also removes
+preview selections for repositories no longer associated with the task; existing
+selections stay unchanged and newly associated repositories require selection.
+Both entry points load the shared editor through `lazyPage` when rendered, keeping
+its module out of the first screen's page-preload dependencies. The connection
+context hook lives with the repository request helpers, so naming does not load
+the repository editor just to scope its requests.
+Edits and computer or assistant changes invalidate pending preview responses.
+These controls never select a creation mode or start an Agent.

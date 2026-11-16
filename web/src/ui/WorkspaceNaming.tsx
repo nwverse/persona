@@ -2,12 +2,11 @@ import { useId, useRef, useState } from "react";
 import { t } from "../i18n";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
-import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
+import { loadTaskRepositories, repositoryRequestOptions, useRepositoryRequestContext, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
 import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
 import { settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Loading } from "./atoms";
-import { useRepositoryRequestContext } from "./TaskRepositoryBindingsEditor";
 
 /** An empty field removes its override; placeholders describe the current fallback without materializing it. */
 export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system", disabled, diagnostics = [], onChange }: {
@@ -119,7 +118,10 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       if (todoId) {
         const [record, set] = await Promise.all([loadWorkspaceRules(context, todoId), loadTaskRepositories(context, todoId)]);
         if (!context.isCurrent()) return;
-        rules = record.workspace_rules; setRevision(record.revision); setRepositories(set.repositories); if (!keepDraft) setSelected(set.repositories.map((r) => r.repo_id));
+        rules = record.workspace_rules; setRevision(record.revision); setRepositories(set.repositories);
+        const available = set.repositories.map((r) => r.repo_id);
+        // A removed repository must not survive invisibly in the next preview request.
+        setSelected((current) => keepDraft ? current.filter((id) => available.includes(id)) : available);
       }
       if (!keepDraft) setDraft(rules);
       // The freshly fetched rules are the dirty-comparison baseline even when the draft is kept, so a
