@@ -1,8 +1,10 @@
 package node
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -30,13 +33,15 @@ import (
 //     local command only, so it needs no sign-in, and the transcript holds the folder and the title the app shows (the
 //     app gives an imported session none of its own: the title is the first message's, or the start's name hint when
 //     the message goes after it, as the apps send it);
-//  2. asks the app to import it (in the background; the app comes to the front all the same) and waits for its index to
+//  2. stamps the start's permission mode on the transcript's user lines (desktopStartMode, stampDesktopMode), the
+//     mode the app imports the session in;
+//  3. asks the app to import it (in the background; the app comes to the front all the same) and waits for its index to
 //     list the session (claudedesktop.go);
-//  3. sends the first message as to any session of the app (send → sendThroughDesktopApp): the app starts the
+//  4. sends the first message as to any session of the app (send → sendThroughDesktopApp): the app starts the
 //     session's claude with its peer inbox, and the message goes in. This runs after the answer, as an async start's
 //     work does: the app may take seconds to start the session.
 //
-// The app runs the session with its own settings (provider, model, permission mode), as a session it opens itself.
+// The app runs the session with its own settings (provider, model, effort), as a session it opens itself.
 
 // claudeDesktopLauncher is the launcher a computer whose desktop app keeps Claude Code sessions offers (launchers.list),
 // and claudeDesktopSource its Source.
@@ -181,8 +186,13 @@ func (n *Node) newDesktopSession(ctx context.Context, p runtimeStartParams, name
 	if err := seedDesktopSession(ctx, claude, dir, id, title); err != nil {
 		return nil, fmt.Errorf("Claude Code 没能写出新会话：%v", err)
 	}
-	if n.transcriptPath(id) == "" {
+	path := n.transcriptPath(id)
+	if path == "" {
 		return nil, fmt.Errorf("Claude Code 没有写出会话 %s", id)
+	}
+	if err := stampDesktopMode(path, desktopStartMode(p.PermissionMode)); err != nil {
+		// The session still imports, in the app's own choice of mode (Accept edits where settings say bypass).
+		log.Printf("new desktop session %s: permission mode not written: %v", id, err)
 	}
 	if err := openDesktopLink(ctx, "claude://resume?session="+id); err != nil {
 		return nil, refusal(desktopOpenFailed, desktopOpenTimeoutMsg, nil)
@@ -216,6 +226,52 @@ func (n *Node) awaitDesktopImport(ctx context.Context, id string) bool {
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// desktopStartMode is the permission mode a new session of the app starts in for a start asking mode (#9350). The app
+// imports a transcript in the mode of its last user line that names one, else in the settings' defaultMode, and always
+// lowers bypassPermissions to acceptEdits for an imported session (measured in Claude.app 5.11492.5); auto it keeps,
+// unless device policy withholds auto mode. So no mode, and bypassPermissions, which the app would not keep, start in
+// auto, the mode closest to it the app runs an imported session in; default, acceptEdits and auto are kept as asked.
+func desktopStartMode(mode string) string {
+	switch mode {
+	case "default", "acceptEdits", "auto":
+		return mode
+	}
+	return "auto"
+}
+
+// stampDesktopMode writes mode as the permissionMode of the user lines of the transcript at path that name none (the
+// seed's: the CLI writes no mode on a local command's lines, whatever --permission-mode says), so the app imports the
+// session in it. Every other line is kept byte for byte, and the file is replaced whole.
+func stampDesktopMode(path, mode string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	field := []byte(`{"permissionMode":` + strconv.Quote(mode) + `,`)
+	lines := bytes.SplitAfter(b, []byte("\n"))
+	stamped := 0
+	for i, line := range lines {
+		body := bytes.TrimRight(line, "\r\n")
+		var row struct {
+			Type           string  `json:"type"`
+			PermissionMode *string `json:"permissionMode"`
+		}
+		if len(body) < 2 || body[0] != '{' || json.Unmarshal(body, &row) != nil || row.Type != "user" || row.PermissionMode != nil {
+			continue
+		}
+		next := append(append(slices.Clone(field), body[1:]...), line[len(body):]...)
+		if !json.Valid(bytes.TrimRight(next, "\r\n")) {
+			continue
+		}
+		lines[i] = next
+		stamped++
+	}
+	if stamped == 0 {
+		return errors.New("the transcript has no user line to carry it")
+	}
+	return writeFileAtomic(path, bytes.Join(lines, nil))
 }
 
 // firstDesktopMessage sends a new session's first message, as any message to a session of the app goes. A failure is

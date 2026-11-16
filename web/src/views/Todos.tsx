@@ -1270,7 +1270,6 @@ const SECTION_TONE: Record<TriageSection, string> = {
   working: "text-orange",
   parked: "text-ink-2",
   just_done: "text-green",
-  pr: "text-accent-ink",
   other: "text-ink-2",
   shelved: "text-ink-3",
   done: "text-ink-3",
@@ -1519,7 +1518,7 @@ const TodoListItem = memo(function TodoListItem({
 }) {
   const { status, dotState, activeCount } = view;
   // the PR it waits on: its current one, or an earlier one still open (#7935)
-  const openPR = section === "pr" ? openMergePRs(todo, Date.now())[0] : undefined;
+  const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
   const pr = openPR ? prLink(openPR.url) : null;
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
