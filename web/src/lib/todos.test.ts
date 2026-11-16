@@ -252,7 +252,8 @@ describe("待办列表排序 (sortTodos)", () => {
     // the same order as the board's sections
     const sections = sorted.map((t) => BOARD_ORDER.indexOf(boardSectionOf({ todo: t, status: todoStatus(t, lookup) })));
     expect(sections).toEqual([...sections].sort((a, b) => a - b));
-    expect(new Set(sections).size).toBe(BOARD_ORDER.length);
+    // Parked comes from task triage, not an Agent status (parked-grouping.test.ts).
+    expect(new Set(sections).size).toBe(BOARD_ORDER.filter((section) => section !== "parked").length);
   });
 
   it("同状态下按创建时间倒序排（新的在前）", () => {

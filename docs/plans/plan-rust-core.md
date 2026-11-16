@@ -592,6 +592,10 @@ Phase 3 lands in several PRs.
     timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
     remains separately #8483. The later C ABI, macOS SwiftPM and ArkTS host replays are recorded below; they do not
     execute the real NAPI boundary, transport or a physical device.
+  - The draft a click leaves (#9238): a single choice empties its question's Other entry and keeps the key, as iOS's
+    `QuestionForm.pick` does, and Advance and Submit change neither map. The core follows iOS; Android's builder removes the
+    key, so the answer shadow reports `other-state` until its adapter drops emptied entries
+    (`native/app-core/README.md`, "Android answer adapter and shadow (#9143)").
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21

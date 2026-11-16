@@ -20373,6 +20373,10 @@ PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" e
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
+# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page. Empty until something is stored;
+# MOCK_NAVIGATION=off is a hub (or a default manager) from before, which answers 404 and keeps nothing.
+NAVIGATION = {}
+NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
 
 def personal_prefs():
     return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
@@ -24400,6 +24404,9 @@ def markets_route(handler, p, body):
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
                     "placement": "nav_page", "size": "full", "icon": "calendar"}]
+        if GAUGE_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
+                    "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26085,6 +26092,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             return self.send_json(personal_prefs())
+        if p == "/api/v1/navigation":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -26614,6 +26624,16 @@ class H(BaseHTTPRequestHandler):
                 try: c["send"]({"type": "agents"})
                 except Exception: pass
             return self.send_json({"ok": True, "hidden": op == "hide"})
+        if p == "/api/v1/navigation" and self.command == "PUT":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            start = json.loads(self.last_body or b"{}").get("start")
+            if not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)):
+                return self.send_json({"error": "start must be empty, a page's key or p:<extension>/<page>"}, 400)
+            NAVIGATION["start"] = start
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "navigation", "start": start})
+                except Exception: pass
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             if PERSONAL_PREF_FAIL["status"]:
@@ -28985,7 +29005,9 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29563,6 +29585,8 @@ _plugins_route_without_extensions = plugins_route
 def plugins_route(handler, p, body):
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
+    if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
+        return mock_quota(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29656,6 +29680,48 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GAUGE=1 (with MOCK_EXTENSIONS=1): a made-up gateway's quota page, UI version 9's gauge (#9337): a row
+# of status tiles, then a card of three rings, each filled to the quota left with the amount in its centre and the
+# limit's name below, green while there is enough and amber once it runs low; the reset times are the card's footer.
+# Pressing the low ring answers a toast. All names and numbers are invented.
+GAUGE_MODE = os.environ.get("MOCK_EXTENSION_GAUGE") == "1"
+
+
+def _quota_ring(key, title, value, ratio, **extra):
+    color = "amber" if ratio < 0.2 else "green"
+    tile = {"key": key, "title": title, "value": value, "gauge": {"ratio": ratio, "unit": "USD", "color": color}}
+    tile.update(extra)
+    return tile
+
+
+def _quota_view():
+    return {"title": "Gateway quota", "refresh_after": 300, "sections": [
+        {"key": "status", "items": [{"type": "grid", "key": "status", "tiles": [
+            {"key": "state", "title": "Gateway", "value": "Online", "icon": "wifi", "color": "green"},
+            {"key": "keys", "title": "Keys", "subtitle": "1 paused", "value": "3", "icon": "lock"},
+            {"key": "requests", "title": "Requests today", "value": "1,284", "icon": "chart",
+             "spark": {"values": [420, 610, 580, 820, 960, 1010, 1284], "color": "blue"}},
+            {"key": "errors", "title": "Errors", "value": "0.4%", "icon": "warning", "badge": {"text": "Low", "color": "green"}},
+        ]}]},
+        {"key": "quota", "title": "Quota left", "footer": "5 hours resets in 1 h 49 min · this week resets in 1 d 16 h",
+         "items": [{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+             _quota_ring("five_hours", "5 hours", "4.69", 0.94),
+             _quota_ring("week", "This week", "38.20", 0.76),
+             _quota_ring("fable_week", "Fable this week", "0.62", 0.12, badge={"text": "Low", "color": "amber"},
+                         action={"id": "open_limit", "values": {"limit": "fable_week"}}),
+         ]}]},
+    ]}
+
+
+def mock_quota(handler, body):
+    request = json.loads(body) if body else {}
+    if request.get("action") == "open_limit":
+        handler.send_json({"toast": "Fable this week: 0.62 USD left"})
+    else:
+        handler.send_json({"view": _quota_view()})
     return True
 
 
