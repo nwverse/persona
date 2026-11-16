@@ -83,7 +83,7 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
-const ParkedTaskRow = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRow));
+const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 import { conversationTitle } from "./conversations";
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
@@ -987,7 +987,7 @@ function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
 }
 
 /** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <PlanCard plan={item.plan} />;
   if (item.kind === "message") return <MessageCard item={item.item} />;
@@ -1246,7 +1246,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {!entries.review.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_review")}</p>}
           </div>}
           {tray === "parked" && <div className="divide-y divide-line">
-            <Suspense fallback={<Loading />}>{entries.parked.map((item) => item.kind === "task" && <ParkedTaskRow key={item.key} todo={item.todo} countsOpen={item.countsOpen} />)}</Suspense>
+            <Suspense fallback={<Loading />}><ParkedTasks items={entries.parked} /></Suspense>
             {!entries.parked.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_parked")}</p>}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">

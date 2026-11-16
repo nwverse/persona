@@ -301,6 +301,26 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepa
     .unwrap_or_default()
 }
 
+/// Applies a caller-supplied drawn-info predicate to Apple's still-open picture fence. Pure function, no runtime.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectPlainOpenFence<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_repair::PlainFenceInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::plain_open_fence(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
 /// Applies one question-answer operation from a JSON input string. Debug/test only: no Release Android export.
 /// The pure projection runs on a bounded Rust worker; the caller waits at most one second.
 #[cfg(not(feature = "release-android"))]
