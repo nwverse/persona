@@ -4306,6 +4306,7 @@ def minutes_markdown(m, body, lang, ov=None):
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
 # one still installing. MOCK_MANAGER_COMMANDS=1 adds the install commands to a new code's answer; MOCK_MANAGERS=0 is a
 # hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: a one-row switcher without Default, no grouping).
+# MOCK_MANAGER_HIDDEN=1: 工作 is the default and has every computer, and the hub's own is kept out of the switcher (#9055).
 def _managers_seed():
     if os.environ.get("MOCK_MANAGERS") == "1":
         return [{"id": "assistant", "name": "助手", "online": True, "builtin": True, "host": "server", "os": "linux", "arch": "amd64",
@@ -4329,7 +4330,26 @@ def _managers_seed():
     ] if os.environ.get("MOCK_MANAGER_EXPIRED") == "1" else [])
 
 
-MANAGERS = {"list": _managers_seed(), "default": "assistant"}
+MANAGER_HIDDEN = os.environ.get("MOCK_MANAGER_HIDDEN") == "1"
+MANAGERS = {"list": _managers_seed(), "default": "m-3fa21c" if MANAGER_HIDDEN else "assistant", "hide": MANAGER_HIDDEN}
+
+
+def builtin_owns_machine():
+    """A computer is the hub's own assistant's: one no other manager has (MANAGED_MACHINES)."""
+    return any(MANAGED_MACHINES.get(m["id"], "assistant") == "assistant" for m in MACHINES)
+
+
+def roster_entry(m, needs_you=None):
+    """A manager as the roster has it: default, its inbox's Needs you count, and for the built-in one whether the user
+    asked to keep it out of the switcher (hide) and whether that is in effect (hidden: not the default, no computer,
+    nothing in its inbox that needs the user; hub/managers.go, #9055)."""
+    out = dict(m, **({"default": True} if m["id"] == MANAGERS["default"] else {}),
+               **({"inbox_needs_you": needs_you[m["id"]]} if needs_you and m["id"] in needs_you else {}))
+    if m.get("builtin") and MANAGERS.get("hide"):
+        out["hide"] = True
+        waiting = (out.get("inbox_needs_you") or 0) > 0  # something in its inbox needs the user: shown
+        if m["id"] != MANAGERS["default"] and not waiting and not builtin_owns_machine(): out["hidden"] = True
+    return out
 
 
 # What belongs to the other managers (docs/protocol/protocol.md「Per-manager routing」): the hub's merged lists stamp every item
@@ -4339,6 +4359,7 @@ MANAGERS = {"list": _managers_seed(), "default": "assistant"}
 # A computer of an offline manager is offline with the hub's words for it (devices_reports.go offlineLocal): so 家里 has
 # none by default, and the computers the other screenshots count stay as they were.
 MANAGED_MACHINES = {"macbook": "m-3fa21c", **({"nas": "m-8b04d2"} if os.environ.get("MOCK_MANAGER_NAS") == "1" else {})}
+if MANAGER_HIDDEN: MANAGED_MACHINES.update({m["id"]: "m-3fa21c" for m in MACHINES if m["id"] not in MANAGED_MACHINES})
 # With the NAS 家里's, the agent it had: the hub keeps an offline manager's sessions, in state unknown (stamp_row).
 NAS_BACKUP = "0b4c0e5a-0000-4000-8000-000000000001"
 if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not any(x["machine_id"] == "nas" for x in SESSIONS):
@@ -4575,8 +4596,7 @@ def managers_route(h, method, p):
     ms, dflt = MANAGERS["list"], MANAGERS["default"]
     if p == "/api/v1/managers" and method == "GET":
         needs_you = inbox_needs_you()
-        out = [dict(m, **({"default": True} if m["id"] == dflt else {}),
-                    **({"inbox_needs_you": needs_you[m["id"]]} if m["id"] in needs_you else {})) for m in ms]
+        out = [roster_entry(m, needs_you) for m in ms]
         out.sort(key=lambda m: (m["id"] != dflt, bool(m.get("installing"))))
         reply = {"managers": out, "default": dflt}
         if os.environ.get("MOCK_SHARED_BOTS") == "1":
@@ -4610,6 +4630,11 @@ def managers_route(h, method, p):
     if method == "PATCH":
         if m.get("installing"):
             return h.send_json({"error": "this manager is not installed yet", "code": "installing"}, 409) or True
+        if "hide" in body:
+            if not m.get("builtin"):
+                return h.send_json({"error": "only the built-in assistant can be hidden"}, 400) or True
+            if body["hide"] is True and (m["id"] == MANAGERS["default"] or body.get("default") is True or builtin_owns_machine()):
+                return h.send_json({"error": "the built-in assistant is the default or has a computer", "code": "builtin_in_use"}, 409) or True
         if "name" in body:
             name = str(body.get("name") or "").strip()
             if not name or len(name) > 40:
@@ -4618,8 +4643,9 @@ def managers_route(h, method, p):
         if body.get("default") is True: MANAGERS["default"] = m["id"]
         elif body.get("default") is False:
             return h.send_json({"error": "make another manager the default instead"}, 400) or True
+        if "hide" in body: MANAGERS["hide"] = body["hide"] is True
         _managers_changed()
-        return h.send_json({"manager": dict(m, default=True) if m["id"] == MANAGERS["default"] else m}) or True
+        return h.send_json({"manager": roster_entry(m)}) or True
     if method == "DELETE":
         if m.get("builtin"):
             return h.send_json({"error": "the hub runs this manager itself", "code": "builtin_manager"}, 409) or True
@@ -4662,6 +4688,7 @@ def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
         (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_live_view"] if meeting_live_view_on() else []) + \
         (["meeting_highlights"] if meeting_highlights_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["meeting_notes"] if meeting_live_view_on() and os.environ.get("MOCK_MEETING_NOTES") != "0" else []) + \
         (["meeting_transcription"] if meeting_transcription_on() else []) + \
         (["recording_day"] if RECORDING_DAY["on"] else [])
 
@@ -9361,6 +9388,36 @@ if os.environ.get("MOCK_QUESTION_CANCEL") == "1":
         copy.deepcopy(ix) for ix in INTERACTIONS
         if ix["id"] in ("ix_tests", "ix_ask_long") and ix["id"] not in ask_long_ids
     ]
+# Urgent calls (docs/assistant/urgent-call.md): the settings Settings › Urgent Calls reads, and with MOCK_URGENT_CALL=1
+# urgent calls on and the call `call_mock` about a pending card in Persona's main conversation, for the call page's
+# screenshots (`-showUrgentCallSample YES`).
+URGENT = {"settings": {"enabled": os.environ.get("MOCK_URGENT_CALL") == "1", "rules": [
+    {"id": "money_loss", "builtin": True}, {"id": "harm", "builtin": True}, {"id": "agent_disaster", "builtin": True},
+    {"id": "r_kids", "text": "接孩子相关的事"}], "daily_cap": 3, "quiet": None, "retry_minutes": 3}, "today": 1}
+URGENT_CALL = {"id": "call_mock", "title": "云账单扣费失控", "body": "要不要现在停掉这批实例？", "why": "rule",
+               "happening": "训练任务起的 8 台 GPU 实例近 1 小时扣了 2300 元，还在涨",
+               "rule": {"id": "money_loss", "text": "资金或资源正在损失：扣费失控还在涨、云资源被删、账号被盗刷或出现陌生扣款。"},
+               "machine_id": "server", "conversation_id": ASK1, "interaction_id": "", "state": "answered", "attempt": 1,
+               "seconds": 0, "outcome": "", "transcript": ""}
+# The calls GET /api/v1/assistant/calls?conversation=… lists with MOCK_URGENT_CALL=1: one answered with its transcript and
+# one missed twice, in Persona's main conversation (the web's call rows).
+URGENT_CALLS = []
+if os.environ.get("MOCK_URGENT_CALL") == "1":
+    URGENT_CALLS = [
+        dict(URGENT_CALL, id="call_done", state="ended", created_at=ago(minutes=50), rang_at=ago(minutes=50), seconds=125,
+             outcome="现在停掉", transcript="Persona：训练任务起的 8 台 GPU 实例近 1 小时扣了 2300 元，还在涨。要不要现在停掉？\n你：现在停掉\nPersona：你选的是：现在停掉。说“确认”就照这样做。\n你：确认"),
+        dict(URGENT_CALL, id="call_missed", title="学校提前放学", why="rule", rule={"id": "r_kids", "text": "接孩子相关的事"},
+             happening="学校群说 15:00 提前放学，还没人去接", body="", interaction_id="", state="missed", attempt=2,
+             created_at=ago(minutes=20), rang_at=ago(minutes=20), seconds=0, outcome="", transcript=""),
+    ]
+if os.environ.get("MOCK_URGENT_CALL") == "1":
+    INTERACTIONS.append({
+        "id": "ix_urgent", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": [{"question": "要不要现在停掉这批 GPU 实例？", "header": "云账单", "multi_select": False, "options": [
+            {"label": "现在停掉 (Recommended)"}, {"label": "再等 10 分钟"}, {"label": "我自己处理"}]}]})
+    URGENT_CALL["interaction_id"] = "ix_urgent"
+
 # A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
 # every width, so its buttons have to stay reachable.
 def _long_lark_cmd(verb):
@@ -11412,6 +11469,53 @@ if os.environ.get("MOCK_IMESSAGE_INBOX"):
     ]
 
 
+# A scheduled task's briefing (#9041): its text is Markdown. The hub keeps it as written in `body` and says it as plain
+# words in summary, preview and the chain's received message; mode `before` is the same row as hubs before #9041 kept
+# it: no body, the Markdown run into one line and cut. GET /mock/assistant_inbox?mode=before|1 switches it. Made-up content.
+BRIEF_MD = ("**早报 · 周一**\n结论：上午有一节辅导课，下午没课。邮件和课程公告都**没有新消息**。\n\n"
+            "**今天的课**\n- **数据结构辅导课：10:30–12:20，教学楼 B201**\n- 课上有 3–5 道选择题小测，不补考\n\n"
+            "**本周要交**\n1. 周三 23:59 前交实验报告（第 4 章）\n2. 周五前在选课系统确认下学期课程\n\n"
+            "**提醒**\n- 周四图书馆下午闭馆\n- 校园卡余额 23 元，建议这周充值\n\n"
+            "> 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+BRIEF_PLAIN = ("早报 · 周一 结论：上午有一节辅导课，下午没课。邮件和课程公告都没有新消息。 今天的课 数据结构辅导课：10:30–12:20，教学楼 B201 "
+               "课上有 3–5 道选择题小测，不补考 本周要交 周三 23:59 前交实验报告（第 4 章） 周五前在选课系统确认下学期课程 提醒 周四图书馆下午闭馆 "
+               "校园卡余额 23 元，建议这周充值 来源：课程表、学校邮箱和课程公告，早上 7:30 看过。")
+
+
+def assistant_brief(mode):
+    base = os.environ.get("MOCK_PUBLIC_URL", "http://127.0.0.1:%d" % PORT).rstrip("/")
+    url = base + "/s/macbook/" + BLOG
+    if mode == "before":
+        one = " ".join(BRIEF_MD.split())
+        summary, preview, body = one[:200] + "…", one[:120] + "…", None
+        said = preview
+    else:
+        summary, preview, body = BRIEF_PLAIN, BRIEF_PLAIN[:120] + "…", BRIEF_MD
+        said = BRIEF_PLAIN[:200] + "…"
+    row = {"id": "assistant:s3", "source": "assistant", "kind": "assistant_post", "account": "assistant", "account_name": "助手",
+           "title": "每日早报", "preview": preview, "count": 1, "started_at": ago(minutes=12), "updated_at": ago(minutes=12),
+           "tier": "fyi", "status": "fyi", "summary": summary, "reason": "定时任务设成每次都放进收件箱", "read": False,
+           "triaged_by": "rules", "context": "每日早报\n" + (body or summary),
+           "chain": [{"id": "c1", "at": ago(minutes=12), "kind": "received", "text": "收到 1 条新消息", "count": 1, "via": "assistant",
+                      "link": {"type": "source", "url": url}, "messages": [{"text": said}]},
+                     {"id": "c2", "at": ago(minutes=12), "kind": "triaged", "text": "分拣：知悉即可", "detail": "fyi", "via": "assistant"}],
+           "connector": {"thread": "assistant:macbook/" + BLOG, "label": "助手", "url": url}}
+    if body:
+        row["body"] = body
+    return row
+
+
+def assistant_inbox_area(h, method, p):
+    """/mock/assistant_inbox?mode=before|1 (MOCK_ASSISTANT_INBOX): the briefing row as hubs before #9041 kept it, or now."""
+    if not os.environ.get("MOCK_ASSISTANT_INBOX") or method != "GET" or p != "/mock/assistant_inbox":
+        return False
+    mode = parse_qs(urlparse(h.path).query).get("mode", ["1"])[0] or "1"
+    for i, x in enumerate(INBOX):
+        if x["id"] == "assistant:s3":
+            INBOX[i] = assistant_brief(mode)
+    return h.send_json({"mode": mode}) or True
+
+
 # MOCK_ASSISTANT_INBOX=1 (#6430): rows the assistant put into the Inbox (source `assistant`, made by the manager): the generic
 # `connector` block, its url the conversation's page. Only with ?sources=all, like connectors' items; made-up content.
 if os.environ.get("MOCK_ASSISTANT_INBOX"):
@@ -11430,6 +11534,7 @@ if os.environ.get("MOCK_ASSISTANT_INBOX"):
          "context": "Price drop: the standing desk you watch\nThe desk you asked me to watch is 20% off until Sunday",
          "connector": {"thread": "assistant:macbook/" + TESTS, "label": "Assistant", "url": _ASSISTANT_BASE + "/s/macbook/" + TESTS}},
     ]
+    INBOX.insert(1, assistant_brief(os.environ.get("MOCK_ASSISTANT_INBOX", "1")))
 
 
 # MOCK_SUBSCRIPTION_INBOX=1 (#5537): an item a source subscription delivered (a mail subscription's notice): its source is
@@ -12853,6 +12958,69 @@ if MOCK_INBOX_SHOWCASE:
                         _status, _state, "Showcase", 90 + _i, "Inbox", 0, 0, "")
         _session.update(_row)  # The fixture's exact timestamps and state win over the row defaults.
         SESSIONS.append(_session)
+
+
+# MOCK_INBOX_MANY=<n> (n per section) or action:30,working:6,fyi:40,noise:20,done:25: many more made-up items per section,
+# for the section bar (#9053), long-list screenshots and perf runs. Every item carries `status` (so In progress shows),
+# sources rotate over Lark, the mail account and GitHub (three source groups), and update times spread over 40 days (every
+# time group); done items fall in the list's last 3 days. Added after MOCK_INBOX_EVENTS / MOCK_INBOX_SHOWCASE, so it
+# combines with either.
+def _many_counts(spec):
+    keys = ("action", "working", "fyi", "noise", "done")
+    if not spec: return {}
+    if spec.isdigit(): return {k: int(spec) for k in keys}
+    out = {}
+    for part in spec.split(","):
+        k, _, v = part.partition(":")
+        if k.strip() in keys and v.strip().isdigit(): out[k.strip()] = int(v)
+    return out
+
+
+_MANY_TOPICS = [  # i18n-ignore: made-up mock content in the mock's language
+    ("周会时间调整", "问周三的周会能不能改到下午"),
+    ("合同条款确认", "对方法务改了付款条款，等你确认第 4 条和第 7 条能不能接受，周五前要回复"),
+    ("报销单待审批", "上个月的差旅报销等你审批"),
+    ("新版设计稿", "设计组放了新版首页设计稿，想在评审前听听你的意见，重点是导航和空状态"),
+    ("服务器告警", "示例服务的磁盘用量超过 85%"),
+    ("客户回访", "示例客户想约下周回访，问你哪天方便"),
+    ("发布计划", "下个版本的发布计划更新了，候选包推迟一天"),
+    ("数据看板更新", "周报数据看板刷新了，转化率比上周低 2%，附了原因分析的链接"),
+]
+
+
+def _many_item(section, i, n):
+    title, summary = _MANY_TOPICS[i % len(_MANY_TOPICS)]
+    if section == "done":
+        at = ago(minutes=5 + (i * (3 * 24 * 60 - 120)) // max(n, 1))
+    else:
+        at = ago(days=(i * 41) // max(n, 1), minutes=7 * (i % 9))
+    k = i % 3
+    base = {"id": "many:%s:%d" % (section, i), "count": 1 + i % 4, "started_at": at, "updated_at": at,
+            "title": "%s %d" % (title, i + 1), "summary": summary, "preview": summary, "read": i % 3 == 0}
+    if k == 0:
+        base.update(source="lark", kind="group" if i % 2 else "dm", account="lark", account_name="飞书", sender="示例同事 %d" % (i % 7 + 1),
+                    lark={"feed_id": "many-%s-%d" % (section, i), "is_group": bool(i % 2), "start_position": "1"})
+    elif k == 1:
+        base.update(source="mail", kind="mail", account="acc1", account_name="个人邮箱", sender="示例联系人 %d" % (i % 5 + 1),
+                    mail={"account_id": "acc1", "mailbox": "INBOX", "uids": [20000 + 1000 * len(section) + i],
+                          "from": {"name": "示例联系人 %d" % (i % 5 + 1), "email": "contact%d@example.com" % (i % 5 + 1)}})
+    else:
+        base.update(source="github", kind="review_requested", account="github", account_name="GitHub", sender="example-bot",
+                    connector={"thread": "example-org/example-repo#%d" % (100 + i), "label": "GitHub",
+                               "url": "https://github.com/example-org/example-repo/pull/%d" % (100 + i)})
+    if section == "done":
+        base.update(tier="fyi" if i % 2 else "action", done_at=at, done_by="user", read=True)
+    elif section == "working":
+        base.update(tier="action", status="working", reason="AI 正在处理",
+                    handling={"owner": "manager", "state": ("looking", "agent", "waiting")[i % 3], "since": at})
+    else:
+        base.update(tier=section, status=section, reason={"action": "等你回复", "fyi": "知会你", "noise": "自动通知"}[section])
+    return base
+
+
+MOCK_INBOX_MANY = _many_counts(os.environ.get("MOCK_INBOX_MANY", "").strip())
+for _section, _n in MOCK_INBOX_MANY.items():
+    INBOX.extend(_many_item(_section, _i, _n) for _i in range(_n))
 
 
 # MOCK_HANDOFF_CARD=1 (with MOCK_TASKS=1): an item handed to the main conversation that wrote back (#5932,
@@ -17432,6 +17600,21 @@ if os.environ.get("MOCK_RICH") == "1":
 
 参考：https://en.wikipedia.org/wiki/Weather_(disambiguation)。"""
     ITEMS[RICH] = [it("user", "text", 5, text="还有哪些要我拍板？"), it("assistant", "text", 2, text=_rich)]
+
+# MOCK_TABLE_CHIPS=1: a reply whose two-column table has a sentence with code chips in its second column (#9146): on a
+# wide column it takes the room it needs and wraps at a reading length; a short chip is never broken across lines.
+TABLE_CHIPS = "a1f3c2d4-0000-4000-8000-000000009146"
+if os.environ.get("MOCK_TABLE_CHIPS") == "1":
+    SESSIONS.append(sess("macbook", TABLE_CHIPS, "Check the MCP endpoint", "/Users/me/code/weather", "done", "unread", "weather", 1, "mcp", 5, 2,
+                         "The endpoint works."))
+    _chips = """The endpoint works:
+
+| Item | Result |
+| --- | --- |
+| Service | Runs `1.2.3`, the `/mcp` endpoint on port 8080 accepts `Bearer` tokens; without a token it answers 401 `invalid_token` |
+| Tools | Only two: `list_items`, `list_item_details` |
+| Config | Reads `~/.config/weather/mcp-endpoint-settings.json` and falls back to the defaults when it is missing |"""
+    ITEMS[TABLE_CHIPS] = [it("user", "text", 5, text="Does the MCP endpoint work?"), it("assistant", "text", 2, text=_chips)]
 
 # MOCK_WIDE=1: an Agents chat whose reply has a table that fits, one that does not and a code block with a long line,
 # then a short reply in a turn of its own (SwipeWideContentTests, #5737: a drag to the left scrolls what scrolls sideways, else quotes).
@@ -24180,6 +24363,9 @@ def markets_route(handler, p, body):
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
         if volc_mock.ENABLED and PLUGINS.get(volc_mock.EXT, {}).get("enabled") and placement in ("", "plugin_page", "extension_page"):
             ui += PLUGINS[volc_mock.EXT]["ui"]
+        if COLUMNS_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
+                    "placement": "nav_page", "size": "full", "icon": "calendar"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -24776,6 +24962,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
+    "MOCK_URGENT_CALL=1  Urgent calls on, and the call call_mock (GET /api/v1/assistant/calls/call_mock) about a pending ask_user card in Persona's main conversation, for the call page (-showUrgentCallSample YES; docs/assistant/urgent-call.md)",
     "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
@@ -25239,6 +25426,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/ln":
             if "on" in q: LN["on"] = q["on"][0] == "1"
             return self.send_json(LN)
+        if p == "/api/v1/assistant/urgent-call":  # Settings › Urgent Calls (docs/assistant/urgent-call.md)
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/calls":
+            return self.send_json({"calls": [c for c in URGENT_CALLS if c["conversation_id"] == q.get("conversation", [""])[0]]})
+        if p.startswith("/api/v1/assistant/calls/"):
+            return self.send_json(URGENT_CALL)
         if p == "/api/v1/push/ln-mode":
             return self.send_json({"enabled": LN["on"]})
         if p == "/api/v1/push/intercepts":  # kept whether the mode is on or off, as the hub keeps them
@@ -25961,6 +26154,7 @@ class H(BaseHTTPRequestHandler):
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if subscription_thread_area(self, "GET", p): return
+        if assistant_inbox_area(self, "GET", p): return
         if github_area(self, "GET", p, b""): return
         if p == "/api/v1/connectors":  # Settings › Connectors › GitHub; MOCK_GITHUB=signed_out: its gh login has expired
             listed = [GITHUB_CONNECTOR, {k: v for k, v in _imessage_connector().items() if v is not None}] + ([telegram_connector()] if TELEGRAM_MODE else [])
@@ -27956,6 +28150,13 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/assistant/urgent-call" and self.command == "PUT":
+            URGENT["settings"] = json.loads(self.last_body or b"{}")
+            return self.send_json(dict(URGENT, can_write=True))
+        if p == "/api/v1/assistant/urgent-call/test" and self.command == "POST":
+            return self.send_json({"devices": 1, "call": URGENT_CALL})
+        if p.startswith("/api/v1/assistant/calls/") and p.endswith("/state") and self.command == "POST":
+            return self.send_json(dict(URGENT_CALL, state=json.loads(self.last_body or b"{}").get("state", "")))
         if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
             LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
             return self.send_json({"enabled": LN["on"]})
@@ -28750,6 +28951,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -28768,6 +28970,7 @@ MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a 
 MOCK_HELP.append("MOCK_REWIND=1|safeguards|codex|agy  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
+MOCK_HELP.append("MOCK_INBOX_MANY=<n>|action:30,working:6,fyi:40,noise:20,done:25  Inbox: n made-up items per section (or per section:count), with status so In progress shows, over Lark, mail and GitHub and 40 days of updates; done ones in the last 3 days. For the section bar (#9053) and long-list runs")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
@@ -29324,6 +29527,8 @@ _plugins_route_without_extensions = plugins_route
 
 
 def plugins_route(handler, p, body):
+    if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
+        return mock_today(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29345,6 +29550,79 @@ def plugins_route(handler, p, body):
             except ValueError: pass
         return _plugins_route_without_extensions(_NewKeysHandler(handler), "/api/v1/plugins" + p[len("/api/v1/extensions"):], body)
     return _plugins_route_without_extensions(handler, p, body)
+
+
+# MOCK_EXTENSION_COLUMNS=1 (with MOCK_EXTENSIONS=1): a made-up extension's "Today" page, a dashboard of UI version 8
+# (#9158): a full-width "Needs me" card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents,
+# each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
+# bottom rows push a plain page of the card's (its state); a row's own action answers a toast. All names are invented.
+COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
+
+
+def _today_row(key, title, subtitle="", value="", **extra):
+    row = {"type": "row", "key": key, "title": title, "action": {"id": "open", "values": {"row": key}}}
+    if subtitle: row["subtitle"] = subtitle
+    if value: row["value"] = value
+    row.update(extra)
+    return row
+
+
+def _today_more(key, title, page):
+    return {"type": "row", "key": key, "title": title, "action": {"id": "page", "push": {"state": page, "title": title}}}
+
+
+def _today_card(key, title, icon, color, link, summary, rows, more=None, **extra):
+    section = {"key": key, "title": title, "icon": icon, "icon_color": color,
+               "link": {"title": link, "action": {"id": "page", "push": {"state": key, "title": title}}},
+               "items": [{"type": "text", "key": key + ".summary", "text": summary, "style": "secondary"}] + rows}
+    if more: section["items"].append(_today_more(key + ".more", more, key))
+    section.update(extra)
+    return section
+
+
+def _today_view():
+    return {"title": "Today", "layout": "columns", "sections": [
+        _today_card("needs", "Needs me", "bell", "orange", "All", "4 things wait for you · 1 due today", [
+            _today_row("need.travel", "Approve the travel request", "Approval · from Robin", icon="check", icon_color="blue",
+                       badge={"text": "Today", "tone": "caution"}),
+            _today_row("need.review", "Reply about the design review", "Chat · Kai asked 2 h ago", icon="chat", icon_color="teal"),
+            _today_row("need.agent", "Agent waits for a permission", "Running Agents · release notes", icon="robot", icon_color="purple"),
+            _today_row("need.report", "Sign the quarterly report", "Document · due Friday", icon="doc", icon_color="gray"),
+        ], span="full", columns=2),
+        _today_card("calendar", "Calendar", "calendar", "red", "Calendar", "3 events today · next at 14:00", [
+            _today_row("cal.sync", "Weekly sync", "Room 4 · 6 people", "14:00"),
+            _today_row("cal.robin", "1:1 with Robin", "Video call", "16:30"),
+            _today_row("cal.release", "Release review", "Room 2", "17:30"),
+        ], "3 more this week"),
+        _today_card("lark", "Lark today", "chat", "blue", "Lark", "12 unread in 4 chats", [
+            _today_row("lark.design", "Design team", "Kai: the new cards look good", avatar={"text": "DT"}, badge={"text": "5"}),
+            _today_row("lark.release", "Release", "Build 812 is out", avatar={"text": "RE"}, badge={"text": "2"}),
+        ], "2 more chats"),
+        _today_card("wechat", "WeChat", "chat", "green", "WeChat", "3 unread · 1 mention", [
+            _today_row("wechat.family", "Family", "Mom: dinner at 7?", avatar={"text": "FA"}, badge={"text": "2"}),
+            _today_row("wechat.club", "Climbing club", "Saturday trip is on", avatar={"text": "CC"}, badge={"text": "1"}),
+        ], "1 more chat"),
+        _today_card("agents", "Running Agents", "robot", "purple", "Agents", "2 running · 1 waits for you", [
+            _today_row("agent.notes", "Release notes", "Waits for a permission", badge={"text": "Needs you", "tone": "caution"}),
+            _today_row("agent.tests", "Flaky test hunt", "Running · 12 min"),
+            _today_row("agent.docs", "Docs sweep", "Running · 3 min"),
+        ], "1 finished today"),
+    ]}
+
+
+def mock_today(handler, body):
+    request = json.loads(body) if body else {}
+    state = request.get("state") or ""
+    if request.get("action") == "open":
+        handler.send_json({"toast": "Opened " + ((request.get("values") or {}).get("row") or "")})
+    elif state:
+        card = next((s for s in _today_view()["sections"] if s["key"] == state), None)
+        title = card["title"] if card else state
+        handler.send_json({"view": {"title": title, "sections": [{"items": [
+            {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
+    else:
+        handler.send_json({"view": _today_view()})
+    return True
 
 
 def mock_showcase(handler, ui, body):

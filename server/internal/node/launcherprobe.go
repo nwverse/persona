@@ -160,7 +160,8 @@ var probeCache = struct {
 }{at: map[string]time.Time{}, got: map[string]proto.LauncherDetail{}}
 
 // launcherProbeCached probes at most every 10 minutes per launcher: running one may run what it runs first (a script
-// that fetches a token), so opening its page again should not repeat that.
+// that fetches a token), so opening its page again should not repeat that. Past that it reads the kept probe
+// (keptProbe), which a message or a start has usually taken already.
 func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.LauncherDetail {
 	probeCache.Lock()
 	if at, ok := probeCache.at[name]; ok && time.Since(at) < 10*time.Minute {
@@ -170,12 +171,15 @@ func (n *Node) launcherProbeCached(ctx context.Context, name string) proto.Launc
 	}
 	probeCache.Unlock()
 	var d proto.LauncherDetail
-	if p, err := n.launcherProbe(ctx, name); err == nil {
+	if p, err := n.keptProbe(ctx, name); err == nil {
 		d = LauncherDetail(p)
 	} else if errors.Is(err, errProbeUnseen) {
 		d = proto.LauncherDetail{Agent: launcherAgentType(name), Error: err.Error()}
 	} else {
 		d = proto.LauncherDetail{Error: err.Error()}
+		if ctx.Err() != nil && err == ctx.Err() {
+			return d // the caller gave up; the probe goes on and is kept for the next one
+		}
 	}
 	probeCache.Lock()
 	probeCache.at[name], probeCache.got[name] = time.Now(), d

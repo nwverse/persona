@@ -56,6 +56,62 @@ func TestInboxPostMakesAGenericRow(t *testing.T) {
 	}
 }
 
+// A post's text is the assistant's Markdown (#9041): the row keeps it, line breaks and all, as body for the detail, and
+// says it without the marks on one line wherever a line is drawn (summary, preview, the chain's received message).
+func TestInboxPostKeepsMarkdownInBody(t *testing.T) {
+	ctx := context.Background()
+	h := postHub(t)
+	md := "**Morning briefing · Mon**\nToday: one tutorial.\n\n## Classes\n- **Tutorial: 10:30–12:20**, room B2\n- Short quiz, `no` make-up\n"
+	if _, err := h.postToInbox(ctx, "m1", "s1", inboxPostArgs{Title: "Morning briefing", Summary: md, Reason: "daily"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	items := postItems(h)
+	if len(items) != 1 {
+		t.Fatalf("%d rows", len(items))
+	}
+	it := items[0]
+	if it.Body != strings.TrimSpace(md) {
+		t.Fatalf("body is the Markdown as written: %q", it.Body)
+	}
+	const plain = "Morning briefing · Mon Today: one tutorial. Classes Tutorial: 10:30–12:20, room B2 Short quiz, no make-up"
+	if it.Summary != plain || it.Preview != plain {
+		t.Fatalf("summary and preview are its words on one line:\n%q\n%q", it.Summary, it.Preview)
+	}
+	if it.Context != "Morning briefing\n"+strings.TrimSpace(md) {
+		t.Fatalf("the context keeps the Markdown for the assistant: %q", it.Context)
+	}
+	var said []string
+	for _, e := range it.Chain {
+		if e.Kind == ChainReceived {
+			for _, m := range e.Messages {
+				said = append(said, m.Text)
+			}
+		}
+	}
+	if len(said) != 1 || said[0] != plain {
+		t.Fatalf("the chain's received message says the words: %q", said)
+	}
+	raw, err := json.Marshal(it.listed())
+	if err != nil || !strings.Contains(string(raw), `"body":"**Morning briefing`) {
+		t.Fatalf("the list carries body, so the detail draws it at once: %s %v", raw, err)
+	}
+
+	// A long briefing: the summary is cut for the row, the body keeps all of it.
+	long := "# Weekly\n" + strings.Repeat("- **item** with a few words\n", 60)
+	if _, err := h.postToInbox(ctx, "m1", "s2", inboxPostArgs{Title: "Weekly", Summary: long, Reason: "weekly"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range postItems(h) {
+		if it.Title != "Weekly" {
+			continue
+		}
+		if it.Body != strings.TrimSpace(long) || len([]rune(it.Summary)) != inboxPostSummaryMax+1 || !strings.HasSuffix(it.Summary, "…") ||
+			strings.ContainsAny(it.Summary, "*#") {
+			t.Fatalf("long: body %d runes, summary %q", len([]rune(it.Body)), it.Summary)
+		}
+	}
+}
+
 func TestInboxPostRepeatUpdatesOneRow(t *testing.T) {
 	ctx := context.Background()
 	h := postHub(t)
@@ -229,6 +285,42 @@ func TestInboxPostEveryAfterARun(t *testing.T) {
 	run("run-1", "今天三个会，设计评审改到 15:00", "")
 	got := rows()
 	if len(got) != 1 || got[0].Title != "早报" || got[0].Tier != TierFYI || !strings.Contains(got[0].Context, "15:00") || got[0].Connector.Thread != "server/run-1" {
+		t.Fatalf("rows: %+v", got)
+	}
+}
+
+// The row of a task set to "every" holds the run's whole reply as written, read from its conversation: the session
+// list's last_text is one line cut at 200 characters, which ran a briefing's Markdown together (#9041).
+func TestInboxPostEveryKeepsTheWholeReply(t *testing.T) {
+	ctx := context.Background()
+	h := newSpawnHarness(t)
+	sc := h.s.loadSchedule(ctx)
+	sc.mu.Lock()
+	sc.tasks = append(sc.tasks, Task{ID: "task_every", Title: "早报", Prompt: "p", Repeat: repeatDaily, Time: "09:00", Enabled: true,
+		Inbox: inboxEvery, RunMachineID: "server", RunSessionID: "run-1"})
+	sc.mu.Unlock()
+	h.f.known["run-1"] = true
+	reply := "**早报 · 周一**\n结论：上午一节辅导课。\n\n**今天的课**\n- **辅导课：10:30–12:20**\n- " + strings.Repeat("随堂小测，", 60)
+	h.f.answerNode(DeviceSessionItems, func(string, json.RawMessage) (any, error) {
+		return map[string]any{"items": []proto.Item{
+			{ID: "1", Kind: proto.KindText, Role: "user", Text: "p"},
+			{ID: "2", Kind: proto.KindText, Role: "assistant", Text: "我先看看邮件。"},
+			{ID: "3", Kind: proto.KindToolUse, Role: "assistant"},
+			{ID: "4", Kind: proto.KindText, Role: "assistant", Text: reply},
+		}}, nil
+	})
+	h.f.setSessions("server", h.parent, proto.Session{SessionID: "run-1", MachineID: "server", Assistant: true, Status: proto.StatusIdle,
+		LastText: clip(oneLine(reply), 200)})
+	h.s.assistantTurnSettled(ctx, "server", "run-1")
+	h.s.inbox.mu.Lock()
+	var got []InboxItem
+	for _, it := range h.s.inbox.items {
+		if it.Source == inboxPostSource {
+			got = append(got, *it)
+		}
+	}
+	h.s.inbox.mu.Unlock()
+	if len(got) != 1 || got[0].Body != reply || strings.Contains(got[0].Summary, "**") || !strings.HasPrefix(got[0].Summary, "早报 · 周一 结论：上午一节辅导课。 今天的课 辅导课") {
 		t.Fatalf("rows: %+v", got)
 	}
 }

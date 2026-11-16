@@ -3,6 +3,8 @@
 //! (`jni`). Both carry bincode-encoded wire types. A panic never crosses the boundary: each entry point catches it and
 //! returns its failure value.
 
+#[cfg(not(feature = "release-android"))]
+mod answer_shadow;
 mod jni;
 
 use std::collections::HashMap;
@@ -302,6 +304,30 @@ fn json_output<T: serde::Serialize>(projection: &T) -> PersonaCoreBytes {
     }
 }
 
+/// Decodes one WebSocket frame through the production transport decoder. The result is a JSON classification used by
+/// host binding tests; a refusal carries only the same code and protocol keys as `DecodeError`. No core handle.
+/// `Frame::Other` is `{"frame":"other"}`; an `items` frame reports its identity and count. This does not decode any
+/// other event's associated payload.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_transport_frame(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input = unsafe { slice(input, length) };
+        let result = match persona_core_domain::transport::decode_frame(input) {
+            Ok(persona_core_domain::transport::Frame::Other) => serde_json::json!({"frame": "other"}),
+            Ok(persona_core_domain::transport::Frame::Items(frame)) => serde_json::json!({
+                "frame": "items", "machine_id": frame.machine_id, "session_id": frame.session_id,
+                "item_count": frame.items.len(),
+            }),
+            Err(error) => serde_json::json!({"error": {"code": error.code(), "detail": error.detail()}}),
+        };
+        json_output(&result)
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
 /// Projects the Agents list from a JSON input. The input is a UTF-8 JSON document matching `persona_core::sort::Input`;
 /// the returned bytes are a UTF-8 JSON document matching `persona_core::sort::Projection`. This is a pure function: no
 /// core handle, no dispatch, no drain. The caller frees the result with `persona_core_bytes_free`.
@@ -372,6 +398,22 @@ pub unsafe extern "C" fn persona_core_project_stream_chunks(input: *const u8, le
     .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }
 
+/// Repairs a streaming fence, table or final-block marker (`persona_core::stream_repair::Input`). Returns the
+/// complete `{repaired, end}` JSON. Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_stream_repair(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::stream_repair::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&persona_core_domain::stream_repair::project(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
 /// Projects static transcript rows into turns (`persona_core::turns::Input`). Returns a JSON array of complete turn
 /// objects; the caller applies the checked-in current-iOS overlay to the fixture's expected turns before comparing.
 /// Pure function, same buffer ownership as `persona_core_project_sort`.
@@ -385,6 +427,26 @@ pub unsafe extern "C" fn persona_core_project_turns(input: *const u8, length: us
             return PersonaCoreBytes::empty();
         };
         json_output(&persona_core_domain::turns::project(&input))
+    }))
+    .unwrap_or_else(|_| PersonaCoreBytes::empty())
+}
+
+/// Projects the first represented work segment's viewed-image line (`persona_core::viewed_images::Input`). Returns
+/// the complete `{id, image_ids, is_input, type}` JSON, or an empty buffer when no image produces a viewed line.
+/// Pure function, same buffer ownership as `persona_core_project_sort`.
+///
+/// # Safety
+/// `input` is valid for `length` bytes of UTF-8 JSON.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn persona_core_project_viewed_images(input: *const u8, length: usize) -> PersonaCoreBytes {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = json_input::<persona_core_domain::viewed_images::Input>(input, length) else {
+            return PersonaCoreBytes::empty();
+        };
+        let Some(projection) = persona_core_domain::viewed_images::project(&input) else {
+            return PersonaCoreBytes::empty();
+        };
+        json_output(&projection)
     }))
     .unwrap_or_else(|_| PersonaCoreBytes::empty())
 }

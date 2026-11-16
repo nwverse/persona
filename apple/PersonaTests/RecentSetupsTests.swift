@@ -53,6 +53,29 @@ import PersonaWire
 
     // MARK: The shared fixtures
 
+    /// The generated `RecentSetup` (schema/wire/recents.schema.json) writes back exactly the fixture's JSON: every
+    /// field, empty strings included, and no other.
+    @Test func generatedSetupWritesTheFixtureBytesBack() throws {
+        let root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: Self.fixtureURL)) as? [String: Any])
+        let cases = try #require(root["cases"] as? [[String: Any]])
+        var samples: [[String: Any]] = []
+        for c in cases {
+            let input = c["input"] as? [String: Any] ?? [:]
+            let expected = c["expected"] as? [String: Any] ?? [:]
+            samples += (input["before"] as? [[String: Any]] ?? []) + (input["entries"] as? [[String: Any]] ?? [])
+            samples += (input["setup"] as? [String: Any]).map { [$0] } ?? []
+            samples += expected["after"] as? [[String: Any]] ?? []
+        }
+        #expect(!samples.isEmpty)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        for sample in samples {
+            let data = try JSONSerialization.data(withJSONObject: sample, options: [.sortedKeys, .withoutEscapingSlashes])
+            let setup = try JSONDecoder().decode(RecentSetup.self, from: data)
+            #expect(try encoder.encode(setup) == data)
+        }
+    }
+
     @Test func limitsAreTheFixtures() throws {
         let f = try Self.fixture()
         #expect(RecentSetups.maxEntries == f.maxEntries)

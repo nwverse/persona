@@ -47,6 +47,23 @@ nonisolated enum RecordingTitle {
         return name.isEmpty ? nil : String(name.prefix(maxLength))
     }
 
+    /// What to do with the hub's name for a recording (#8877).
+    enum HubNaming: Equatable, Sendable {
+        /// A name the owner gave on the web: it becomes the recording's own title, uploaded with its next revision.
+        case adopt(String)
+        /// Any other name, kept as `hubName` (nil: none).
+        case keep(String?)
+    }
+
+    /// A name the owner gave on the web (`renamed`) is taken as the recording's own title when it is not already, unless
+    /// this phone has a change of its own still to upload (`pending`: its title goes up and wins on the hub as the newer
+    /// one); a calendar's or a generated name is kept as `hubName` (`hubName(name:source:)`).
+    static func naming(_ entry: RecordingEntry, name: String?, source: String?, pending: Bool) -> HubNaming {
+        guard source == "renamed" else { return .keep(hubName(name: name, source: source)) }
+        let title = cleaned(name ?? "")
+        return title.isEmpty || pending || title == entry.title ? .keep(nil) : .adopt(title)
+    }
+
     /// The owner's title as kept: one line, trimmed, at most `maxLength` characters.
     static func cleaned(_ title: String) -> String {
         let line = title.split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
