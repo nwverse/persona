@@ -42,10 +42,18 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 
 `scripts/ci/core.sh` runs all of these, plus formatting and clippy. On Linux, `scripts/test-c-abi.sh` compiles
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
-`libpersona_core.so`, compares the `empty_list` projection and empty-buffer behavior, and checks that the header's
-declared functions have dynamic exports. This proves a real C compiler/linker can consume the C ABI; it is not a Swift
-importer, Apple ABI, NAPI/HAP, physical-device or performance test. Generated inputs and the executable stay under the
-ignored `native/app-core/target/` directory.
+`libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
+unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
+`persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
+invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
+`{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
+applied by the client (62 complete turn objects across the 54 non-empty cases), and
+`persona_core_project_task_index` for all five complete expected objects plus the background receipt. Expected objects
+are compared completely after a canonical re-serialization (sorted object keys, exact array order and scalars);
+exact-name manifests, malformed-input empty buffers and a deliberately wrong expected object are checked per domain.
+A missing fixture, client source or release library fails rather than skips. This proves a real C compiler/linker can
+consume the C ABI; it is not a Swift importer, Apple ABI, NAPI/HAP, physical-device or performance test. Generated
+inputs and the executable stay under the ignored `native/app-core/target/` directory.
 
 Android's `:core:rustcore` tests build a host copy of
 the library and replay the same continuity, transport, sort and static-turn fixtures through the real JNI binding. The
@@ -66,7 +74,10 @@ input, a wrong expectation and the U+200B boundary. This does not execute Swift,
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
-consumer state, UI badges or actual background execution.
+consumer state, UI badges or actual background execution. The viewed-image leaf (#8860) uses the existing turn
+projection to keep the image entry's owner, compares the complete post-overlay viewed line through real Kotlin/JNI,
+and checks duplicate/running/error/Read-extension and wrong-expectation cases. It does not cover full ChatLine,
+folded images, UI image loading or actual tool execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
@@ -149,9 +160,17 @@ binary; a missing helper or too-old Node fails the test rather than skipping it.
 replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
 The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
 from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
+`harmony/tests/core-host/projections.test.mjs` (#8937) replays the unchanged 15 answer + 8 display_answer,
+21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
+conditional next-page, picks and display fields. The receipt retains its description and started call with empty
+notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
+The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
+`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
+label, while the other three take JSON documents.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
-mistake, so it is not a substitute. These host projections do not exercise an ArkTS state codec, a loaded NAPI module,
-NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical device.
+mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
+a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical
+device. No production client uses the new exports yet.
 
 ## Host-only boundary diagnostics
 
