@@ -81,6 +81,8 @@ describe("the user's arrangement", () => {
     setPageGroup("p:console/today", life);
     removePageGroup(life);
     expect(drawn(getSidebarPrefs())).toEqual(drawn(NONE));
+    // nothing is kept of it: a group made later never takes its pages by surprise
+    expect(getSidebarPrefs().assign).toEqual({});
   });
 
   it("removing an extension's group puts its pages in Pages, and Undo brings it back", () => {

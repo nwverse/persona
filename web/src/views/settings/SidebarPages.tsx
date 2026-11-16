@@ -146,14 +146,15 @@ export function SidebarPagesGroup() {
                       <Icon name={p.icon} size={14} />
                     </span>
                     {/* the page's name and where it is wrap on a phone, beside the row's controls, rather than being cut */}
-                    <div className="min-w-0 flex-1">
+                    {/* at least a name's width: on a phone the controls go under it rather than squeezing it */}
+                    <div className="min-w-32 flex-1">
                       <div className="break-words text-[13px] text-ink">{p.label}</div>
                       <div className="mt-0.5 break-words text-[11.5px] text-ink-3">
                         {locked ? t("settings.sidebar_pages_locked") : on ? t("settings.sidebar_pages_in_list") : t("settings.sidebar_pages_in_more")}
                         {from && ` · ${from}`}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="ml-auto flex items-center gap-2">
                       {sections.length > 1 && !locked && (
                         <select value={s.id} onChange={(e) => setPageGroup(k, e.target.value)} aria-label={t("settings.sidebar_groups_page_group", { name: p.label })} className={cx(FIELD, "max-w-36")}>
                           {groups.map((g) => (

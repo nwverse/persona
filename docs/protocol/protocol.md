@@ -1742,8 +1742,8 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/workspace-board` | `{revision,action,...}` → the full updated board; `full` only, a stale revision gets 409 `conflict` |
 | GET | `/api/v1/workspace-board/settings` | `{enabled,can_write}`: the board switch (#2475), one per hub; when never set, inferred from whether the board has been changed, see "Workspace board" |
 | PUT | `/api/v1/workspace-board/settings` | `{enabled}` → `{enabled,can_write}`; `full` only, missing `enabled` returns 400 |
-| GET | `/api/v1/navigation` | `{"start"?}`: the page the apps open on (#9071), one per hub, so the owner's for all their devices; `start` is left out until something is stored, see "Navigation" |
-| PUT | `/api/v1/navigation` | `{start}` → `{start}`; `full` only; a missing `start` or one of another shape returns 400 |
+| GET | `/api/v1/navigation` | `{"start"?, "pages"?}`: the page the apps open on and the sidebar's arrangement (#9071), one per hub, so the owner's for all their devices; `start` is left out until something is stored, see "Navigation" |
+| PUT | `/api/v1/navigation` | `{start?, pages?}` → the record; `full` only; neither, or one of another shape, returns 400 |
 | GET | `/api/v1/workspaces` | `{workspaces:[Workspace],errors?:[{machine_id,error}]}`; workspace discovery independent of Agents, keeps the last known info on failure, readable by `answer` |
 | POST | `/api/v1/machines/{mid}/reconnect` | Reconnect that machine's node |
 | GET · POST | `/api/v1/machines/{mid}/codex/{sid}/takeover` | Signed-in full-device route; generic device-call APIs are denied. GET → `{token,cwd,transcript_path,continuation_prompt}` with a single-use two-minute token. POST requires `{token,confirm_stop:true}` only while the original writer is running; `false` is accepted once it has exited. The manager verifies process identity and terminal instance, then sends one Ctrl+D only with empty composer and no modal or queued input. It waits for process exit, a complete stable transcript ending, and a fresh writer scan; any failed check or timeout refuses. No signals or forced termination. Takeover resumes the same thread/session ID in a new terminal tab. The separate continue option alone starts an independent session with context and attached to-do preserved. `encrypted_context` is continuation-only. |
@@ -2150,7 +2150,7 @@ Server → client:
 | `saved_agent_searches` | `revision` (decimal string): the default manager committed a saved-query mutation; re-read the collection while its view is open, respecting the message's manager stamp. No query/name payload; see "Saved Agent searches" |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
-| `navigation` | `start`: the start page changed (`PUT /api/v1/navigation`, "Navigation"); clients keep it for their next opening |
+| `navigation` | `start` and / or `pages`, whichever changed (`PUT /api/v1/navigation`, "Navigation"): clients keep the start page for their next opening and draw the sidebar's arrangement |
 | `urgent_call` | `{id, state, conversation}`: an urgent call moved on (answered, declined, missed, ended, cancelled when its card was answered elsewhere); a phone still ringing for it ends the call (`docs/assistant/urgent-call.md`) |
 | `kb_selection` | —: the knowledge base's selection was saved (`PUT /api/v1/kb/selection`, or a per-item change from the assistant); clients re-read `GET /api/v1/kb/selection` |
 | `todos` | —: pushed whenever to-dos or links change; clients re-fetch `GET /api/v1/todos` |
@@ -4827,8 +4827,17 @@ every device of theirs follows it.
   know or a page that is not there now, keeping the choice.
 - `start` is left out of the answer until a PUT stores one; `""` once the default was chosen. An app that kept a choice of its
   own while there was no record (a hub or manager without the route, a new default manager) PUTs it when the answer has none.
-- PUT `{start}` requires `full` (an `answer` credential gets 403; extension tokens never reach it, `extwire.RouteScopes` does
-  not list it); it replaces only the fields it carries and broadcasts `{"type":"navigation","start":"<page>"}`.
+- `pages` is the sidebar's arrangement (#9071 groups), as the web keeps it (`web/src/lib/sidebar-pages.ts`):
+  `{"order": [<page>], "shown": [<page>], "hidden": [<page>], "groups"?: [{"id", "title"?}], "assign"?: {<page>: <group id>}, "removed"?: [<group id>]}`.
+  `order` is the user's order; `shown` / `hidden` the pages switched into the sidebar or put under More; `groups` the groups in
+  their order, where `""` is the built-in **Pages**, `u:<id>` a group the user made (a title is required) and any other id an
+  extension's `nav_page` group (`docs/extensions/extensions.md` "UI slots"; a title renames it); `assign` the group a page was moved
+  to; `removed` the extensions' groups the user removed. The manager checks only the shape (at most 256 keys a list and 256 moves,
+  32 groups, titles of at most 40 characters, ids once). Like `start`, it is left out until stored, and an app hands over the
+  arrangement it kept while there was none.
+- PUT `{start?, pages?}` (at least one) changes only the fields it carries and pushes only those, so an app with an unsent change of
+  one field keeps it. It requires `full` (an `answer` credential gets 403; extension tokens never reach it, `extwire.RouteScopes` does
+  not list it); and broadcasts `{"type":"navigation","start"?:"<page>","pages"?:{…}}`.
 - A hub or default manager from before answers 404: the web then keeps the choice in the browser only and says so in the
   setting (`docs/web/web.md` "Start page"). iOS and Android do not read it yet.
 
