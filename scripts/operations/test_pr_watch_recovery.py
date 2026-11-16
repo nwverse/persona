@@ -141,7 +141,7 @@ class RecoveryIntegrationTests(unittest.TestCase):
         remove.assert_not_called()
         self.assertTrue(other.exists())
 
-    def test_only_empty_loose_objects_and_old_temporary_packs_are_removed(self):
+    def test_only_empty_loose_objects_are_removed_and_pack_temps_are_preserved(self):
         loose = self.checkout / ".git/objects/ab"
         loose.mkdir(parents=True)
         empty = loose / ("c" * 38)
@@ -154,10 +154,10 @@ class RecoveryIntegrationTests(unittest.TestCase):
         temporary.touch()
         old = 1
         os.utime(temporary, (old, old))
-        self.assertEqual(pr_watch_recovery.recover_object_debris(self.checkout), 2)
+        self.assertEqual(pr_watch_recovery.recover_object_debris(self.checkout), 1)
         self.assertFalse(empty.exists())
         self.assertTrue(nonempty.exists())
-        self.assertFalse(temporary.exists())
+        self.assertTrue(temporary.exists())
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch_recovery.recover_object_debris(self.worktrees)
 

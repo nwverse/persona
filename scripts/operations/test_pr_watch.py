@@ -352,7 +352,7 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         update.assert_called_once()
 
-    def test_semantic_repair_infrastructure_exhaustion_publishes_final_failure(self):
+    def test_semantic_repair_infrastructure_exhaustion_preserves_code_repair_budget(self):
         finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[finding]), \
@@ -363,8 +363,10 @@ class WatcherTests(unittest.TestCase):
                     self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
                 self.watcher.process("example/one", 7)
         state = self.watcher.state.get("example/one", 7)
-        self.assertEqual(state["outcome"], "repair_exhausted")
-        self.assertIn("offline", self.comments[-1])
+        self.assertEqual(state["outcome"], "retry")
+        self.assertNotIn("repair_exhausted", state)
+        self.assertEqual(state["repair_rounds"], 0)
+        self.assertGreater(state["retry_after"], time.time() + 3000)
 
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
@@ -526,6 +528,23 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "repair_findings") as repair:
             self.watcher.process("example/one", 7)
         repair.assert_not_called()
+
+    def test_interrupted_repairing_record_resumes_instead_of_stopping(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="repairing", semantic="findings",
+                               findings=[finding], review_posted=True, repair_rounds=1)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+
+    def test_heartbeat_refreshes_active_leases(self):
+        self.watcher.state.data["worktree_leases"] = {
+            "/tmp/lease": {"repository": "example/one", "number": 7, "active": True, "heartbeat": 1}}
+        self.watcher.touch_leases(("example/one", 7))
+        self.assertGreater(self.watcher.state.data["worktree_leases"]["/tmp/lease"]["heartbeat"], 1)
 
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):

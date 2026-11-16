@@ -105,11 +105,15 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
     result = run(argv, cwd=cwd, timeout=timeout, environ=environ, input_text=input_text)
     if result.returncode:
         detail = (result.stderr.strip() or result.stdout.strip())[-2000:]
-        if argv[:2] == ["git", "fetch"] and "rename detection" in detail:
-            # Only a refused update caused by rename detection can be checked
-            # this way. Other Git failures retain their original diagnostic.
-            remote_name = argv[3] if len(argv) > 3 else "origin"
+        if argv[:2] == ["git", "fetch"] and "exhaustive rename detection was skipped" in detail:
+            # This fallback supports only the exact single-refspec shape used
+            # by the watcher, never arbitrary options or multiple refspecs.
+            if len(argv) < 5 or len(argv) > 6 or any(arg.startswith("-") for arg in argv[3:]):
+                raise WatchError("unsupported fetch recovery command shape")
+            remote_name = argv[3]
             original_refspecs = argv[4:]
+            if len(original_refspecs) != 1:
+                raise WatchError("fetch recovery requires exactly one refspec")
             refspecs = [refspec.rsplit(":", 1)[0].lstrip("+") for refspec in original_refspecs]
             remote_refspecs = [refspec if refspec.startswith("refs/") else "refs/" + refspec for refspec in refspecs]
             if remote_name.startswith("-") or any(refspec.startswith("-") for refspec in refspecs):

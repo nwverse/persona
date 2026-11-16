@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import shutil
 import time
 from pathlib import Path
 
@@ -139,12 +138,8 @@ def recover_object_debris(checkout):
                 item.unlink()
                 removed += 1
     pack = objects / "pack"
-    if pack.is_dir():
-        for item in pack.iterdir():
-            if (item.name.startswith("tmp_") and item.is_file() and not item.is_symlink()
-                    and time.time() - item.stat().st_mtime > 3600):
-                item.unlink()
-                removed += 1
+    # Temporary pack files can belong to long-running index-pack operations;
+    # age alone is not proof of abandonment and never authorizes deletion.
     return removed
 
 

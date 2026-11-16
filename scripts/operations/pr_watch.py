@@ -313,6 +313,15 @@ class Watcher:
             if key in self.active:
                 self.active[key]["phase"] = phase
                 self.active[key]["started"] = time.monotonic()
+        self.touch_leases(key)
+
+    def touch_leases(self, key):
+        repo, number = key
+        with self.state.lock:
+            for lease in self.state.data.get("worktree_leases", {}).values():
+                if lease.get("repository") == repo and lease.get("number") == number and lease.get("active"):
+                    lease["heartbeat"] = time.time()
+            pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
 
     @contextmanager
     def merging(self, repo):
@@ -330,7 +339,6 @@ class Watcher:
         config = self.repositories[repo]
         root = config["checkout"]
         with self.git_lock:
-            pr_watch_recovery.recover_object_debris(root)
             result = run(["git", "worktree", "prune", "--expire", "now"], cwd=root, timeout=90)
             if result.returncode:
                 raise WatchError("cannot prune stale watcher worktree metadata: " + bounded(result.stderr, 800))
@@ -373,9 +381,13 @@ class Watcher:
                 checked(["git", "worktree", "add", "--detach", str(worktree), pr["headRefOid"]], cwd=root, timeout=180)
             return worktree
         except BaseException:
-            with self.git_lock:
-                pr_watch_recovery.remove_worktree(root, self.config["state"], worktree)
-            self.release_worktree(worktree)
+            try:
+                with self.git_lock:
+                    pr_watch_recovery.remove_worktree(root, self.config["state"], worktree)
+            except (OSError, WatchError) as cleanup_error:
+                self.log("temporary worktree cleanup failed: " + bounded(cleanup_error, 300))
+            finally:
+                self.release_worktree(worktree)
             raise
 
     def remove_worktree(self, repo, worktree):
@@ -429,10 +441,14 @@ class Watcher:
 
     def comment_findings(self, repo, number, pr, findings):
         blocking = any(finding["severity"] in ("P0", "P1") for finding in findings)
+        if not self.repositories[repo]["merge"]:
+            action = "Review-only mode: no automatic repair or merge will be attempted. Please correct the findings in a new head."
+        elif blocking:
+            action = "P0/P1 findings block this head; the watcher will use its bounded repair flow."
+        else:
+            action = "These P2 findings are non-blocking under the maintainer-approved policy. Verification and exact-head merging continue."
         body = "Automated semantic review at `%s` found %d issue(s).\n\n%s" % (
-            pr["headRefOid"][:9], len(findings),
-            "P0/P1 findings block this head; the watcher will use its bounded repair flow." if blocking else
-            "These P2 findings are non-blocking under the maintainer-approved policy. Verification and exact-head merging continue.")
+            pr["headRefOid"][:9], len(findings), action)
         comments = [{"path": f["path"], "line": f["line"], "side": "RIGHT",
                      "body": "**%s** — %s\n\n**Suggestion:** %s" % (f["severity"], f["summary"], f["suggestion"])}
                     for f in findings]
@@ -781,6 +797,7 @@ class Watcher:
                                                 and old.get("semantic") == "passed") \
                     and not (old.get("outcome") in ("passed_with_findings", "passed") and not old.get("success_posted")) \
                     and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
+                    and old.get("outcome") != "repairing" \
                     and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0):
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
@@ -957,7 +974,9 @@ class Watcher:
                 if not self.dry_run:
                     self.comment_findings(repo, number, pr, findings)
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
-                                         review_posted=not self.dry_run)
+                                         review_posted=not self.dry_run,
+                                         published_findings=findings if not self.dry_run else current.get("published_findings", []),
+                                         published_fingerprint=current.get("review_fingerprint"))
             if current.get("semantic") == "findings":
                 if self.dry_run or not config["merge"]:
                     current = self.state.put(repo, number, head, evidence_key=evidence_key,
@@ -1055,7 +1074,10 @@ class Watcher:
             if phase == "semantic_repair":
                 repair_attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
                 if repair_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
-                    return self.exhaust_repair(repo, number, pr, evidence_key, error)
+                    self.state.put(repo, number, head, evidence_key=evidence_key, outcome="retry",
+                                   repair_attempts=repair_attempts, retry_after=time.time() + 3600,
+                                   retry_reason="semantic_repair", failure=str(error))
+                    return False
                 delay = 60 * repair_attempts
                 self.state.put(repo, number, head, evidence_key=evidence_key, outcome="retry",
                                repair_attempts=repair_attempts, retry_after=time.time() + delay,
@@ -1126,6 +1148,9 @@ class Watcher:
             with self.queue_lock:
                 detail = ", ".join("%s#%s %s %ss" % (repo, number, item["phase"], int(time.monotonic() - item["started"]))
                                    for (repo, number), item in sorted(self.active.items()))
+                keys = [key for key, item in self.active.items() if item["phase"] != "queued"]
+            for key in keys:
+                self.touch_leases(key)
             self.log("workers: " + (detail or "idle"))
 
     def start_workers(self):
