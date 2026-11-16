@@ -1490,6 +1490,20 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   at full frame rate under it. Colors `Theme.Shell.composerGlow`, width `Theme.Size.rule`, shape `Theme.Shell.composerRadius`.
   Reduce Motion keeps it still. Mac and Vision compile the same sources without the package (`#if os(iOS) && canImport`), so the switch is hidden there.
   The glow is applied inside `ShellComposerBar` (`glows`), before its animations, so it follows the surface when the line grows into the card.
+- **Return Key Sends** (#8178): a switch in Settings › Appearance & Display, beside Glow While Replying, off by default (`ReturnSends`,
+  `ui.returnSends`, iOS only: the Mac always sends on Return). Off, Return is a new line and the composer is unchanged. On, in the main
+  conversation and Agent conversations (`ShellComposerBar`, the iOS `ComposerRow`, BeautifulUI's `PromptComposer`): the software
+  keyboard's Return key reads "send" (`submitLabel`) and sends; a hardware keyboard's Return sends and Shift-Return (or Option-Return) is a
+  new line; ⌘Return still sends. Return does what the send button's place does: send, the gate's action when a `SendGate` stands there (as
+  the web's Enter nudges a blocked send), or nothing with nothing to send, never a blank line. While the keyboard is composing (marked
+  text) Return confirms the composition and sends nothing (#2203). The full-page editor (Expand) keeps Return a new line, and BeautifulUI's
+  bar leaves Return alone while its @ / / list or a menu is open. The fields are SwiftUI's vertical `TextField`, which never submits on
+  Return, so the software key is read off the draft (`ReturnSends.breakSends`: an edit that only adds one line break, while the field holds no marked text), the line break taken
+  back out of the text view as well as the draft before the send confirms what the field shows; a hardware Return is caught by
+  `onKeyPress` first, with `GCKeyboard`'s Shift and Option (either side, `ReturnSends.lineBreakKeyHeld`) as the fallback when the press does not reach the field. A paste that brings a line break
+  with other text never sends. The web has no setting (Enter sends with a precise pointer, `enterSends`) and Android none, so there is no
+  shared key. `PersonaTests/ReturnSendsTests`; UI test `ReturnSendsUITests` (Return sends with the switch on, a new line with it off);
+  `-ui.returnSends YES` turns it on for screenshots.
   Debug `-ui.composerGlow YES`; on the mock, `GET /mock/session_state?mid=server&sid=<assistant>&state=working` holds a reply open.
 - State colors never follow style; one `Shared/StatusPalette.swift` shared by App/watch/Live Activities: Needs you blue (on every client, `docs/design/DECISIONS.md`), Working amber, Unread green, Seen gray, Not running pale gray, like herdr (`docs/protocol/agent-states.md`). Three values each: `dot` (dots/icons/fills), `text` (same hue darkened, small text on white ≥4.5:1), `tint` (pale background), via `AgentState.tone`. Questions/plans/permissions/terminal dialogs all Needs you blue; working spinner amber, accompanying text secondary gray. Non-Agent states use their own `Theme` tokens: `Theme.Diff` (diff/Git ±, counts, fills, body black), `caution` (connecting/stale/truncated/version mismatch, triangle not dot), `ai` (✦ AI summary), `loop` (loops/waiting), `positive` (success/connected/online/completed to-dos), `Hue` (categories such as memory types). Permission labels neutral except Allow everything red.
 - Agent row (`SlotRow`): state dot + title + time; latest sentence; metadata "Needs you · Claude · Space › Tab · Machine", regular secondary gray. Only Needs you written in its blue; others dots only (Unread also bold title); former colored tab pill/state text/outlined Agent kind crowded first line and repeated status three times. Space counts colored dots + gray numbers.

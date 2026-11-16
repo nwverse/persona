@@ -243,6 +243,11 @@
     <plurals name="chat_content_show_all_lines">
         <item quantity="other">展开全部（%1$d 行）</item>
     </plurals>
+    <plurals name="chat_diff_unchanged_lines">
+        <item quantity="other">… %1$d 行没变</item>
+    </plurals>
+    <string name="chat_diff_line_added">新增</string>
+    <string name="chat_diff_line_removed">删除</string>
     <plurals name="chat_todos_progress">
         <item quantity="other">%1$d/%2$d 项待办已完成</item>
     </plurals>
