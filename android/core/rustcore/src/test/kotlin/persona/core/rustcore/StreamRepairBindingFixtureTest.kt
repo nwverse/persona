@@ -11,7 +11,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Real Kotlin/JNI replay for the fence-only StreamRepair slice, with independently stated Apple-test expectations. */
+/** Real Kotlin/JNI replay for fence and final-marker StreamRepair, with independently stated Apple expectations. */
 class StreamRepairBindingFixtureTest {
     private fun replay(text: String): JsonObject {
         val input = buildJsonObject { put("text", text) }.toString()
@@ -67,6 +67,41 @@ class StreamRepairBindingFixtureTest {
         println("JNI StreamRepair fence replay: ${repairCases.size} repaired + ${endCases.size} end expectations")
     }
 
+    @Test fun holdsOnlyTheUnfinishedBlockMarkerLineBack() {
+        // StreamRepairTests.holdsALastLineOfOnlyMarkersBack: exact Apple inputs and expected strings.
+        val cases = listOf(
+            "- 第一项\n-" to "- 第一项\n",
+            "- 第一项\n- " to "- 第一项\n",
+            "1. 第一步\n2." to "1. 第一步\n",
+            "1. 第一步\n12" to "1. 第一步\n",
+            "正文\n##" to "正文\n",
+            "正文\n>" to "正文\n",
+            "标题\n---" to "标题\n",
+            "- [ ]" to "",
+            "**" to "",
+            "- 第" to "- 第",
+            "2026年" to "2026年",
+            "1.5 倍" to "1.5 倍",
+            "-\n" to "-\n",
+            "正文\n---\n" to "正文\n---\n",
+        )
+        for ((input, repaired) in cases) {
+            assertEquals("StreamRepair markersOnly case: ${input.replace("\n", "\\n")}", repaired,
+                replay(input).getValue("repaired").jsonPrimitive.content)
+        }
+        val wrong = expected("", "text")
+        val actual = replay("正文\n##")
+        assertNotEquals("a marker-only expected from another input must differ", wrong, actual)
+        assertThrows("wrong complete marker expectation is rejected", AssertionError::class.java) {
+            assertEquals("StreamRepair markersOnly negative", wrong, actual)
+        }
+        assertEquals("a digit beyond Apple's nine-digit ordered-item boundary is text", "1234567890",
+            replay("1234567890").getValue("repaired").jsonPrimitive.content)
+        assertEquals("digits after a marker are not an ordered-item opener", "- 12",
+            replay("- 12").getValue("repaired").jsonPrimitive.content)
+        assertEquals("a non-ASCII digit is real text", "１２", replay("１２").getValue("repaired").jsonPrimitive.content)
+        println("JNI StreamRepair markersOnly replay: ${cases.size} repaired expectations plus boundaries")
+    }
     @Test fun rejectsMalformedInputAndWrongExpectedObjects() {
         assertEquals("", NativeBridge.projectStreamRepair("{\"invalid\":true}"))
         assertEquals("", NativeBridge.projectStreamRepair("not JSON"))

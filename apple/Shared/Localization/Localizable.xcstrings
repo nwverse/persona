@@ -13649,6 +13649,50 @@
       },
       "extractionState" : "manual"
     },
+    "A call nobody answers rings once more after %lld minutes; that doesn't count again. When neither is answered, Persona sends a notification and reminds you after 10 and 30 minutes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A call nobody answers rings once more after %lld minutes; that doesn't count again. When neither is answered, Persona sends a notification and reminds you after 10 and 30 minutes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出なかった電話は %lld 分後にもう一度かかります（回数には数えません）。どちらにも出なければ、Persona は通知を送り、10 分後と 30 分後に再度お知らせします。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没接的电话 %lld 分钟后再打一次，不另算次数。两次都没接，Persona 会发通知，并在 10 分钟、30 分钟后各提醒一次。"
+          }
+        }
+      }
+    },
+    "A catastrophic agent error: data deleted for good, a production incident, an irreversible send" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A catastrophic agent error: data deleted for good, a production incident, an irreversible send"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent による重大なミス：元に戻せない削除、本番障害、取り消せない送信"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent 造成的灾难性错误：恢复不了的删除、生产事故、不可逆的外发"
+          }
+        }
+      }
+    },
     "A Docker hub updates with a new image: when one is out, run this in the compose file's directory" : {
       "localizations" : {
         "en" : {
@@ -15067,6 +15111,28 @@
         }
       }
     },
+    "Add Rule" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Rule"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ルールを追加"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加一条"
+          }
+        }
+      }
+    },
     "AI Draft Reply" : {
       "localizations" : {
         "en" : {
@@ -15430,6 +15496,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全部会议"
+          }
+        }
+      }
+    },
+    "Allow" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "許可"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许"
           }
         }
       }
@@ -23772,6 +23860,28 @@
       },
       "extractionState" : "manual"
     },
+    "Approve" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Approve"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "批准"
+          }
+        }
+      }
+    },
     "Approve %@?" : {
       "localizations" : {
         "en" : {
@@ -24301,6 +24411,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Are you still there? Say what you'd like to do, or say “hang up”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Are you still there? Say what you'd like to do, or say “hang up”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだいますか？どうしたいか話すか、「切って」と言ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你还在吗？说说你想怎么做，或者说“挂断”。"
+          }
+        }
+      }
     },
     "Arrives when this turn ends [Queue Strip]" : {
       "localizations" : {
@@ -30093,6 +30225,72 @@
       },
       "extractionState" : "manual"
     },
+    "Call ended" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Call ended"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通话已结束"
+          }
+        }
+      }
+    },
+    "Calling this iPhone. Lock it to see how a call looks." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calling this iPhone. Lock it to see how a call looks."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone に発信しています。ロックして着信の見え方を確認してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在打给这台 iPhone，锁上屏幕看看来电的样子。"
+          }
+        }
+      }
+    },
+    "Calls a Day" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calls a Day"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1日の上限"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天最多"
+          }
+        }
+      }
+    },
     "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow." : {
       "localizations" : {
         "en" : {
@@ -30274,6 +30472,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Connecting…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接…"
+          }
+        }
+      }
     },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
@@ -57703,6 +57923,28 @@
       },
       "extractionState" : "manual"
     },
+    "Done. Anything else?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done. Anything else?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了しました。ほかにありますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "办好了。还有别的吗？"
+          }
+        }
+      }
+    },
     "Done. Nothing was stored." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -58829,6 +59071,28 @@
         }
       }
     },
+    "During these hours Persona doesn't call; it sends a notification instead. In the assistant's time zone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "During these hours Persona doesn't call; it sends a notification instead. In the assistant's time zone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この時間帯は Persona は電話せず、代わりに通知を送ります。アシスタントのタイムゾーンで判定します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这段时间内 Persona 不打电话，改发通知。按助手的时区。"
+          }
+        }
+      }
+    },
     "During these hours you're not told when an agent finishes (the morning's Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot's nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this device's time zone." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -59219,6 +59483,28 @@
       },
       "extractionState" : "manual"
     },
+    "Edit" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑"
+          }
+        }
+      }
+    },
     "Edit %@" : {
       "localizations" : {
         "en" : {
@@ -59333,6 +59619,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Edit Rule" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit Rule"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ルールを編集"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑这一条"
+          }
+        }
+      }
     },
     "Edit Rule [Inbox Policy]" : {
       "localizations" : {
@@ -63392,6 +63700,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对你所有的设备生效。开启后，要你回答、批准或拍板的事、你设的提醒和主对话的通知照常提醒；任务结论、「请验收」和其他对话的通知留给简报和「被拦推送」，Agent 做完不再提醒。"
+          }
+        }
+      }
+    },
+    "For example: anything about picking up the kids" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For example: anything about picking up the kids"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例：子どものお迎えに関すること"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "比如：接孩子相关的事"
           }
         }
       }
@@ -68449,6 +68779,28 @@
         }
       }
     },
+    "Got it, I've passed that on. Anything else?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got it, I've passed that on. Anything else?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "わかりました、伝えておきました。ほかにありますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好的，我已经转达了。还有别的吗？"
+          }
+        }
+      }
+    },
     "Got It: move %@ to Done" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -68927,6 +69279,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没有静音、折叠或标为完成的群"
+          }
+        }
+      }
+    },
+    "Hang Up" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hang Up"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切る"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "挂断"
           }
         }
       }
@@ -76888,6 +77262,28 @@
       },
       "extractionState" : "manual"
     },
+    "It's waiting on your phone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It's waiting on your phone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スマートフォンで対応を待っています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它在手机上等你处理。"
+          }
+        }
+      }
+    },
     "It's written once the day's text reaches the hub." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83288,6 +83684,28 @@
         }
       }
     },
+    "Lock your iPhone after tapping to see how a call looks. On some iPhones a call shows only at the top of the screen; a notification stays as well." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lock your iPhone after tapping to see how a call looks. On some iPhones a call shows only at the top of the screen; a notification stays as well."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タップしたら iPhone をロックして、着信の見え方を確認してください。iPhone によっては着信が画面上部にだけ表示され、通知も残ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点了之后锁上 iPhone，看看来电是什么样子。有的 iPhone 上来电只显示在屏幕顶部，同时会留一条通知。"
+          }
+        }
+      }
+    },
     "Locked" : {
       "localizations" : {
         "en" : {
@@ -88275,6 +88693,28 @@
       },
       "extractionState" : "manual"
     },
+    "Missed urgent call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Missed urgent call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不在着信の緊急コール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未接的加急来电"
+          }
+        }
+      }
+    },
     "Missing" : {
       "localizations" : {
         "en" : {
@@ -89023,6 +89463,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Money or resources being lost: runaway charges, deleted resources, fraudulent payments" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Money or resources being lost: runaway charges, deleted resources, fraudulent payments"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お金やリソースの損失：止まらない課金、削除されたリソース、不正な支払い"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "资金或资源正在损失：扣费失控、资源被删、被盗刷"
+          }
+        }
+      }
     },
     "Monitor [Message Views fdc390]" : {
       "localizations" : {
@@ -94563,6 +95025,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "No iPhone can take calls yet." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No iPhone can take calls yet."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まだ着信を受けられる iPhone がありません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有能接来电的 iPhone。"
+          }
+        }
+      }
     },
     "No Link" : {
       "localizations" : {
@@ -103732,6 +104216,28 @@
       },
       "extractionState" : "manual"
     },
+    "Off: calls can come at any time" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off: calls can come at any time"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフ：いつでも電話がかかります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭：任何时候都可能来电"
+          }
+        }
+      }
+    },
     "OK" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -104652,6 +105158,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Okay, I didn't do it. What would you like instead?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Okay, I didn't do it. What would you like instead?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "わかりました、実行していません。代わりにどうしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好，我没做。你想换成怎么做？"
+          }
+        }
+      }
+    },
+    "Okay. I'll take it from here. Goodbye." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Okay. I'll take it from here. Goodbye."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "わかりました。あとは任せてください。それでは。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好的，剩下的我来处理。再见。"
+          }
+        }
+      }
     },
     "Old" : {
       "localizations" : {
@@ -110736,6 +111286,160 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Persona calls only for these, when it's happening now and waiting would make it worse, or when you ask it to call you about something. Everything else stays a notification. You can also tell Persona “call me about this kind of thing too”; it asks you to confirm before adding it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona calls only for these, when it's happening now and waiting would make it worse, or when you ask it to call you about something. Everything else stays a notification. You can also tell Persona “call me about this kind of thing too”; it asks you to confirm before adding it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が電話するのは、これらがいま起きていて待つと悪化するとき、またはあなたが電話を頼んだときだけです。それ以外は通知のままです。Persona に「こういうことも電話して」と伝えることもでき、追加の前に確認を求めます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有这些事正在发生、晚了会更糟，或者你让它为某件事打电话时，Persona 才会打。其他的照旧发通知。你也可以直接跟 Persona 说“以后这种事也打电话给我”，它会先请你确认再加进来。"
+          }
+        }
+      }
+    },
+    "Persona calls when something like this is happening now and can't wait." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona calls when something like this is happening now and can't wait."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このようなことがいま起きていて待てないとき、Persona が電話します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这类事正在发生、等不了的时候，Persona 会打电话给你。"
+          }
+        }
+      }
+    },
+    "Persona can't hear you: turn on the microphone and speech recognition for Persona in Settings." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can't hear you: turn on the microphone and speech recognition for Persona in Settings."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona にあなたの声が届きません：設定で Persona のマイクと音声認識をオンにしてください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 听不到你：请在“设置”里给 Persona 打开麦克风和语音识别。"
+          }
+        }
+      }
+    },
+    "Persona is calling you" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona is calling you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona から着信中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 在给你打电话"
+          }
+        }
+      }
+    },
+    "Persona needs the microphone and speech recognition to hear you on a call." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona needs the microphone and speech recognition to hear you on a call."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話中にあなたの声を聞くには、マイクと音声認識の許可が必要です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 需要麦克风和语音识别权限，才能在电话里听到你。"
+          }
+        }
+      }
+    },
+    "Persona Urgent Call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona Urgent Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 緊急コール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 加急来电"
+          }
+        }
+      }
+    },
+    "Personal harm or safety: smoke, gas or water alarms, a call for help" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personal harm or safety: smoke, gas or water alarms, a call for help"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "身の危険や安全：煙・ガス・水漏れの警報、助けを求める連絡"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "人身伤害或安全：烟雾、燃气、漏水报警，有人求救"
+          }
+        }
+      }
     },
     "Please look at the attached files" : {
       "localizations" : {
@@ -119390,6 +120094,28 @@
         }
       }
     },
+    "Quiet Hours for Calls" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quiet Hours for Calls"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通話のおやすみ時間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来电安静时段"
+          }
+        }
+      }
+    },
     "Quit Persona" : {
       "localizations" : {
         "en" : {
@@ -119685,6 +120411,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "报告包含数据卡片、有数据时的心率图和配速图、与最近同类运动的对比，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"
+          }
+        }
+      }
+    },
+    "Restore Default Rules" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restore Default Rules"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "既定のルールに戻す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复默认的三条"
           }
         }
       }
@@ -130412,6 +131160,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Say “approve” or “reject”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Say “approve” or “reject”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「承認」か「却下」と言ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "说“批准”或“拒绝”。"
+          }
+        }
+      }
     },
     "SF Mono (System)" : {
       "localizations" : {
@@ -151473,6 +152243,28 @@
       },
       "extractionState" : "manual"
     },
+    "Test Call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "テスト通話"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试打一次"
+          }
+        }
+      }
+    },
     "Test Connection" : {
       "localizations" : {
         "en" : {
@@ -152223,6 +153015,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "电脑的防火墙挡住了直连"
+          }
+        }
+      }
+    },
+    "The details are on your screen." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The details are on your screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "詳細は画面に表示しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "详情在屏幕上。"
           }
         }
       }
@@ -161441,6 +162255,94 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This iPhone can take urgent calls." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone can take urgent calls."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone は緊急コールを受けられます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 能接加急来电。"
+          }
+        }
+      }
+    },
+    "This iPhone can't take calls yet: the push relay doesn't support them (%@). Persona sends notifications instead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone can't take calls yet: the push relay doesn't support them (%@). Persona sends notifications instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone はまだ着信を受けられません：プッシュ中継が未対応です（%@）。代わりに通知を送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 暂时接不了来电：推送中继还不支持（%@）。Persona 会改发通知。"
+          }
+        }
+      }
+    },
+    "This iPhone isn't registered for calls yet. Open Persona again in a moment; until then Persona sends notifications instead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone isn't registered for calls yet. Open Persona again in a moment; until then Persona sends notifications instead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone はまだ着信の登録が済んでいません。少ししてから Persona を開き直してください。それまでは代わりに通知を送ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 iPhone 还没登记来电。稍后重新打开 Persona；在那之前 Persona 会改发通知。"
+          }
+        }
+      }
+    },
+    "This is Persona, calling about: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This is Persona, calling about: %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona です。次の件でお電話しました：%@。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我是 Persona，打电话是因为：%@。"
+          }
+        }
+      }
     },
     "This isn't a valid address. Write it like hub.example.com or https://hub.example.com:8443." : {
       "extractionState" : "manual",
@@ -174239,6 +175141,28 @@
       },
       "extractionState" : "manual"
     },
+    "Until" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Until"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "到"
+          }
+        }
+      }
+    },
     "Until [Notification Settings View 9a07c3]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -176317,6 +177241,72 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Urgent Call" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Urgent Call"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "緊急コール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加急通话"
+          }
+        }
+      }
+    },
+    "Urgent Calls" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Urgent Calls"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "緊急コール"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加急来电"
+          }
+        }
+      }
+    },
+    "Urgent: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Urgent: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "緊急：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加急：%@"
+          }
+        }
+      }
     },
     "Usage" : {
       "localizations" : {
@@ -180493,6 +181483,28 @@
       },
       "extractionState" : "manual"
     },
+    "Waiting for “confirm”" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for “confirm”"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「確認」を待っています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等你说“确认”"
+          }
+        }
+      }
+    },
     "Waiting in the background" : {
       "localizations" : {
         "en" : {
@@ -181207,6 +182219,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "What Counts as Urgent" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What Counts as Urgent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "緊急とするもの"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "什么事算紧急"
+          }
+        }
+      }
     },
     "What It Can Do" : {
       "localizations" : {
@@ -182010,6 +183044,28 @@
         }
       }
     },
+    "What would you like to do?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What would you like to do?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どうしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想怎么做？"
+          }
+        }
+      }
+    },
     "What you call it in a chat, as in “remind me when I get home”." : {
       "localizations" : {
         "en" : {
@@ -182193,6 +183249,50 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "When something can't wait, Persona can ring this iPhone like a phone call." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When something can't wait, Persona can ring this iPhone like a phone call."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待てない用件があると、Persona が電話のようにこの iPhone を鳴らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等不了的事，Persona 可以像来电一样打这台 iPhone。"
+          }
+        }
+      }
+    },
+    "When something can't wait, Persona rings this iPhone like a phone call and talks it through with you." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When something can't wait, Persona rings this iPhone like a phone call and talks it through with you."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待てない用件があると、Persona が電話のようにこの iPhone を鳴らし、通話で相談します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等不了的事，Persona 会像来电一样打这台 iPhone，和你在电话里说清楚。"
+          }
+        }
+      }
     },
     "When You're Needed" : {
       "localizations" : {
@@ -183816,6 +184916,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Why Persona called" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Why Persona called"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "電話した理由"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为什么打给你"
+          }
+        }
+      }
     },
     "Why you decide" : {
       "comment" : "The context the assistant filled in on a question: why it is the user's to answer",
@@ -185606,6 +186728,94 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "You asked to be called" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You asked to be called"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなたが電話を頼んだ件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你让它打的"
+          }
+        }
+      }
+    },
+    "You can say: %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You can say: %@."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ と言えます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以说：%@。"
+          }
+        }
+      }
+    },
+    "You chose: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You chose: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選んだのは「%@」"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你选的是：%@"
+          }
+        }
+      }
+    },
+    "You chose: %@. Say “confirm” to go ahead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You chose: %@. Say “confirm” to go ahead."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選んだのは「%@」です。進めるなら「確認」と言ってください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你选的是：%@。说“确认”就照这样做。"
+          }
+        }
+      }
     },
     "You Decide" : {
       "extractionState" : "manual",
