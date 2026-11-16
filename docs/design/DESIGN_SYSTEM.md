@@ -2961,4 +2961,3 @@ agent may have added a link. Manager/Todo/credential changes retire old results.
 New copy ships in English, Simplified Chinese and Japanese. Evidence:
 `web/src/ui/TaskRepositoryBindingsEditor.test.tsx` and
 `web/e2e/todo-repositories-browser.py`.
-

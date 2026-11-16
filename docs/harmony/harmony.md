@@ -252,4 +252,3 @@ A native destination becoming hidden while the application backgrounds does not 
 The peer switch and its existing New and Spaces buttons share one native flex row inside the Navigation title; ordinary child destinations retain their native menu slot. The symbol segment uses the shared 104 vp header token and fixed symbol sizes in a native flex row, leaving room for adjacent New and Spaces targets even in the narrow master pane. Large-text fallbacks for content filters remain independent of this peer control.
 
 List selection marks a currently displayed chat context rather than the last cached target. Returning to an empty Home detail clears Persona and Agent highlights without discarding the saved session, draft or queue; opening that chat again restores its native selected state.
-
