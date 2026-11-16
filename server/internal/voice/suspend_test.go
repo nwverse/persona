@@ -718,12 +718,15 @@ func TestPauseDue(t *testing.T) {
 	if !may().pauseDue(now) {
 		t.Fatal("a quiet call whose conversation works does not pause")
 	}
+	// What still holds a pause off on hold (#9290): no session to pause, or a meeting call. Everything else does not.
+	hard := map[string]bool{"protocol 1": true, "paused": true, "reconnecting": true, "over": true, "a meeting call": true}
 	for what, set := range map[string]func(c *conversation){
 		"protocol 1":             func(c *conversation) { c.version = 1 },
 		"it does not work":       func(c *conversation) { c.sus.works = false },
 		"paused":                 func(c *conversation) { c.sus.state = linkPaused },
 		"reconnecting":           func(c *conversation) { c.ready, c.up = false, nil },
 		"over":                   func(c *conversation) { c.closed = true },
+		"a meeting call":         func(c *conversation) { c.meeting = &meetingCall{} },
 		"the model speaks":       func(c *conversation) { c.pace.playEnd = now.Add(time.Second) },
 		"the model spoke lately": func(c *conversation) { c.pace.playEnd = recent },
 		"the user's voice":       func(c *conversation) { c.pace.voice = recent },
@@ -741,6 +744,17 @@ func TestPauseDue(t *testing.T) {
 		if c.pauseDue(now) {
 			t.Errorf("%s: it pauses", what)
 		}
+		c = may()
+		set(c)
+		c.sus.onHold = true
+		if c.pauseDue(now) != !hard[what] {
+			t.Errorf("%s, on hold: it pauses %v", what, c.pauseDue(now))
+		}
+	}
+	idle := may()
+	idle.sus.works, idle.connectedAt, idle.sus.onHold = false, now, true
+	if !idle.pauseDue(now) {
+		t.Error("on hold: an idle call that just connected does not pause")
 	}
 }
 

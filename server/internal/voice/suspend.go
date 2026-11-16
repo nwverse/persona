@@ -33,6 +33,13 @@ import (
 // and waking are not drops: they do not count toward maxReconnects (a session paused after pauseAfter held
 // stableAfter, which starts that count over); a wake is tried wakeMost times in a row before the call ends
 // (upstream_failed).
+//
+// Hold (#9290, feature hold): the app's hold frame says the call is on hold (a system call the user put on hold, or
+// one they took another call over). The upstream is paused at once, whatever the conversation is doing and however
+// lately anyone spoke, and nothing wakes it while it lasts: what comes to say (a result, a card, a refusal) and the
+// lines the user types wait, and the app's audio is dropped (the user is talking to someone else: none of it is for
+// the model, nor kept for the wake). The hold's off wakes it as something to say does, and what waited goes then.
+// A meeting call and protocol 1 ignore it (the app sends it only on a system call, after a ready that lists hold).
 
 var (
 	// pauseAfter is how long the call is quiet while its conversation works before the upstream is closed
@@ -70,6 +77,11 @@ type suspension struct {
 	failed int       // tries of a wake that failed in a row
 	flush  bool      // a flushRing sends what is kept: one at a time, so it goes out in order
 	pauses int       // how often the call paused (the log)
+	// onHold: the app put the call on hold (holdFrame): it pauses at once and nothing wakes it till the hold is off.
+	// holdAt is when the last hold began, holds how many there were (the log).
+	onHold bool
+	holdAt time.Time
+	holds  int
 }
 
 // ring is the app's audio of the last span bytes, oldest first.
@@ -116,10 +128,14 @@ func (c *conversation) quietSince() time.Time {
 // pauseDue: the upstream may be paused now (mu held).
 func (c *conversation) pauseDue(now time.Time) bool {
 	switch {
-	case !c.ready || c.up == nil || c.version < 2 || c.closed || !c.sus.works || c.sus.state != "":
+	case !c.ready || c.up == nil || c.version < 2 || c.closed || c.sus.state != "":
 		return false // ready first: the version is set before it, outside mu
 	case c.meeting != nil:
-		return false // a meeting call never pauses: it is there for the next Talk (meeting.go)
+		return false // a meeting call never pauses: it is there for the next Talk (meeting.go); it takes no hold either
+	case c.sus.onHold:
+		return true // the user is on another call: at once, whatever the conversation does, whatever waits to be said
+	case !c.sus.works:
+		return false
 	case len(c.queue) > 0 || len(c.pending) > 0 || c.askCur != "" || c.user != nil:
 		return false // something to say, a handover waiting for its call, a card asked, the user's line open
 	}
@@ -150,8 +166,12 @@ func (c *conversation) maybePause(now time.Time) {
 	c.closeUser()
 	c.owed = owedAnswer{} // nothing is owed by a session that is gone after a minute's quiet (nudge.go)
 	c.sendApp(map[string]any{"type": "link", "state": linkPaused})
-	c.logf("paused the upstream (%d): session %d closed, the conversation works and nobody spoke for %v", s.pauses, sessionNo(c.gen-1),
-		now.Sub(c.quietSince()).Round(time.Second))
+	if s.onHold {
+		c.logf("paused the upstream (%d): session %d closed, the call is on hold", s.pauses, sessionNo(c.gen-1))
+	} else {
+		c.logf("paused the upstream (%d): session %d closed, the conversation works and nobody spoke for %v", s.pauses, sessionNo(c.gen-1),
+			now.Sub(c.quietSince()).Round(time.Second))
+	}
 	c.mu.Unlock()
 	go func() { // its reader sees the new gen and stops
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -210,16 +230,55 @@ func (c *conversation) takeBack(text string) {
 	}
 }
 
-// rouse begins to wake a paused upstream (mu held); why is what woke it (the log).
+// rouse begins to wake a paused upstream (mu held); why is what woke it (the log). Nothing wakes one on hold: what
+// would have woken it waits for the hold's off (holdFrame).
 func (c *conversation) rouse(why string) {
 	s := &c.sus
-	if s.state != linkPaused || c.closed {
+	if s.state != linkPaused || c.closed || s.onHold {
 		return
 	}
 	s.state, s.at = linkWaking, time.Now()
 	c.sendApp(map[string]any{"type": "link", "state": linkWaking})
 	c.logf("waking the upstream: %s", why)
 	go c.wakeUp()
+}
+
+// holdFrame takes the app's hold frame (#9290): the call goes on hold (on) or comes back. On hold the upstream is
+// paused at once (pauseDue) and nothing wakes it; back, it wakes as for something to say, and what waited goes then.
+// A repeated on or off changes nothing. Protocol 1 and a meeting call ignore it (logged once): the app sends it only
+// on a system call, after a ready that lists hold, and a meeting call never pauses.
+func (c *conversation) holdFrame(on bool) {
+	c.mu.Lock()
+	s := &c.sus
+	switch {
+	case c.version < 2 || c.meeting != nil:
+		if !c.holdIgnored {
+			c.holdIgnored = true
+			c.logf("hold frames on a %s: ignored", map[bool]string{true: "meeting call", false: "protocol 1 call"}[c.meeting != nil])
+		}
+		c.mu.Unlock()
+		return
+	case on == s.onHold:
+		c.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	s.onHold = on
+	if on {
+		s.holds++
+		s.holdAt = now
+		c.logf("hold %d: on", s.holds)
+		c.mu.Unlock()
+		c.maybePause(now) // live: paused now; reconnecting or waking: once it is up (the speaker's next look)
+		return
+	}
+	c.logf("hold %d: off after %v", s.holds, logDur(now.Sub(s.holdAt)))
+	c.rouse("the call is off hold")
+	c.mu.Unlock()
+	select { // not paused (the hold came as it reconnected or woke, and went before it was up): what waits goes now
+	case c.wake <- struct{}{}:
+	default:
+	}
 }
 
 // wakeUp opens the new session (connect: its instructions tell it what was said and what is waited on, and link{live}

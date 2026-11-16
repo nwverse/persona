@@ -80,8 +80,8 @@ func (c *conversation) nextToSay(now time.Time) *sentWords {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.queue = slices.DeleteFunc(c.queue, func(s *sentWords) bool { return !s.expires.IsZero() && now.After(s.expires) })
-	if !c.ready || c.sus.state != "" {
-		return nil // no session to say it to (paused, waking, reconnecting): it waits for the next one
+	if !c.ready || c.sus.state != "" || c.sus.onHold {
+		return nil // no session to say it to (paused, waking, reconnecting), or the call is on hold: it waits for the next one
 	}
 	best := -1
 	for i, s := range c.queue {
