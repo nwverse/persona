@@ -485,7 +485,7 @@ export struct AgentListPage {
       if (this.quickFilterUsesSelect()) {
         Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') },
           { value: tr('agent_group_background') }])
-          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%')
+          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
           .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
       } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([
