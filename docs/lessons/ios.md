@@ -2551,6 +2551,11 @@ agent for Codex-only levels, and test both an explicit effort and a configured e
   says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
   small pure type (`GitReadFailure`) so a test pins which case is quiet.
 
+- Connector sign-in is also user-initiated: the first device-code request has no poll to retry it if it fails.
+  `AppModel.show` suppresses timeout-shaped errors, including HTTP 502 diagnostics containing `deadline exceeded`.
+  Keep sign-in errors in the login model and show them beside the retry action; suppress cancellation only. Use the
+  connector's scrubbed API message so generic 5xx formatting does not hide the configuration advice.
+
 ## Configuration refusals are not retryable connection failures (#1915)
 
 HTTP failures live in `Shared/APIClient.swift`, not PersonaKit's model-response `APIErrorInfo`. Classify business codes before status or timeout wording. A background sync must pause on disabled/read-only configuration without discarding uploads or deletion intent; another local save cannot repair that configuration. Reopen/foreground can explicitly recheck. Do not continue writes after failed reconciliation, and do not acknowledge a remote deletion from an unsupported 404. Keep the list's pending-delete explanation durable across relaunch.
@@ -2895,3 +2900,23 @@ is picked or routed to; the page resets on `.onChange(of:)`. A kept path (`Shell
 so that page is new and lands by itself. The Sidebar layout's pick goes through `SidebarPageRoots` instead, and a pick of
 the root in front (no move, or a pop to it) bumps the counter there. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
 (`personactl navigate inbox --keep`, the widget's and the quick action's way in); `InboxSectionBarUITests` now walks it.
+
+## The newest end out of reach after a far landing (2026-11-16, #7382, #1942)
+
+- **What happened**: in Persona's main conversation a long newest answer's last lines sat under the capsule row and the
+  composer, and a drag there sprang back; ↓ was gone because the offset said the list was at its end. Reproduced on the
+  mock hub (`NewestEndReachTests`, `MOCK_LONG_ASSISTANT=1 MOCK_TASKS=1`, history paging on): opened again at a saved place
+  far up (`landEntry`), then flicked back to the newest end by finger.
+- **Why**: after a landing far from the newest end, the flipped `LazyVStack` places the rows between there and the newest
+  end by estimated heights and never corrects them once a finger brings them in. Rows taller than estimated put the newest
+  line over the end sentinel, before the scroll view's end (measured −590 pt: the newest line's top should be 16, the
+  rows' spacing past the sentinel); shorter ones left thousands of points of blank room before it (3,600–35,000 pt), with
+  older rows drawn past the newest. Which of the two depends on the run; ↓ (`ChatJumpRun`) always got it right.
+- **Fix**: the sentinel and the newest line report where the stack placed them, in the stack's own coordinate space
+  (`ChatPin.space`, which scrolling does not change, so the reports come only with layout). When they disagree and the
+  newest line is on screen with nothing moving the list, the list is built again at its newest end
+  (`ChatView.mendMisplacedStart`, logged under `chat-landing`). `probe.chat-rows` has `newestY` and `startMends`.
+- **Also**: building the list again (`listBuild`) left `ChatPin.list` nil: the old list's `Finder` probe, leaving the
+  window after the new one came in, handed the pin the outgoing scroll view. The probe now takes the list only on its way in.
+- XCUITest's frame of a text in a misplaced list can be thousands of points off the screen while the probe says the line
+  is drawn: check the probe's numbers, not only frames.

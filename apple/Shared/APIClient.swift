@@ -692,6 +692,11 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var text: String }
         _ = try await request("POST", "/api/v1/machines/\(machine)/computer/clipboard", body: Body(text: text))
     }
+    /// Phone Screen (#9314, docs/protocol/protocol.md): start / windows / place / stop for the live screen whose RFB
+    /// stream carries `pair`. A refusal keeps the node's code (`APIError.code`: busy, permission, not_signed_in…).
+    func phoneScreen(machine: String, _ body: PhoneScreenRequest) async throws -> PhoneScreenReply {
+        try JSON.decoder.decode(PhoneScreenReply.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/phone-screen", body: body))
+    }
     /// The apps always allowed for the assistant on this Mac (#1507), and taking one back (asked again next time).
     func computerApps(machine: String) async throws -> [ComputerApp] {
         struct Out: Decodable { var apps: [ComputerApp] }

@@ -639,7 +639,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
+`{item?, processing_turn?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -647,6 +647,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `agent` | Assign an Agent (`text` is its instruction; optional `machine` / `cwd` default to assistant computer / home directory) | Code starts an Agent with that instruction (like the chat calling `agent_start`: `agent` chain entry links to it; completion reports back), `handling.state = agent` |
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
+- The manager includes a new `processing_turn` in a processing conversation's first prompt and each subsequent Inbox delivery while the item is open. The call echoes its prompt's value. The manager checks it under the Inbox lock before changing the item, so a delayed write from a superseded prompt cannot replace a suggestion or change follow-up or handling. Existing processing chats without a value can omit it until their next Inbox delivery. Handed-off conversations still write back using `item`.
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
 - `follow` is valid only without `kind`; the two are mutually exclusive. It contains `who`, `next`, `check_at` and `check_in`: `check_at` is an RFC 3339 timestamp with a time zone and takes precedence over `check_in`; `check_in` accepts durations such as `30m`, `4h` or `2d`. With neither time field, it defaults to `24h`; the resulting time is clamped to between 30 minutes and 14 days from now. `who` and `next` are single lines clipped to 80 characters. `recap`, `title` and `summary` may be written together with `follow`, and an existing suggestion stays in place.
 - `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
@@ -899,6 +900,8 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   and Fold all / Unfold all.
   On iOS each title a finger taps (a section's and its Mark all seen / Clear all, a group's and, selecting, its tick, Done's and its Jump To) is at least 44 pt tall,
   its header or row adding no room above or below it (#6576, `InboxTitleTargetUITests`); the tick is a finger wide too, over the header's inset and the gap before the title, with nothing drawn moving (#6658); a tap on Jump To opens its menu and leaves Done's fold beside it alone.
+  A Jump To still waiting for its group's first page gives way to what comes after it: the next Jump To, the user dragging the list, or the list going out
+  of sight (an item opened over it, the Inbox left) cancels it, so the page coming late does not take the list from where it was sent since (iOS, #6661, `InboxJumpToRaceUITests`).
 - **Done's history**: past what the list holds (its 3 days, at most 200 done items), Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
   Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
   - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name

@@ -1100,6 +1100,13 @@ final class AppModel {
         if let b = m.browser, b.enabled, b.screenSharing, let i = b.screenInput, i.reads { return i }
         return nil
     }
+    /// Phone Screen as the extension showing this Mac's screen reports it (#9314); nil when no shown extension's node has it.
+    func phoneScreen(_ ref: MachineRef) -> MachinePhoneScreen? {
+        guard let m = machine(ref) else { return nil }
+        if let c = m.computer, c.enabled, c.screenSharing, let p = c.phoneScreen, p.offered { return p }
+        if let b = m.browser, b.enabled, b.screenSharing, let p = b.phoneScreen, p.offered { return p }
+        return nil
+    }
     nonisolated static func advertisesVideo(_ m: Machine) -> Bool {
         (m.computer.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)
             || (m.browser.map { $0.enabled && $0.screenSharing && ($0.screenVideo?.advertised ?? false) } ?? false)

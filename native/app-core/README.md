@@ -36,7 +36,7 @@ emulator results never fill the physical-device column.
 | `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30; state/recents not implemented | Sort smoke only; state/recents not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents not implemented | Sort is compiled for OHOS but its actual NAPI invocation is not measured; state/recents have no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming, and the draft each click leaves (#9238) | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker and inline source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker, inline and math-end source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary, 6 explicit math end + 57 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
@@ -47,10 +47,10 @@ cannot rerun them. Those reports used later Xcode versions, so Xcode 26.0 remain
 generated Swift type, a compiled OHOS feature or a host fake is not itself a replay result.
 
 The StreamRepair boundary is deliberately narrower than full Markdown repair: fence recognition/repair, the bounded
-table scanner, final unfinished block-marker hold-back and scalar inline repair have cargo and real host-JNI evidence.
-Their C ABI and ArkTS-host replays (#9241) cover the named fence/table/marker inputs, including inherited inline
-expectations. The `.math` end state, `plainOpenFence`, rendering, timing/coalescing and production adapters remain out
-of scope; no SwiftPM or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is
+table scanner, final unfinished block-marker hold-back, scalar inline repair and math-end classification have cargo
+and real host-JNI evidence. Their C ABI and ArkTS-host replays (#9241) cover the named fence/table/marker inputs,
+including inherited inline expectations; they do not replay the complete inline or math corpora. `plainOpenFence`,
+rendering, timing/coalescing and production adapters remain out of scope; no SwiftPM or real-NAPI repair replay exists. #8227 was a duplicate-key snapshot correctness bug and is
 closed. It does not close
 the separate Android performance follow-up: #9048's lock-free dispatch and owned-JNI-byte hand-off have overlapping
 host A/B distributions, and the original emulator / device go/no-go evidence remains unresolved as recorded in the plan.
@@ -124,8 +124,11 @@ lazy-line exclusion. Inline repair (#9286) replays all 51 explicit Apple inline-
 source-derived boundary controls. Its scalar scanner follows emphasis/strikethrough flanking, code spans,
 links/images, escapes, bare/autolinks and inline-formula skipping. All 342 Unicode-scalar prefixes of Apple's mixed
 reply are replayed through real stream-chunks JNI into stream-repair JNI, preserving each completed-line prefix and
-leaving the finished reply unchanged. Display math is recognized to keep inline repair
-out of it. The `.math` end state and `plainOpenFence` are not implemented.
+leaving the finished reply unchanged. Math end (#9395) adds Apple's six explicit math assertions and 45 source-derived
+controls for open/closed blocks, one-line display formulas, inline formulas in prose, money, code spans, CJK, trailing
+indentation and the 400-Character plausibility boundary. It follows the distinction between scalar-based inline repair
+and `MathMarkdown.display`'s extended-grapheme indexing; it does not implement `MathMarkdown.rewrite`, rendering or
+`plainOpenFence`.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. #9233 adds a ninth recommendation for newline / NBSP / TAB

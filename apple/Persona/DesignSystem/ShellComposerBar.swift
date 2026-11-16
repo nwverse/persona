@@ -341,6 +341,10 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
             }
             #endif
             .focused(focused)
+            #if os(iOS)
+            // Return Key Sends (#8178): what send does, never from under the full-page editor (it keeps Return a new line).
+            .returnSends(text: $text, canSend: canSend, gate: gate?.action, paused: enlarged || barOn) { endDictation(then: sendTyped) }
+            #endif
             #if os(macOS)
             .textFieldStyle(.plain) // the card is the field's box; the Mac's own bezel drew a second one inside
             .macComposerKeys(focused: focused.wrappedValue, canSend: canSend, // ⏎ sends, ⇧⏎ a new line

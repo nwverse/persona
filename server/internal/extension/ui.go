@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Declarative UI (docs/extensions/extensions.md "Declarative UI"): a plugin never runs code in the apps. It answers ui.render with a View
@@ -52,7 +52,7 @@ type UIGroup struct {
 }
 
 // uiGroupID is a group id's shape.
-var uiGroupID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+var uiGroupID = lazyre.New(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Refresh is how often widget u is drawn again on its own.
 func (u UIItem) Refresh() time.Duration {
