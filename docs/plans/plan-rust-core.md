@@ -444,6 +444,14 @@ Phase 2 lands in several PRs.
     JNI and ArkTS host replays cover the new fields.
   - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
 
+- **The `sync` domain's survey and fixtures-first design (#9230), documentation only.**
+  - `docs/plans/plan-rust-core-sync.md` surveys iOS's chat-sync layer with file/line citations (socket lifecycle,
+    reconnect/backoff, the event-resume cursor, per-chat subscription, gap-to-request, stalled catch-up, background
+    prefetch, the catch-up barrier and foreground/background), defines the `spec/fixtures/sync-driver` fixture
+    inventory with explicit clock/network injection, and carves out the first pure `SyncDriver` state-machine slice
+    (lifecycle/network results in → request/reconnect/backoff/catch-up effects out, no real socket or persistence).
+  - Nothing is implemented; no production network, client or core behavior changed, and no device claim is made.
+
 Phase 3 lands in several PRs.
 
 - **Nested-item Envelope fallback removal (#9187).**

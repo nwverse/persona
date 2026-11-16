@@ -344,7 +344,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     const parent = getScrollElement();
     if (!parent) return;
     const maybeMore = () => {
-      if (!sections && scrolled.current && hasMore && !page.loading && !page.error &&
+      if (!sections && scrolled.current && hasMore && !page.loadingMore && !page.error &&
           parent.scrollTop + parent.clientHeight >= margin + totalSize - SESSION_LIST_METRICS.overscan * SESSION_LIST_METRICS.estimate) {
         void list.more().catch(() => {});
       }
@@ -353,7 +353,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
     parent.addEventListener("scroll", scroll, { passive: true });
     maybeMore();
     return () => parent.removeEventListener("scroll", scroll);
-  }, [list, getScrollElement, sections, hasMore, page.loading, page.error, margin, totalSize]);
+  }, [list, getScrollElement, sections, hasMore, page.loadingMore, page.error, margin, totalSize]);
 
   const stateTotals = scopeCounts?.state ?? {};
   // the quick filters' numbers, as the complete list counts them: Working without the ones waiting in the background
@@ -397,7 +397,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
   const autoMore = useRef(0);
   useEffect(() => {
     // Load to the open row's group, stopping on a repeated page (#7327).
-    if (!sections || !isOpen || !placeOf || openRow || !rootPage.hasMore || rootPage.loading || rootPage.error) return;
+    if (!sections || !isOpen || !placeOf || openRow || !rootPage.hasMore || rootPage.loadingMore || rootPage.error) return;
     const rows = rootPage.rows.length;
     if (autoMore.current > rows) autoMore.current = 0;
     if (autoMore.current === rows) return;
@@ -481,10 +481,11 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
           );
         })}
       </div>
-      {page.loading && loadingLine}
+      {/* a background refresh moves nothing: only a first read or a page someone asked for says Loading (#9215) */}
+      {page.loading && (!page.loaded || page.loadingMore) && loadingLine}
       {page.error && <ListError text={failureText(page.error)} onRetry={() => void list.retry().catch(() => {})} />}
       {page.loaded && !page.loading && !page.error && !page.rows.length && <p className="px-2 py-2 text-xs text-ink-3">{t("sidebar.no_match")}</p>}
-      {hasMore && !page.loading && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
+      {hasMore && !page.loadingMore && !page.error && <ShowMoreRow label={t("paged-agents.more")} onClick={() => void list.more().catch(() => {})} />}
       </>}
     </div>
   );
