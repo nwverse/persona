@@ -48,6 +48,10 @@ lines, execute Swift or connect a production Android adapter. The operation repl
 in the four existing operation cases. It compares 13 complete turn objects and exact item IDs against the same checked-in
 corpus plus overlay, and separately replays the existing replacement through the standalone `replace` branch. These
 runtime operations are not incremental ChatStore rebuild, rendered-line/layout, task-index or device-performance evidence.
+The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JNI boundary for all 21 existing
+`spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
+fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover StreamRepair, visual
+gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
