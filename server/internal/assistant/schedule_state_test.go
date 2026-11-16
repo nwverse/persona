@@ -270,8 +270,9 @@ func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
 	previous := task
 	previous.stateRunKey = s.openTaskStateDraft() // the previous run's draft is still open: only the prompt check can refuse it
 	prompt := func(task Task) proto.Item {
-		return proto.Item{Role: "user", Kind: proto.KindText, Text: "⏰ 定时任务，每 30 分钟：patrol" + taskStatePrompt(task)}
+		return proto.Item{Role: "user", Kind: proto.KindText, Text: scheduledPrompt(task)}
 	}
+	node.pageTurns = true // the page starts at the last prompt the node counts, which a scheduled one is not
 	node.setItems(prompt(previous), proto.Item{Role: "assistant", Kind: proto.KindText, Text: "done"}, prompt(task))
 
 	stale, _ := json.Marshal(map[string]string{"run_key": previous.stateRunKey, "text": "stale"})
