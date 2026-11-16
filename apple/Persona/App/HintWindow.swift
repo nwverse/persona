@@ -8,7 +8,7 @@ import Foundation
 /// (`RuntimeSessionLists.listInSight`), so what is on screen keeps its timeliness (docs/apple/ios-state.md "Timely").
 @MainActor final class HintWindow {
     /// The web's window: long enough to merge a busy fleet's hints, short enough that nothing looks stale on return.
-    static let length: Duration = .seconds(2)
+    nonisolated static let length: Duration = .seconds(2)
 
     private let length: @MainActor () -> Duration
     private let now: @MainActor () -> ContinuousClock.Instant

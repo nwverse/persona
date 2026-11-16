@@ -45,7 +45,7 @@ struct SessionRefreshTests {
     }
 
     /// A clock the test moves: `sleep` records what it was asked for and returns only when the test lets it.
-    private final class FakeClock {
+    @MainActor private final class FakeClock {
         var now = ContinuousClock.now
         private(set) var asked: [Duration] = []
         private var sleepers: [CheckedContinuation<Void, any Error>] = []
