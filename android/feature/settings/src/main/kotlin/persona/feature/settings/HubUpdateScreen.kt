@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -60,7 +61,10 @@ internal fun HubUpdateContent(
     val resources = LocalResources.current
     var confirmNow by remember { mutableStateOf(false) }
     val loadable = state.loadable(state.error?.text())
-    JListPage(title = stringResource(R.string.settings_hub_update_title), onBack = onBack, refreshing = loadable.isRefreshing,
+    // The failed check or update is the list's first row: a list scrolled below it keeps its own first row in view, so show it.
+    val listState = rememberLazyListState()
+    LaunchedEffect(state.actionError) { if (state.actionError != null) listState.animateScrollToItem(0) }
+    JListPage(title = stringResource(R.string.settings_hub_update_title), onBack = onBack, state = listState, refreshing = loadable.isRefreshing,
         onRefresh = model?.let { m -> { scope.launch { m.check() } } }) {
         if (state.unsupported) item("unsupported") { JNotice(stringResource(R.string.settings_hub_update_unsupported), Modifier.padding(top = Tokens.Space.m)) }
         else jLoadableContent(loadable, onRetry = model?.let { m -> { scope.launch { m.load() } } }) { s ->
