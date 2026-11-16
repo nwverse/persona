@@ -43,7 +43,7 @@ interface Job {
 const lists = new Map<string, ComposerFile[]>();
 const jobs = new Map<string, Job>();
 const owners = new Map<string, string>();
-const currentOwner = () => JSON.stringify([credentialOwner(), conversationDeletionScope()]);
+const currentOwner = () => JSON.stringify([typeof localStorage === "undefined" ? "" : credentialOwner(), conversationDeletionScope()]);
 const listeners = new Set<() => void>();
 const EMPTY: ComposerFile[] = [];
 let seq = 0;

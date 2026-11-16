@@ -244,7 +244,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const phone = useMedia(PHONE);
   const asked = open && !managing && mode === "jump" && !operators && searchOn && Boolean(assistant) ? text.trim() : "";
   useLayoutEffect(() => {
-    if (priorAccount.current !== account) { priorAccount.current = account; setQ(""); onClose(); }
+    if (priorAccount.current !== account) { priorAccount.current = account; onClose(); }
   }, [account, onClose, setQ]);
   useEffect(() => {
     setFound({ q: "", scope });
