@@ -81,8 +81,10 @@ test('sort host rejects invalid JSON input', async () => {
   }
 });
 
-test('ArkTS host replays the exact session_state and hub_state fixtures', stateTestOptions, async () => {
+test('ArkTS host replays the exact session_state and hub_state fixtures', stateTestOptions, async (context) => {
   const host = startCore();
+  // node:test's timeout does not unwind a pending await; abort the child explicitly so stdio cannot keep Node alive.
+  context.after(() => host.kill(), {timeout: 1_000});
   try {
     const replayed = new Set();
     for (const doc of stateDocs) {
@@ -100,8 +102,9 @@ test('ArkTS host replays the exact session_state and hub_state fixtures', stateT
   }
 });
 
-test('ArkTS host state projection rejects malformed and wrong-shaped input', stateTestOptions, async () => {
+test('ArkTS host state projection rejects malformed and wrong-shaped input', stateTestOptions, async (context) => {
   const host = startCore();
+  context.after(() => host.kill(), {timeout: 1_000});
   try {
     await assert.rejects(() => host.state('unknown', {}), /unknown projection kind/);
     await assert.rejects(() => host.state('session_state', {sessions: {}}), /sessions does not decode/);
@@ -112,9 +115,10 @@ test('ArkTS host state projection rejects malformed and wrong-shaped input', sta
   }
 });
 
-test('ArkTS host state comparison rejects a wrong fixture expectation', stateTestOptions, async () => {
+test('ArkTS host state comparison rejects a wrong fixture expectation', stateTestOptions, async (context) => {
   const c = documents.find((d) => d.operation === 'hub_state').cases[0];
   const host = startCore();
+  context.after(() => host.kill(), {timeout: 1_000});
   try {
     const actual = await host.state('hub_state', c.input);
     assert.throws(() => compareState(`hub_state.json/${c.name}`, actual, {state: 'idle'}),

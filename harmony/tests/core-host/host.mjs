@@ -302,7 +302,14 @@ export class HostCore {
     assert.equal(this.#records.length + this.#pending.length + this.#callbacks.length, 0, 'nothing follows the end record');
   }
 
-  kill() { this.#child.kill('SIGKILL'); }
+  kill() {
+    this.#child.kill('SIGKILL');
+    // A test-timeout or an unresponsive helper must also release its stdio handles without waiting for #record().
+    this.#child.stdin.destroy();
+    this.#child.stdout.destroy();
+    this.#child.stderr.destroy();
+    this.#child.unref();
+  }
 }
 
 const cores = [];
