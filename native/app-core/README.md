@@ -140,7 +140,10 @@ Agents-list sorter: the temporary ArkTS projection, debug shadow, snapshot worke
 `AgentWorkspace` maps the core's complete groups, `visible_rows`, folds and counts back to the original `ResourceRow`
 identities used by native actions. The default is iOS By Status; By Machine and By Project are the other choices.
 State/space folds, idle expansion, quick filters including BackgroundWaiting, pin/mute ranks, search operators and
-multi-Hub machine identities all use the same settings as the core. Native failure retains the last usable projection
+multi-Hub machine identities all use the same settings as the core. When manager is supplied, machine paths are
+`group|manager|id` (or `manager|id` for the default Hub); legacy input without it retains `group|id`. This keeps
+same-Hub, same-ID managers independent (#9068). Per-Hub pin/mute preference scoping is the separate #9027 contract.
+Native failure retains the last usable projection
 and exposes the existing failure state instead of presenting an empty successful list. There is no second release
 sorter or debug-only native fallback; an older build is the rollback boundary while no HAP/device evidence is available.
 
