@@ -46,7 +46,7 @@ export function coreMachineFilter(input: AgentListInput): string | undefined {
       if (parsed.length !== 3) return undefined;
       const group = typeof parsed[0] === 'string' ? parsed[0] as string : '';
       const id = typeof parsed[2] === 'string' ? parsed[2] as string : '';
-      return id && group ? group + '|' + id : id || undefined;
+      return id && group ? group + '|' + (typeof parsed[1] === 'string' ? parsed[1] as string : '') + '|' + id : id || undefined;
     } catch (_) { return undefined; }
   }
   return input.machineFilter;

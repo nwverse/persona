@@ -35,6 +35,9 @@ pub struct Session {
     pub workflow_progress: Option<crate::state::WorkflowRun>,
     #[serde(default)]
     pub app_hub_group: Option<String>,
+    /// The machine's manager within the Hub, when a client distinguishes owners sharing an ID.
+    #[serde(default)]
+    pub manager: Option<String>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]

@@ -327,23 +327,20 @@ export struct AgentListPage {
   @Builder groupHeader(binding: BoundAgentGroup) {
     Column({ space: Tokens.fine }) {
       if (binding.value.parent === 'quiet') {
-        Row({ space: Tokens.gap }) {
-          Text(tr('agent_group_quiet_spaces')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).layoutWeight(1)
-          Text(tr(binding.value.folded ? 'agent_expand' : 'agent_collapse')).fontSize(Tokens.meta).fontColor(Colors.action)
-            .constraintSize({minHeight: Tokens.touch}).onClick(() => this.workspace.toggleFold(binding.value.id))
-        }.width('100%').padding({left: Tokens.page, right: Tokens.page}).constraintSize({minHeight: Tokens.touch})
+        Text(tr('agent_group_quiet_spaces')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
       }
       Row({ space: Tokens.gap }) {
-        Text(tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
-          .fontColor(Colors.secondary).layoutWeight(1).maxLines(2)
-        Text(this.groupCounts(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary)
-        Text(tr(binding.value.folded ? 'agent_expand' : 'agent_collapse')).fontSize(Tokens.meta).fontColor(Colors.action)
+        Column({ space: Tokens.fine }) {
+          Text(tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+            .fontColor(Colors.secondary).maxLines(2)
+          Text(this.groupCounts(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button(tr(binding.value.folded ? 'agent_expand' : 'agent_collapse')).attributeModifier(ButtonStyles.quiet)
+          .constraintSize({minHeight: Tokens.touch})
+          .accessibilityText((tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName) + ' ' +
+            tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
+          .onClick(() => this.workspace.toggleFold(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
       }.width('100%').alignItems(VerticalAlign.Center)
-        .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine })
-        .constraintSize({minHeight: Tokens.touch}).onClick(() => this.workspace.toggleFold(binding.value.id))
-        .accessibilityText((tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName) + ' ' +
-          tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
-        .id('agents.group.toggle.' + binding.value.id)
     }.alignItems(HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
   }
@@ -510,8 +507,8 @@ export struct AgentListPage {
                 rowBinding.key)
             }.id('agents.group.' + binding.value.id)
             if (binding.value.totalRowCount > binding.value.rows.length && !binding.value.folded) ListItem() {
-              Text(String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle'))
-                .fontSize(Tokens.meta).fontColor(Colors.action).padding(Tokens.page).constraintSize({minHeight: Tokens.touch})
+              Button(String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle'))
+                .attributeModifier(ButtonStyles.quiet).padding(Tokens.page).constraintSize({minHeight: Tokens.touch})
                 .onClick(() => this.workspace.toggleIdleRows(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
             }
           }, (binding: BoundAgentGroup) => binding.key)

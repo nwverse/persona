@@ -32,16 +32,24 @@ pub struct Machine {
     /// matching iOS's `MachineRef.path`.
     #[serde(default)]
     pub group: Option<String>,
+    /// An owner-qualified machine registry entry. Legacy input without it retains `group|id` exactly.
+    #[serde(default)]
+    pub manager: Option<String>,
+}
+
+/// The owner-qualified path: `group|manager|id` when manager is supplied, otherwise the existing `group|id`.
+pub fn machine_path(group: Option<&str>, manager: Option<&str>, id: &str) -> String {
+    match manager {
+        Some(manager) if !manager.is_empty() => format!("{}|{}|{}", group.unwrap_or(""), manager, id),
+        _ => match group {
+            Some(group) if !group.is_empty() => format!("{group}|{id}"),
+            _ => id.to_owned(),
+        },
+    }
 }
 
 impl Machine {
-    /// The full path: `group|id` for a non-default hub group, bare `id` for the default.
-    fn path(&self) -> String {
-        match self.group.as_deref() {
-            Some(group) if !group.is_empty() => format!("{group}|{}", self.id),
-            _ => self.id.clone(),
-        }
-    }
+    fn path(&self) -> String { machine_path(self.group.as_deref(), self.manager.as_deref(), &self.id) }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -171,6 +179,8 @@ struct Row {
     session_id: String,
     /// `group|machine_id` for a non-default hub group, as iOS's `MachineRef.path`.
     machine_path: String,
+    /// The unqualified machine ID used by the legacy space-preference key contract.
+    preference_machine_id: String,
     state: AgentState,
     sort_date: Option<i128>,
     is_waiting: bool,
@@ -195,12 +205,16 @@ impl Row {
         let muted = is_muted(&session, &input.mutes);
         let space_name = session.space_name.clone().unwrap_or_else(|| folder_name(&session.cwd));
         let group = session.app_hub_group.as_deref().unwrap_or("");
+        let machine_path = machine_path(
+            session.app_hub_group.as_deref(),
+            session.manager.as_deref(),
+            &session.machine_id,
+        );
         let prefix = if group.is_empty() {
             String::new()
         } else {
             format!("{group}|")
         };
-        let machine_path = format!("{prefix}{}", session.machine_id);
         let held = input.settings.held.as_deref() == Some(short_id.as_str());
         let sort_date = if state == AgentState::Working {
             session.state_since.as_deref().or(session.updated_at.as_deref())
@@ -212,6 +226,7 @@ impl Row {
             short_id,
             session_id: session.session_id.clone(),
             machine_path,
+            preference_machine_id: session.machine_id.clone(),
             state,
             sort_date: sort_date.and_then(utc_timestamp),
             is_waiting: state.is_quiet() && session.is_waiting(),
@@ -331,14 +346,14 @@ impl Query {
         let machine = input.machines.iter().find(|machine| {
             machine.id == session.machine_id
                 && machine.group.as_deref().unwrap_or("") == session.app_hub_group.as_deref().unwrap_or("")
+                && machine.manager.as_deref() == session.manager.as_deref()
         });
         let machine_name = machine.map_or("", |machine| machine.name.as_str()).to_lowercase();
-        let group = session.app_hub_group.as_deref().unwrap_or("");
-        let machine_path = if group.is_empty() {
-            session.machine_id.clone()
-        } else {
-            format!("{group}|{}", session.machine_id)
-        };
+        let machine_path = machine_path(
+            session.app_hub_group.as_deref(),
+            session.manager.as_deref(),
+            &session.machine_id,
+        );
         if !input.settings.machine_filter.is_empty() && machine_path != input.settings.machine_filter {
             return false;
         }
@@ -715,6 +730,7 @@ fn plain_group(
 
 struct Space<'a> {
     id: String,
+    preference_machine_id: String,
     name: String,
     members: Vec<&'a Row>,
     priority: u8,
@@ -727,10 +743,12 @@ struct Space<'a> {
 fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -> (Vec<Group>, bool) {
     let mut spaces: BTreeMap<String, Space> = BTreeMap::new();
     for row in rows.iter().copied().filter(|row| row.state.is_live()) {
+        let machine_path = row.machine_path.clone();
         let space = spaces
-            .entry(format!("{}/{}", row.machine_path, row.space_id))
+            .entry(format!("{}/{}", machine_path, row.space_id))
             .or_insert_with(|| Space {
-                id: format!("{}/{}", row.machine_path, row.space_id),
+                id: format!("{}/{}", machine_path, row.space_id),
+                preference_machine_id: row.preference_machine_id.clone(),
                 name: row.space_name.clone(),
                 members: Vec::new(),
                 priority: u8::MAX,
@@ -748,7 +766,7 @@ fn space_groups(rows: &[&Row], input: &Input, quick: Quick, recent_sort: bool) -
     for space in &mut spaces {
         let key = format!(
             "{}/{}",
-            space.id.split_once('/').map_or("", |(machine, _)| machine),
+            space.preference_machine_id,
             space.name
         );
         space.pinned = input.pins.spaces.contains(&key);

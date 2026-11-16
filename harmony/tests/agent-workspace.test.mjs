@@ -56,8 +56,8 @@ function agent(id, fields = {}) {
   return ResourceRow.from(data, 'session');
 }
 
-function machine(id = 'm1', trust = 'personal') {
-  return ResourceRow.from({ id, manager: 'work', name: 'Computer ' + id, online: true, trust }, 'machine');
+function machine(id = 'm1', trust = 'personal', manager = 'work') {
+  return ResourceRow.from({ id, manager, name: 'Computer ' + id, online: true, trust }, 'machine');
 }
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -88,7 +88,7 @@ function clientFixture(options = {}) {
   };
   const client = {
     connected: true, demo: false, sessionsReady: true, profile: { manager: state.manager }, features: [],
-    sessions: options.sessions || [agent('s1')], machines: options.machines || [machine()],
+    sessions: options.sessions || [agent('s1', {manager: state.manager})], machines: options.machines || [machine('m1', 'personal', state.manager)],
     selected: new ResourceRow(),
     repo() { return repo; },
     scope() { return state.scope; },
@@ -338,6 +338,47 @@ test('the first loaded live catalog populates a cold Agents list before membersh
  const {client}=clientFixture({sessions:[]});client.sessionsReady=false;const workspace=new AgentWorkspace();await workspace.open(client,true);assert.equal(workspace.groups.length,0);
  client.sessions=[agent('first')];client.sessionsReady=true;workspace.update(client,true);assert.deepEqual(workspace.groups.flatMap(g=>g.rows.map(r=>r.id)),['first']);
  client.sessions=[agent('later'),agent('first',{state:'needs_you'})];workspace.update(client,true);assert.deepEqual(workspace.groups.flatMap(g=>g.rows.map(r=>r.id)),['first']);
+});
+
+test('manager-qualified machine filters keep same-Hub same-ID owners independent', async () => {
+  const a = clientFixture(), b = clientFixture();
+  a.client.profile.id = 'hub-a'; a.client.profile.manager = 'alpha'; a.state.manager = 'alpha';
+  b.client.profile.id = 'hub-a'; b.client.profile.manager = 'beta'; b.state.manager = 'beta'; b.state.scope = 'hub-a:beta';
+  a.client.directoryReady = true; a.client.directoryOwners = () => [a.client, b.client];
+  a.client.machines[0].manager = 'alpha'; b.client.machines[0].manager = 'beta';
+  a.client.directoryOwnerFor = (row) => row.manager === 'beta' ? b.client : a.client;
+  const first = agent('shared-id', {manager: 'alpha'}), second = agent('shared-id', {manager: 'beta'});
+  first.group = 'hub-a'; second.group = 'hub-a';
+  a.client.directorySessions = [first, second];
+  const w = new AgentWorkspace(); await w.open(a.client);
+  w.setGroupingMode('machine');
+  assert.deepEqual(w.groups.map((group) => group.id).sort(), ['machine/hub-a|alpha|m1', 'machine/hub-a|beta|m1']);
+  assert.equal(w.groups.every((group) => group.rows.length === 1), true);
+  await w.setMachineFilter(w.machineIdentity(b.client.machines[0]));
+  assert.deepEqual(w.visibleRows().map((row) => row.manager), ['beta']);
+});
+
+test('per-Hub pins and allowed exceptions cannot affect another Hub with the same short key', async () => {
+  const a = clientFixture(), b = clientFixture();
+  a.client.profile.id = 'hub-a'; b.client.profile.id = 'hub-b'; b.state.scope = 'hub-b:work';
+  a.state.prefs.pins.sessions = ['m1/shared']; b.state.prefs.pins.sessions = [];
+  a.state.prefs.mutes.spaces = ['m1/project']; b.state.prefs.mutes.allowed = ['m1/shared'];
+  const first = agent('shared', {space_name: 'project'}), second = agent('shared', {space_name: 'project'});
+  first.group = 'hub-a'; second.group = 'hub-b';
+  a.client.directoryReady = true; a.client.directorySessions = [first, second];
+  a.client.directoryOwners = () => [a.client, b.client]; a.client.directoryOwnerFor = (row) => row.group === 'hub-b' ? b.client : a.client;
+  const w = new AgentWorkspace(); await w.open(a.client);
+  assert.equal(w.isPinned(first), true); assert.equal(w.isPinned(second), false);
+  assert.equal(w.isMuted(first), true); assert.equal(w.isMuted(second), false);
+  assert.equal(w.groups.find((group) => group.id === 'pinned').rows[0].group, 'hub-a');
+  assert.equal(w.groups.find((group) => group.id === 'pinned').rows.some((row) => row.group === 'hub-b'), false);
+});
+
+test('group fold and quick filter controls are native buttons with touch bounds', () => {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
+  assert.match(source, /Button\(tr\(binding\.value\.folded \? 'agent_expand' : 'agent_collapse'\)\)/);
+  assert.match(source, /constraintSize\(\{minHeight: Tokens\.touch\}\)/);
+  assert.ok(!source.includes("Text(tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))"));
 });
 
 test('merged rows with identical runtime ids isolate pin, mute and mutation ownership',async()=>{

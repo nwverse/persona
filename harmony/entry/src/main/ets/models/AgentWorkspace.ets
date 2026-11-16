@@ -707,7 +707,7 @@ export class AgentWorkspace {
       kept: this.frozenGroups?.flatMap((group) => group.rows.map((row: ResourceRow) =>
         (row.group ? row.group + '|' : '') + rowMachine(row) + '/' + rowSession(row))) || [],
       machines: this.client?.directoryOwners().flatMap((owner: ClientModel) => owner.machines.map((row: ResourceRow) =>
-        ({id: row.id, name: row.title, group: owner.profile.id}))) || [],
+        ({id: row.id, name: row.title, group: owner.profile.id, manager: row.manager || owner.profile.manager}))) || [],
       coreSettings: {sort: 'state', folded: this.folded, expanded_idle: this.expandedIdle, expanded_quiet: this.expandedQuiet,
         compact: false, now: this.currentNow, held: this.heldSession},
       preferencesFor: (row: AgentListRow) => this.preferencesFor(row.source as ResourceRow),
