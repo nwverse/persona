@@ -20,6 +20,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +33,8 @@ import (
 type Script struct {
 	RefuseASR      int    // an HTTP status refusing every recognition handshake (0: none), with RefuseBody
 	RefuseBody     string //
+	DropLines      []int  // a session sent speech of one of these lines (Line.N) drops at once: a window that keeps failing
+	DropAll        bool   // every session drops at its next audio packet: the service is down
 	RefuseRequest  uint32 // an error frame's code answering the request (0: none), with RefuseMessage
 	RefuseMessage  string //
 	DropAfter      int    // the socket of each of the first DropN sessions closes after this many audio packets
@@ -311,7 +314,10 @@ func (s *Service) serveASR(w http.ResponseWriter, r *http.Request) {
 		packets := sess.Packets
 		s.mu.Unlock()
 		h.add(pcm)
-		if n <= sc.DropN && packets >= sc.DropAfter {
+		s.mu.Lock()
+		down := s.script.DropAll // read at each packet: a test turns it on while sessions run
+		s.mu.Unlock()
+		if down || n <= sc.DropN && packets >= sc.DropAfter || slices.ContainsFunc(sc.DropLines, func(line int) bool { return speaks(pcm, line) }) {
 			c.CloseNow()
 			return
 		}
@@ -426,6 +432,17 @@ func PCM(lines ...Line) []byte {
 		b = append(b, make([]byte, int(math.Round(l.Silence*16000))*2)...)
 	}
 	return b
+}
+
+// speaks: pcm has a sample of line n's speech (PCM writes it as ±(1000+100n)).
+func speaks(pcm []byte, n int) bool {
+	v := int16(1000 + 100*n)
+	for i := 0; i+1 < len(pcm); i += 2 {
+		if x := int16(binary.LittleEndian.Uint16(pcm[i:])); x == v || x == -v {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) serveTTS(w http.ResponseWriter, r *http.Request) {

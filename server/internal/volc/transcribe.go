@@ -25,6 +25,9 @@ import (
 // the streaming-input endpoint, which answers once the window's audio ended; a window that fails is tried once more.
 // Sentences go out in order: those of a session wait while an earlier one is still open.
 
+// replayGapTries: a window of a replay job with no transcript of record is tried this often before it is a gap (#8887).
+const replayGapTries = 3
+
 // Times a job keeps (variables: tests shorten them).
 var (
 	liveQuietEnd     = 3 * time.Second  // no audio this long: the session is finished
@@ -116,6 +119,7 @@ type sess struct {
 	queue   []extwire.TranscriptionFrame
 	final   *asrResult
 	byT     time.Time // a finishing session not closed by then is closed
+	due     time.Time // a session to open again: when
 }
 
 func (ss *sess) end(pos float64) float64 {
@@ -163,9 +167,8 @@ type job struct {
 	cur       *sess   // the one new audio goes to
 	dialing   *sess
 	n         int
-	fails     int // dials or drops in a row
-	retryAt   time.Time
-	retry     *sess // the session to open again (its at, until and tries), when retryAt passes
+	fails     int     // dials or drops in a row
+	retry     []*sess // sessions to open again (their at, until and tries), each when its due passes, in failure order
 	lastAudio time.Time
 	lastAck   float64
 	flushes   []float64
@@ -217,7 +220,7 @@ func (j *job) run() {
 			j.c.Close(websocket.StatusNormalClosure, "")
 			return
 		}
-		if j.ended && len(j.sessions) == 0 && j.dialing == nil && j.retry == nil {
+		if j.ended && len(j.sessions) == 0 && j.dialing == nil && len(j.retry) == 0 {
 			j.release()
 			j.sendUsage()
 			_ = j.send(extwire.TranscriptionFrame{Type: extwire.TFDone})
@@ -391,7 +394,7 @@ func (j *job) onAudio(pcm []byte) {
 	j.ring.add(pcm)
 	j.q.add(pcm)
 	j.inPos = j.ring.end()
-	if j.cur == nil && j.dialing == nil && j.retry == nil {
+	if j.cur == nil && j.dialing == nil && len(j.retry) == 0 {
 		j.open(&sess{at: from, until: -1, why: j.nextWhy()}, false)
 	}
 	if taking := cmpOr(j.cur, j.dialing); taking != nil && !j.live() {
@@ -421,16 +424,7 @@ func (j *job) open(ss *sess, first bool) {
 	if ss.until < 0 {
 		j.dialing = ss
 	}
-	j.sessions = append(j.sessions, ss)
-	slices.SortStableFunc(j.sessions, func(a, b *sess) int {
-		switch {
-		case a.at < b.at:
-			return -1
-		case a.at > b.at:
-			return 1
-		}
-		return 0
-	})
+	j.inOrder(ss)
 	endpoint := endpointLive
 	if !j.live() {
 		endpoint = endpointReplay
@@ -494,10 +488,17 @@ func logidNote(id string) string {
 }
 
 // again opens ss's audio in a new session after a failure: at once, then after 2 and 4 seconds; a third failure in a
-// row ends the job (live: the manager opens a new job; replay: the manager tries the pass again).
+// row ends the job (live: the manager opens a new job; replay: the manager tries the pass again). A replay job with no
+// transcript of record (an extension's: no `reference` before its audio) gives a window two retries, then sends it as
+// a gap and goes on (#8887); failures that run on into the next window still end it.
 func (j *job) again(ss *sess, err error) {
 	j.fails++
-	if j.fails >= len(retryDelays)+1 || (!j.live() && ss.tries >= 1) {
+	gaps := !j.live() && len(j.refs) == 0 && j.ready
+	if gaps && j.fails < len(retryDelays)+1 && ss.tries >= replayGapTries-1 {
+		j.gap(ss, err)
+		return
+	}
+	if j.fails >= len(retryDelays)+1 || (!j.live() && !gaps && ss.tries >= 1) {
 		code := transcriptionCode(err)
 		if !j.ready && code == extwire.TEUpstreamFailed {
 			code = extwire.TEUpstreamUnavailable
@@ -512,8 +513,36 @@ func (j *job) again(ss *sess, err error) {
 	if next.at < j.ring.at { // the ring lost the start of a window: what is left of it
 		next.at = j.ring.at
 	}
-	j.retry = next
-	j.retryAt = time.Now().Add(retryDelays[min(j.fails-1, len(retryDelays)-1)])
+	next.due = time.Now().Add(retryDelays[min(j.fails-1, len(retryDelays)-1)])
+	j.retry = append(j.retry, next) // never in place of another: two windows can fail at once
+}
+
+// gap gives up on ss's window: a kept window over its audio goes out in its turn (the extension's job reads it as a
+// gap), and the job goes on. A window that was taking new audio ends where the audio is now; what comes next opens
+// the next window.
+func (j *job) gap(ss *sess, err error) {
+	from, to := ss.at, ss.until
+	if to < 0 {
+		to = j.ring.end()
+	}
+	j.logf("window %.1f–%.1f: no session after %d tries (%v), a gap", from, to, ss.tries+1, err)
+	j.inOrder(&sess{at: from, until: to, why: "gap", closed: true, failed: true,
+		queue: []extwire.TranscriptionFrame{{Type: extwire.TFWindow, From: extwire.F(round3(from)), To: extwire.F(round3(to)), Kept: true}}})
+	j.release()
+}
+
+// inOrder puts ss among the job's sessions by where its audio begins (one that begins where another does, after it).
+func (j *job) inOrder(ss *sess) {
+	j.sessions = append(j.sessions, ss)
+	slices.SortStableFunc(j.sessions, func(a, b *sess) int {
+		switch {
+		case a.at < b.at:
+			return -1
+		case a.at > b.at:
+			return 1
+		}
+		return 0
+	})
 }
 
 func (j *job) remove(ss *sess) {
@@ -547,8 +576,10 @@ func (j *job) endCurrent() {
 	case j.dialing != nil:
 		j.dialing.until = end
 		j.dialing = nil
-	case j.retry != nil && j.retry.until < 0:
-		j.retry.until = end
+	default:
+		if i := slices.IndexFunc(j.retry, func(r *sess) bool { return r.until < 0 }); i >= 0 {
+			j.retry[i].until = end
+		}
 	}
 	j.pump()
 }
@@ -745,6 +776,9 @@ func (j *job) takeWindow(ss *sess) {
 func (j *job) release() {
 	for len(j.sessions) > 0 {
 		head := j.sessions[0]
+		if j.retried(head.at) { // an earlier one waits to be opened again: its turn comes first
+			break
+		}
 		for _, f := range head.queue {
 			j.emit(f)
 		}
@@ -759,12 +793,17 @@ func (j *job) release() {
 		if len(j.sessions) > 0 && j.sessions[0].at < at-0.0001 {
 			break
 		}
-		if j.dialing != nil && j.dialing.at < at-0.0001 || j.retry != nil && j.retry.at < at-0.0001 {
+		if j.dialing != nil && j.dialing.at < at-0.0001 || j.retried(at) {
 			break
 		}
 		j.flushes = j.flushes[1:]
 		_ = j.send(extwire.TranscriptionFrame{Type: extwire.TFFlushed, At: extwire.F(round3(at))})
 	}
+}
+
+// retried: a session whose audio begins before at waits to be opened again.
+func (j *job) retried(at float64) bool {
+	return slices.ContainsFunc(j.retry, func(r *sess) bool { return r.at < at-0.0001 })
 }
 
 func (j *job) emit(f extwire.TranscriptionFrame) {
@@ -776,10 +815,11 @@ func (j *job) emit(f extwire.TranscriptionFrame) {
 
 func (j *job) onTick() {
 	now := time.Now()
-	if j.retry != nil && !now.Before(j.retryAt) {
-		ss := j.retry
-		j.retry = nil
-		j.open(ss, false)
+	for _, ss := range slices.Clone(j.retry) {
+		if !now.Before(ss.due) {
+			j.retry = slices.DeleteFunc(j.retry, func(r *sess) bool { return r == ss })
+			j.open(ss, false)
+		}
 	}
 	j.pump()
 	if j.live() && j.cur != nil {

@@ -136,12 +136,36 @@ export function placeFailed(lines: ChatLine[], list: OutboxEntry[]): { before: M
   return { before, rest };
 }
 
+/** An uncertain send whose computer said where it is (a Claude session outside Persona's terminals, through its peer
+ *  inbox): its own words, not only "not sure it arrived", so the owner knows what to do (approve it on the computer). */
+const IN_DOUBT_REASONS: Record<string, string> = {
+  peer_held: "lib-outbox.held_on_computer", // a bypass permissions session holds it for approval at the computer
+  peer_unconfirmed: "lib-outbox.peer_unconfirmed", // handed over, not taken: held there, or dropped as a repeat
+};
+
+/** The code's own words for an uncertain send, when it has some. */
+function inDoubtReason(code: unknown): string | undefined {
+  const key = typeof code === "string" ? IN_DOUBT_REASONS[code] : undefined;
+  return key ? t(key) : undefined;
+}
+
 /** Why it didn't go, in words. */
 export function failureText(e: unknown): string {
   if (e instanceof ApiError && e.code === "input_draft") return t("lib-outbox.input_draft");
   if (e instanceof ApiError && e.code === "dialog_open") return t("lib-outbox.dialog_open");
-  if (e instanceof ApiError && e.body.delivered === "unknown") return t("lib-outbox.delivery_unknown");
+  if (e instanceof ApiError && e.body.delivered === "unknown") return inDoubtReason(e.code) ?? t("lib-outbox.delivery_unknown");
   return errorText(e);
+}
+
+/** What a kept entry's bubble says: an uncertain one in the page's current language from its code (one kept from
+ *  before a reload, or from a page that only had the generic words), else the words it failed with. */
+export function entryReason(e: Pick<OutboxEntry, "error" | "code" | "inDoubt">): string {
+  return (e.inDoubt ? inDoubtReason(e.code) : undefined) ?? e.error ?? "";
+}
+
+/** Held for approval on the computer (peer_held): not a failure, the owner's step there is what is left. */
+export function heldOnComputer(e: Pick<OutboxEntry, "code" | "inDoubt">): boolean {
+  return Boolean(e.inDoubt) && e.code === "peer_held";
 }
 
 // ── the store's side ────────────────────────────────────

@@ -200,6 +200,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   is silently dropped (`max` too; settings accepts only low…xhigh). The picker has no auto position. `/effort auto` clears this model's default in settings;
   phone auto handling must differ by path (`docs/apple/ios.md` ("Effort and permission modes")). Testing `/effort …` on a dev machine also changes real settings.json; don't use your own configuration.
 - **Settings defaults and session effort need different option lists** (#5946): Claude Code 2.1.318 / Agent SDK 0.3.318 accept only `low`, `medium`, `high`, and `xhigh` in settings.json. Keep `max` in session controls, reject it in settings writes, and report an existing stored `max` as ignored with the model default in effect. Never reuse `proto.EffortLevels` for the settings whitelist. Web settings override node descriptions with their own translations, so a server warning also needs a localized web warning.
+- **Catalog defaults need execution precedence too** (#8941). A launcher's `--settings` model can differ from the CLI catalog's recommendation, but its `effortLevel` does not beat `CLAUDE_CODE_EFFORT_LEVEL`, `--effort`, or a saved level in the same file's `modelSettings`. Native model matching covers aliases and provider IDs, so keep the native effort where that matching may apply. A probe's differential `Env` also omits inherited shell values: combine `Shell`, `Unset`, launcher changes and profile/explicit settings env before projecting a default. Preserve native aliases and leave unknown settings or unsupported levels unchanged; test both inherited variables and settings values that only session controls accept.
+- **A custom launcher name does not identify its Agent** (#8940): assistant effort validation must resolve the executable behind the launcher before deciding whether Codex-only levels are valid. Validate cold and warm starts, explicit and configured effort, and a follow-up that inherits the saved launcher; checking only the literal `codex` command leaves aliases broken. Once dispatch has selected Claude or Codex, validate against that backend rather than the launcher's spelling.
 - **An explicit `--permission-mode default` is not "unset"** (#3026): it overrides `permissions.defaultMode` in Claude Code's settings.json, so
   filling an unset mode with `default` (#2194) silently put every Agent the assistant started into Ask every step for someone whose Claude Code
   starts in Auto. Resolve "unset" to the mode that would really run (the computer's `permissions.defaultMode`), or pass no flag and show it as unset.
@@ -1086,6 +1088,14 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
+
+## Completed Codex history is not the current turn's state (#8946)
+
+The session list promoted a pane to working from its shared app-server, then demoted it to done because a materialized
+paginated transcript ended on an older completed turn. Check the unambiguous live owner's cached active or waiting state
+before applying stale-rollout correction, including when no current turn ID was observed. Test the published session row
+with old completed history, a late join, a start notification and completion; testing only the intermediate status misses
+the overwrite. Keep the terminal-only stale-turn fallback, and do not add RPC or transcript reads to the live guard.
 
 ## Herdr workspace directories come from panes (#4761)
 
