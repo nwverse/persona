@@ -545,6 +545,20 @@ on-demand model panel, not the everyday Assistant home (#6887).
   thumbnails between the work line and the answer, `box64` tall in a strip that scrolls sideways, one alone `box80`, each
   as wide as its picture (¾ to 1.6 of its height), with a small mark for a screenshot or a web page and nothing written
   around them; a tap opens the viewer on the turn's images. Android draws it on Glass (`ViewedImagesRow`, #4339 C9).
+- Pictures in replies (#9474; web #9475, Android #9476; iOS `ReplyPictureRun`, rules in PersonaKit `ReplyImages` and
+  `ReplyImageLayout`, tokens `Theme.Size.replyPicture` / `replyPictures` / `replyPictureFailed`): a web picture on a
+  line of its own, however it sits in its paragraph, is a block picture; block pictures with only line breaks or blank
+  lines between them are one run. One picture is `replyPicture` (240 pt) tall and as wide as its shape from 3:4 up to
+  the column (wider or narrower ones cut around their centre), never larger than itself; two are squares side by side;
+  three or more are squares three to a row (four as 2 × 2), at most two rows, the sixth dimmed with "+N" for those not
+  drawn; a run is at most `replyPictures` (480 pt) wide. Same left edge as the text, `Radius.control`, the hairline
+  `cardStroke`, `Fill.well` while it loads. The box is its final size before the picture arrives: only a lone
+  picture's width changes, so the text below never moves. One that did not load is a `replyPictureFailed` tile with
+  the retry mark (in a run, that square), a tap retries; a long press offers Open Original. A picture inside a line of
+  text is the line's height. A tap opens the viewer on every picture of the reply. They load through the hub's remote
+  image route (`remote_images`, docs/protocol/protocol.md "Remote images (#9473)") at the size drawn; what other
+  people wrote (the Inbox's Lark, GitHub and connector threads, `asksBeforePictures()`) keeps each run its size with
+  Load Image over it until tapped, since a picture there may be a tracking pixel.
 - No shared bubble component exists. Messages, Tasks and Lark rebuild it with different paddings and gutters (DS-20).
 - Web: user bubble 14 px radius; replies unboxed. Android: 20 dp in Glass, max width 86%.
 - Web reply bar (#5314, `ReplyBar`; the owner's requested alignment with cindy's `MessageActionBar`, 2026-11-12): only

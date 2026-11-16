@@ -58,6 +58,10 @@ extension MarkdownUI.Theme {
             }
             .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
             .codeBlock { config in
+                // A run of pictures (`ReplyImages`, #9474): one, or squares, the viewer on all of the reply's.
+                if config.language == ReplyImages.language, let block = ReplyImages.block(config.content) {
+                    ReplyPictureRun(block: block).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                } else
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
                 // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
@@ -1070,7 +1074,7 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(item.text ?? "")))))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply(item.text ?? ""))))))
                                 .markdownTheme(.persona)
                                 .readingContent()
                                 .markdownSoftBreakMode(.lineBreak)
@@ -1242,7 +1246,7 @@ nonisolated enum StreamTail {
         memo(tail) { tail in
             var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
             if StreamRepair.end(of: tail) == .text { shown += " ▍" }
-            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(shown)))))
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply(shown))))))
         }
     }
 }
@@ -1273,11 +1277,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply($0)))))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply($0)))))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
@@ -1389,7 +1393,7 @@ nonisolated struct AssistantRowText {
     init(_ text: String) {
         // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); bold next to CJK punctuation
         // closes (`CJKEmphasis`, #3863); links end where `Links` says, not at the next space; formulas as pictures.
-        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(text))))
+        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyImages.apply(ReplyBreaks.apply(text)))))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths
