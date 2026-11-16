@@ -3,6 +3,8 @@ package subscriptions
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -122,31 +124,42 @@ func (s *Service) replying(ctx context.Context) map[string]bool {
 // ReplyTarget is where a reply to a row of subscription id goes (#6198): its connector, and the thread the connector
 // knows the row's newest item by (the recipe's thread, else the item's id). row is the row's thread and last its newest
 // item (the thing's Last, the item's id in the source). A things recipe's row is the connector's own (#6296): its thread
-// as it is. ok is false when the subscription, the item or its reply_to is gone, the item has no id of the source's, or
-// the connector cannot reply now: the reply is refused as for a row that cannot be replied to.
-func (s *Service) ReplyTarget(ctx context.Context, id, row, last string) (conn connector.Inbox, thread string, ok bool) {
+// as it is. err says why there is none (#9194): connector.ErrCannotReply when the row cannot be answered (no newest
+// item, or none with an id of the source's; the item or its reply_to is gone; the connector does not reply), so it is
+// refused as such a row; errReplyUnavailable when the subscription is gone or its connector cannot be called now.
+func (s *Service) ReplyTarget(ctx context.Context, id, row, last string) (conn connector.Inbox, thread string, err error) {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
-	if err != nil || sub == nil || last == "" || strings.HasPrefix(last, weakPrefix) || s.o.Connectors == nil {
-		return nil, "", false
+	if err != nil || sub == nil || s.o.Connectors == nil {
+		return nil, "", errReplyUnavailable
+	}
+	if last == "" || strings.HasPrefix(last, weakPrefix) {
+		return nil, "", fmt.Errorf("%w: the row has no item of the source's to answer", connector.ErrCannotReply)
 	}
 	thread = row
 	if sub.Recipe.Mode != wire.ConnectorSubscriptionModeThings {
 		h, err := s.o.Store.HeldItem(ctx, id, last)
-		if err != nil || h == nil || h.ReplyTo == "" {
-			return nil, "", false
+		if err != nil {
+			return nil, "", errReplyUnavailable
+		}
+		if h == nil || h.ReplyTo == "" {
+			return nil, "", fmt.Errorf("%w: the row's item is gone or says nowhere to reply", connector.ErrCannotReply)
 		}
 		thread = cmpOr(h.Thread, h.UID)
 	}
 	info, found := s.o.Connectors.Find(ctx, sub.Connector)
 	if !found || !info.ready() {
-		return nil, "", false
+		return nil, "", errReplyUnavailable
 	}
 	in, ok := connector.As[connector.Inbox](info.Conn)
 	if !ok {
-		return nil, "", false
+		return nil, "", fmt.Errorf("%w: the connector does not reply", connector.ErrCannotReply)
 	}
-	return in, thread, true
+	return in, thread, nil
 }
+
+// errReplyUnavailable is ReplyTarget's answer for a subscription that is gone or whose connector cannot be called now:
+// the reply's source is not here, whatever the row (#9194).
+var errReplyUnavailable = errors.New("subscription: no connector to reply through")
 
 // readErrorOf is how a subscription in state says it is behind, as a built-in's failed read does (#6189): its last run
 // failed, or nothing is read until its recipe is fixed, or the connector asked it to wait. A connector that cannot be

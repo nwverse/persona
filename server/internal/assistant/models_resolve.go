@@ -277,6 +277,11 @@ func (s *Service) apiConfig(ctx context.Context, b ModelBinding) (ai.Config, err
 				}
 				c = ai.Config{API: l.API, BaseURL: l.BaseURL, Model: l.Model, ReasoningEffort: l.Effort, Bearer: l.BearerAuth(), ViaMachine: l.ViaMachine}
 				providerModels = l.Models
+				model, err := resolveAPITierAlias(l, cmp.Or(b.Model, l.Model))
+				if err != nil {
+					return c, err
+				}
+				c.Model, b.Model = model, ""
 				key, err := s.openLauncherKey(ctx, l.KeySealed, l.Name, "")
 				if err != nil {
 					return c, err

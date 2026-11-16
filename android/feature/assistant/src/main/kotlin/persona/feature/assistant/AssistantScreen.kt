@@ -1373,6 +1373,12 @@ internal fun AssistantDrawer(
     found: List<FoundChat>? = null,
     /** The manager is still reading older chats, so some matches may be missing. */
     searchPartial: Boolean = false,
+    /**
+     * A regular window: the Search control opens the full-window search (#9171) via [onFullSearch] instead of the
+     * inline field. Compact drawers leave this false.
+     */
+    fullWindowSearch: Boolean = false,
+    onFullSearch: () -> Unit = {},
 ) {
     // "All chats" opens the rest of the conversations in place: this app has no all-conversations page.
     var showAllChats by rememberSaveable { mutableStateOf(false) }
@@ -1391,20 +1397,25 @@ internal fun AssistantDrawer(
     val assistantName = drawerRoster.assistantDisplayName(drawerChoice.shown, LocalPersonaName.current)
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val drawer = LocalHomeDrawer.current
+    // Regular-window column: Search opens the full-window page. Compact Glass drawer: the inline field toggles.
+    val searchInHead = drawer || fullWindowSearch
     val resources = androidx.compose.ui.platform.LocalResources.current
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
-            JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), { searchVisible = !searchVisible }, raised = true)
+            JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), {
+                if (fullWindowSearch) onFullSearch() else searchVisible = !searchVisible
+            }, raised = true)
         }
-        // The head as it was (the persona's name; only the compact drawer has one), where there is no switcher to show.
+        // The head as it was (the persona's name; only the compact drawer / regular-window Search has one), where there
+        // is no switcher to show.
         val plainHead: @Composable () -> Unit = {
-            if (drawer) Row(Modifier.fillMaxWidth().then(headPadding), verticalAlignment = Alignment.CenterVertically) {
+            if (searchInHead) Row(Modifier.fillMaxWidth().then(headPadding), verticalAlignment = Alignment.CenterVertically) {
                 Text(assistantName, style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink, modifier = Modifier.weight(1f))
                 search()
             }
         }
-        if (switcher != null) switcher(headPadding, search.takeIf { drawer }, plainHead) else plainHead()
+        if (switcher != null) switcher(headPadding, search.takeIf { searchInHead }, plainHead) else plainHead()
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
             // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
             // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the search.
@@ -1452,7 +1463,11 @@ internal fun AssistantDrawer(
                     })
             } }
             if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
-            if (!drawer || searchVisible || query.isNotBlank()) item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
+            // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
+            // query typed before unfolding remains clearable until blank).
+            if ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank()) {
+                item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
+            }
             if (searchPartial) item {
                 Text(stringResource(R.string.assistant_search_partial),
                     Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),

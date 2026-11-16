@@ -1151,7 +1151,10 @@ comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 
   at a constant quality.
 - **Falling back**, for the rest of the stream: ffmpeg can't start (`unavailable`); it ends, or puts out something
   that isn't the next frame (`failed`); any frame takes over 50 ms of its own, more than 10% of the last 2 s's frames
-  take over 8 ms of their own (a process's first frame aside), or a frame is still inside after 200 ms (`slow`). A
+  take over 8 ms of their own, judged once there are 60 of them, or a frame is still inside after 200 ms (`slow`). A
+  process's first frame counts for none of these, and its next 30 (its warm-up: x264's threads starting, the
+  capture's fresh buffers) only for the 50 ms bound; the reason in the log names the frame, the share and the
+  window's median and maximum. A
   frame's own time starts when ffmpeg could start on it (it came in and the frame before it was out): frames that
   waited behind a cold process's first one (30–40 ms) are not slow themselves, which on the first real session they
   were (x264 stopped a fraction of a second in); a report cuts the bitrate or

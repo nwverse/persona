@@ -184,7 +184,7 @@ func TestPairErrorsSpeakTerminalLanguage(t *testing.T) {
 		"en": {
 			conflict:       "--android needs a temporary token and cannot be combined with --legacy",
 			listen:         "The hub’s listen configuration has no valid port. Check the configuration, or use --legacy to print a legacy QR code",
-			unreachable:    "Can’t connect to the hub on this machine. It may not be running or listening on loopback. Start the hub first, or use --legacy to print a legacy QR code",
+			unreachable:    "Can’t connect to the hub on this machine. It may not be running, or hub.json’s listen names an address this machine doesn’t have. Start the hub first, or use --legacy to print a legacy QR code",
 			temporaryToken: "This hub failed to create a temporary token (HTTP 502). Check that the hub is upgraded and its configuration matches, or use --legacy to print a legacy QR code",
 			invalidReply:   "This hub returned invalid pairing information. Upgrade the hub, or use --legacy to print a legacy QR code",
 			noPublicURL:    "The hub does not know which address phones should use to reach it (public_url is empty). With Docker, set PERSONA_PUBLIC_URL=http://<this machine's LAN address>:18660 in .env and run docker compose up -d. Without Docker, set public_url in hub.json and restart the hub. You can also set the address under Network in the admin page",
@@ -195,7 +195,7 @@ func TestPairErrorsSpeakTerminalLanguage(t *testing.T) {
 		"zh-Hans": {
 			conflict:       "--android 需要临时 token，不能与 --legacy 同时使用",
 			listen:         "hub listen 配置没有有效端口；请检查配置，或用 --legacy 打印旧格式二维码",
-			unreachable:    "无法连接本机 hub：hub 可能未运行，或未监听回环地址；请先启动 hub，或用 --legacy 打印旧格式二维码",
+			unreachable:    "无法连接本机 hub：hub 可能未运行，或 hub.json 的 listen 写的不是本机的地址；请先启动 hub，或用 --legacy 打印旧格式二维码",
 			temporaryToken: "本机 hub 生成临时 token 失败（HTTP 502）；请确认 hub 已升级且配置一致，或用 --legacy 打印旧格式二维码",
 			invalidReply:   "本机 hub 返回了无效的配对信息；请升级 hub，或用 --legacy 打印旧格式二维码",
 			noPublicURL:    "hub 还不知道手机从哪个地址连它（public_url 是空的）：Docker 里在 .env 写上 PERSONA_PUBLIC_URL=http://<这台机器的局域网地址>:18660，再运行 docker compose up -d；不用 Docker 的，在 hub.json 里填 public_url 后重启 hub。也可以在管理界面的「网络」里填地址",
@@ -206,7 +206,7 @@ func TestPairErrorsSpeakTerminalLanguage(t *testing.T) {
 		"ja": {
 			conflict:       "--androidには一時トークンが必要なため、--legacyと同時には使えません",
 			listen:         "ハブのlisten設定に有効なポートがありません。設定を確認するか、--legacyで旧形式のQRコードを出力してください",
-			unreachable:    "このマシンのハブに接続できません。ハブが実行されていないか、ループバックで待ち受けていない可能性があります。ハブを起動するか、--legacyで旧形式のQRコードを出力してください",
+			unreachable:    "このマシンのハブに接続できません。ハブが実行されていないか、hub.json の listen がこのマシンにないアドレスになっている可能性があります。ハブを起動するか、--legacyで旧形式のQRコードを出力してください",
 			temporaryToken: "このハブは一時トークンを作成できませんでした（HTTP 502）。ハブの更新と設定を確認するか、--legacyで旧形式のQRコードを出力してください",
 			invalidReply:   "このハブから無効なペアリング情報が返されました。ハブを更新するか、--legacyで旧形式のQRコードを出力してください",
 			noPublicURL:    "ハブはスマートフォンからの接続先アドレスをまだ認識していません（public_urlが空です）。Dockerでは.envにPERSONA_PUBLIC_URL=http://<このマシンのLANアドレス>:18660を設定し、docker compose up -dを実行してください。Docker以外ではhub.jsonにpublic_urlを設定してハブを再起動してください。管理画面の「ネットワーク」でも設定できます",

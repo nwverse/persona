@@ -595,7 +595,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                 settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                 settingsOpened = true
                             }, headModifier = head, trailing = trailing, fallback = fallback)
-                    })
+                    },
+                    // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
+                    fullWindowSearch = regular)
             }
         }
         // What the decorator below reads: it is remembered across compositions, these change with the window.
