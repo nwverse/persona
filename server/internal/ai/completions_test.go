@@ -139,6 +139,7 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 		want       bool
 	}{
 		{"unsupported parameter", `{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model."}}`, true},
+		{"numeric code preserves field rejection", `{"error":{"code":40010,"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
 		{"parameter named by param", `{"error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"unknown argument", `{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}`, true},
 		{"extra field", `{"detail":[{"loc":["body","reasoning_effort"],"msg":"Extra inputs are not permitted"}]}`, true},

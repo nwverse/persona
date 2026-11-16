@@ -45,22 +45,22 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			resp.Body.Close()
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
-			// reject stream_options or reasoning_effort. Retry only those rejected requests without an explicit no-retry
-			// signal; arbitrary 400s, invalid effort values, policy ceilings and started streams must never be replayed.
-			noRetry := NoRetry(resp.Header)
-			if !noRetry && !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && ChatRejectsReasoningEffort(raw) {
+			// reject stream_options or reasoning_effort. Each such response leads to a modified request, not a replay
+			// of the rejected one, so X-Should-Retry: false does not forbid it. Arbitrary 400s, invalid effort values,
+			// policy ceilings and started streams must never be replayed.
+			if !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && ChatRejectsReasoningEffort(raw) {
 				droppedEffort = true
 				delete(body, "reasoning_effort")
 				logf("ai: chat/completions: gateway rejected reasoning_effort; retrying once without it")
 				continue
 			}
-			if !noRetry && !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
+			if !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				renamedTokens = true
 				delete(body, "max_tokens")
 				body["max_completion_tokens"] = r.MaxTokens
 				continue
 			}
-			if !noRetry && !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
+			if !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
 				droppedStreamOptions = true
 				delete(body, "stream_options")
 				continue
@@ -104,15 +104,15 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 	if json.Unmarshal(raw, &envelope) == nil {
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
-				Message string `json:"message"`
-				Param   string `json:"param"`
-				Code    string `json:"code"`
+				Message json.RawMessage `json:"message"`
+				Param   json.RawMessage `json:"param"`
+				Code    json.RawMessage `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningValueCode(object.Code) {
+				if chatReasoningValueCode(decodeErrorCode(object.Code)) {
 					return false
 				}
-				return chatReasoningFieldError(object.Message, object.Param)
+				return chatReasoningFieldError(decodeErrorString(object.Message), decodeErrorString(object.Param))
 			}
 			var message string
 			return json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
@@ -202,7 +202,7 @@ func readCompletions(body io.Reader) (Reply, error) {
 			return nil
 		}
 		var chunk struct {
-			Type    string          `json:"type"`
+			Type    json.RawMessage `json:"type"`
 			Model   string          `json:"model"`
 			Error   json.RawMessage `json:"error"`
 			Choices []struct {
@@ -226,7 +226,7 @@ func readCompletions(body io.Reader) (Reply, error) {
 		}
 		rawError := bytes.TrimSpace(chunk.Error)
 		hasError := len(rawError) > 0 && !bytes.Equal(rawError, []byte("null"))
-		if hasError || chunk.Type == "error" {
+		if hasError || decodeErrorString(chunk.Type) == "error" {
 			code, msg := gatewayErrorDetails([]byte(payload))
 			return streamFailureError("stream error", code, msg)
 		}
