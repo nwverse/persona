@@ -2652,13 +2652,16 @@ struct ChatView: View {
     private var pendingCards: [PendingCards.Card] {
         let parentPage = style == .dev && host == nil
         var cards = model.interactions(for: key).compactMap { ix -> PendingCards.Card? in
+            // Answerable exactly when nothing blocks it (`canAnswer`); what does is said under the card (#6868).
+            let blocked = model.answerBlock(ix)
             // A side session's card (#7944), here by its `folded_under` as every folded child's: "From Side Session ·
             // <title>", and not while that side's own page is the one shown, which has it.
             if parentPage, ix.sessionKey != key, let side = model.sideChat(of: ix) {
                 guard side != sideUI.shown else { return nil }
-                return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix), from: Self.sideCardSource(side, ix, model))
+                return PendingCards.Card(
+                    interaction: ix, enabled: blocked == nil, blocked: blocked, from: Self.sideCardSource(side, ix, model))
             }
-            return PendingCards.Card(interaction: ix, enabled: model.canAnswer(ix))
+            return PendingCards.Card(interaction: ix, enabled: blocked == nil, blocked: blocked)
         }
         // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
         if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
@@ -2790,6 +2793,9 @@ struct ChatView: View {
                     #else
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     #endif
+                } else if session == nil, let reason = model.missingSessionReason(key) {
+                    // Opened outside the current manager's filtered list and the hub could not supply the row (#8748).
+                    Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
@@ -2931,9 +2937,6 @@ struct ChatView: View {
             if style == .assistant, lines.isEmpty, !pending.isEmpty { DayLine(date: .now).flippedBack() }
             // Every message, timer line, tool count and answer is its own lazy row (a running turn can hold
             // hundreds of steps; one stack of them froze the page).
-            // The oldest dozen lines start loading the page before them: by the time you reach the top it is
-            // usually there (pages with screenshots run to megabytes and take seconds).
-            let prefetch = Set(lines.prefix(12).map(\.id))
             let openRecap = ChatLines.openRecap(lines, pending: viewing == nil ? pendingRecap : nil)
             ForEach(lines.reversed()) { line in
                 Group {
@@ -2947,7 +2950,6 @@ struct ChatView: View {
                     .debugLineY(line.id, scratch)
                     .landingFrame(line.id == landing, scratch)
                     .id(line.id)
-                    .onAppear { if prefetch.contains(line.id) { prefetchOlder() } }
                     .zIndex(menu.selected != nil && line.holds(menu.selected) ? 1 : 0)
                 // Upside down: drawn after the line is drawn above it, where it was written.
                 ForEach((placed.before[line.id] ?? []).reversed()) { msg in
@@ -3023,7 +3025,13 @@ struct ChatView: View {
         }
         // Any part of a row on screen: `visibleLines` counts a row once half of it is, and a line taller than two
         // screens never is. None at all after a landing is a blank page (`mendBlankLanding`).
-        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in scratch.drawnLines = ids }
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+            scratch.drawnLines = ids
+            // The oldest dozen lines start loading the page before them: by the time you reach the top it is usually
+            // there (pages with screenshots run to megabytes and take seconds). Here, not an `onAppear` on every row:
+            // each row the lazy list made while scrolling then ran an action and an update of the page for nothing.
+            if lines.prefix(12).contains(where: { ids.contains($0.id) }) { prefetchOlder() }
+        }
         .flippedBack() // the scroll view itself upside down; every row above is flipped back
         // Safe areas would land on the wrong ends of a flipped scroll view: ignore them and add the room ourselves.
         // (Content top = the composer side on screen, content bottom = the navigation side.) The newest end has the
