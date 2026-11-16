@@ -1202,7 +1202,8 @@ A permission card offers **Always allow** only where the answer is kept (#3590).
 - `false`: nothing would keep it. The manager sets it on every other card it asks itself: the extensions' tools
   (`computer_*`, `browser_run`, `iphone_do`, connector writes, `extension.ui`), `persona_settings`, its to-do, agent
   and health confirmations; and on a node's card in an assistant chat it will not remember (keys but no store, more
-  than 32 keys, `fields`, or a health conversation's card, confirmed each time). Clients show only Allow and Deny, and
+  than 32 keys, `fields`, no keys at all, as a gated command confirmed whole names none (#9075), or a health
+  conversation's card, confirmed each time). Clients show only Allow and Deny, and
   no scope line. An `always` answered on such a card anyway (an older client) is dropped: the card is allowed once.
 - absent: clients keep their own rule, as before: on iOS a card with a session, on the web, Android and in Lark a card
   from Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
