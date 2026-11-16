@@ -182,6 +182,9 @@ data class Todo(
     val priority: String? = null,
     /** The owner's current acceptance round; always submit its captured askedAt. */
     val ask: TodoAsk? = null,
+    /** An open task whose latest review waits on the owner: that review's time, and the owner's Don't handle for exactly
+     *  that review (web #4874, docs/protocol/protocol.md `GET /api/v1/todos`); null otherwise and from an older hub. */
+    @SerialName("decision_review") val decisionReview: DecisionReview? = null,
     @SerialName("pr_url") val prUrl: String? = null,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
     /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
@@ -250,6 +253,14 @@ data class TodoOrphaned(val reason: String? = null, @WireTime val since: String?
  * for the next briefing, with nothing pushed for it, while [forBriefing] (#4930, "Decisions that can wait"); one the owner
  * gave the same go-ahead for three times carries the rule it suggests ([suggestion], #4929). All absent from an older hub.
  */
+/** A task's review decision as the hub tracks it (#4874): [reviewAt] is the latest review's `at`, [dismissalId] set while
+ *  the owner chose Don't handle for that review; a new review restores it. */
+@Serializable
+data class DecisionReview(
+    @WireTime @SerialName("review_at") val reviewAt: String? = null,
+    @SerialName("dismissal_id") val dismissalId: String? = null,
+)
+
 @Serializable
 data class TodoAsk(
     val outcome: String? = null,
@@ -335,6 +346,8 @@ data class Supervision(
     val round: Int = 0,
     val reviews: List<TaskReview> = emptyList(),
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
+    /** When the task entered `pending_review`; null in every other state, and from an older hub. */
+    @WireTime @SerialName("pending_since") val pendingSince: String? = null,
     /** The agent's explicit report; missing counts never imply a percentage. */
     val progress: TaskProgress? = null,
 )

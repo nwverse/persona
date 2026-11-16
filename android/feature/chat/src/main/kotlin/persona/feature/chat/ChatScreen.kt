@@ -22,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -72,6 +74,9 @@ import kotlinx.coroutines.withContext
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
 private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
 
+/** Guidance supplied by the Assistant host for its main conversation's composer. */
+val LocalMainChatGuidance = androidx.compose.runtime.compositionLocalOf<(@Composable () -> Unit)?> { null }
+
 /** The shell supplies repositories and optional terminal/navigation affordances, never wire clients. */
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
@@ -98,6 +103,8 @@ fun ChatScreen(
     historyFooter: (@Composable () -> Unit)? = null,
     /** Display metadata for a history entry that is absent from the live session list. */
     historySession: Session? = null,
+    /** The host already knows this is Health; do not briefly route its files as ordinary attachments while the row loads. */
+    healthChat: Boolean = false,
 ) {
     PersonaTheme(darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f) {
         LaunchedEffect(sessionKey, chrome.childSessionId) {
@@ -116,7 +123,7 @@ fun ChatScreen(
                 scopedReadingKey, anchorStore ?: local?.anchors,
                 renderStyle, textUpdates,
                 composerService, composerState ?: rememberChatComposerState(), onDraftChanged, onContextCleared, statusBindings,
-                embedded, showTopBar, historyReadOnly, historyFooter, historySession)
+                embedded, showTopBar, historyReadOnly, historyFooter, historySession, healthChat)
         }
     }
 }
@@ -134,7 +141,7 @@ private fun ChatPage(
     statusBindings: ChatStatusBindings,
     embedded: Boolean, showTopBar: Boolean,
     historyReadOnly: Boolean, historyFooter: (@Composable () -> Unit)?,
-    historySession: Session?,
+    historySession: Session?, healthChat: Boolean,
 ) {
     val pageSources = rememberChatPageSources(key, repository, sender, interactions, sessions, chrome, textUpdates,
         statusBindings)
@@ -198,6 +205,9 @@ private fun ChatPage(
     var footerHeight by remember { mutableIntStateOf(0) }
     var taskHeight by remember { mutableIntStateOf(0) }
     var stackHeight by remember { mutableIntStateOf(0) }
+    // The page's height above the keyboard, in pixels, read only where it is used (PendingStack.cap, the trays' room): it moves
+    // on every frame the keyboard slides, and a BoxWithConstraints here composed the whole page again on each of them.
+    var pageHeightPx by remember { mutableIntStateOf(-1) }
     val pageTrays = rememberChatPageTrays(key, chrome, renderStyle, connection)
     val assistantTrays = pageTrays.assistantTrays
     var trayApproving by pageTrays.trayApproving
@@ -225,43 +235,35 @@ private fun ChatPage(
     val stackCards = pageRequests.stackCards
     val messages = pageRequests.messages
     val composerDeliveries by pageRequests.composerDeliveries
-    var submittedDraft by remember { mutableStateOf<Pair<String, ChatComposerDraft>?>(null) }
-    var clearingPane by rememberSaveable { mutableStateOf<String?>(null) }
     var linkContexts by rememberSaveable(stateSaver = ChatLinkContextsSaver) { mutableStateOf(emptyList<ChatLinkContext>()) }
     var conversationLauncher by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
     var conversationModel by rememberSaveable(key.path, chrome.assistantManagement) { mutableStateOf<String?>(null) }
-    var submittedContexts by remember { mutableStateOf(emptyList<ChatLinkContext>()) }
-    var notice by remember { mutableStateOf<String?>(null) }
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
     var hostRetried by rememberSaveable(key.path) { mutableStateOf<String?>(null) }
-    val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
-    var statusSheet by remember { mutableStateOf(false) }
+    val statusSheetState = remember { mutableStateOf(false) }
+    var statusSheet by statusSheetState
     // The loop and background work's sheet, from the header's pill (Glass, #4339 C8).
     var activitySheet by remember { mutableStateOf(false) }
     // The shell presents transient notices once; persistent sync errors stay inline.
     val feedback = persona.core.designsystem.LocalAppFeedback.current
-    // A message only on this phone taken off (Cancel send / Delete): nothing was sent; Undo puts it back (#4645,
-    // docs/design/DESIGN_SYSTEM.md 4.4 principle 3).
-    fun removed(message: OutboxMessage) {
-        val deleted = res.getString(R.string.chat_delivery_deleted)
-        val undo = persona.core.designsystem.FeedbackAction(res.getString(R.string.chat_delivery_undo)) { sender.restore(message) }
-        if (feedback?.notice(deleted, undo) != true) notice = deleted
-    }
-    fun deliveryAction(message: OutboxMessage, action: DeliveryAction) {
-        if (readOnly) return
-        if (!message.state.allows(action, canSend)) return
-        scope.launch {
-            try {
-                if (!deliveryActions.perform(message.clientMessageId, action, composer::restoreMessage, ::removed))
-                    notice = res.getString(R.string.chat_screen_delivery_changed)
-                else if (action == DeliveryAction.Discard) statusSheet = false
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { notice = res.getString(R.string.chat_screen_delivery_failed) }
-        }
-    }
-    LaunchedEffect(notice) { notice?.let { if (feedback?.notice(it) == true) notice = null } }
+    val deliveryActions = remember(sender) { ChatDeliveryActions(sender) }
+    val clearingPaneState = rememberSaveable { mutableStateOf<String?>(null) }
+    var clearingPane by clearingPaneState
+    val timelineFollow = remember { mutableStateOf<(() -> Unit)?>(null) }
+    val submittedContextState = remember { mutableStateOf(emptyList<ChatLinkContext>()) }
+    val interactionController = rememberChatInteractionController(key, sender, interactions, sessions, composer,
+        composerService, scope, res, feedback, haptics, pageRequests, pageTrays, rememberUpdatedState(canSend),
+        rememberUpdatedState(readOnly), statusSheetState,
+        deliveryActions, clearingPaneState, pageCloseout.drawnSwitch, switchSession, tasks, timelineFollow, submittedContextState)
+    var notice by interactionController.notice
+    var submittedDraft by interactionController.submittedDraft
+    var submittedContexts by submittedContextState
+    var sending by interactionController.sending
+    var sendingId by interactionController.sendingId
+    fun removed(message: OutboxMessage) = interactionController.removed(message)
+    fun deliveryAction(message: OutboxMessage, action: DeliveryAction) = interactionController.deliveryAction(message, action)
     val currentDraftCallback by rememberUpdatedState(onDraftChanged)
     LaunchedEffect(composer) { snapshotFlow { composer.draft }.collect { currentDraftCallback?.invoke(it) } }
     LaunchedEffect(sessionList, clearingPane) {
@@ -282,8 +284,6 @@ private fun ChatPage(
         if (allMessages.none { it.session == key && it.text == SlashCommand.CLEAR && it.state != DeliveryState.Sent })
             notice = res.getString(R.string.chat_screen_clear_sent)
     }
-    var sending by remember { mutableStateOf(false) }
-    var sendingId by remember { mutableStateOf<String?>(null) }
     // A card open on its full page, in either place of cards.
     var taskOverlay by remember { mutableStateOf(false) }
     var stackOverlay by remember { mutableStateOf(false) }
@@ -409,6 +409,7 @@ private fun ChatPage(
     fun followEnd() {
         chatList.returnToLatest()
     }
+    timelineFollow.value = ::followEnd
     fun expand(item: Item) {
         val fold = item.fold ?: return
         if (item.id in folding) return
@@ -444,50 +445,11 @@ private fun ChatPage(
         if (!chatList.followsEnd) scope.launch { chatList.scrollToRecord(line.contentKey) }
     } }, modifier) } }
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
-    fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean {
-        if (readOnly || !canSend) return false
-        if (sending || submittedDraft != null) return false
-        if (command == null && ((!composer.hasContent && linkContexts.isEmpty()) || !composer.ready)) return false
-        val draft = composer.draft
-        val refs = if (command == null) linkContexts else emptyList()
-        val wireText = command ?: linkMessage(composer.message(), refs, context.resources)
-        val id = UUID.randomUUID().toString()
-        if (command == null) { submittedDraft = id to draft; submittedContexts = refs }
-        if (command == "/clear") clearingPane = session?.paneId
-        sendingId = id
-        sending = true
-        followEnd()
-        scope.launch {
-            try {
-                // Routed to a task ("Say to "xx""): its accepted response, not launching the request, consumes the route
-                // and clears the draft below. Until then this has the same pending state as an ordinary send (#5949).
-                val routed = command == null && tasks != null && refs.isEmpty() && draft.attachments.isEmpty() &&
-                    tasks.sendRouted(key.sessionId, draft.text.trim())
-                if (!routed) {
-                    // The user's own message carries out a launcher switch waiting on Glass, where the pill shows it (#5055):
-                    // `apply_switch`; any other message leaves it waiting.
-                    if (command == null && switchesNext(switchSession, glass && agentChat)) {
-                        sender.sendApplyingSwitch(key, wireText, id)
-                        drawnSwitch = null
-                    } else sender.send(key, wireText, id, null, conversationLauncher, conversationModel)
-                }
-                if (command == null) {
-                    composer.clearIfUnchanged(draft)
-                    linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } }
-                    submittedDraft = null; submittedContexts = emptyList()
-                }
-            }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                submittedDraft = null; submittedContexts = emptyList()
-                if (command == SlashCommand.CLEAR) clearingPane = null
-                onFailed()
-                if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res)
-            }
-            finally { sending = false; sendingId = null }
-        }
-        return true
-    }
+    fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean = interactionController.send(command,
+        draft = composer.draft, contexts = linkContexts, hasContent = composer.hasContent, ready = composer.ready,
+        wireText = command ?: linkMessage(composer.message(), linkContexts, context.resources), paneId = session?.paneId,
+        conversationLauncher = conversationLauncher, conversationModel = conversationModel, glassAgent = glass && agentChat,
+        onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
     // Chat content (group A): the message menu, the image viewer, photos and paths in messages, the API error retry.
     val messageMenu = remember { MessageMenuState() }
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
@@ -658,50 +620,24 @@ private fun ChatPage(
             backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true },
             onOpenSetup = chrome.onOpenSetup?.let { open -> { page: persona.core.contracts.BriefSetupPage -> open(page, session?.manager) } })
     }
-    fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
-        if (trayApproving || taps.busy || readOnly) return
-        trayApproving = true
-        scope.launch {
-            try {
-                for ((interaction, resolution) in captured) {
-                    val current = interactions.pending.value
-                    val sourceSession = sessions.sessions.value.firstOrNull { it.key == interaction.sessionKey }
-                        ?: taskAgentSessions[GroupKeys.rawKey(interaction.sessionKey)]
-                    if (!taps.canTap(interaction, current, java.time.Instant.now()) || trayApproval(interaction, sourceSession) != resolution) continue
-                    taps = taps.tapped(interaction.id)
-                    try {
-                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
-                        result.submission.haptic?.let(haptics)
-                        taps = taps.answered(interaction.id, result.card)
-                        if (!result.withdraw) notice = result.notice(res, interaction, resolution)
-                        // An approval from the tray answers a card here too: the next one waiting elsewhere is offered.
-                        else if (result.offersNext(resolution)) answeredHere++
-                    } finally { taps = taps.idle() }
-                }
-            } finally { trayApproving = false }
-        }
-    }
-    fun sendTray(draft: TrayDraft) {
-        if (traySending || readOnly || !canSend) return
-        traySending = true
-        scope.launch {
-            try {
-                when (draft) {
-                    is TrayDraft.Inbox -> {
-                        val accepted = chrome.inboxScope?.let { scopeId ->
-                            chrome.inboxTrays?.send(scopeId, draft.draft, traySendIds.getOrPut(draft.draft) { UUID.randomUUID().toString() })
-                        } == true
-                        if (!accepted) notice = res.getString(R.string.chat_tray_draft_changed)
-                    }
-                    is TrayDraft.Feed -> {
-                        val latest = tasks?.feeds?.value?.get(key.sessionId)?.firstOrNull { it.id == draft.item.id }
-                        if (latest != draft.item || !latest.canSend) notice = res.getString(R.string.chat_tray_draft_changed)
-                        else tasks?.sendMessage(draft.item, draft.text) { notice = operationFeedback(it).text.resolve(res) }
-                    }
-                }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
-            finally { traySending = false }
+    // A task's or an agent's own detail is a sheet on a phone; a wide window pushes the same page into this column, as
+    // iOS's `detailPresentation` does on an iPad or an open Duo (#9347). The chat stays composed under it, so Back finds
+    // it at the same scroll position; "All" stays a sheet at any width, as iOS's board is.
+    val pushedDetail = taskHost?.let { host -> host.sheet.value?.takeIf { it.pushesOnWide(LocalLargeWindowInput.current) } }
+    fun approveTray(captured: List<Pair<Interaction, Resolution>>) = interactionController.approve(captured, taskAgentSessions)
+    fun sendTray(draft: TrayDraft) = interactionController.sendTray(draft) { current ->
+        when (current) {
+            is TrayDraft.Inbox -> {
+                val accepted = chrome.inboxScope?.let { scopeId ->
+                    chrome.inboxTrays?.send(scopeId, current.draft, traySendIds.getOrPut(current.draft) { UUID.randomUUID().toString() })
+                } == true
+                if (!accepted) notice = res.getString(R.string.chat_tray_draft_changed)
+            }
+            is TrayDraft.Feed -> {
+                val latest = tasks?.feeds?.value?.get(key.sessionId)?.firstOrNull { it.id == current.item.id }
+                if (latest != current.item || !latest.canSend) notice = res.getString(R.string.chat_tray_draft_changed)
+                else tasks?.sendMessage(current.item, current.text) { notice = operationFeedback(it).text.resolve(res) }
+            }
         }
     }
     trayPlan?.let { plan -> taskHost?.let { host ->
@@ -725,8 +661,9 @@ private fun ChatPage(
             }
         }
     }
-    // Drawn whatever the composer area shows: a read-only assistant conversation's task cards open their sheet too.
-    taskHost?.let { AssistantTaskSheets(it) }
+    // Drawn whatever the composer area shows: a read-only assistant conversation's task cards open their sheet too. A
+    // wide window's page is drawn over the chat instead (below).
+    if (pushedDetail == null) taskHost?.let { AssistantTaskSheets(it) }
     if (backgroundOpen) CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
         AssistantBackgroundRecords(assistantPresentation.background, key, loader,
             onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors, hideTaskPrompts = foldsBackground,
@@ -747,13 +684,6 @@ private fun ChatPage(
             }
         }
     }
-    LaunchedEffect(interactionFeedback) {
-        if (interactionFeedback != null) { delay(3_000); interactionFeedback = null }
-    }
-    // As long as the web shows its "Answered" receipts (20 s); never moves on by itself.
-    LaunchedEffect(answeredHere) {
-        if (answeredHere > 0) { offerNext = true; delay(NEXT_WAITING_MILLIS); offerNext = false }
-    }
     LaunchedEffect(allRequests) {
         taps = taps.pending(allRequests.map { it.id }.toSet())
     }
@@ -764,7 +694,7 @@ private fun ChatPage(
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
     val headerBusy by rememberUpdatedState(chrome.covered || overlay || chromeOverlay || linkVisible || statusSheet || activitySheet ||
-        terminalHelp || taskPageVisible || fullText != null || search.visible)
+        terminalHelp || taskPageVisible || fullText != null || search.visible || pushedDetail != null)
     LaunchedEffect(headerFold, foldsHeader, reduceMotion) {
         if (!foldsHeader || reduceMotion) return@LaunchedEffect
         while (true) {
@@ -813,8 +743,8 @@ private fun ChatPage(
     ChatSearchNavigation(search, chatList, lines, foldErrors.keys)
     ChatMessageJump(key, repository, chatList, lines, snapshot.hasOlder, snapshot.loading || snapshot.loadingOlder, search,
         onItem = { jumpItem = it }, onNotice = { notice = it })
-    LaunchedEffect(list, chrome.covered, search.visible, search.pending, search.returning, chatList.restored, chatList.programmaticScroll, overlay, chromeOverlay, fullText, linkVisible, statusSheet, terminalHelp, taskPageVisible, lifecycle, snapshot.verified) {
-        if (chrome.covered || search.visible || search.pending || search.returning || !chatList.restored || chatList.programmaticScroll || overlay || chromeOverlay || fullText != null || linkVisible || statusSheet || terminalHelp || taskPageVisible || lifecycle != Lifecycle.State.RESUMED || !snapshot.verified) return@LaunchedEffect
+    LaunchedEffect(list, chrome.covered, search.visible, search.pending, search.returning, chatList.restored, chatList.programmaticScroll, overlay, chromeOverlay, fullText, linkVisible, statusSheet, terminalHelp, taskPageVisible, pushedDetail, lifecycle, snapshot.verified) {
+        if (chrome.covered || search.visible || search.pending || search.returning || !chatList.restored || chatList.programmaticScroll || overlay || chromeOverlay || fullText != null || linkVisible || statusSheet || terminalHelp || taskPageVisible || pushedDetail != null || lifecycle != Lifecycle.State.RESUMED || !snapshot.verified) return@LaunchedEffect
         snapshotFlow {
             if (list.isScrollInProgress) null else list.layoutInfo.visibleItemsInfo.mapNotNull { visible ->
                 currentLinesByKey[visible.key]?.seenItem()
@@ -865,9 +795,14 @@ private fun ChatPage(
                     followEnd()
                 }
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
-                val pageHeight = maxHeight
-                val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
+            val windowHeightPx = LocalWindowInfo.current.containerSize.height
+            val pageDensity = LocalDensity.current
+            // Until the page is measured (its first frame) the window's height stands in.
+            val pageHeight: () -> Dp = { with(pageDensity) { (if (pageHeightPx >= 0) pageHeightPx else windowHeightPx).toDp() } }
+            val trayMax: () -> Dp = { pageHeight() * AssistantTrayTokens.maximumHeightFraction }
+            Box(Modifier.fillMaxSize().padding(bottom = linkInset).onSizeChanged { pageHeightPx = it.height }
+                // The chat under a page a wide window pushed into this column: drawn as it was, and out of screen readers' way.
+                .then(if (pushedDetail != null) Modifier.clearAndSetSemantics {} else Modifier)) {
                 // The rule a question a supervisor passed up suggests, under its card (#4929); a hub from before sends none.
                 val ruleLine: (@Composable (Interaction) -> Unit)? = if (tasks == null) null else { card ->
                     RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
@@ -882,10 +817,12 @@ private fun ChatPage(
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
                     val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
-                    val cap by remember(pageHeight, keyboard, density, above, task, otherShown) {
+                    // The window's height is a key too: it stands in for the page's until the page is measured, and the
+                    // lambda this derived state keeps must see the window's current one after a resize.
+                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx) {
                         derivedStateOf {
                             with(density) {
-                                PendingStack.cap(pageHeight, keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
                                     header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
                                     other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
@@ -894,43 +831,11 @@ private fun ChatPage(
                     // In a box of its own: with no cards it is nothing, and its height reads 0 again.
                     Box(Modifier.onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
                         InteractionPanel(cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
-                            if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
-                                taps = taps.tapped(interaction.id)
-                                scope.launch {
-                                    try {
-                                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
-                                        result.submission.haptic?.let(haptics)
-                                        taps = taps.answered(interaction.id, result.card)
-                                        if (result.withdraw) {
-                                            interactionFeedback = result.notice(res, interaction, resolution)
-                                            if (result.offersNext(resolution)) answeredHere++
-                                        }
-                                        notice = if (result.withdraw) null else result.notice(res, interaction, resolution)
-                                        if (result.submission == InteractionSubmission.PromptChanged || !result.withdraw) {
-                                            try { interactions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                                        }
-                                    } finally { taps = taps.idle() }
-                                }
-                            }
+                            interactionController.answer(interaction, resolution)
                         }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
                             folds = requestFolds,
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
-                            terminalHelp = canTerminal, onDiscardLocal = { interaction ->
-                                if (!taps.busy) {
-                                    taps = taps.tapped(interaction.id)
-                                    scope.launch {
-                                        try {
-                                            interactions.discardLocal(interaction.id)
-                                            taps = taps.discarded(interaction.id)
-                                            interactionFeedback = res.getString(R.string.chat_card_discarded_local)
-                                            notice = null
-                                        } catch (e: CancellationException) { throw e
-                                        } catch (_: Exception) {
-                                            notice = res.getString(R.string.chat_card_discard_failed)
-                                        } finally { taps = taps.idle() }
-                                    }
-                                }
-                            }, keyboard = keyboard,
+                            terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
                             first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
                     }
@@ -999,7 +904,9 @@ private fun ChatPage(
                             if (agentChat) computerPill?.invoke(Modifier.padding(horizontal = Tokens.Space.m))
                             // This agent has nothing left for you, others have (#4325): one tap to the next, no jump.
                             val openRequest = chrome.onOpenRequest
-                            val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                            val ime = WindowInsets.ime
+                            val imeDensity = LocalDensity.current
+                            val keyboard by remember(ime, imeDensity) { derivedStateOf { ime.getBottom(imeDensity) > 0 } }
                             if (showsNextWaiting(offerNext, requests.size, readOnly, canOpen = openRequest != null, keyboard = keyboard))
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
@@ -1078,15 +985,17 @@ private fun ChatPage(
                                 if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.mainSuggestions(composer.value.text,
                                         clear = canSend && LocalMainChatClear.current != null, resources = res).isEmpty())
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                if (embedded && assistantChat) LocalMainChatGuidance.current?.invoke()
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 // Brief and Board's "Mode" sheet: a permission mode, an effort or a model to change (a
                                 // listed model needs the computer's launcher lists), or the modes a provider lists (#8261).
                                 val modeSheet = session != null && (session.canChangeModes || session.canChangeEffortOnly ||
                                     session.canSwitchListedModes || (chrome.worktrees != null && SessionModes.listsModels(session)))
-                                ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
+                                LargeWindowComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
-                                    service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
+                                    service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
+                                    onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
                                     extraContent = linkContexts.isNotEmpty(),
                                     assistantChat = assistantChat,
                                     enabled = canSend, placeholder = when {
@@ -1291,6 +1200,11 @@ private fun ChatPage(
                         }
                     }
                 }
+            }
+            // The detail a wide window pushed into this column (#9347): the sheet's page, over the chat it leaves composed.
+            pushedDetail?.let { open ->
+                val host = taskHost ?: return@let
+                Box(Modifier.fillMaxSize()) { AssistantTaskPage(open, host, onDismiss = { host.sheet.value = null }) }
             }
             if (search.visible) ChatSearchScreen(search, searchableItems, projection.turns.size, snapshot.hasOlder,
                 repository, key, snapshot.history, onClose = { search.close(chatList) })

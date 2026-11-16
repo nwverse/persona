@@ -279,14 +279,18 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
     /// The node has asked macOS for this helper version's grant (once), so Persona Screen is in System Settings' list;
     /// false while macOS's alert is still to come.
     var asked = false
+    /// The ffmpeg with libx264 the user installed on the Mac, as its node found and tested it ("ffmpeg 9.0.2", #8859):
+    /// x264 can be turned on for the Mac's live screen. Nil: none, or an older node.
+    var x264: String? = nil
 
-    enum CodingKeys: String, CodingKey { case version, codecs, permission, asked }
+    enum CodingKeys: String, CodingKey { case version, codecs, permission, asked, x264 }
 
-    init(version: Int = 0, codecs: [String] = [], permission: String? = nil, asked: Bool = false) {
+    init(version: Int = 0, codecs: [String] = [], permission: String? = nil, asked: Bool = false, x264: String? = nil) {
         self.version = version
         self.codecs = codecs
         self.permission = permission
         self.asked = asked
+        self.x264 = x264
     }
 
     init(from decoder: Decoder) throws {
@@ -295,6 +299,7 @@ nonisolated struct MachineScreenVideo: Codable, Hashable, Sendable {
         codecs = (try? c.decodeIfPresent([String].self, forKey: .codecs)) ?? []
         permission = try c.decodeIfPresent(String.self, forKey: .permission)
         asked = (try? c.decodeIfPresent(Bool.self, forKey: .asked)) ?? false
+        x264 = (try? c.decodeIfPresent(String.self, forKey: .x264)) ?? nil
     }
 
     /// The node offers the video channel at all: the Picture / Quality switcher appears only then (#3954).
@@ -334,6 +339,50 @@ nonisolated struct MachineScreenInput: Codable, Hashable, Sendable {
     var granted: Bool { reads && permission == "granted" }
 }
 
+/// What a Mac can do for the live screen's Phone Screen mode (#9314, docs/extensions/computer-use.md "Phone Screen"): its
+/// node's Persona Input can show one window on a portrait virtual display (`version`, the request set it speaks), and
+/// whether that helper may move windows (Accessibility). Absent from a Mac without it or an older node: no mode offered.
+nonisolated struct MachinePhoneScreen: Codable, Hashable, Sendable {
+    var version = 0
+    /// Accessibility (moving windows) for Persona Input: granted | missing.
+    var permission: String? = nil
+
+    var offered: Bool { version > 0 }
+    var granted: Bool { permission == "granted" }
+}
+
+/// A request for Phone Screen (#9314): `op` start (`width` × `height`, the picture in points), windows, place (`pid`,
+/// `window`) or stop, for the live screen whose RFB stream carries `pair`.
+nonisolated struct PhoneScreenRequest: Encodable, Sendable {
+    var pair: String
+    var op: String
+    var width: Double? = nil
+    var height: Double? = nil
+    var pid: Int32? = nil
+    var window: UInt32? = nil
+}
+
+/// What the Mac answered: the virtual display and every display (start), the windows, the one placed.
+nonisolated struct PhoneScreenReply: Decodable, Sendable {
+    var display: MachineDisplay?
+    var displays: [MachineDisplay]?
+    var windows: [PhoneScreenWindow]?
+    var placed: PhoneScreenWindow?
+}
+
+/// One of the Mac's windows for Phone Screen: its app, title, and whether it is on the phone's display now.
+nonisolated struct PhoneScreenWindow: Decodable, Hashable, Sendable, Identifiable {
+    var pid: Int32
+    var window: UInt32
+    var app: String
+    var bundle: String?
+    var title: String
+    var minimized: Bool?
+    var placed: Bool?
+
+    var id: String { "\(pid)/\(window)" }
+}
+
 /// A Mac the assistant may operate through Cua Driver (the hub's plugin cua, docs/extensions/computer-use.md). `enabled`: the user
 /// turned it on for this machine; the rest is what its node found when last asked, and only for an enabled one.
 nonisolated struct MachineComputer: Codable, Hashable, Sendable {
@@ -355,6 +404,8 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var screenSharing = false
     /// 「扩展开着时不自动锁屏」 is on for it (#1507 b2).
     var noAutoLock = false
+    /// x264 is on for its live screen (#8859; the plugin's screen_x264): its own ffmpeg encodes on a direct LAN route.
+    var screenX264 = false
     /// cua or lcu. Nil from a hub that only knows Cua Driver.
     var backend: String? = nil
     /// The official ChatGPT desktop app is installed (LCU's runtime).
@@ -365,11 +416,13 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
     var screenVideo: MachineScreenVideo? = nil
     /// Pixel scrolling (#7775); nil from a Mac without Persona Input or an older node.
     var screenInput: MachineScreenInput? = nil
+    /// Phone Screen (#9314); nil from a node or helper without it.
+    var phoneScreen: MachinePhoneScreen? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, daemon, accessibility, desktop, ready, note, job, backend, chatgpt, displays
         case screenRecording = "screen_recording", screenSharing = "screen_sharing", noAutoLock = "no_auto_lock", screenVideo = "screen_video"
-        case screenInput = "screen_input"
+        case screenInput = "screen_input", screenX264 = "screen_x264", phoneScreen = "phone_screen"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, daemon: Bool = false, accessibility: String? = nil,
@@ -403,6 +456,7 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         job = try? c.decodeIfPresent(ComputerJob.self, forKey: .job)
         screenSharing = try c.decodeIfPresent(Bool.self, forKey: .screenSharing) ?? false
         noAutoLock = try c.decodeIfPresent(Bool.self, forKey: .noAutoLock) ?? false
+        screenX264 = (try? c.decodeIfPresent(Bool.self, forKey: .screenX264)) ?? false
         backend = try c.decodeIfPresent(String.self, forKey: .backend)
         chatgpt = try c.decodeIfPresent(Bool.self, forKey: .chatgpt) ?? false
         // An unreadable list only costs the display choice, not the machine.
@@ -411,6 +465,7 @@ nonisolated struct MachineComputer: Codable, Hashable, Sendable {
         screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
         // An unreadable one only costs pixel scrolling (wheel notches instead).
         screenInput = (try? c.decodeIfPresent(MachineScreenInput.self, forKey: .screenInput)) ?? nil
+        phoneScreen = (try? c.decodeIfPresent(MachinePhoneScreen.self, forKey: .phoneScreen)) ?? nil
     }
 
     /// The node has said how it is (a never-asked one has neither a verdict nor a note).
@@ -443,10 +498,13 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
     var screenVideo: MachineScreenVideo? = nil
     /// As `MachineComputer.screenInput` (#7775).
     var screenInput: MachineScreenInput? = nil
+    /// Phone Screen (#9314), as for the computer.
+    var phoneScreen: MachinePhoneScreen? = nil
 
     enum CodingKeys: String, CodingKey {
         case enabled, installed, version, imported, analytics, ready, note, job, displays
         case setUp = "set_up", screenSharing = "screen_sharing", screenVideo = "screen_video", screenInput = "screen_input"
+        case phoneScreen = "phone_screen"
     }
 
     init(enabled: Bool = false, installed: Bool = false, version: String? = nil, setUp: Bool = false, imported: Bool = false,
@@ -478,6 +536,7 @@ nonisolated struct MachineBrowser: Codable, Hashable, Sendable {
         displays = (try? c.decodeIfPresent([MachineDisplay].self, forKey: .displays)) ?? []
         screenVideo = (try? c.decodeIfPresent(MachineScreenVideo.self, forKey: .screenVideo)) ?? nil
         screenInput = (try? c.decodeIfPresent(MachineScreenInput.self, forKey: .screenInput)) ?? nil
+        phoneScreen = (try? c.decodeIfPresent(MachinePhoneScreen.self, forKey: .phoneScreen)) ?? nil
     }
 
     /// The node has said how it is.
@@ -493,14 +552,17 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
     var width: Double
     var height: Double
     var main: Bool = false
+    /// Pixels per point (2 for Retina, #9314): Screen Sharing draws each display at its own pixels. 0 from an older node.
+    var scale: Double = 0
 
-    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false) {
+    init(id: Int, x: Double, y: Double, width: Double, height: Double, main: Bool = false, scale: Double = 0) {
         self.id = id
         self.x = x
         self.y = y
         self.width = width
         self.height = height
         self.main = main
+        self.scale = scale
     }
 
     init(from decoder: Decoder) throws {
@@ -511,6 +573,7 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
         width = try c.decode(Double.self, forKey: .width)
         height = try c.decode(Double.self, forKey: .height)
         main = try c.decodeIfPresent(Bool.self, forKey: .main) ?? false
+        scale = (try? c.decodeIfPresent(Double.self, forKey: .scale)) ?? 0
     }
 
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
@@ -653,7 +716,14 @@ extension Launcher {
     /// use (headless `claude -p`, `codex app-server`, the runtime). Other agents (TRAEX…) are left out; the node
     /// refuses them with a reason too.
     var runsAssistant: Bool {
-        assistant == true || (baseURL != "(traex)" && (agent == nil || agent == "" || agent == "claude" || agent == "codex"))
+        if let assistant { return assistant }
+        guard baseURL != "(traex)" else { return false }
+        // Older hubs can ignore purpose=assistant. A runtime's provider is not a shell command, and managed Codex
+        // launchers cannot start the assistant's app-server. Keep the shell fallback for hubs without capabilities.
+        let managed = source == "persona" || source == LegacyNames.product
+        let machine = source == nil || source == "" || source == "zshrc" || source == "path" || source == "builtin"
+        guard machine || managed, !(managed && agent == "codex") else { return false }
+        return agent == nil || agent == "" || agent == "claude" || agent == "codex" || agent == "agy"
     }
 }
 
@@ -1285,11 +1355,17 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         default: nil
         }
     }
+    private static let nodeReadOnlyPrefix = "仅查看：" // i18n-ignore: the node's prefix it strips
+
     var sourceSubtitle: String? {
         guard let sourceLabel else { return nil }
         let detail = sourceKind == "identity_conflict" ? nil : agentName.flatMap { $0.isEmpty ? nil : $0 }
         let label = detail.map { sourceLabel + " · " + $0 } ?? sourceLabel
-        let reason = readOnlyReason.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Sending isn't allowed from this source yet")
+        // The node writes some reasons with their own "View only: " in Chinese, which this line adds already (#7803;
+        // Android's `READ_ONLY_PREFIX`).
+        let given = readOnlyReason.map { $0.hasPrefix(Self.nodeReadOnlyPrefix) ? String($0.dropFirst(Self.nodeReadOnlyPrefix.count)) : $0 }
+        let reason = given.map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
+            ?? String(localized: "Sending isn't allowed from this source yet")
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 

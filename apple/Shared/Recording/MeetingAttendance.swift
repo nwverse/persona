@@ -7,18 +7,30 @@ import Foundation
 nonisolated enum MeetingAttendance: String, Codable, CaseIterable, Sendable {
     /// Today's behaviour: the hub writes minutes after the meeting, and nothing reaches it while the meeting goes on.
     case off
+    /// Persona isn't in the meeting, but its room follows it (#8851, #8731): the live log, topics and highlights come,
+    /// and Persona answers nothing. The phone's own role for a room meeting Persona wasn't invited to, on a hub that
+    /// listed `meeting_notes` as it started (`RecordingAttendance.notes`); never picked (`choices`), shown as Off.
+    case notes
     /// Persona follows the meeting and answers on screen only. It never speaks.
     case listener
     /// Persona also says its answers out loud, through a connected headset or the loudspeaker.
     case participant
 
+    /// The meeting goes to the hub as it happens (the live log; a room meeting's room follows it): every role but off.
     var attends: Bool { self != .off }
+    /// Persona is in the meeting and answers when asked (on screen, or out loud too).
+    var answers: Bool { self == .listener || self == .participant }
     var speaks: Bool { self == .participant }
+
+    /// The roles a person picks: notes is the phone's own (Persona not invited), shown as Off.
+    static let choices: [MeetingAttendance] = [.off, .listener, .participant]
+    /// The choice a picker shows for this role.
+    var shown: MeetingAttendance { self == .notes ? .off : self }
 
     /// The segmented choice's word.
     var title: String {
         switch self {
-        case .off: String(localized: "Off")
+        case .off, .notes: String(localized: "Off")
         case .listener: String(localized: "Listen [Meeting Role]")
         case .participant: String(localized: "Take Part [Meeting Role]")
         }
@@ -27,7 +39,7 @@ nonisolated enum MeetingAttendance: String, Codable, CaseIterable, Sendable {
     /// One plain sentence on what the choice does.
     var detail: String {
         switch self {
-        case .off: String(localized: "Persona stays out of the meeting. The minutes come after it ends.")
+        case .off, .notes: String(localized: "Persona stays out of the meeting. The minutes come after it ends.")
         case .listener: String(localized: "Persona follows the meeting. Ask it from this phone; it answers on screen and never speaks.")
         case .participant: String(localized: "Persona follows the meeting and answers out loud when you tap Ask Persona.")
         }
@@ -69,6 +81,9 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// Started while the hub listed `meeting_highlights` beside `meeting_live_view` (phase 2b): the page's top card shows
     /// the room's highlights once it set any, and `GET …/live` reads them. Only ever with `liveView`.
     var highlights: Bool = false
+    /// Started while the hub listed `meeting_notes` beside `meeting_live_view` (#8851): Persona out of the meeting is
+    /// `notes`, not off, so the room keeps following it (`outRole`). Only ever with `liveView`.
+    var notes: Bool = false
     /// The start sheet's Private meeting choice, sent as the upload's `private` (the hub takes it only while it has no mark).
     var privateMark: Bool? = nil
     /// The owner picked the main chat to attend this meeting (#3862): the only way it ever attends one. A meeting's words
@@ -100,6 +115,10 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// the recording, so its hub-mode time ends there for good, also after a relaunch: no socket, and no audio recorded
     /// from then on goes up, live or as a gap. Nil while it may run.
     var hubStopped: RecordingHubStop?
+    /// A room meeting's Persona invited in or taken out while it records (#8731): when, on the wall clock, and whether it
+    /// answers from then on, so the thread says "Persona joined / left the meeting" where it happened (`MeetingThread`).
+    /// How the meeting began is the room's header. Kept on this phone only: no upload carries it.
+    var presence: [RecordingPresence] = []
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
@@ -114,10 +133,16 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// A room meeting's attendance as it starts: no attending session (the meeting's own room attends), whatever the role.
     /// `highlights` counts only beside `liveView`, as the hub lists it only beside `meeting_live_view`. `transcription`:
     /// the mode asked for, when the hub lists `meeting_transcription` (phase 5); its role is the first of `roles`.
+    /// `notes` (#8851): the hub lists `meeting_notes`, so a meeting Persona isn't invited to starts as `notes`.
     static func room(_ role: MeetingAttendance, private privateMark: Bool, photos: Bool, liveView: Bool = false,
-                     highlights: Bool = false, transcription: MeetingTranscriptionMode? = nil, at: Double = 0) -> RecordingAttendance {
+                     highlights: Bool = false, notes: Bool = false, transcription: MeetingTranscriptionMode? = nil,
+                     at: Double = 0) -> RecordingAttendance {
+        // Notes asked for by name, or by the hub's flag for a meeting Persona isn't invited to.
+        let notes = liveView && notes || role == .notes
+        let role = role.answers ? role : notes ? MeetingAttendance.notes : .off
         var a = RecordingAttendance(role: role, at: at)
         a.room = true
+        a.notes = notes
         a.photos = photos
         a.liveView = liveView
         a.highlights = liveView && highlights
@@ -130,8 +155,8 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, liveView, highlights,
-             privateMark, mainPicked
-        case transcription, roles, hubTime, hubRolledBack, hubStopped
+             privateMark, mainPicked, notes
+        case transcription, roles, hubTime, hubRolledBack, hubStopped, presence
     }
 
     init(from decoder: Decoder) throws {
@@ -151,6 +176,8 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         liveView = (try? c.decodeIfPresent(Bool.self, forKey: .liveView)) ?? false
         // Written since phase 2b; a file from before has none, and its meeting shows no highlights.
         highlights = (try? c.decodeIfPresent(Bool.self, forKey: .highlights)) ?? false
+        // Written since #8731; a file from before has none, and its Persona-out role is off.
+        notes = (try? c.decodeIfPresent(Bool.self, forKey: .notes)) ?? false
         privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
         // Written since #3862; a file from before has none: its main chat was never picked, so it goes as off.
         mainPicked = (try? c.decodeIfPresent(Bool.self, forKey: .mainPicked)) ?? false
@@ -161,6 +188,8 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         hubTime = (try? c.decodeIfPresent([RecordingPeriod].self, forKey: .hubTime)) ?? []
         hubRolledBack = (try? c.decodeIfPresent(Bool.self, forKey: .hubRolledBack)) ?? false
         hubStopped = try? c.decodeIfPresent(RecordingHubStop.self, forKey: .hubStopped)
+        // Written since #8731 B2; a file from before has none, and its thread shows only how the meeting began.
+        presence = (try? c.decodeIfPresent([RecordingPresence].self, forKey: .presence)) ?? []
     }
 
     /// The recording is a meeting that asked for `hub` from `at` on (its start, or a Note turned into a meeting): a
@@ -212,6 +241,9 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// target is never sent, whatever built the attendance.
     var sentRole: MeetingAttendance { role.attends && !hasAttendee ? .off : role }
 
+    /// The role with Persona out of the meeting: notes while the hub took it as the meeting started, else off.
+    var outRole: MeetingAttendance { room && notes ? .notes : .off }
+
     /// Sets the role at `at` (seconds on the recording's clock), opening or closing the attending period; a meeting that
     /// asked for a transcription mode also keeps the change in `roles` (the hub's timeline).
     mutating func set(_ next: MeetingAttendance, at: Double) {
@@ -223,6 +255,14 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         }
         role = next
         if next.attends { stopped = nil }
+    }
+
+    /// A room meeting's role changes while it records (`MeetingRecorder.setRole`): `set`, and Persona's coming in or
+    /// going out (its answering turning on or off) noted at `now` in `presence`.
+    mutating func turn(_ next: MeetingAttendance, at: Double, now: Date) {
+        let answered = sentRole.answers
+        set(next, at: at)
+        if room, sentRole.answers != answered { presence.append(RecordingPresence(at: now, answers: sentRole.answers)) }
     }
 
     /// The recording writes its short segments (#3862 phase 2, docs/assistant/meeting-minutes.md「Phase 2: live view」), so
@@ -291,6 +331,13 @@ nonisolated struct RecordingRoleChange: Codable, Hashable, Sendable {
     var attendance: MeetingAttendance
 }
 
+/// Persona coming into a room meeting or going out of it (`RecordingAttendance.presence`): when, and whether it answers
+/// from then on.
+nonisolated struct RecordingPresence: Codable, Hashable, Sendable {
+    var at: Date
+    var answers: Bool
+}
+
 /// A stretch with an open end: attending since `start`, until `end` (nil while it goes on).
 nonisolated struct RecordingPeriod: Codable, Hashable, Sendable {
     var start: Double
@@ -342,6 +389,8 @@ nonisolated enum MeetingAttendanceDefaults {
     static let liveViewFeature = "meeting_live_view"
     /// …and the highlights (phase 2b: the page's top card); only ever with `meeting_live_view`.
     static let highlightsFeature = "meeting_highlights"
+    /// …and the notes role (#8851: the room follows a meeting Persona isn't in); only ever with `meeting_live_view`.
+    static let notesFeature = "meeting_notes"
     /// Listed by a hub whose manager takes Persona's echo marked on an upload (#5905: `echo` on segments, `spoken`), with
     /// `meeting_attendance`: only then the upload carries echo lines, else it leaves them out.
     static let echoFeature = "meeting_echo"
@@ -360,6 +409,7 @@ nonisolated enum MeetingAttendanceDefaults {
     static let photosKey = "recording.meeting.photos"
     static let liveViewKey = "recording.meeting.liveView"
     static let highlightsKey = "recording.meeting.highlights"
+    static let notesKey = "recording.meeting.notes"
     static let transcriptionKey = "recording.meeting.transcription"
     /// The hub's `meeting_transcription_default` and `meeting_transcription_ready` as last read (`GET /api/v1/assistant`),
     /// for a one-tap start before the settings are in.
@@ -371,8 +421,9 @@ nonisolated enum MeetingAttendanceDefaults {
 
     /// Keeps whether the hub lists them (a start without the app in front reads them).
     static func remember(conversation: Bool, photos: Bool, liveView: Bool = false, highlights: Bool = false,
-                         transcription: Bool = false,
+                         transcription: Bool = false, notes: Bool = false,
                          _ store: UserDefaults = .standard) {
+        if store.object(forKey: notesKey) == nil || store.bool(forKey: notesKey) != notes { store.set(notes, forKey: notesKey) }
         if store.object(forKey: conversationKey) == nil || store.bool(forKey: conversationKey) != conversation { store.set(conversation, forKey: conversationKey) }
         if store.object(forKey: photosKey) == nil || store.bool(forKey: photosKey) != photos { store.set(photos, forKey: photosKey) }
         if store.object(forKey: liveViewKey) == nil || store.bool(forKey: liveViewKey) != liveView { store.set(liveView, forKey: liveViewKey) }

@@ -405,7 +405,8 @@ func checkMarkdown(text string) error {
 	return nil
 }
 
-// Actions are a view's actions (its components', its search's, filter's and sections' more) and where each is.
+// Actions are a view's actions (its components', its search's, filter's, and its sections' more and link) and where
+// each is.
 func Actions(v *View) []*Action {
 	var out []*Action
 	if v == nil {
@@ -480,6 +481,9 @@ func Actions(v *View) []*Action {
 		}
 		if s.More != nil {
 			out = append(out, &s.More.Action)
+		}
+		if s.Link != nil {
+			out = append(out, &s.Link.Action)
 		}
 	}
 	return out

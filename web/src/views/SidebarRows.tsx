@@ -24,11 +24,12 @@ import { managerOf, useRoster } from "../lib/managers";
 import { BrandMark } from "../ui/BrandMark";
 import { OriginMark } from "../ui/ChannelMark";
 import { autoOrigin, originMarkLabel } from "../lib/conversation-origins";
+import { InfoTip } from "../ui/InfoTip";
 import { Icon, type IconName } from "../ui/icons";
 import { UltraMark } from "./chat/Ultracode";
 import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
-import { rowDetail, useAgentDetails, useContextAsUsed } from "../lib/context-usage";
+import { rowDetail, useAgentDetails } from "../lib/context-usage";
 import { SessionMark } from "../ui/AgentMark";
 import { AgentAvatar } from "./agents/AgentAvatar";
 import { useFolded } from "../lib/use-folded";
@@ -113,45 +114,29 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   );
 });
 
-/** A group's small title inside a sidebar section (Persona chats' 常驻): the same type
- *  as the section's own title, optionally with an icon before it and a ⋯ for the group's actions.
- *  With `onToggle` it folds the group it heads (Persona chats' 最近, #6228): the title is a button with the same
- *  chevron and `aria-expanded` as a section's, so the state is announced without extra words. */
+/** A subgroup title. Its disclosure and help are separate controls. */
 const SUB_HEADING_TYPE = "text-[11px] font-semibold text-ink-3";
-export function SubHeading({ label, icon, onMenu, menuLabel, folded, onToggle }: { label: string; icon?: IconName; onMenu?: (at: MenuAt) => void; menuLabel?: string; folded?: boolean; onToggle?: () => void }) {
+export function SubHeading({ label, folded, onToggle, help }: { label: string; folded?: boolean; onToggle?: () => void; help?: string }) {
   return (
-    <div role="heading" aria-level={3} className="flex items-center gap-1 px-2 pt-0.5 pb-0.5" {...(onMenu ? contextMenuProps((at) => onMenu(at)) : {})}>
-      {onToggle ? (
-        <button type="button" aria-expanded={!folded} onClick={onToggle} className={`touch-hit flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap rounded-[5px] text-left ${SUB_HEADING_TYPE} hover:text-ink-2`}>
-          {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
-          <span className="min-w-0 truncate">{label}</span>
-          <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
-        </button>
-      ) : (
-        <span className={`flex min-w-0 flex-1 items-center gap-1 truncate whitespace-nowrap ${SUB_HEADING_TYPE}`}>
-          {icon && <Icon name={icon} size={10} stroke={2.2} className="shrink-0" />}
-          {label}
-        </span>
-      )}
-      {onMenu && <button
-        type="button"
-        aria-label={menuLabel}
-        aria-haspopup="menu"
-        title={t("sidebar.more")}
-        onClick={(e) => onMenu({ anchor: e.currentTarget })}
-        className="touch-hit relative z-10 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-ink-3 hover:bg-hover hover:text-ink-2"
-      >
-        <Icon name="more" size={12} />
-      </button>}
+    <div className="flex items-center gap-1 px-2 py-0.5">
+      <div role="heading" aria-level={3} className={cx("min-w-0 flex-1", !onToggle && "truncate", SUB_HEADING_TYPE)}>
+        {onToggle ? (
+          <button type="button" aria-expanded={!folded} onClick={onToggle} className="touch-hit relative flex w-full min-w-0 items-center gap-1 whitespace-nowrap rounded-[5px] text-left hover:text-ink-2 [@media(pointer:coarse)]:min-h-11">
+            <span className="min-w-0 truncate">{label}</span>
+            <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
+          </button>
+        ) : label}
+      </div>
+      {help && <InfoTip name={label} text={help} className="[@media(pointer:coarse)]:size-11" />}
     </div>
   );
 }
 
-type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; hint?: string; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState };
+type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; hint?: string; hintCount?: { n: number; label: string }; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState };
 
 // The pages take nothing from the sessions, yet every sessions push re-renders the sidebar: memoized like SessionRow
 // (sameProps), a page row renders again only when its own props change (a badge, the highlight).
-export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label, badge, badgeTone, hint, title, onMenu, menuLabel, dot }: NavRowProps) {
+export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, label, badge, badgeTone, hint, hintCount, title, onMenu, menuLabel, dot }: NavRowProps) {
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
   const ref = useMemo(() => reg(k), [reg, k]);
   const link = (
@@ -172,7 +157,8 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
       </span>
       <span className={cx("min-w-0 flex-1 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2")}>{label}</span>
       {dot && <StatusMark state={dot} size="sm" />}
-      {hint && <span className="text-[11px] text-ink-3 tabular-nums">{hint}</span>}
+      {hintCount ? <GroupCount {...hintCount} className="shrink-0" />
+        : hint && <span className="text-[11px] text-ink-3 tabular-nums">{hint}</span>}
       {badge !== undefined && (
         <span className={cx("flex h-4.5 min-w-4.5 shrink-0 items-center justify-center whitespace-nowrap rounded-full px-1 text-[10.5px] font-semibold tabular-nums", BADGE_CLASS[badgeTone ?? "accent"])} style={{ animation: `pop-in 250ms ${EASE} both` }} key={badge}>
           {badge}
@@ -304,7 +290,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const preview = sessionPreview(s);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
-  const contextUsed = useContextAsUsed();
   const withDetail = details && showState && !s.assistant;
   // when it was last active, at the row's end after its hint (#4236; the work-item row, DESIGN_SYSTEM 3.4): not twice
   // when the details line shows it; a tab's row, whose end is the room for "N agents", keeps it to offline and
@@ -319,7 +304,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // mount time until the first tick, and a row may only start showing an age long after it mounted
   const showsAge = ageAtEnd || (withDetail && !!s.updated_at);
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit");
-  const detail = withDetail ? rowDetail(s, contextUsed) : [];
+  const detail = withDetail ? rowDetail(s, now) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
   const workflowTitle = workflow ? workflowLine(s, now) : "";
   // its own task list (#5302): 3/5 · the step in progress

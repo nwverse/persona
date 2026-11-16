@@ -136,12 +136,17 @@ private fun PageFrame(
     topScrollEdgeStyle: ScrollEdgeStyle,
     bottomScrollEdgeStyle: ScrollEdgeStyle,
     probePage: String? = null,
+    /** No reading inset: the content takes the pane's whole width ([JListPage]'s `fullWidth`). */
+    fullWidth: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val chrome = LocalChromeInsets.current
-    val navigationPadding = WindowInsets.navigationBars.asPaddingValues()
-    val navigation = navigationPadding.calculateBottomPadding()
+    // Read unconsumed navigation-bar insets inside layout measurement rather than composition: an ancestor or page
+    // imePadding() consumes the IME height from the bottom of the window (which covers the navigation bar once open),
+    // and horizontal shell insets consume side bars in landscape, without subscribing PageFrame to keyboard frames.
+    val navigationInsets = WindowInsets.navigationBars
+    var consumedInsets by remember { mutableStateOf(WindowInsets(0, 0, 0, 0)) }
     val glass = LocalGlassSource.current ?: remember { HazeState() }
     val window = LocalWindowLayout.current
     CompositionLocalProvider(LocalGlassSource provides glass) {
@@ -150,19 +155,21 @@ private fun PageFrame(
             val light = ambience ?: LocalAmbience.current
             // Bars and content are measured in one pass. In particular, a dock's real height decides whether the lower
             // side is usable; an onSizeChanged correction would first draw a frame across the hinge.
-            SubcomposeLayout(modifier.fillMaxSize()) { constraints ->
+            SubcomposeLayout(modifier.fillMaxSize().onConsumedWindowInsetsChanged { consumedInsets = it }) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
+                val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
+                val navigationBottom = unconsumedNavigation.getBottom(this)
+                val navigation = navigationBottom.toDp()
                 val bars = subcompose(PageSlot.Top) { topBar() }.map { it.measure(loose) }
                 // A host's bar above this page (chrome.top): this page's own bars sit below it, the content under both.
                 val above = chrome.top.roundToPx().coerceIn(0, constraints.maxHeight)
-                val dockStart = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateLeftPadding(layoutDirection).roundToPx()
-                val dockEnd = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateRightPadding(layoutDirection).roundToPx()
+                val dockStart = if (chrome.handlesNavigationBar) 0 else unconsumedNavigation.getLeft(this, layoutDirection)
+                val dockEnd = if (chrome.handlesNavigationBar) 0 else unconsumedNavigation.getRight(this, layoutDirection)
                 // System and host insets are placement arithmetic, not part of the dock measurement: tabletop needs
                 // the dock's actual height, while a flat page keeps exactly its former bottom inset behavior.
                 val dock = if (bottomBar == null) emptyList() else subcompose(PageSlot.Bottom) {
-                    Box(Modifier.fillMaxWidth().then(if (chrome.handlesNavigationBar) Modifier
-                        else Modifier.consumeWindowInsets(WindowInsets.navigationBars)), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.fillMaxWidth().consumeWindowInsets(WindowInsets.navigationBars), contentAlignment = Alignment.TopCenter) {
                         // On wide panes the composer and bars stay as wide as the text they belong to.
                         Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { bottomBar() }
                     }
@@ -170,7 +177,7 @@ private fun PageFrame(
                 val topHeight = above + (bars.maxOfOrNull { it.height } ?: 0)
                 val dockHeight = dock.maxOfOrNull { it.height } ?: 0
                 val flatDockInset = chrome.bottom.roundToPx() +
-                    (if (chrome.handlesNavigationBar) 0 else navigation.roundToPx())
+                    (if (chrome.handlesNavigationBar) 0 else navigationBottom)
                 val pageLayout = tabletopPageLayout(window, topHeight,
                     bottomBarHeight = if (bottomBar == null) null else dockHeight,
                     totalHeight = constraints.maxHeight, minimumContentHeight = Tokens.MinTouch.android.roundToPx(),
@@ -246,22 +253,27 @@ private fun PageFrame(
         } else {
             // Brief and Board use the same measured policy. Their bars take layout space instead of floating, but the
             // content slot and its state stay identical when a posture change selects split or single layout.
-            SubcomposeLayout(modifier.fillMaxSize().background(palette.background)) { constraints ->
+            SubcomposeLayout(
+                modifier.fillMaxSize().background(palette.background).onConsumedWindowInsetsChanged { consumedInsets = it },
+            ) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
-                val inset = readingInset(constraints.maxWidth.toDp())
+                val inset = if (fullWidth) Tokens.Space.flush else readingInset(constraints.maxWidth.toDp())
+                val unconsumedNavigation = navigationInsets.exclude(consumedInsets)
+                val navigationBottom = unconsumedNavigation.getBottom(this)
+                val navigation = navigationBottom.toDp()
                 val bars = subcompose(PageSlot.Top) { topBar() }.map { it.measure(loose) }
                 val above = chrome.top.roundToPx().coerceIn(0, constraints.maxHeight)
-                val dockStart = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateLeftPadding(layoutDirection).roundToPx()
-                val dockEnd = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateRightPadding(layoutDirection).roundToPx()
+                val dockStart = if (chrome.handlesNavigationBar) 0 else unconsumedNavigation.getLeft(this, layoutDirection)
+                val dockEnd = if (chrome.handlesNavigationBar) 0 else unconsumedNavigation.getRight(this, layoutDirection)
                 val dock = if (bottomBar == null) emptyList() else subcompose(PageSlot.Bottom) {
-                    Box(Modifier.fillMaxWidth().then(if (chrome.handlesNavigationBar) Modifier
-                        else Modifier.consumeWindowInsets(WindowInsets.navigationBars)), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.fillMaxWidth().consumeWindowInsets(WindowInsets.navigationBars), contentAlignment = Alignment.TopCenter) {
                         Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { bottomBar() }
                     }
                 }.map { it.measure(loose.copy(maxWidth = (constraints.maxWidth - dockStart - dockEnd).coerceAtLeast(0))) }
                 val topHeight = above + (bars.maxOfOrNull { it.height } ?: 0)
                 val dockHeight = dock.maxOfOrNull { it.height } ?: 0
-                val flatDockInset = if (chrome.handlesNavigationBar) 0 else navigation.roundToPx()
+                val flatDockInset = chrome.bottom.roundToPx() +
+                    (if (chrome.handlesNavigationBar) 0 else navigationBottom)
                 val pageLayout = tabletopPageLayout(window, topHeight,
                     bottomBarHeight = if (bottomBar == null) null else dockHeight,
                     totalHeight = constraints.maxHeight, minimumContentHeight = Tokens.MinTouch.android.roundToPx(),
@@ -269,8 +281,9 @@ private fun PageFrame(
                 val split = pageLayout as? TabletopPageLayout.Split
                 val contentBottom = when {
                     split != null -> TabletopHingeSpacing.contentBottom
-                    bottomBar == null && !chrome.handlesNavigationBar -> navigation
-                    else -> 0.dp
+                    bottomBar != null -> 0.dp
+                    chrome.handlesNavigationBar -> chrome.bottom
+                    else -> navigation
                 }
                 val dockSpace = if (dock.isEmpty()) 0 else dockHeight + flatDockInset
                 val contentHeight = ((split?.bodyHeight ?: constraints.maxHeight - dockSpace) - topHeight).coerceAtLeast(0)
@@ -364,7 +377,9 @@ fun JFullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
                 }
             }
         }
-        Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        CompositionLocalProvider(LocalSplitDetail provides null) {
+            Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { content() }
+        }
     }
 }
 
@@ -410,10 +425,13 @@ fun JTopBar(
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val compactHeight = 56.dp
+    val splitLeading = resolveDetailLeading(LocalSplitDetail.current, onBack)
     val leading: @Composable () -> Unit = {
-        when {
-            onBack != null -> JBackButton(onClick = onBack)
-            else -> LocalRootLeading.current?.invoke()
+        when (splitLeading) {
+            is DetailLeading.ShowList -> JIconButton(persona.core.designsystem.icons.PersonaIcons.sidebar, stringResource(R.string.designsystem_sidebar), splitLeading.onClick)
+            is DetailLeading.Back -> JBackButton(onClick = splitLeading.onClick)
+            DetailLeading.Hidden -> Spacer(Modifier.width(if (style == AppStyle.Brief) Tokens.Space.s else Tokens.Space.sm))
+            null -> LocalRootLeading.current?.invoke()
         }
     }
     val titleBlock: @Composable RowScope.() -> Unit = {
@@ -500,6 +518,8 @@ fun JListPage(
     /** False when the list should stop above the bottom inset instead of drawing a scroll edge over it. */
     scrollUnderBottom: Boolean = true,
     scrollEdgeStyle: ScrollEdgeStyle = ScrollEdgeStyle.Blurred,
+    /** The content takes the pane's whole width rather than [ReadingWidth]: a grid of cards (an extension's dashboard page). */
+    fullWidth: Boolean = false,
     content: LazyListScope.() -> Unit,
 ) {
     val style = PersonaTheme.style
@@ -515,6 +535,7 @@ fun JListPage(
         underBottom = { scrollUnderBottom && state.canScrollForward },
         topScrollEdgeStyle = scrollEdgeStyle,
         bottomScrollEdgeStyle = scrollEdgeStyle,
+        fullWidth = fullWidth,
     ) { padding ->
         val pad = pagePadding
         val bottom = padding.calculateBottomPadding()

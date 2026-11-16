@@ -486,12 +486,16 @@ function useThread(conv: MeetingConversation | undefined, tick: number, auth: Au
 const ROOM_PROBLEMS = ["runtime_unsupported", "node_too_old", "machine_offline", "start_failed"];
 
 /** The room's state in one line, and its icon. */
-function roomLine(room: MeetingRoom | undefined, role: RecordingView["attendance"], trimmed: boolean): { icon: IconName; text: string } | null {
+function roomLine(room: MeetingRoom | undefined, role: RecordingView["attendance"], notesOnly: boolean, trimmed: boolean): { icon: IconName; text: string } | null {
   const state = roomState(room);
   switch (state) {
     case "none": return { icon: "micOff", text: t("knowledge-kbdetail.room_none") };
     case "starting": return { icon: "clock", text: t("knowledge-kbdetail.room_starting") };
-    case "ready": return { icon: "mic", text: t(role === "participant" ? "knowledge-kbdetail.room_ready_participant" : role === "listener" ? "knowledge-kbdetail.room_ready_listener" : "knowledge-kbdetail.room_ready_off") };
+    case "ready": {
+      // A notes room (#8851) is fed the meeting but Persona is not in it: not "not listening".
+      if (notesOnly) return { icon: "mic", text: t("knowledge-kbdetail.room_ready_notes") };
+      return { icon: "mic", text: t(role === "participant" ? "knowledge-kbdetail.room_ready_participant" : role === "listener" ? "knowledge-kbdetail.room_ready_listener" : "knowledge-kbdetail.room_ready_off") };
+    }
     case "unavailable": {
       const p = room?.problem ?? "";
       return { icon: "warning", text: t(ROOM_PROBLEMS.includes(p) ? `knowledge-kbdetail.room_problem_${p}` : "knowledge-kbdetail.room_problem_other") };
@@ -536,7 +540,7 @@ export function RecordingConversation({ detail, rec, meeting, auth, current, man
   const askById = new Map(asks.map((a) => [a.id.toLowerCase(), a]));
   const showAsks = shownAsks.length > 0;
   const before = roomEntries.length > 0 || showAsks;
-  const status = meeting.roomMeeting ? roomLine(room, rec.attendance, !!rec.trimmedAt) : null;
+  const status = meeting.roomMeeting ? roomLine(room, rec.attendance, !!rec.notesOnly, !!rec.trimmedAt) : null;
   const roomRoute = roomIds ? conversationPage(roomIds.session_id, roomIds.machine_id, manager) : null;
   const followRoute = followup ? conversationPage(followup.session_id, followup.machine_id, manager) : null;
   const loadingRoom = !!roomIds && !roomPart.items && !roomPart.error;

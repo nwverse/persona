@@ -9,7 +9,9 @@
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
-import { agentDraft, agentWorking, canDraft, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, muteShortName, muteTitle, openTitle, policyMenuTitle, openURL, setDone, shortTime, sourceLine, useInbox, type InboxItem } from "../../lib/inbox";
+import { agentDraft, agentWorking, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, openTitle, openURL, setDone, shortTime, useInbox, type InboxItem } from "../../lib/inbox";
+import { lineSummary } from "../../lib/inbox-markdown";
+import { canDraft, muteShortName, muteTitle, policyMenuTitle, sourceLine } from "../../lib/inbox-page";
 import { rowMeta } from "../../lib/inbox-now";
 import { openTodoDialog } from "./InboxTodoDialog";
 import { openFolderDialog, useFoldersShown } from "./InboxFolders";
@@ -201,7 +203,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             {item.summary && !showEvent && (
               <p className="mt-3 text-[13px] leading-relaxed text-ink">
                 <Spark />
-                {item.summary}
+                {lineSummary(item)}
               </p>
             )}
             {!showEvent && <InboxLine item={item} />}

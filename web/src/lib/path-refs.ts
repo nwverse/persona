@@ -20,8 +20,10 @@ export type PathRef = {
   col?: number;
 };
 
-// A name: ASCII, or a letter or digit of any script not right after an extension.
-const SEG = "(?:[A-Za-z0-9_.@+\\-]|(?<!\\.[A-Za-z][A-Za-z0-9]{0,7})[\\p{L}\\p{M}\\p{N}])+";
+// A name: ASCII, or a letter or digit of any script not right after an extension. The second branch never takes an ASCII
+// letter or digit, so each character has one way to match: overlapping branches backtrack exponentially on a long
+// extensionless part such as a 32-character hash (#8894).
+const SEG = "(?:[A-Za-z0-9_.@+\\-]|(?<!\\.[A-Za-z][A-Za-z0-9]{0,7})(?![A-Za-z0-9])[\\p{L}\\p{M}\\p{N}])+";
 const LINE = String.raw`(?::(\d{1,7})(?::(\d{1,5}))?(?:[-–]\d{1,7})?|#L(\d{1,7})(?:-L?\d{1,7})?)?`;
 const TEXT = new RegExp(
   String.raw`(?<![A-Za-z0-9_/:.\-~])(~(?:/${SEG})+/?|/${SEG}(?:/${SEG})+/?|[A-Za-z0-9_.@\-]+(?:/${SEG})+\.[A-Za-z][A-Za-z0-9]{0,7})${LINE}(?![A-Za-z0-9_/\-])`,

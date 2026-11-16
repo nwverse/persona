@@ -1,3 +1,6 @@
+import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
+import { createTodoWithRepositories, type CreateRepositoryBindings } from "../lib/task-repositories";
+import { defaultManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
@@ -72,7 +75,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -168,6 +171,7 @@ export function TodosView({
   onToggleSidebar?: () => void;
 }) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const repositoryManager = useShownManager();
   // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
   // to-do still opens it, without switching
   const everyTodo = useStore((s) => s.todos);
@@ -965,6 +969,9 @@ export function TodosView({
 
       {/* Dialogs */}
       <NewTodoDialog
+        key={`${owner}:${repositoryManager}:${newOpen}`}
+        manager={repositoryManager}
+        owner={owner}
         open={newOpen}
         slot={newSlot}
         onClose={() => {
@@ -1263,7 +1270,6 @@ const SECTION_TONE: Record<TriageSection, string> = {
   working: "text-orange",
   parked: "text-ink-2",
   just_done: "text-green",
-  pr: "text-accent-ink",
   other: "text-ink-2",
   shelved: "text-ink-3",
   done: "text-ink-3",
@@ -1511,7 +1517,9 @@ const TodoListItem = memo(function TodoListItem({
   onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
-  const pr = section === "pr" ? prLink(todo.pr_url) : null;
+  // the PR it waits on: its current one, or an earlier one still open (#7935)
+  const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
+  const pr = openPR ? prLink(openPR.url) : null;
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
   const held = heldDelivery(todo);
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
@@ -1655,7 +1663,7 @@ const TodoListItem = memo(function TodoListItem({
               <Icon name="pullRequest" size={11} />
               {pr.text}
             </a>
-            <span className="truncate">· {prBlockers(todo).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
+            <span className="truncate">· {prBlockers(todo, openPR).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</span>
           </div>
         )}
 
@@ -2078,6 +2086,8 @@ function TodoDetail({
   const retry = () => retryTask(todo).catch((e) => toast(t("todos.action_failed", { error: errorText(e) }), "error"));
   const status = todoStatus(todo, lookup);
   const statusInfo = TODO_STATUS_INFO[shownStatus(todo, status)];
+  // The to-do's own PR, parsed once here (the list row and the repository section's fallback share it).
+  const legacyPR = prLink(todo.pr_url);
   const toneClass = {
     red: "bg-red-tint text-red",
     green: "bg-green-tint text-green",
@@ -2182,8 +2192,9 @@ function TodoDetail({
       )}
       <LatestReport todo={todo} />
 
-      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
-      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub. Its PR link is not drawn again here: the repository links below are the one
+          place a task's issues and PRs are shown (legacy ones included). */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 
@@ -2201,6 +2212,9 @@ function TodoDetail({
           />
         </div>
       </div>
+
+      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
+        legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} />
 
       <ThreadSection todo={todo} />
 
@@ -2816,16 +2830,22 @@ function DecisionDialog({
 
 function NewTodoDialog({
   open,
+  manager,
+  owner,
   slot,
   onClose,
   onCreated,
 }: {
   open: boolean;
+  manager: string;
+  owner: string;
   /** Made on the calendar (#2029): due there, a moment or a whole day; the calendar stays in front once it is saved. */
   slot?: CalendarSlot;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const repositoryContext = useRepositoryRequestContext(manager, owner);
+  const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2857,10 +2877,13 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || !repositoryContext.isCurrent()) return;
     setBusy(true);
     try {
-      const todo = await createTodo(title, notes, due());
+      const todo = repositoryBindings
+        ? await createTodoWithRepositories(repositoryContext, title, notes, due(), repositoryBindings)
+        : await createTodo(title, notes, due());
+      if (!repositoryContext.isCurrent()) return;
       await refreshTodos();
       await refresh();
       toast(t("todos.created"), "ok");
@@ -2869,14 +2892,14 @@ function NewTodoDialog({
       onCreated(todo.id);
       navigate(`/todos?id=${encodeURIComponent(todo.id)}`);
     } catch (err) {
-      toast(t("todos.create_failed", { error: errorText(err) }), "error");
+      if (repositoryContext.isCurrent()) toast(t("todos.create_failed", { error: errorText(err) }), "error");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={t("todos.new_todo")}>
+    <Dialog open={open} onClose={() => { if (!busy) onClose(); }} title={t("todos.new_todo")}>
       <form onSubmit={submit} onKeyDown={submitOnModEnter} className="flex flex-col gap-3.5">
         <div>
           <label className="mb-1 block text-[12px] font-medium text-ink-2">{t("todos.title_label")}</label>
@@ -2930,8 +2953,10 @@ function NewTodoDialog({
           />
         </div>
 
+        <NewTodoRepositoryBindings context={repositoryContext} value={repositoryBindings} onChange={setRepositoryBindings} pending={busy} />
+
         <div className="mt-2 flex justify-end gap-2">
-          <Button tone="secondary" onClick={onClose}>
+          <Button tone="secondary" disabled={busy} onClick={onClose}>
             {t("common.cancel")}
           </Button>
           <Button tone="accent" type="submit" disabled={!title.trim() || busy} busy={busy}>

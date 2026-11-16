@@ -81,7 +81,8 @@ async function hint() {
   await act(async () => {
     for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
     await list.load();
-    await vi.advanceTimersByTimeAsync(0);
+    // past the invalidation throttle window (lib/session-list.ts): the refreshes' trailing reads have gone out
+    await vi.advanceTimersByTimeAsync(2_100);
   });
 }
 

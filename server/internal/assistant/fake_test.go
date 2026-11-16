@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
@@ -36,10 +37,17 @@ type fakeHub struct {
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
 	onDevicesList func()                    // runs once, then clears, before the next devices.list; no lock held
-	hello         Hello
-	settings      *Settings
-	launcherList  []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
-	zshrc         map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
+	// beforeSend runs once, then clears, when session.send is called, before it is answered (what happens on the
+	// agent's computer while the send is out); afterList, by machine, once after that machine's next sessions.list was
+	// answered. No lock held. sendHangs: session.send is never answered while the link stays up, and ends with the
+	// call's context, after beforeSend (a request that went out).
+	beforeSend   func()
+	afterList    map[string]func()
+	sendHangs    bool
+	hello        Hello
+	settings     *Settings
+	launcherList []proto.Launcher            // the nodes' launchers.list (nil: the list fails, so it can't be told)
+	zshrc        map[string][]proto.Launcher // a machine\'s own launchers.list (over launcherList)
 	// hostLaunchers: a machine's launchers.list for a start in its engine host (the call names a host), answered as an
 	// engine that runs only its own launchers would (host_runtime, #8140).
 	hostLaunchers map[string][]proto.Launcher
@@ -57,16 +65,17 @@ type fakeHub struct {
 	voice         []assistantwire.VoicePlugin
 	modelExts     []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage    []string
-	ownModels     bool                       // the test sets hello.Models itself: no fake model
-	devices       []Device                   // devices.list answers these when set (else one per machine with sessions)
-	devicesFull   bool                       // devices.list says its list is complete (a machine not in it was removed)
-	devicesOther  []string                   // devices.list's ids kept out of it (pending, leaving, absorbed)
-	sessions      map[string][]proto.Session // by machine: the machines there are
-	sessionsFail  map[string]int             // by machine: sessions.list fails offline this many more times (then recovers)
-	itemsFail     int                        // session.items fails this many more times (then recovers)
-	items         []proto.Item               // session.items answers this
-	pageTurns     bool                       // and only the last n turns of it to "turns": n, as the node does (else all of it)
-	itemsPage     int                        // > 0: session.items with after_seq pages them by seq, this many a page
+	ownModels     bool                         // the test sets hello.Models itself: no fake model
+	devices       []Device                     // devices.list answers these when set (else one per machine with sessions)
+	devicesFull   bool                         // devices.list says its list is complete (a machine not in it was removed)
+	devicesOther  []string                     // devices.list's ids kept out of it (pending, leaving, absorbed)
+	sessions      map[string][]proto.Session   // by machine: the machines there are
+	sessionsFail  map[string]int               // by machine: sessions.list fails offline this many more times (then recovers)
+	itemsFail     int                          // session.items fails this many more times (then recovers)
+	items         []proto.Item                 // session.items answers this
+	page          func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
+	pageTurns     bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
+	itemsPage     int                          // > 0: session.items with after_seq pages them by seq, this many a page
 	calls         []DeviceCall
 	known         map[string]bool  // conversations the nodes have
 	made          int              // conversations started, for the next id
@@ -77,6 +86,7 @@ type fakeHub struct {
 	larkCLI       bool
 	slowSnapshots time.Duration // the connectors' live states come this late (nothing: there are none)
 	liveStates    []any         // the connectors' live states (connectors.snapshots), when they come at once
+	liveDelay     time.Duration // liveStates come this late instead (the ask's deadline still holds)
 	snapshotAsks  int           // connectors.snapshots calls
 	hungChannel   string        // the channel whose program never answers a send (hangChannel)
 	replies       []string      // the model's answers, in turn (the last one again when they run out)
@@ -100,6 +110,7 @@ type fakeHub struct {
 	offline      map[string]bool
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
+	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -122,6 +133,7 @@ type fakeHub struct {
 
 	// The hub's other apps as a test answers them (answerApp), and the calls they got.
 	apps     map[string]appAnswer
+	blocking map[string]bool // app methods whose answer runs outside the lock (answerAppBlocking)
 	appCalls []AppCall
 
 	inbox *fakeInbox // the inbox's sources (inbox_fake_test.go); nil: the hub has none
@@ -224,8 +236,31 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			hook() // what happens while a card is being made: its "where" reads the machines
 		}
 	}
+	if p.Method == DeviceSessionSend {
+		f.mu.Lock()
+		hook, hangs := f.beforeSend, f.sendHangs
+		f.beforeSend = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		if hangs {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
 	if p.Method != DeviceSessionItems {
-		return f.deviceCall(ctx, p)
+		out, err := f.deviceCall(ctx, p)
+		if p.Method == DeviceSessionsList {
+			f.mu.Lock()
+			hook := f.afterList[p.Device]
+			delete(f.afterList, p.Device)
+			f.mu.Unlock()
+			if hook != nil {
+				hook()
+			}
+		}
+		return out, err
 	}
 	f.mu.Lock()
 	f.itemReads++
@@ -355,6 +390,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		items := f.items
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
+		}
+		if f.page != nil { // a real transcript pages (transcriptChat)
+			n, _ := a["turns"].(float64)
+			items = f.page(max(int(n), 1))
+			if limit, _ := a["limit"].(float64); limit > 0 && len(items) > int(limit) {
+				items = items[len(items)-int(limit):]
+			}
 		}
 		return json.Marshal(map[string]any{"items": items})
 	case DeviceSessionRename:
@@ -510,6 +552,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.refuseUltra != nil && a["ultracode"] == true {
 			return nil, f.refuseUltra
 		}
+		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
+			return nil, f.refuseGoal
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -613,8 +658,15 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	if p.AppID == AppConnectors && p.Method == ConnectorsSnapshots {
 		f.mu.Lock()
 		f.snapshotAsks++
-		slow, live := f.slowSnapshots, f.liveStates
+		slow, live, delay := f.slowSnapshots, f.liveStates, f.liveDelay
 		f.mu.Unlock()
+		if slow == 0 && delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		if slow == 0 {
 			if live == nil {
 				live = []any{}
@@ -629,6 +681,16 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		}
 	}
 	f.mu.Lock()
+	if key := p.AppID + " " + p.Method; f.blocking[key] {
+		answer := f.apps[key]
+		f.appCalls = append(f.appCalls, p)
+		f.mu.Unlock()
+		out, err := answer(p.Params)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}
 	defer f.mu.Unlock()
 	switch p.AppID + " " + p.Method {
 	case AppConnectors + " " + ConnectorsSignedIn:
@@ -1031,6 +1093,9 @@ func storelessService(t testing.TB, f *fakeHub) *Service {
 // newServiceOn is an assistant on f with st as its database.
 func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 	t.Helper()
+	if database, ok := st.(*db.DB); ok {
+		st = repositorystore.New(database)
+	}
 	return withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)}))
 }
 
@@ -1104,6 +1169,20 @@ func (f *fakeHub) answerApp(app, method string, answer appAnswer) {
 		f.apps = map[string]appAnswer{}
 	}
 	f.apps[app+" "+method] = answer
+}
+
+// answerAppBlocking is answerApp for an answer that waits on the test (a post held until the test lets it land): it
+// runs outside the fake's lock, so the service's other calls go on meanwhile. Under the lock, a goroutine of a
+// synctest bubble that calls the fake would wait on the mutex, which is not a durable block: the bubble's clock would
+// stop, and a timer the test waits for would never fire (#8924). The answer must not touch the fake's fields.
+func (f *fakeHub) answerAppBlocking(app, method string, answer appAnswer) {
+	f.answerApp(app, method, answer)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.blocking == nil {
+		f.blocking = map[string]bool{}
+	}
+	f.blocking[app+" "+method] = true
 }
 
 // appParams are the params of each call to app's method, in order.
@@ -1324,16 +1403,27 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 }
 
 // lastTurns is the last n turns of items, as the node pages a transcript (transcript.File.PageTurns): a turn opens
-// with a prompt.
+// with a prompt the node counts (nodePagePrompt), so the page also holds the turns before it that opened with an
+// injected prompt (a scheduled run's, a wake, a supervision prompt). Counting those as turns made the page of a reused
+// scheduled chat hold only the current run, which is how #8874 got past the tests.
 func lastTurns(items []proto.Item, n int) []proto.Item {
 	start := len(items)
 	for seen := 0; start > 0 && seen < n; {
 		start--
-		if it := items[start]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued {
+		if nodePagePrompt(items[start]) {
 			seen++
 		}
 	}
 	return items[start:]
+}
+
+// nodePagePrompt is transcript.pagePrompt (not exported): a user question, not a turn Persona woke. TestLastTurnsPagesLikeTheNode
+// holds the two together on a real transcript.
+func nodePagePrompt(it proto.Item) bool {
+	if it.Role != "user" || it.Kind != proto.KindText || it.Queued || it.Wake || it.Injected != nil {
+		return false
+	}
+	return it.ClientMsgID != "" || it.From != "" || prompts.ParseInjected(it.Text) == nil
 }
 
 // fakeAnswer is how the fake model gives one answer: after delay (a caller that gives up first gets none), stopping for

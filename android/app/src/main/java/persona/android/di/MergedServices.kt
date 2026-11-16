@@ -217,6 +217,9 @@ internal fun mergedMachineManagement(
     override suspend fun claudeDirs(machineId: String) = routes.on(machineId) { it.claudeDirs(machineId) }
     override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
         routes.on(machineId) { it.setBlockedClaudeDirs(machineId, blocked) }
+    override suspend fun claudeLiveReplies(machineId: String) = routes.on(machineId) { it.claudeLiveReplies(machineId) }
+    override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean) =
+        routes.on(machineId) { it.setClaudeLiveReplies(machineId, on) }
     override suspend fun doctor(machineId: String) = routes.on(machineId) { it.doctor(machineId) }
     override suspend fun fixDoctor(machineId: String) = routes.on(machineId) { it.fixDoctor(machineId) }
     override suspend fun browser(machineId: String) = routes.on(machineId) { it.browser(machineId) }
@@ -323,18 +326,9 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
     /** Every group's dashboard in one; [plain] builds the API of one group's connection (null while it has no route). */
     fun metrics(plain: (GroupStack) -> MachineMetricsApi?): MachineMetricsApi = object : MachineMetricsApi {
         private fun of(stack: GroupStack) = plain(stack) ?: throw HubFailure(HubError.NoNetwork)
-        override suspend fun dashboard(): MetricsDashboard {
-            val list = stacks.stacks.value
-            if (list.size == 1) return of(list.single()).dashboard().let { it.copy(machines = it.machines.map(list.single().names::metrics)) }
-            var failure: Exception? = null
-            val parts = list.mapNotNull { stack ->
-                try { of(stack).dashboard().let { it.copy(machines = it.machines.map(stack.names::metrics)) } }
-                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (error: Exception) { if (failure == null) failure = error; null }
-            }
-            if (parts.isEmpty()) throw failure ?: HubFailure(HubError.NoNetwork)
-            return MetricsDashboard(parts.flatMap { it.machines }, parts.first().step)
-        }
+        override suspend fun dashboard(): MetricsDashboard = mergedMetrics(stacks.stacks.value.map { stack ->
+            MetricsGroup(stack.names, { plain(stack) }, stack.metricSnapshots) { stack.current }
+        })
         override suspend fun history(machineId: String, range: MetricRange): MetricsHistory {
             val stack = stacks.of(machineId) ?: throw HubFailure(HubError.NoNetwork)
             val history = of(stack).history(GroupKeys.raw(machineId), range)
@@ -434,6 +428,7 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         private fun of(machineId: String) = list.indexOfFirst { it.owns(machineId) }.takeIf { it >= 0 }
         private fun creation(index: Int?) = index?.let { creations[it] } ?: throw HubFailure(HubError.NoNetwork)
         override suspend fun launchers(machineId: String) = creation(of(machineId)).launchers(machineId)
+        override suspend fun launcherList(machineId: String) = creation(of(machineId)).launcherList(machineId)
         override suspend fun directories(machineId: String, path: String) = creation(of(machineId)).directories(machineId, path)
         override suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult {
             val index = of(request.machineId)
@@ -454,6 +449,7 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
             creation(of(machineId)).removeWorktree(machineId, path, deleteBranch, force, kind)
         // A computer's catalog workspaces come from the hub that owns it; none when no hub does.
         override suspend fun workspaces(machineId: String) = of(machineId)?.let { creations[it] }?.workspaces(machineId).orEmpty()
+        override suspend fun workspaceCatalog(machineId: String) = creation(of(machineId)).workspaceCatalog(machineId)
     }
     return AgentsWiringState(
         scope = scope,

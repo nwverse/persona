@@ -30,6 +30,8 @@ struct RecordingsSection: View {
     #endif
     /// The recording a swipe asked to delete (its row shows the confirmation), and why a delete failed.
     @State private var pendingDelete: UUID?
+    /// The row's recording while Rename is open (#8873).
+    @State private var renaming: UUID?
     @State private var failure: String?
 
     var body: some View {
@@ -41,12 +43,28 @@ struct RecordingsSection: View {
         #else
         let today: UUID? = nil
         #endif
-        let recents = library.entries.filter { !(capturing && $0.id == capture.recordingID) && $0.id != today }
+        // Only what the knowledge base doesn't have whole yet (#8731, one home for meetings): a recording synced whole is
+        // in Knowledge's Meetings list, which All Meetings below opens.
+        let recents = library.entries.filter { e in
+            guard !(capturing && e.id == capture.recordingID), e.id != today else { return false }
+            #if os(iOS) || os(visionOS)
+            if e.isDay { return RecordingStatusText.dayStillHere(days.cell(e.id).summary) }
+            #endif
+            return RecordingStatusText.stillHere(e, sync: sync)
+        }
+        #if os(iOS)
+        // Today's calendar meetings, each a tap from starting (#8731 v2), above the quick start.
+        if capture.state == .idle { MeetingUpcomingSection(form: form ?? ownForm) }
+        #endif
         Section {
             #if os(iOS)
             RecordingCaptureControls(part: startAtBottom ? .options : .inline, sharedForm: form ?? ownForm)
             #else
             RecordingCaptureControls()
+            #endif
+        } header: {
+            #if os(iOS)
+            if capture.state == .idle, !(form ?? ownForm).upcoming.isEmpty { Text("Quick Start") }
             #endif
         } footer: {
             // Read once, before a recording: not under the controls of one that runs.
@@ -91,11 +109,6 @@ struct RecordingsSection: View {
         }
         #endif
         Section {
-            if recents.isEmpty, !capturing, today == nil {
-                EmptyStateView(symbol: Theme.Icon.recording, title: String(localized: "No Recordings Yet"),
-                               message: String(localized: "Record meetings, dictation and on-site notes with your phone or Apple Watch; the transcribed text goes into Knowledge."))
-                    .listRowBackground(Color.clear)
-            }
             ForEach(recents) { entry in
                 if entry.isDay {
                     // A day is deleted on its page: it stops the watch and deletes every part on the hub too.
@@ -104,6 +117,11 @@ struct RecordingsSection: View {
                 } else {
                     NavigationLink { RecordingDetailView(id: entry.id) } label: { RecordingRow(entry: entry) }
                         .accessibilityIdentifier("recording-row")
+                        // Rename (#8873): a touch and hold, and VoiceOver's actions (a menu is no control of its own).
+                        .contextMenu {
+                            Button { renaming = entry.id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
+                        }
+                        .accessibilityAction(named: Text("Rename")) { renaming = entry.id }
                         // Only the swiped row's dialog shows, so its popover points at that row.
                         .confirmationDialog("Delete This Recording?", isPresented: Binding(get: { pendingDelete == entry.id }, set: { if !$0, pendingDelete == entry.id { pendingDelete = nil } }),
                                             titleVisibility: .visible) {
@@ -125,18 +143,31 @@ struct RecordingsSection: View {
         } header: {
             if !recents.isEmpty {
                 HStack(spacing: Theme.Space.sm) {
-                    Text("Recent Recordings")
+                    #if os(visionOS)
+                    Text("Still on This Device")
+                    #else
+                    Text("Still on This iPhone")
+                    #endif
                     CountBadge(count: recents.count)
                 }
                 .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                     Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
                 } message: { Text(failure ?? "") }
+                .recordingRename($renaming)
             }
         } footer: {
             if let problem = sync.problem ?? library.error {
                 Label(problem, systemImage: Theme.Icon.error).foregroundStyle(Theme.danger)
                     .accessibilityIdentifier("recording-sync-problem")
             }
+        }
+        // Every meeting and note, the imported ones too, is in one list: Knowledge's Meetings (#8731).
+        Section {
+            NavigationLink { KnowledgeView(kind: .meetings) } label: {
+                Label { Text("All Meetings").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.knowledge) }
+                    .font(Theme.Font.body)
+            }
+            .accessibilityIdentifier("recordings-all-meetings")
         }
         .task {
             PhoneRecordingReceiver.shared.start()
@@ -168,7 +199,9 @@ extension RecordingsSection {
     /// elsewhere the audio stays on this device, as before.
     private var startPrivacy: String {
         let form = form ?? ownForm
-        let role = form.pickedRole ?? MeetingAttendees.defaultRole(model)
+        let role = MeetingAttendees.conversation(model)
+            ? MeetingAttendees.invitedRole(model, invited: form.invited ?? MeetingAttendees.defaultRole(model).answers)
+            : form.pickedRole ?? MeetingAttendees.defaultRole(model)
         let voice = model.hub.flatMap { MeetingCall.shared.voiceExtension(group: $0.group) }
         let meeting = form.pickedKind == .meeting
         let mode = meeting && MeetingAttendees.conversation(model)
@@ -244,6 +277,26 @@ struct RecordingStatusText: View {
         Text(text).foregroundStyle(tone).accessibilityIdentifier("recording-status")
     }
 
+    /// Whether the Meetings page lists the recording (#8731): until the knowledge base has it whole. Synced with all of it
+    /// transcribed, it is in Knowledge's Meetings list; recording, transcribing, waiting, past retention, nothing heard
+    /// or not accepted, only this phone has it.
+    static func stillHere(_ entry: RecordingEntry, sync: RecordingSync) -> Bool {
+        if case .synced = sync.status(entry), entry.transcribedAll, !entry.active { return false }
+        return true
+    }
+
+    #if os(iOS) || os(visionOS)
+    /// The same for a past all-day recording, whose state is its day's (`RecordingDayStatus.word`): it leaves the page
+    /// once the hub has its text (synced, its recap ready, being written or failed). Listed until its summary is read.
+    static func dayStillHere(_ summary: RecordingDaySummary?) -> Bool {
+        guard let summary else { return true }
+        switch RecordingDayStatus.word(summary) {
+        case .synced, .recapReady, .recapWriting, .recapFailed: return false
+        default: return true
+        }
+    }
+    #endif
+
     static func status(_ entry: RecordingEntry, transcription: RecordingTranscription, sync: RecordingSync) -> (String, Color) {
         if entry.active {
             if entry.isRolling { return (String(localized: "Rolling recording"), Theme.danger) }
@@ -282,6 +335,23 @@ struct RecordingStatusText: View {
     /// The calendar's meeting on now (read again each minute while nothing records).
     var meetingNow: RecordingMeeting?
     var calendarAskable = false
+    /// Persona invited into the next meeting (#8731): nil until changed here, the hub's default role then (Settings ›
+    /// Meetings' Invite Persona Automatically).
+    var invited: Bool?
+    /// The name typed on the quick start; empty: the calendar's meeting on now, else "Meeting · now".
+    var pickedTitle = ""
+    /// Today's meetings on now or still to come (the home's Upcoming Meetings), and when they were read.
+    var upcoming: [MeetingCalendar.Candidate] = []
+    var upcomingAt = Date.now
+    /// An Upcoming row's Start, for the page's start button to take (one place starts).
+    var queued: MeetingCalendar.Candidate?
+
+    /// Reads the calendar's meeting on now and today's still to come.
+    func readCalendar() async {
+        meetingNow = await MeetingCalendar.meetingOffMain()
+        upcomingAt = .now
+        upcoming = await MeetingCalendar.upcomingOffMain(at: upcomingAt)
+    }
     /// A Bluetooth microphone is on the route (the Microphone picker shows only then).
     var hasBluetooth = false
 }
@@ -333,7 +403,10 @@ struct RecordingCaptureControls: View {
             }
             .task(id: capture.state == .idle) {
                 while capture.state == .idle, !Task.isCancelled {
-                    form.meetingNow = await MeetingCalendar.meetingOffMain()
+                    await form.readCalendar()
+                    #if DEBUG
+                    if let sample = RecordingSamples.upcomingIfAsked(at: form.upcomingAt) { form.upcoming = sample }
+                    #endif
                     form.calendarAskable = MeetingCalendar.canAsk
                     try? await Task.sleep(for: .seconds(60))
                 }
@@ -342,11 +415,19 @@ struct RecordingCaptureControls: View {
 
     /// The page's bottom bar: Record and what the meeting will be called, or the running recording's card.
     @ViewBuilder private var bar: some View {
-        if capture.state == .recording || capture.state == .paused {
-            // A card as in the list it came from: in the bar it has no row behind it.
-            nowRecording.card(padding: Theme.Space.m)
-        } else {
-            hero(busy: preparing != .idle)
+        Group {
+            if capture.state == .recording || capture.state == .paused {
+                // A card as in the list it came from: in the bar it has no row behind it.
+                nowRecording.card(padding: Theme.Space.m)
+            } else {
+                hero(busy: preparing != .idle)
+            }
+        }
+        // An Upcoming row's Start (#8731): the bar's controls start it, so the page has one place that starts.
+        .onChange(of: form.queued) { _, event in
+            guard let event else { return }
+            form.queued = nil
+            record(event: event)
         }
     }
     #endif
@@ -385,52 +466,81 @@ struct RecordingCaptureControls: View {
         let busy = preparing != .idle
         if part == .inline { hero(busy: busy) }
         if capture.state == .starting { startingRow }
-        // Meeting or Note is a choice row under the one Record button, never a second button (#5243); a note has none
-        // of the meeting's options (progressive disclosure).
-        kindRow.disabled(busy)
+        // The quick start (#8731 v2): its name, Meeting or Note (never a second button, #5243), who is in it, and who
+        // transcribes. Private, language and microphone are the page's options menu (`MeetingOptionsMenu`).
+        titleField.disabled(busy)
+        kindPicker.disabled(busy)
         if form.pickedKind == .meeting, MeetingAttendees.offered(model) {
-            personaRow.disabled(busy)
             if MeetingAttendees.conversation(model) {
-                // The meeting's own room conversation attends (#3862): no session to pick, and the private mark instead.
-                privateRow.disabled(busy)
-                // On This iPhone or On the Hub (#3862 phase 5), only while the hub can transcribe: never a choice that
-                // can't be had. The line under Record says what each sends.
-                if MeetingAttendees.offersHub(model) { transcriptionRow.disabled(busy) }
-            } else if role.attends {
-                // Never the main chat by default (#3862): Choose until one is picked here or picked before (not the main
-                // chat), and the meeting starts with Persona off without one.
-                let attendee = self.attendee
-                NavigationLink { MeetingAttendeePicker(selected: attendee?.key) { form.pickedAttendee = $0 } } label: {
-                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                        MeetingAttendeeLabel(title: attendee?.title, detail: attendee?.detail)
-                        if attendee == nil {
-                            Text("Choose who attends. Until then Persona stays out of the meeting.")
-                                .font(Theme.Font.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("meeting-attendee-needed")
+                // The meeting's own room conversation attends (#3862): Persona is someone to invite, not a role to pick.
+                MeetingPeopleRow(invited: Binding(get: { invited }, set: { form.invited = $0 })).disabled(busy)
+            } else {
+                personaRow.disabled(busy)
+                if role.attends {
+                    // Never the main chat by default (#3862): Choose until one is picked here or picked before (not the
+                    // main chat), and the meeting starts with Persona off without one.
+                    let attendee = self.attendee
+                    NavigationLink { MeetingAttendeePicker(selected: attendee?.key) { form.pickedAttendee = $0 } } label: {
+                        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                            MeetingAttendeeLabel(title: attendee?.title, detail: attendee?.detail)
+                            if attendee == nil {
+                                Text("Choose who attends. Until then Persona stays out of the meeting.")
+                                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("meeting-attendee-needed")
+                            }
                         }
                     }
+                    .disabled(busy)
+                    .accessibilityIdentifier("meeting-attendee")
                 }
-                .disabled(busy)
-                .accessibilityIdentifier("meeting-attendee")
             }
         }
-        // With an icon like the rows above, so every title starts at one edge (#5522).
-        Picker(selection: $locale) {
-            Text("Chinese").tag("zh-CN")
-            Text("English").tag("en-US")
-            Text("Japanese").tag("ja-JP")
-        } label: {
-            Label { Text("Recording Language") } icon: { ThemedIcon(Theme.Icon.language) }
-        }.font(Theme.Font.body).disabled(busy)
-        if form.hasBluetooth {
-            Picker(selection: $inputRaw) {
-                ForEach(RecordingInput.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-            } label: {
-                Label { Text("Microphone") } icon: { ThemedIcon(Theme.Icon.dictate) }
-            }.font(Theme.Font.body).disabled(busy)
+        transcriptionLine.disabled(busy)
+    }
+
+    /// The next meeting's name: typed here, else the calendar's meeting on now, else its kind and when (the prompt).
+    private var titleField: some View {
+        TextField(text: Bindable(form).pickedTitle, prompt: Text(defaultTitle)) { Text("Title [Meeting Start]") }
+            .font(Theme.Font.heading)
+            .submitLabel(.done)
+            .accessibilityIdentifier("meeting-title-field")
+    }
+
+    private var defaultTitle: String {
+        if form.pickedKind == .meeting, let title = form.meetingNow?.title { return title }
+        let when = Date.now.formatted(date: .abbreviated, time: .shortened)
+        return form.pickedKind == .note ? String(localized: "Note · \(when)") : String(localized: "Meeting · \(when)")
+    }
+
+    /// Meeting | Note for the next start, with what a note is under it.
+    @ViewBuilder private var kindPicker: some View {
+        Picker(selection: Bindable(form).pickedKind) {
+            ForEach(RecordingKindChoice.allCases, id: \.self) { Text($0.title).tag($0) }
+        } label: { Text("Type") }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityIdentifier("recording-kind")
+        if form.pickedKind == .note {
+            Text("No minutes, and Persona stays out.").font(Theme.Font.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("recording-kind-detail")
         }
     }
+
+    /// Who transcribes it (#8731): this iPhone, or the hub's service by name; a menu while the hub can transcribe now.
+    private var transcriptionLine: some View {
+        let meeting = form.pickedKind == .meeting && MeetingAttendees.conversation(model)
+        let offers = meeting && MeetingAttendees.offersHub(model)
+        let mode = meeting ? MeetingAttendees.startTranscription(model, picked: offers ? form.pickedTranscription : nil) : nil
+        let settings = MeetingAttendees.transcriptionSettings(model)
+        let hubDown = meeting && MeetingAttendees.transcription(model) && settings.mode == .hub && !settings.ready
+        return MeetingTranscriptionLine(mode: mode, hubDown: hubDown, service: MeetingTranscription.shared.service, offersHub: offers) {
+            form.pickedTranscription = $0
+        }
+    }
+
+    /// Persona invited into the next meeting: picked here, else the hub's default role answers.
+    private var invited: Bool { form.invited ?? MeetingAttendees.defaultRole(model).answers }
 
     /// Record, and what a meeting will be called: the calendar's meeting on now, or a way to let it read the calendar (a
     /// note has no name from it). While the start is in flight the button keeps its label, shows a spinner beside it and
@@ -440,7 +550,7 @@ struct RecordingCaptureControls: View {
             Button { record() } label: {
                 HStack(spacing: Theme.Space.s) {
                     // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
-                    Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
+                    Label(MeetingWords.start(form.pickedKind), systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
                     if busy { ProgressView() }
                 }
                 .font(Theme.Font.bodyStrong)
@@ -452,34 +562,8 @@ struct RecordingCaptureControls: View {
             .themedButton(prominent: true)
             .disabled(busy)
             .accessibilityIdentifier("recording-meeting-start")
-            if form.pickedKind == .meeting {
-                calendarLine.frame(maxWidth: .infinity, alignment: part == .bar ? .center : .leading)
-            }
         }
         .padding(.vertical, Theme.Space.xs)
-    }
-
-    /// What the meeting will be called: the calendar's meeting on now, or a way to let it read the calendar.
-    @ViewBuilder private var calendarLine: some View {
-        if let meeting = form.meetingNow, let title = meeting.title {
-            Label(String(localized: "Calendar: \(title) · \(Self.span(meeting))"), systemImage: Theme.Icon.calendarEvent)
-                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                .accessibilityIdentifier("recording-meeting-now")
-        } else if form.calendarAskable {
-            Button {
-                Task {
-                    _ = await MeetingCalendar.requestAccess()
-                    form.calendarAskable = MeetingCalendar.canAsk
-                    form.meetingNow = await MeetingCalendar.meetingOffMain()
-                }
-            } label: {
-                Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
-                    .lineLimit(1).multilineTextAlignment(.leading)
-            }
-            .buttonStyle(.borderless)
-        } else {
-            Text("Named after the calendar event happening now, if there is one.").font(Theme.Font.caption).foregroundStyle(.secondary)
-        }
     }
 
     /// The capture is `.starting` (the microphone): Cancel is possible only now. "Waiting for microphone access" is the
@@ -498,59 +582,18 @@ struct RecordingCaptureControls: View {
         .transition(.opacity)
     }
 
-    /// Meeting or Note for the next start: a menu row like Persona's, with what a note is under it.
-    private var kindRow: some View {
-        Picker(selection: Bindable(form).pickedKind) {
-            ForEach(RecordingKindChoice.allCases, id: \.self) { Text($0.title).tag($0) }
-        } label: {
-            // What a note is, under the title rather than the icon: every row starts its words at one edge (#5522).
-            Label {
-                RowTitle("Type", detail: form.pickedKind == .note ? String(localized: "No minutes, and Persona stays out.") : nil,
-                         detailID: "recording-kind-detail")
-            } icon: { ThemedIcon(form.pickedKind.symbol) }
-        }
-        .pickerStyle(.menu)
-        .font(Theme.Font.body)
-        .accessibilityIdentifier("recording-kind")
-    }
-
     /// Persona's part: one menu, the same control and label as while recording, with what it does under it.
     private var personaRow: some View {
         Picker(selection: Binding(get: { role }, set: { form.pickedRole = $0 })) {
-            ForEach(MeetingAttendance.allCases, id: \.self) { Text($0.title).tag($0) }
+            ForEach(MeetingAttendance.choices, id: \.self) { Text($0.title).tag($0) }
         } label: {
             Label {
-                RowTitle("Persona", detail: role.attends ? role.detail : nil, detailID: "meeting-attendance-detail")
+                RowTitle("Persona", detail: role.answers ? role.detail : nil, detailID: "meeting-attendance-detail")
             } icon: { ThemedIcon(Theme.Icon.persona) }
         }
         .pickerStyle(.menu)
         .font(Theme.Font.body)
         .accessibilityIdentifier("meeting-attendance-role")
-    }
-
-    /// Private Meeting (#3862): whether this meeting's minutes may be used when Persona answers in later ones.
-    private var privateRow: some View {
-        // The system switch, its words under the title as in the rows above (#5522).
-        Toggle(isOn: Bindable(form).pickedPrivate) {
-            Label {
-                RowTitle("Private Meeting", detail: String(localized: "Its minutes are never used when Persona answers in later meetings."))
-            } icon: { ThemedIcon(Theme.Icon.privateMeeting) }
-        }
-        .font(Theme.Font.body)
-        .accessibilityIdentifier("meeting-private-start")
-    }
-
-    /// How the meeting is transcribed (#3862 phase 5): a menu row like Persona's, the hub's default until picked here.
-    private var transcriptionRow: some View {
-        Picker(selection: Binding(get: { MeetingAttendees.startTranscription(model, picked: form.pickedTranscription) ?? .device },
-                                  set: { form.pickedTranscription = $0 })) {
-            ForEach(MeetingTranscriptionMode.allCases, id: \.self) { Text(MeetingTranscriptionWords.title($0)).tag($0) }
-        } label: {
-            Label { RowTitle("Transcription [Meeting Transcription]") } icon: { ThemedIcon(Theme.Icon.meetingTranscription) }
-        }
-        .pickerStyle(.menu)
-        .font(Theme.Font.body)
-        .accessibilityIdentifier("meeting-transcription-start")
     }
 
     /// The role shown and started with: the one picked here, else the hub's default; on a hub without the meeting
@@ -627,38 +670,42 @@ struct RecordingCaptureControls: View {
 
     // MARK: Starting
 
-    /// Record: a meeting with the options shown, or a note when Note is picked. The picks are for this start only.
-    private func record() {
+    /// Start Meeting: a meeting with the options shown, or a note when Note is picked; `event`, an Upcoming row's
+    /// meeting (#8731), names it. The picks are for this start only.
+    private func record(event: MeetingCalendar.Candidate? = nil) {
         // The transcription mode (#3862 phase 5): the one picked here while the hub can transcribe, else the hub's default
         // (`device` while it can't).
         let picked = MeetingAttendees.offersHub(model) ? form.pickedTranscription : nil
-        let start = RecordingStart.make(form.pickedKind, offered: MeetingAttendees.offered(model), conversation: MeetingAttendees.conversation(model),
+        let conversation = MeetingAttendees.conversation(model)
+        let start = RecordingStart.make(form.pickedKind, offered: MeetingAttendees.offered(model), conversation: conversation,
                                         photos: MeetingAttendees.photos(model), liveView: MeetingAttendees.liveView(model),
-                                        highlights: MeetingAttendees.highlights(model),
+                                        highlights: MeetingAttendees.highlights(model), notes: MeetingAttendees.notes(model),
                                         transcription: MeetingAttendees.startTranscription(model, picked: picked),
-                                        role: role, privateMark: form.pickedPrivate,
+                                        role: conversation ? MeetingAttendees.invitedRole(model, invited: invited) : role,
+                                        privateMark: form.pickedPrivate,
                                         attendee: chosenAttendee)
+        let title = form.pickedTitle
         form.pickedRole = nil; form.pickedAttendee = nil; form.pickedPrivate = false; form.pickedKind = .meeting
-        form.pickedTranscription = nil
+        form.pickedTranscription = nil; form.invited = nil; form.pickedTitle = ""
         switch start {
-        case .meeting(let attendance): startMeeting(attendance)
-        case .note: startNote()
+        case .meeting(let attendance): startMeeting(attendance, event: event.map(RecordingMeeting.init), title: event == nil ? title : "")
+        case .note: startNote(title: title)
         }
     }
 
-    private func startMeeting(_ attendance: RecordingAttendance?) {
+    private func startMeeting(_ attendance: RecordingAttendance?, event: RecordingMeeting?, title: String) {
         form.startRequested = true
         Task {
-            await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false, attendance: attendance)
+            await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false, attendance: attendance, event: event, title: title)
             form.startRequested = false
         }
     }
 
-    private func startNote() {
+    private func startNote(title: String) {
         let chosen = input
         form.startRequested = true
         Task {
-            await capture.start(locale: locale, input: chosen)
+            await capture.start(locale: locale, input: chosen, title: RecordingTitle.cleaned(title))
             form.startRequested = false
         }
     }
@@ -764,10 +811,12 @@ struct RecordingsPage: View {
         // recording stay at the top of the list.
         List { RecordingsSection(form: form, startAtBottom: true) }
             .listStyle(.insetGrouped)
+            .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
                 RecordingCaptureControls(part: .bar, sharedForm: form)
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
+                    .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
                     .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
             }
         #else
@@ -779,8 +828,18 @@ struct RecordingsPage: View {
     var body: some View {
         page
             .themedPage()
+            #if os(iOS)
+            .navigationTitle(MeetingWords.place)
+            #else
+            // visionOS keeps Recordings (#9310): Meetings is the iPhone's word (#8731), and this page's controls here
+            // still say Start Recording (`legacyControls`).
             .navigationTitle(String(localized: "Recordings"))
+            #endif
             .navigationBarTitleDisplayMode(.inline)
+            #if os(iOS)
+            // The next meeting's options (#8731 v2): private, language and microphone, out of the quick start.
+            .pageToolbar { ToolbarItem(placement: .topBarTrailing) { MeetingOptionsMenu(form: form) } }
+            #endif
             #if os(iOS)
             .recordingLiveSheet()
             // Pushed over this list, not over the recording's page: its Open Minutes / Open Recording is the way there.
@@ -798,6 +857,9 @@ struct RecordingsPage: View {
                 }
             }
             .onAppear {
+                // `-showRecordingSample YES|second`: the made-up recording, here too since Knowledge lists it only once
+                // the hub has it (#8731); once per launch, as there.
+                _ = RecordingSamples.installIfAsked()
                 // Once per launch: back from it, the page appears again.
                 guard !Self.sampleOpened else { return }
                 let defaults = UserDefaults.standard
@@ -809,6 +871,10 @@ struct RecordingsPage: View {
                 } else if defaults.string(forKey: "showMeetingSample") == "overview" {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.overviewMeeting)
+                } else if defaults.string(forKey: "showMeetingSample") == "untitled-page" {
+                    // The unnamed meeting's page (#8873): its name from the hub, Rename under the transcript.
+                    Self.sampleOpened = true
+                    debugPage = .recording(RecordingSamples.untitledMeeting)
                 }
                 #if os(iOS)
                 // `-openDayRecap YES` with `-showDaySample …`: the made-up past day's page, once it is in place.
@@ -849,6 +915,8 @@ struct RecordingDetailView: View {
     @State private var keeper = RecordingRollingKeeper.shared
     @State private var deleting = false
     @State private var erasing = false
+    /// This recording while Rename is open (#8873).
+    @State private var renaming: UUID?
     @State private var failure: String?
     /// The transcript line a timestamp jumped to, lit for a moment.
     @State private var lit: Int?
@@ -904,6 +972,7 @@ struct RecordingDetailView: View {
         .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
         } message: { Text(failure ?? "") }
+        .recordingRename($renaming)
     }
 
     private func content(_ entry: RecordingEntry, proxy: ScrollViewProxy) -> some View {
@@ -964,6 +1033,10 @@ struct RecordingDetailView: View {
             }
             if !entry.active {
                 Section {
+                    if !entry.isDay {
+                        Button("Rename") { renaming = id }.lineLimit(1)
+                            .accessibilityIdentifier("recording-rename")
+                    }
                     if !entry.isRolling {
                         Picker("Transcription Language", selection: Binding(get: { entry.locale }, set: { transcription.setLocale(id, $0) })) {
                             Text("Chinese").tag("zh-CN"); Text("English").tag("en-US"); Text("Japanese").tag("ja-JP")

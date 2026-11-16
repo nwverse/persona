@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -176,6 +177,12 @@ var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triag
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
+	urls := taskRepositoryReportLinks(text)
+	if len(urls) > 0 {
+		if err := s.importTodoRepositoryLinks(ctx, t.ID, urls, "report"); err != nil {
+			s.logf("task %s: repository links not saved: %v", t.ID, err)
+		}
+	}
 	stage, pr := stageOf(text)
 	d, marked := deliveryMark(text)
 	if pr != "" {
@@ -249,6 +256,20 @@ type todoStage struct {
 	Verified bool          `json:"verified,omitempty"`  // explicit acceptance outranks delivery and reply keywords
 	Check    *TodoCheck    `json:"check,omitempty"`     // task_check.go
 	PRStatus *TodoPRStatus `json:"pr_status,omitempty"` // Observed forge facts, not a task state.
+	// EarlierPRStatus: the same facts for the PRs in PRs, by URL (#7935): work that spans several PRs waits for merge
+	// while any of them is open, not only the last one named.
+	EarlierPRStatus map[string]TodoPRStatus `json:"prs_status,omitempty"`
+}
+
+// otherPRFacts are st's facts for its earlier PRs, newest first: what Todo.OtherPRs carries.
+func (st todoStage) otherPRFacts() []TodoPRStatus {
+	var out []TodoPRStatus
+	for i := len(st.PRs) - 1; i >= 0; i-- {
+		if f, ok := st.EarlierPRStatus[st.PRs[i]]; ok && st.PRs[i] != st.PR {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 const reportStagesKey = "assistant.todo_stages"
@@ -256,7 +277,7 @@ const reportStagesKey = "assistant.todo_stages"
 // empty: st keeps nothing (its row can go).
 func (st todoStage) empty() bool {
 	return st.Stage == "" && st.Kind == "" && st.PR == "" && len(st.PRs) == 0 && st.Delivery == nil && st.Deploy == nil && !st.Verified &&
-		st.Check == nil && st.PRStatus == nil
+		st.Check == nil && st.PRStatus == nil && len(st.EarlierPRStatus) == 0
 }
 
 // stagePRsKept bounds a task's earlier PRs (todoStage.PRs).
@@ -373,6 +394,11 @@ func (s *Service) setTaskStage(ctx context.Context, id, stage, pr string) {
 }
 
 func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind string, verified bool) {
+	if _, link, err := repository.ParseTaskLink(pr); err == nil {
+		if err = s.importTodoRepositoryLinks(ctx, id, []string{link.CanonicalURL}, "report"); err != nil {
+			s.logf("task %s: repository link not saved: %v", id, err)
+		}
+	}
 	s.setTaskStageOn(ctx, id, stage, pr, kind, verified, "")
 }
 
@@ -440,6 +466,27 @@ func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string
 		if cur.PR != "" {
 			cur.PRs = keptPRs(cur.PRs, cur.PR)
 		}
+		// The facts follow their PR: the one named before keeps its own, the one named now takes any it had (#7935).
+		facts := map[string]TodoPRStatus{}
+		for u, f := range cur.EarlierPRStatus {
+			facts[u] = f
+		}
+		if cur.PRStatus != nil && cur.PRStatus.URL == cur.PR && cur.PR != "" {
+			facts[cur.PR] = *cur.PRStatus
+		}
+		cur.PRStatus = nil
+		if f, ok := facts[pr]; ok {
+			cur.PRStatus = &f
+		}
+		cur.EarlierPRStatus = nil
+		for _, u := range cur.PRs {
+			if f, ok := facts[u]; ok && u != pr {
+				if cur.EarlierPRStatus == nil {
+					cur.EarlierPRStatus = map[string]TodoPRStatus{}
+				}
+				cur.EarlierPRStatus[u] = f
+			}
+		}
 		cur.PR, changed = pr, true
 	}
 	if changed {
@@ -457,6 +504,7 @@ func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
 		t.Stage, t.PRURL, t.PRs, t.StageKind, t.stageVerified = cur.Stage, cur.PR, cur.PRs, cur.Kind, cur.Verified
+		t.PRStatus, t.OtherPRs = cur.PRStatus, cur.otherPRFacts()
 	}
 	s.todos.mu.Unlock()
 	s.todosChanged(ctx)

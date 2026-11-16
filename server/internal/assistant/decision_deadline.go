@@ -81,6 +81,7 @@ func defaultReason(l i18n.Lang, loc *time.Location, deadline time.Time) string {
 // sweepDecisionDeadlines handles every decision whose deadline passed unanswered: the supervised tasks' and the
 // questions' that became to-dos.
 func (s *Service) sweepDecisionDeadlines(now time.Time) {
+	s.sweepAgentDecisionReplies()
 	s.sweepWaitingDecisions(now) // first: one no briefing brought to the owner is pushed (decision_wait.go)
 	s.sweepTaskDeadlines(now)
 	s.sweepAskDeadlines(now)
@@ -136,7 +137,7 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 			continue
 		}
 		if a.Reversible && a.Recommend != "" {
-			took, err := s.acceptTryAs(ctx, id, "", true)
+			result, err := s.acceptTryAs(ctx, id, "", true)
 			switch {
 			case err != nil:
 				// Not retried (acceptTryAs keeps the deadline handled): the owner decides instead.
@@ -144,7 +145,7 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 				if cur, ok := s.askCopy(id); ok {
 					s.remindOverdue(ctx, id, cur)
 				}
-			case took:
+			case result.taken:
 				s.logf("task %s: deadline passed unanswered: recommendation taken by default", id)
 			}
 			continue

@@ -62,6 +62,40 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 
+### Send failures (2026-11-16, #9125)
+
+A reply that did not go out says why, on `POST /api/v1/inbox/{id}/reply` and on a confirmed reply suggestion (`…/suggestion`), instead of a bare 502.
+The extension manager classifies the source's failure where it sends (`server/internal/extmgr/inbox_send_reason.go`) and answers `inbox.reply` /
+`inbox.reply_mail` with a coded `rpc.Error` whose message is a fixed sentence; the manager answers the app with the status below and
+`{code, error, delivered, retryable, retry_after?}`, `error` a sentence in the request's language (`inbox-errors.json`), no `detail`.
+Nothing the source printed reaches the response: no lark-cli stdout or stderr, extension or mail-server message, chat, thread or message id, path or token.
+The manager's log line names the item, the code and the request id (`X-Request-Id`); the extension manager's names the send id, the source, the code and an
+allowlisted cause (lark-cli's own error kind, else only an RPC code or a Go type).
+
+| Code | Status | `delivered` | `retryable` | When |
+| --- | --- | --- | --- | --- |
+| `inbox_cannot_reply` | 409 | `none` | false | The item has no way to be answered through its source: the item says so, a lark-cli document comment (read-only), a thread that names no chat, a subscription's row whose item or `reply_to` is gone (#9194). Reply in the source's own app. |
+| `inbox_source_unavailable` | 503 | `none` | false | The source's connector is switched off or missing, mail is not set up, lark-cli is not installed or too old, or a subscription is gone or its connector can't be called now. |
+| `inbox_source_signed_out` | 503 | `none` | false | lark-cli is not signed in, or its sign-in expired. |
+| `inbox_send_denied` | 502 | `none` | false | The source refused the send: a missing permission or scope, or the chat or message is gone or closed to the bot. |
+| `inbox_send_rate_limited` | 429 | `none` | true | The source is rate limited (lark-cli, or an extension's `rate_limited` error); `retry_after` seconds and a `Retry-After` header when it said how long. |
+| `inbox_send_failed` | 502 | `none` | true | The source answered with any other error (lark-cli exited with an error it doesn't classify, an extension's or a mail server's error). |
+| `inbox_send_unrecorded` | 503 | `none` | true | The once-only record (`sent_messages`) could not be claimed, so nothing was tried. |
+| `assistant_in_doubt` | 502 | `unknown` | false | Unchanged: it may have gone out (see "Send once" above). |
+
+**Not sent versus in doubt.** Every code but `assistant_in_doubt` means nothing went out: the failure came before the send (no connector, no record, no way to
+reply) or the source answered that it refused it. Such a send's record is forgotten, so the same reply asked again is really tried again; `retryable: true`
+says the cause is passing, `retryable: false` that the same request fails the same way until the user acts (signs in, turns the source on, replies in the
+source's app). A send that may have gone out is never one of them: a dropped link, a send that ran out of time (lark-cli stopped by its own deadline included),
+a mail whose SMTP server got the whole message and never answered it (the connection dropped or the wait ran out, `mail.ErrMaybeSent`, #9166; a server's
+refusal of it is still not sent) or a manager further on that was in doubt is `assistant_in_doubt` whatever error came with it, its record stays `unknown`,
+and the same reply is not sent again.
+
+**For the apps** (their wording is #9126's): say what to do per code (sign in, turn the source on, reply in the source's app, wait `retry_after`), offer
+sending again only when `retryable` is true, and keep "check before sending again" for `assistant_in_doubt`. A confirmed suggestion is taken even when its send
+fails, so confirming the same version again answers `409 suggestion_stale`; the event shows the failed send (Needs you). An older manager still answers these
+failures with a bare 502.
+
 ## One item = one row
 
 | Source | An item is | id |
@@ -79,7 +113,7 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
   Exception: Reopen (single `done:false`, bulk `reopen` / Undo) does not check whether a newer item exists for the thread; it reopens the old one anyway, yielding two unhandled items.
   Later messages always merge into the newest (`UpdatedAt`, ties by ID, `threadIndex.openFor`, #3796); the old item stays unchanged.
 - Included Lark messages: gateway `unread` scope (Lark Unread, excluding muted chats) + `mentions` scope (mentions of me in muted groups still count).
-  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
+  When `lark.cli` is enabled and is the primary source (or the gateway is absent / unavailable), the built-in `larkcli` connector polls `im +messages-search --start … --as user` every two minutes (minimum one minute, with a bounded page count). It keeps messages that mention me or @all, messages in direct chats, and replies in topics where I posted, replied or was mentioned; my own messages never create an item. Overlapping pages are deduplicated by `message_id`, consecutive messages in one chat/topic are one row, and context comes from `+chat-messages-list` / `+threads-messages-list`. Each context line marks whom its message @'s with the tier criteria's `（@了我）` / `（@所有人）` after the sender (both when it @'s the owner and everyone), taken from the message's structured mention ids, never from a display name another person may share (#9124). A later message from me marks that row replied. The cursor and topic set are kept in Postgres settings, not files under `~/.persona`.
   Search indexes most messages at once but some only minutes later (a direct message was seen arriving in search about ten minutes after it was sent), and a message indexed after the cursor passed its time used to be lost. So the cursor stays 10 minutes behind the newest message it saw. Each round also reads up to 10 direct chats from their own history since two hours ago (`+chat-messages-list --start`), rotating through the 50 most recently active direct chats (`+chat-list --types p2p --sort active_time`), which has no indexing delay; the `message_id` ledger drops what was already collected. The window leaves room to recover a missed conversation more than an hour after it was sent, including time spent investigating and rotating through the candidates; each chat read is still capped at 50 messages. Mentions in group chats still rely on search and its 10-minute overlap. A failed direct-chat read keeps what search found that round and reports the error (`server/internal/connector/larkcli/inbox.go`, `sweepDirectChats`).
   An owner reply settles only earlier incoming activity in the same chat or topic. A later peer follow-up stays open, including one found in the context read before search indexes it. Within a chat, source message positions resolve the CLI's minute-resolution timestamps; an opaque message ID or uncertain order never proves the owner replied later.
   As a maintainer opt-in addition, `larkcli` has an `inbox_all_chats` connector option containing chat ids whose every new incoming message is collected. The default is an empty list; this option is intentionally separate from the L4 collection rules.
@@ -188,8 +222,10 @@ a summary up to 40 characters, and a short reason:
   "请验收", "任务进展" and the like, which the app handles). When unsure, the question is whether someone waits on the owner or
   the owner's own work slips (it used to be "choose action"). @me no longer makes something Needs you by itself.
   A real person's direct message stays Needs you by default, even without a question, unless it is plainly small talk.
-  Grouping (`group.md`) also spells out what the batch's `（@了我）` / `（@所有人）` markers mean: without them a group message
-  did not @ the owner, and a name @'d in the text is someone else; and its input names the other side of a direct chat in
+  The tier criteria (`tiers.md`, shared by triage and grouping) spell out what the `（@了我）` / `（@所有人）` markers mean:
+  a message marked with both counts as @-ing the owner; a Lark group message (the Feishu plugin's batches and the `larkcli`
+  connector's context) without them did not @ the owner, and a name @'d in the text is someone else. Other sources write
+  no markers, so their absence there says nothing and the kind and text decide (#9124). Grouping's input names the other side of a direct chat in
   the connector's kind words (`group_input.md`: a person, a bot or an app), so a bot's "在问你" isn't read as a person asking.
   The user's own rules are unchanged and still come last and win.
 - **Sorted again once after the criteria change**: `inboxTriageRev` (`inbox_triage.go`) is the criteria's revision, and an item
@@ -375,6 +411,7 @@ The assistant can put one of its conversations into the Inbox as a row, so a res
 
 - **An internal source** `assistant`, made by the manager like a push subscription's: no connector, no hub reading; the hub only forwards `/api/v1/inbox`. Code: `assistant/inbox_post.go`.
 - **The generic row.** An item carries the `connector` block an app draws for a source it does not know (`thread` = `<machine>/<conversation>`, `label` Assistant, `url` the conversation's page in the web app at the hub's `public_url`), `kind` `assistant_post`, the tier the post asked for (`action` or `fyi`) with `reason` as its why, the title and a summary line. Without a `public_url` the row has no `url`: it still draws and its content is in the row. Checked on the mock hub (`MOCK_ASSISTANT_INBOX=1`): the web app draws it in its source group and opens the conversation in the side panel from the row's Open button; the iPhone app takes the same path for any item with a `connector` block (`InboxGroups`, `InboxConnectorViews`). An app that knows the source can open the conversation directly from `thread`.
+- **Its text is Markdown (#9041).** The row keeps it as written in `body` (line breaks kept, cut past 6000 characters), and its `summary`, `preview` and the chain's received message are the same words without the marks on one line (`textfmt.PlainMarkdown`), so a list row, the Timeline and an app that does not know `body` show words, never `**` or `- `; `context` is the title and the Markdown, for the assistant. A task set to every time posts the run's whole last reply, read from its conversation (the session list's `last_text` is one line cut at 200 characters; it is used only when the reply cannot be read). The iPhone and the web draw `body` in the detail with the chat's Markdown, folded to ten lines with Expand when it is long, and the Timeline's received message under it to three lines (the whole text is above); a row from before has no `body`: its summary is drawn as Markdown there and without its marks in the list row and the Timeline. Checked on the mock hub (`MOCK_ASSISTANT_INBOX=1`, the row `assistant:s3`; `GET /mock/assistant_inbox?mode=before|1` switches it to how older hubs kept it and back): UI suite `InboxAssistantMarkdownUITests` (`TEST_RUNNER_PERSONA_MOCK_HUB`, `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps `assistant-body-<phase>-<hub|older-hub>-<light|dark>[-expanded|-timeline].png`); web `InboxEvent.test.tsx` and `lib/inbox.test.ts`.
 - **One row a conversation.** A post for a conversation within 30 minutes of its row's last one updates that row (title, summary, tier, the newest content) and opens it again if it was handled; a later post starts a new row. A task set to every time posts after each run that answered; a failed or empty run posts nothing.
 - **The user's rules still apply**: a policy set for the source (Rules, "Policies") changes the tier like any source's.
 - **One switch.** Inbox Sources lists an **Assistant** row (`b.assistant`, icon robot) whose Add to Inbox switch is `Settings.InboxPost` (`inbox.post` on the bus; on unless turned off). Off, `inbox_post` answers that nothing was added and says to tell the user in the conversation, and tasks set to every time add nothing; rows already there stay. The Relationships view shows it with the other Persona-side sources.
@@ -602,7 +639,7 @@ bound to that item (`handling` on the item; chat source `inbox`, `origin_ref` = 
 
 **Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
+`{item?, processing_turn?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
@@ -610,6 +647,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 | `agent` | Assign an Agent (`text` is its instruction; optional `machine` / `cwd` default to assistant computer / home directory) | Code starts an Agent with that instruction (like the chat calling `agent_start`: `agent` chain entry links to it; completion reports back), `handling.state = agent` |
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
+- The manager includes a new `processing_turn` in a processing conversation's first prompt and each subsequent Inbox delivery while the item is open. The call echoes its prompt's value. The manager checks it under the Inbox lock before changing the item, so a delayed write from a superseded prompt cannot replace a suggestion or change follow-up or handling. Existing processing chats without a value can omit it until their next Inbox delivery. Handed-off conversations still write back using `item`.
 - `handback: true`: a suggestion requiring your judgment ("Ask a colleague before replying to the client"). Confirmation executes nothing; hand it back to the handling chat as instructions to act, with the normal chain recording.
 - `follow` is valid only without `kind`; the two are mutually exclusive. It contains `who`, `next`, `check_at` and `check_in`: `check_at` is an RFC 3339 timestamp with a time zone and takes precedence over `check_in`; `check_in` accepts durations such as `30m`, `4h` or `2d`. With neither time field, it defaults to `24h`; the resulting time is clamped to between 30 minutes and 14 days from now. `who` and `next` are single lines clipped to 80 characters. `recap`, `title` and `summary` may be written together with `follow`, and an existing suggestion stays in place.
 - `recap` without `kind` updates the recap (for example after a send), up to 600 characters. `related` contains IDs of related Inbox items from other chats / sources, recorded on both sides.
@@ -642,7 +680,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
   Without a current suggestion, `instruct` with `version: 0` records your words and wakes or queues the handling chat; `confirm`, `reject`, and nonzero versions still return `suggestion_stale`.
 - Responses: `200` item; `409 {"code":"suggestion_stale","error":"建议已更新","item":{…}}` ("Suggestion updated": version is no longer current or no suggestion exists; App shows the notice and redraws from the returned item,
   including the second tap on the same suggestion); `409 inbox_item_done`; `409 mail_reply_target_changed` (the message the reply suggestion answered is no longer the item's target; nothing was sent); `400`; `403`: reply-only devices (Watch) may confirm only replies / conclusions, as text (no Agent creation, handback, rejection, instructions, document-status changes, or `/agent …` sends;
-  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; confirming again gives 409); other 502 errors.
+  hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; confirming again gives 409); a send that did not go out answers its reason ("Send failures": `409 inbox_cannot_reply`, `429 inbox_send_rate_limited`, `502`/`503 inbox_*`, `delivered: "none"`); other 502 errors.
 - **Direct reply**: `POST /api/v1/inbox/{id}/reply` without a card keeps an item with a processing conversation open in `waiting` with the default 24-hour follow, records `sent` then `waiting` (`via=user`), clears any remaining suggestion and its old-App draft mirror, and queues `NoteSent` without waking that conversation. Without a processing conversation it still files as replied; new messages arriving while the send is out keep the existing kept-open behavior. This mode does not change old-App card sends or replies confirmed in a handed-off conversation.
 - **Execution failure** (send fails / times out, Agent fails to start): `handling.state = failed`, return to Needs you without a suggestion; chain `failed` ("Send did not succeed").
 - **Persona's own sends are not your replies**: after Persona sends a reply, the next Lark-plugin round reports the chat's latest message as yours (`done: replied`). While the item awaits the other person's response and no new messages arrived (`last` unchanged),
@@ -792,11 +830,61 @@ which users saw as one action: clear this batch they do not need to handle now. 
   `hub/devicetokens_test.go` `TestAnswerRoleOnlyWhatTheWatchDoes` (Watch blocked), `hub/testdata/route_scopes.txt` (`inbox.write` required); web `inbox.test.ts`; Android `InboxBulkTest`, `InboxRepositoryTest`, `InboxAssistantTransportTest`;
   Apple `InboxBulkTests` (responses / `undo`, old-hub fallback, failure rollback, confirmation threshold), UI `InboxMarkAllTests` (Clean up all + returned Undo; confirmation with `MOCK_INBOX_EXTRA`); hub `TestInboxBulkOldClientsDoneAndDismiss` guards old clients' `done` / `dismiss`.
 
+## Section bar (2026-11-16, #9053)
+
+One row of choices at the top of the list picks which section the Inbox shows: **Needs you · In progress · FYI · Done · All**
+(zh-Hans 需要你 · 进行中 · 知悉即可 · 已处理 · 全部). It replaces scrolling past every Needs-you row to reach FYI or Done.
+Who it serves: everyone using the Inbox on the Assistant side; it adds no setting. Shared cases: `spec/fixtures/inbox/bar.json`,
+`bar_landing.json` and `bar_search.json`, replayed by web, iOS / iPadOS and Android (README "Section bar").
+
+- **Choices**: Needs you and All always; In progress and FYI while they have a row (or are chosen); Done while it has a row, the hub's
+  day counts name a done item (no filter or search on; the apps read the counts when the Inbox is shown, as Done already did), or it
+  is chosen. A choice shows that section alone, with its source or time
+  groups and their folds as in "Grouping and selection". **All** is the page as it was: every section stacked, folding as before.
+  Collapsed has no choice of its own; it stays folded near the end of All.
+- **Default**: the Inbox opens on Needs you each time it is entered (the sidebar, a widget, a quick action, "N more in Inbox", launch).
+  The choice stays while you are in the Inbox (an item opened and closed, a refresh, a filter) and is not kept across visits, so a
+  remembered FYI or Done never hides new requests.
+- **Counts**: Needs you shows its rows (items and waiting Agents under the filters and search, the section's own count) in the
+  Needs-you `CountBadge` tone; In progress and FYI show their rows in the neutral tone; Done and All show none. Zero hides the badge,
+  99+ caps it, and the number is part of the choice's spoken name ("Needs you, 12"). The sidebar's Inbox badge keeps counting unread
+  Needs-you items (#5974 decides one number).
+- **Inside a choice** the section's title stays as a heading with its actions (FYI's Mark All Seen, Done's Jump To and Fold All /
+  Unfold All) and does not fold, as Working's title already behaves. Done reads its history (day counts, groups, Show Older) while
+  Done is shown.
+- **Grouping**: By source / By time is the bar's trailing grouping menu, as on the Agents list (#7033), not a row of its own. It is
+  hidden while In progress or Done is chosen: neither is grouped by source or time.
+- **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
+  and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
+- **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words
+  (Nothing needs you, Nothing in progress, Nothing to read, Nothing done yet), under them "The rest are in the other sections
+  above." (Done: "What you mark done shows up here."), with the other counts right above it. zh-Hans 没有需要你处理的 / 没有进行中的 /
+  没有要看的 / 还没有已处理的, 其余的在上面的其他分区里。 / 标为已处理的会出现在这里。; ja 対応が必要なものはありません / 進行中のものはありません /
+  読むものはありません / 完了したものはまだありません, 残りは上のほかの区分にあります。 / 対応済みにしたものがここに表示されます。 Apple writes the
+  English titles in title case. The filtered and no-match states stay as in "Nothing open" below.
+- **Opening an item from outside the Inbox** (a link, ⌘K, a Needs-you line) lands the list on the item's choice: Done for a done
+  item, All with Collapsed open for a collapsed one (its time group opened too). Beside the item on a wide screen its row is in sight
+  and marked; on a phone, closing the item shows the list there, so a link lands where the item lives. **Opening one from inside**
+  (another item's chain or relations) moves a list shown beside the item the same way and leaves a list that isn't shown alone;
+  Back or closing returns it to the choice it had. A list that already shows the item (All, or the item's own choice) does not move.
+  No notification opens an Inbox item today; one that does is an outside opening.
+- **When the choices don't fit** (a phone at large text, Japanese, a narrow list column), the strip scrolls sideways with a fade at
+  the cut edge, and choosing one, or landing on it, scrolls it fully into view; the web keeps All pinned whole beside the grouping
+  menu. The Inbox opens on Needs you, the first choice, so its count starts in sight.
+- **Selection**: Select All picks the rows in sight. Picks survive a switch, and the pick bar counts the ones out of sight as it
+  counts folded rows. Clean up all keeps its scope (every open item under the filters).
+- **Wide screens** keep the same bar at the top of the list (iPad's detail column, the web's list column, Android's list pane). No
+  section sidebar: a third column beside the app sidebar and the item, and a control that only narrows a list drawn as navigation
+  (DESIGN_SYSTEM 3.4).
+- **Not chosen**: a dropdown (hides the state and its counts), filter chips (they already mean source and kind), only capping rows
+  with Show N more (FYI stays a long scroll away), sideways swipes between sections (a row's swipe marks it done, and the iPhone
+  shell pages sideways). The research and comparison are in #9053.
+
 ## Grouping and selection (2026-11-10, #2059)
 
 The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Persona/Views/Inbox/InboxGroups.swift`); Android follows in #2576. The retired native Mac app kept its earlier list behavior ([mac.md](../archive/apple/mac.md)).
 
-- **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched at the top of the list and kept on this device
+- **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched in the section bar's grouping menu ("Section bar") and kept on this device
   (web `localStorage` `inbox.grouping`, Apple `@StoredValue("inbox.grouping")`). Done always groups by when it was done. Working is never grouped.
   A section that would have one group shows no group titles. Waiting Agents get their own group first in Needs you ("Agents waiting on you"); they are counted but can't be picked.
 - **Time groups** are calendar days in local time, not 24-hour windows: Just now (within the hour, Done only, so a slip is easy to find and undo), Today, Yesterday,
@@ -987,6 +1075,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Agents and More… with the next ones), a one-line "Hand to AI…" field and Send. A chip or a send goes without a confirmation, held for 5 s behind a toast at the bottom (`InboxHandOffModel.undoWindow`):
   Undo takes it back (a typed ask goes back into the field), View sends it at once and opens the conversation; left alone it goes and the toast says where, with View. Sending
   never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" is off, so the toast does not say the item was filed.
+  **Android's event page** (`InboxHandOffBar.kt`, `InboxHandOffBarModel.kt`) follows the same two-row pattern and local five-second wait, with Main Chat (no New Chat target), the latest 3 Agents and More… covering at most 12. The target menu reads the current sessions only when opened. Draft Reply reuses the item's existing `ReplyComposer` and `InboxDraftSheet`, and is hidden for a reply suggestion or an item that cannot accept replies. Undo only cancels the local wait and never calls the hub; Queued View fires immediately and opens after success, while Sent View only opens the returned conversation. Sending and success leave the user on the event, and a persistent status row keeps View / Retry reachable after the local toast expires. A failed explicit Retry keeps the first prompt and operation id. Mark-done failure is reported separately after an accepted hand-off, never as a failed hand-off or an automatic retry. The model is kept per item in the pairing's `InboxHandOffBars` (`InboxDataOwner`'s facade, and `InboxExperienceRepository` where used), so leaving or rotating the page does not cancel it. Each store binds the fixed repository and preferences of the pairing that created it: queued work, an accepted hand-off's memory write and Done never resolve the currently selected hub group again. Replacing or closing the pairing cancels the scope. Settled models are retained in a 64-entry access-ordered cache; Queued and Sending models are never evicted, and revisiting an evicted item starts Idle without replaying its old operation. Done rows already present in the live list and missing items offer no interactive composer; a completed item opened from the Done history keeps the hand-off bar and stays Done after hand-off.
   The Mac and the iPhone's source pages (whose own reply composer sits at the bottom) keep the sheet, which opens the conversation after sending.
   **Per source** (#2121, `InboxHandOffMemory`, shared cases in `spec/fixtures/inbox/handoff_memory.json`), the bar and the sheet remember where an item went:
   - **Key:** the item's source plus its most specific mute option (`repo`, else `chat`, else `sender`), in the hub group.

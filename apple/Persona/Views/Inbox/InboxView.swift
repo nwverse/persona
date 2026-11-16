@@ -156,6 +156,8 @@ struct InboxPage: View {
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
                 .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
+                // The selection's actions clear of the open Duo's floating tabs' switch (#4231); no bar of its own otherwise.
+                .tabSwitchBottomBarRoom(shown: picked != nil)
                 .sheet(item: $composing) { d in ComposeView(draft: d, accounts: d.accounts ?? accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
@@ -849,6 +851,7 @@ struct InboxPage: View {
             }
         }
         .listStyle(.plain)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
@@ -1183,7 +1186,7 @@ struct InboxRow: View {
                     Text(LarkTime.short(item.updatedAt)).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize()
                 }
                 HStack(alignment: .top, spacing: Theme.Space.sm) {
-                    if let summary = item.summary, !summary.isEmpty {
+                    if let summary = item.lineSummary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + summary))
                                 // The hierarchical styles, not `Color.primary`: a Mac list's selected row turns that
@@ -1262,7 +1265,7 @@ struct InboxRow: View {
 
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
-        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        if item.isAssistantRow { return item.linePreview } // the tag says who: no "Assistant:" in front
         #if !os(macOS)
         if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
         #endif
@@ -1485,6 +1488,9 @@ struct InboxDetailView: View {
         _slot = State(initialValue: InboxItemSlotModel(item: item))
     }
 
+    /// Managers number their own items: a manager-only change opens a fresh detail too.
+    nonisolated static func identity(for item: InboxItem) -> String { item.key }
+
     private var current: InboxItem { InboxStore.shared.items.first { $0.key == item.key } ?? item }
 
     var body: some View {
@@ -1497,8 +1503,9 @@ struct InboxDetailView: View {
             .sheet(item: $ruling) { InboxPolicySheet(target: $0) }
             .sheet(item: $todoRequest) { InboxDueSheet(request: $0) }
             #if os(iOS)
-            .onChange(of: item.key) { _, _ in
+            .onChange(of: Self.identity(for: item)) { oldKey, newKey in
                 expandedSourceKey = nil
+                slot.detailIdentityChanged(from: oldKey, to: newKey)
             }
             #endif
             #if DEBUG
@@ -1697,7 +1704,7 @@ struct InboxDestinations: ViewModifier {
             // unkeyed one is updated in place with the last item's state — a Feishu chat kept the chat before's messages
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
-                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
+                InboxDetailView(item: $0, accounts: accounts).id(InboxDetailView.identity(for: $0)).splitDetailPage()
                     .feishuHandlesLinks(routeOpen, manager: model.linkManager($0.manager))
                     .modifier(InboxDestinationEnvironment(chat: inboxChat, openFeishu: routeOpen))
             }

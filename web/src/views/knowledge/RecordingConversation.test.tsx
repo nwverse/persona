@@ -157,6 +157,14 @@ describe("a recorded meeting's conversation", () => {
     expect(s.textContent).toContain("Questions are asked on the phone while the meeting runs.");
   });
 
+  it("says a notes room (#8851) keeps notes without Persona in the meeting, not that Persona stopped listening", async () => {
+    await load(fixture({ attendance: "notes" }));
+    expect(factRow("Persona")).toBeUndefined();
+    await reply(pending(livePath)[0], live({ attendance: "notes", asks: [] }));
+    await reply(pending(itemsPath(room))[0], { items: roomItems(), has_more: false });
+    expect(section()!.querySelector("[role=status]")!.textContent).toBe("Persona isn’t in this meeting: it keeps the topics and highlights and answers nothing.");
+  });
+
   it("reads only the newer parts a meeting_live event names, and the thread again when the asks moved", async () => {
     await load();
     await reply(pending(livePath)[0], live());

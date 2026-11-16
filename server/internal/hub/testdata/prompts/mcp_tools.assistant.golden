@@ -297,13 +297,16 @@
   },
   {
     "name": "schedule_followup",
-    "description": "Wake yourself up later: at the given time Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"remind me…\", \"check again in an hour\", meeting prep 10 minutes before a meeting, watching something until it changes. `at` is RFC 3339 (2026-10-27T09:50:00+08:00) or relative (\"30m\", \"2h\", \"1d\"). For something to do again and again (a patrol every 30 minutes) pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it by itself and the user sees, edits and stops it in the app; never schedule the next run from inside a run. For times an interval can't say (every 30 minutes from 9:00 to 18:30 on weekdays, 10:00 on the 1st of each month) pass `cron` instead of `at` / `every`: a standard 5-field cron expression `minute hour day-of-month month day-of-week` read in the user's time zone (`*/30 9-18 * * 1-5`, `0 10 1 * *`, or @hourly / @daily / @weekly / @monthly / @yearly; day of week 0 and 7 are Sunday; when both day fields are restricted, a day matching either runs; runs at least 5 minutes apart). It first runs at its next match and repeats by itself like `every`; a bad expression is refused with what is wrong, and the reply lists the next runs to check. An `every` task can take `until`, an instant after which the task stops (RFC 3339 or 30m / 2h / 1d, the same forms as `at`, not a bare clock time and not a condition to watch for): after that instant Persona turns it off and records a skipped run instead of running. A one-off ignores `until`. Omit it to keep an existing task's end time; null clears it. The task runs on Main chat's launcher, model and thinking effort unless you give it its own with `launcher`, `model` and `effort`; the permission mode stays the user's choice in the app. A follow-up that continues this conversation (`new_conversation` false) runs on that conversation's launcher, so giving it its own needs `new_conversation: true`; the call is refused otherwise. `inbox` is the user's setting \"when done, put it in the Inbox\": pass it only when they asked for the result to reach their Inbox.",
+    "description": "Wake yourself up later: Persona sends `prompt` into this conversation (or a new one) as if the user wrote it, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). `at` is RFC 3339 or relative (\"30m\", \"2h\", \"1d\"). For a recurring task pass `every` (\"30m\", \"2h\", at least 5m) once: Persona repeats it and the user sees, edits and stops it in the app; never schedule the next run from inside a run. For times an interval can't say, pass `cron` instead of `at` / `every`: a standard 5-field `minute hour day-of-month month day-of-week` in the user's time zone (`*/30 9-18 * * 1-5`, `0 10 1 * *`, or @hourly / @daily / @weekly / @monthly / @yearly; day of week 0 and 7 are Sunday; restricted day fields match either; runs at least 5 minutes apart). A bad expression is refused and the reply lists the next runs. An `every` task can take `until` (RFC 3339 or 30m / 2h / 1d, not a bare clock time): after it Persona turns the task off and records a skipped run. A one-off ignores `until`; omit it to keep an existing end time, null clears it. The task runs on Main chat's launcher, model and effort unless overridden with `launcher`, `model` and `effort`; permission mode stays the user's choice. A follow-up continuing this conversation (`new_conversation` false) runs on that conversation's launcher, so overrides require `new_conversation: true`. `inbox` is the user's setting for putting results in the Inbox: pass it only when requested. With `fresh_each_run: true`, a recurring task starts a new chat on every run and carries its state note.",
     "input_schema": {
       "type": "object",
       "required": [
         "prompt"
       ],
       "properties": {
+        "fresh_each_run": {
+          "type": "boolean"
+        },
         "at": {
           "type": "string",
           "description": "when (the first run, with every); default with every: one interval from now"
@@ -376,10 +379,13 @@
   },
   {
     "name": "schedule_routine",
-    "description": "Set up a recurring routine: every day (or on some weekdays) at a time, Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). Use for \"每天 9 点给我早报\", \"每周五下午起草周报\". For one-off reminders use schedule_followup. For times a time of day and weekdays can't say, pass `cron` instead of `time` / `weekdays`: a standard 5-field cron expression `minute hour day-of-month month day-of-week` read in the user's time zone, such as `*/30 9-18 * * 1-5` (every 30 minutes from 9:00 to 18:30 on weekdays), `0 10 1 * *` (10:00 on the 1st of each month) or `0 9 * * 1,3,5`, or an alias (@hourly, @daily, @weekly, @monthly, @yearly). Day of week 0 and 7 are Sunday; when both day of month and day of week are restricted, a day matching either runs. Runs must be at least 5 minutes apart; seconds, @every and TZ= are refused. A bad expression is refused with what is wrong; the reply lists the next runs, so check them against what the user asked. Pass `id` (from list_followups) to change an existing routine: only the fields you give change; `enabled: false` pauses it. A routine can take `until`, an instant after which it stops (RFC 3339 or 30m / 2h / 1d, not a bare clock time): Persona then turns it off and records a skipped run instead of running. Omit `until` to keep an existing routine's end time; null clears it. Times are in the user's time zone. A routine runs on Main chat's launcher, model and thinking effort unless you give it its own: pass `launcher` (a name from machines_list / the launcher list on the computer where its runs start), and `model` / `effort` for that launcher (a model or effort alone pins the launcher it runs on now). An empty `launcher` clears the override and returns the routine to Main chat. Leave these out to keep what the routine has. `inbox` is the user's setting \"when done, put it in the Inbox\" (off / only if worth a look / every time): pass it only when they asked for the result to reach their Inbox.",
+    "description": "Set up a recurring routine: at a time every day (or selected weekdays), Persona starts a new conversation with `prompt`, you do the work, and the user gets a push with your answer (with `push: \"asked\"`, only what you send with notify_user). For times a time of day and weekdays can't say, pass `cron` instead of `time` / `weekdays`: a standard 5-field `minute hour day-of-month month day-of-week` in the user's time zone (`*/30 9-18 * * 1-5`, `0 10 1 * *`, `0 9 * * 1,3,5`), or @hourly / @daily / @weekly / @monthly / @yearly. Day of week 0 and 7 are Sunday; restricted day fields match either. Runs are at least 5 minutes apart; seconds, @every and TZ= are refused. A bad expression is refused and the reply lists the next runs, so check them. Pass `id` (from list_followups) to change an existing routine: only fields given change; `enabled: false` pauses it. A routine can take `until` (RFC 3339 or 30m / 2h / 1d, not a bare clock time): after it Persona turns it off and records a skipped run. Omit `until` to keep an existing end time; null clears it. Times use the user's zone. The routine runs on Main chat's launcher, model and effort unless overridden with `launcher`, `model` / `effort`; an empty `launcher` returns to Main chat. Omit these to keep what the routine has. `inbox` (off / worthy / every) is the user's Inbox setting: pass it only when requested. With `fresh_each_run: true`, a recurring task starts a new chat on every run and carries its state note.",
     "input_schema": {
       "type": "object",
       "properties": {
+        "fresh_each_run": {
+          "type": "boolean"
+        },
         "id": {
           "type": "string",
           "description": "to change an existing routine"
@@ -433,6 +439,37 @@
           ],
           "description": "what of a run goes into the user's Inbox, independent of push: off (default for a new task), worthy (a run puts a row there with inbox_post only when it finds something worth a look; for a task that watches something), every (every run ends with a row made by Persona; for a briefing the user follows daily). Set it only when the user asked for it. Omit to keep an existing task's"
         },
+        "run_if": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Optional owner-approved shell check on the routine computer before scheduled runs. Exit 0 runs; exit 1 skips. Other errors follow on_error. Omit to keep it or use null to remove it.",
+          "properties": {
+            "command": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "timeout_s": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60,
+              "default": 30
+            },
+            "on_error": {
+              "type": "string",
+              "enum": [
+                "run",
+                "skip"
+              ],
+              "default": "run"
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
         "until": {
           "type": [
             "string",
@@ -458,6 +495,25 @@
             "max"
           ],
           "description": "thinking effort for Claude launchers; without a launcher it pins the launcher the routine runs on now. Omit to keep an existing routine's; empty clears it"
+        }
+      }
+    }
+  },
+  {
+    "name": "schedule_state_set",
+    "description": "Stage the recurring task's state note for this scheduled run. Call near the end of the run with the run key in the scheduled prompt and the full replacement state (up to 4096 UTF-8 bytes). Keep cursors, references, and what was already reported. The hub attempts to save the draft after confirming that the run succeeded. If it cannot track the run or write the note, later runs use the last saved note. An empty string clears the note when saved.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "run_key",
+        "text"
+      ],
+      "properties": {
+        "run_key": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
         }
       }
     }
@@ -1094,10 +1150,13 @@
   },
   {
     "name": "inbox_suggest",
-    "description": "Hand in your suggestion for the inbox event this conversation handles (one at a time: a new one replaces the last), and the event's recap. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `todo` — a to-do for the user to add: `text` its title (clear, starting with the action, no chat or people names), `due` only when the message states a deadline: a day `2006-01-02` for all day, or a moment as RFC 3339 with its offset; leave it out when unsure and say so in `note`; the user can edit both and adds it with one tap (a row that came to a to-do counts as handled); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `title`: what the matter is, without chat or person names; `summary`: one sentence on where things stand and who is waited on for what. Write both every time; items whose title comes from the source (mail, documents, PRs / issues, and the like) ignore `title`, and the tool says so. `related`: ids of inbox items in other chats or sources this one is about. `recap` without `kind` creates no suggestion, and may include `title`, `summary`, and `follow`. `follow` records waiting on the other side: `who` (empty means waiting for a reply), `next`, and `check_at` (RFC 3339 with a time zone) or `check_in` (such as `30m`, `4h`, or `2d`). `check_at` takes precedence; with neither, look again in `24h`; the resulting time is clamped to 30 minutes–14 days from now. `follow` is valid only without `kind`. `reported`: `{text, by}` records one externally visible action you or an Agent actually completed but the program did not observe, without verifying it; never use it for plans or actions not taken. `by` is `agent` or `assistant` (default `assistant`), and `text` is one sentence, kept on one line and clipped to 120 characters. It may be given alone or accompany `kind`, `recap`, `title`, `summary`, or `follow`; a filed item refuses it, and text identical to the item's latest `reported` entry is not recorded twice. Call it at the end of each turn. In a conversation the user handed an inbox item to (its context block names the item's id), pass that id as `item` and call it when you have something to write back to the item, and again whenever it changes (it also shows in that conversation as a card); it refuses an item not handed to this conversation or one the user already filed: answer in the chat then.",
+    "description": "Submit the event’s recap and one suggestion, replacing any earlier suggestion. It waits in the user's inbox; nothing goes out until they confirm, and then the program does exactly what it says (you never send it yourself). `kind`: `reply` — one message to send, `text` in the user's voice, ready to go out as it is (no blanks to fill in like 【…】: leave out what you could not find and say so in `note`; for a Feishu sheet / Base item `changes` proposes moving rows' status: ref, field and one of the values the item lists); `agent` — an Agent to start, `text` its instruction (`machine` and `cwd` optional); `todo` — a to-do for the user to add: `text` its title (clear, starting with the action, no chat or people names), `due` only when the message states a deadline: a day `2006-01-02` for all day, or a moment as RFC 3339 with its offset; leave it out when unsure and say so in `note`; the user can edit both and adds it with one tap (a row that came to a to-do counts as handled); `conclusion` — you dealt with it, `text` the conclusion, `outcome` `fyi` (worth knowing) or `done` (nothing to do). `handback: true` for one the user has to judge: their confirmation comes back here as an instruction instead of being carried out. `note`: one or two sentences on what you found and where. `recap`: the event's background, progress and where it is stuck (up to 600 characters), every time. `title`: what the matter is, without chat or person names; `summary`: one sentence on where things stand and who is waited on for what. Write both every time; items whose title comes from the source (mail, documents, PRs / issues, and the like) ignore `title`, and the tool says so. `related`: ids of inbox items in other chats or sources this one is about. `recap` without `kind` creates no suggestion, and may include `title`, `summary`, and `follow`. `follow` records waiting on the other side: `who` (empty means waiting for a reply), `next`, and `check_at` (RFC 3339 with a time zone) or `check_in` (such as `30m`, `4h`, or `2d`). `check_at` takes precedence; with neither, look again in `24h`; the resulting time is clamped to 30 minutes–14 days from now. `follow` is valid only without `kind`. `reported`: `{text, by}` records one externally visible action you or an Agent actually completed but the program did not observe, without verifying it; never use it for plans or actions not taken. `by` is `agent` or `assistant` (default `assistant`), and `text` is one sentence, kept on one line and clipped to 120 characters. It may be given alone or accompany `kind`, `recap`, `title`, `summary`, or `follow`; a filed item refuses it, and text identical to the item's latest `reported` entry is not recorded twice. Call it at the end of each turn. In a conversation the user handed an inbox item to (its context block names the item's id), pass that id as `item` and call it when you have something to write back to the item, and again whenever it changes (it also shows in that conversation as a card); it refuses an item not handed to this conversation or one the user already filed: answer in the chat then.",
     "input_schema": {
       "type": "object",
       "properties": {
+        "processing_turn": {
+          "type": "string"
+        },
         "item": {
           "type": "string"
         },
@@ -1214,13 +1273,16 @@
   },
   {
     "name": "inbox_draft",
-    "description": "The older name of inbox_suggest with kind `reply`: prefer inbox_suggest. Submit the reply you drafted for the inbox item this conversation was started for. It waits in the user's inbox; they read it and send it with one tap (you never send it yourself). `text` is the reply in the user's voice, ready to go out as it is: no blanks to fill in (【…】) — leave out what you could not find and say so in `note`; `note` is one or two sentences on what you found and where, for the user to check the draft against. For a Feishu sheet / Base item, `changes` proposes moving rows' status (ref, field and one of the values the item lists); they are made when the user sends. Call it once, at the end.",
+    "description": "Legacy inbox_suggest `reply`. Prefer inbox_suggest. Draft a reply for this conversation’s inbox item. It waits in the user's inbox; they read it and send it with one tap (you never send it yourself). `text` is the reply in the user's voice, ready to go out as it is: no blanks to fill in (【…】) — leave out what you could not find and say so in `note`; `note` is one or two sentences on what you found and where, for the user to check the draft against. For a Feishu sheet / Base item, `changes` proposes moving rows' status (ref, field and one of the values the item lists); they are made when the user sends. Call it once, at the end.",
     "input_schema": {
       "type": "object",
       "required": [
         "text"
       ],
       "properties": {
+        "processing_turn": {
+          "type": "string"
+        },
         "text": {
           "type": "string"
         },
@@ -1725,6 +1787,44 @@
         }
       },
       "additionalProperties": false
+    }
+  },
+  {
+    "name": "skill_import",
+    "description": "Import a user-requested skill ZIP through Persona's existing Settings importer. First preview the base64-encoded archive (up to 4 MiB compressed); returns validated metadata, a short-lived reference and environment. Then install with the same archive, reference and environment. Installation and undo wait for the user's own permission card showing the validated skill and target computer; never approve for the user. The target is the current assistant's configured personal computer, never a model-chosen path or machine. Skills are shared by assistants using that computer account and load in new conversations; an existing conversation is not guaranteed to refresh. Same-name skills are never overwritten. ZIP inspection does not run scripts or treat skill instructions as authorization. Use status with the original reference and environment after a lost/uncertain response, before any retry: it records previewed, installed or undone and recovers the undo receipt. Status is an operation receipt, not a live inventory; receipts expire after ten minutes or a computer restart. If unavailable, inspect Settings \u003e Skills instead of assuming failure. Cancel discards an unused preview. Undo takes an installed receipt, refuses edited/replaced files and retains recovery data. No URL download, repository clone, arbitrary path write or arbitrary skill removal is provided. An older computer may require a Persona update.",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "install",
+            "status",
+            "cancel",
+            "undo"
+          ]
+        },
+        "archive": {
+          "type": "string",
+          "maxLength": 5592408,
+          "description": "Base64 ZIP bytes, required only for preview and install. Supply identical bytes for both; do not put secrets in the archive."
+        },
+        "reference": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Opaque receipt from preview/install, required except for preview. Never invent one."
+        },
+        "environment": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Environment returned by preview, required except for preview. A changed assistant computer requires a fresh preview."
+        }
+      }
     }
   },
   {
@@ -2304,7 +2404,7 @@
   },
   {
     "name": "task_review",
-    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is stopped once it stays still; its terminal stays); rework sends what is missing back to the same agent (refused when it has stopped: a stopped agent is read-only, so start a new agent for the task with agent_start) — at most 2 rounds; a third is refused unless it carries a decision for the user (the needs_user fields below), and otherwise you accept or cancel; needs_user puts a decision to the user, and only a decision they can answer: it is refused unless it has why_owner (why only they can decide), reason (one sentence: what is to be decided), recommend, options (2 to 4, the recommended first, each with what choosing it leads_to) and cost_of_waiting. When nothing needs the user, don't use it: decide it yourself and send the agent on, send the work back, or close the task; a task that only waits for something is no decision either: park it. parked is for a task that waits on purpose (for the user to say what comes first, for someone else, for something outside to happen, for a date): it is refused unless it has reason (one sentence: what it waits for) and waiting_on, and it takes until (default 24 hours, at most 30 days). A parked task stays open and is not in the user's Needs you: no card, no push, and no stalled, idle, orphaned or overdue signal while it is parked; only waiting_on owner_priority is listed in their daily digest. At until it comes back to you once in a 督办 message (parked_due): decide, park it again with a new reason, or close it. Its agent starting a turn ends the parking, so send it what it needs before you park. A task parked again 3 times in a row with no agent turn in between is refused the next time: close it, or state the real decision. Don't park what you can decide, and don't use needs_user to park. The hub adds where the task came from and where it stands, and the decision is listed on the to-do with its options (its conclusion card asks them too; without a card, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted): its agents are closed and archived, and their waiting cards end. A leader conversation's needs_user also goes to the main conversation. From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. The criteria are the task's brief's as they stand after its logged scope changes (the 督办 message lists them), not what a later hand-over prompt says: write one check per criterion in the same words. For accepted with outcome done (the default) and a nonempty current done_when, checks is exact: every current criterion appears once with met=true and nonblank evidence. Missing, duplicate, unknown or unmet checks and blank evidence are refused before any review or completion is written; user_check does not relax this. outcome cannot, cancelled and tasks without done_when keep their existing behavior. Other verdicts may omit entries, whose persisted progress then stays as it was. The completion report lists each criterion as met, not met or dropped (with the scope change that dropped it), then also_done. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again. A deployed task already has a \"Please verify\" card from when its work went live: your accepted passes it for the user (marked verified by you), so they are not asked to press \"Pass\"; set user_check only when the user should still look at the result themselves (a UI change someone has to see), and then that card, or a new one, waits for them. A needs_user decision has a default and a date: unless why_owner is irreversible or visible_to_others, it takes your recommend by default after 24 hours unanswered (recorded on the to-do as taken at the deadline), or at the deadline you give; irreversible and visible_to_others are never taken by default and are raised to the user again once a day. A decision that waited a day comes back to you once to confirm its facts still hold. A decision that can wait says so with can_wait: nothing is due within 12 hours and waiting costs little (nobody is held up today). It is then not pushed and gets no card: it is in the user's Needs you at once and the next daily briefing lists it with your recommendation, where they answer it (don't ask them yourself); its default, its recheck and their answers are unchanged, and if no briefing lists it within 24 hours, or an hour before its deadline, it is pushed after all. can_wait is ignored, and the decision pushed as usual (the answer says why), for irreversible and visible_to_others, for a deadline within 12 hours or one with reversible false, and while no daily briefing with facts is on; when in doubt leave it out. Besides the options the user can answer \"You decide\", \"This isn't what I asked for\" or \"Tell me the background first\": that comes back to you in a 督办 message, and nothing is taken.",
+    "description": "Review a task you handed out after checking its work. Accepted closes it (its Agent is stopped once it stays still; its terminal stays); rework sends gaps to the same Agent (at most 2 rounds; a third is refused unless it carries a complete owner decision). A stopped Agent is read-only: use agent_start for a replacement. A task only waiting for something is not a decision; park it with source-backed evidence. A needs_user verdict is only for an answerable owner-only decision and requires why_owner, reason, recommend, 2–4 options (recommended first, each with leads_to), and cost_of_waiting. Otherwise decide within your authority, send the Agent on, rework, or close it.\n\nFor accepted with outcome done (the default) and nonempty current done_when, checks must contain each current criterion exactly once with met=true and nonblank evidence. Missing, duplicate, unknown or unmet checks, or blank evidence, are refused before any review or completion is written; user_check does not relax this. outcome cannot, cancelled and tasks without done_when keep their existing behavior. Other verdicts may omit checks; omitted progress stays unchanged. The completion report lists each criterion as met, not met or dropped (with its scope change), then also_done. Judge against the brief after logged scope changes, not a later handover; use task_review for every task a 督办 message says waits for review and do not accept on the Agent's word alone.\n\nOn supervised tasks, accepted and needs_user send one conclusion card in Lark with verdict, one-sentence reason and one link; needs_user also includes recommend, which the owner's “OK” selects. Give outcome, reason and link for accepted, and reason and recommend for needs_user. Do not duplicate the card. A deployed task's existing “Please verify” card is passed by acceptance; set user_check only when the owner must still inspect the result themselves. A needs_user decision defaults to recommend after 24 hours or its deadline unless why_owner is irreversible or visible_to_others; those never default and are reminded daily. A decision waiting 24 hours is rechecked once. Use can_wait only when nobody is blocked today, waiting costs little and no deadline is within 12 hours; the schema describes when the briefing hold is honored. Owner replies “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision; do not ask the same question again or take an irreversible/externally visible step for them.\n\nFrom a conversation other than main, on a task it does not supervise, only accepted and cancelled apply: send gaps with agent_send. A leader's needs_user also reaches main. Cancel only a duplicate or unwanted task; cancellation closes and archives its Agents and ends their waiting cards.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2369,16 +2469,15 @@
         "waiting_on": {
           "type": "string",
           "enum": [
-            "owner_priority",
             "someone_else",
             "external_event",
             "date"
           ],
-          "description": "parked (required): what kind of thing the task waits on. owner_priority: the user has to say whether to do it or what comes first (their daily digest lists it); someone_else: another person has to do or answer something; external_event: something outside has to happen (a release, a result, a fix upstream); date: nothing but the time"
+          "description": "parked (required): the external wait. someone_else: another person must act or answer; external_event: an outside event must happen; date: wait only until a date. New owner decisions use needs_user; legacy owner_priority parks remain readable and retain their digest behavior"
         },
         "until": {
           "type": "string",
-          "description": "parked, optional: until when it is parked, a duration (\"3d\", \"36h\", \"90m\") or an RFC 3339 time, 1 minute to 30 days ahead; default 24h. At that time the task comes back to you"
+          "description": "parked, optional: duration (\"3d\", \"36h\", \"90m\") or RFC 3339 time, 1 minute to 30 days ahead; default 24h. For waiting_on date, give an explicit RFC 3339 time (no duration or default). At that time the task returns to supervision"
         },
         "link": {
           "type": "string",
@@ -2449,6 +2548,91 @@
         "reversible": {
           "type": "boolean",
           "description": "with deadline: whether taking recommend can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default (why_owner irreversible and visible_to_others must say false)"
+        },
+        "evidence": {
+          "type": "object",
+          "required": [
+            "kind",
+            "target",
+            "wake"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "person_reply",
+                "merge_review",
+                "external_event",
+                "date"
+              ],
+              "description": "parked: person_reply (a sent request to a person), merge_review (a sent request for review of a ready PR/MR), external_event (an observable outside event), or date"
+            },
+            "target": {
+              "type": "string",
+              "maxLength": 200,
+              "description": "the named person/reviewer or external object"
+            },
+            "wake": {
+              "type": "string",
+              "maxLength": 600,
+              "description": "the observable change that ends this wait"
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2000,
+              "description": "required for merge_review (ready PR/MR link) and external_event (observable object URL); omit for person_reply and date"
+            },
+            "contact": {
+              "type": "object",
+              "required": [
+                "channel",
+                "url",
+                "sender",
+                "sent_at",
+                "request",
+                "status"
+              ],
+              "properties": {
+                "channel": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "url": {
+                  "type": "string",
+                  "maxLength": 2000,
+                  "description": "sent-message/receipt link, not a channel homepage"
+                },
+                "sender": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "sent_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "actual sent time; not in the future"
+                },
+                "request": {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "sent"
+                  ]
+                }
+              },
+              "description": "required for person_reply and merge_review: the request has already been sent"
+            },
+            "ready": {
+              "type": "boolean",
+              "enum": [
+                true
+              ],
+              "description": "merge_review only: the named reviewer can review the PR/MR"
+            }
+          },
+          "description": "required for parked; do not supply recorded_by. Inspect the source receipt; the tool records your attestation, not an independent provider check. recorded_by is server-authored for the current task_review conversation and is output only. Missing evidence on a legacy park means unrecorded, not verified"
         }
       }
     }
@@ -2495,7 +2679,7 @@
   },
   {
     "name": "task_decided",
-    "description": "Record the owner's answer to a task's waiting decision (a needs_user decision on its to-do) when they gave it to you in this conversation, in their own words, instead of on the decision's card or row. Only from the main conversation or the task's supervisor, and only what the owner said: never your own call (a decision that is yours is no decision: send the agent on, or review the task). option is the label of one of the decision's options, the one their words choose; when their words fit none of them, don't record it: ask them, or restate the decision with task_review. With told_agent false the hub takes the option as the card does: it goes to the task's agent and is recorded (refused, and nothing recorded, while the agent cannot be reached). With told_agent true you already passed their answer to the agent with agent_send, and it is only recorded. Either way the decision ends as if they had answered it on its card: it leaves their Needs you, is not raised again, the to-do lists it among its decisions with their words, and the task is supervised as before. So when the owner answers a task's open decision in the chat, record it here; relaying it with agent_send alone leaves the decision waiting.",
+    "description": "Record the owner's needs_user choice; main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true means already delivered (also direct Agent chat): record only. Otherwise send and record. Both settle the ask.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2506,19 +2690,19 @@
       "properties": {
         "todo_id": {
           "type": "string",
-          "description": "the task's todo id (todo_…)"
+          "description": "task id"
         },
         "option": {
           "type": "string",
-          "description": "the label of the option the owner chose, exactly as the decision lists it"
+          "description": "exact option label"
         },
         "said": {
           "type": "string",
-          "description": "what the owner said, quoted (one or two sentences)"
+          "description": "owner's words"
         },
         "told_agent": {
           "type": "boolean",
-          "description": "true when you already sent their answer to the task's agent (agent_send): it is only recorded; default false: the hub sends the option to the agent as the card does"
+          "description": "true: already delivered to the Agent, record only; false: relay and record"
         }
       }
     }
@@ -2599,8 +2783,227 @@
     }
   },
   {
+    "name": "todo_repositories_get",
+    "description": "Read a to-do's saved repository/issue/PR associations and catalog status. No Git/network calls.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repositories_set",
+    "description": "Replace associations atomically using revisions from todo_repositories_get and repositories_list. [] removes metadata only. Retained source snapshots stay fixed; remove and reselect to adopt a changed catalog identity. Editable after execution. Omitted links preserve; [] clears. Use {url} or {kind,number}; omitted/empty titles preserve retained titles. On conflict reread and reconcile. No files, task progress or completion changes.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "expected_revision",
+        "expected_catalog_revision",
+        "repositories"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_catalog_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repositories": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": [
+              "repo_id"
+            ],
+            "properties": {
+              "repo_id": {
+                "type": "string"
+              },
+              "directory_alias": {
+                "type": "string"
+              },
+              "requested_ref": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "default",
+                      "branch",
+                      "tag",
+                      "commit",
+                      "ref"
+                    ]
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "links": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "issue",
+                        "pull_request"
+                      ]
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
+                      "maxLength": 1024
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repository_links_set",
+    "description": "Replace all links for repo_id at the revision from todo_repositories_get; URLs must match its saved identity. Use {url} or {kind,number}. [] clears; omitted/empty titles preserve retained titles. On conflict reread and reconcile. No files, task progress or completion changes.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "repo_id",
+        "expected_revision",
+        "links"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "issue",
+                  "pull_request"
+                ]
+              },
+              "number": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
+                "maxLength": 1024
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_repository_links_add",
+    "description": "Record discovered/opened issue/PR links without manual user entry. Accept 1–50 exact URLs across links:[{url,title}] and legacy urls; group repositories automatically, including unlisted ones. Use actual source titles, never guesses; nonempty titles refresh, omitted/empty preserve. Deduplicate links; this explicit call can restore removed links. Atomic; preserves aliases, refs and source snapshots. Use todo_repositories_get and revision-checked set tools to replace/remove. Associations do not prove completion.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "urls": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string"
+          }
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
+                "maxLength": 1024
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "urls"
+          ]
+        },
+        {
+          "required": [
+            "links"
+          ]
+        }
+      ]
+    }
+  },
+  {
     "name": "todo_list",
-    "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones and failed starts by default, earliest due first (those without a due date last), each with its id, title, state, priority, project, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, by knowledge-base project, by kind (concerns only), or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
+    "description": "List Persona to-dos (not Feishu tasks): open/failed starts by default, due first and undated last. Returns id, title/state, priority/project, due/reminder, agents and first note line; times use the user's time zone. Filter by the schema fields. Find an id here before edits; use todo_get for details.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -2611,23 +3014,23 @@
             "done",
             "all"
           ],
-          "description": "which to-dos: open (default), done, or all"
+          "description": "Default: open."
         },
         "due_before": {
           "type": "string",
-          "description": "only those due by then: a day (2026-11-15, through its end) or a moment (2026-11-15 18:00, RFC 3339); leaves out those without a due date"
+          "description": "Due no later than this date (inclusive through day's end) or datetime (user's time zone/RFC3339); excludes undated to-dos."
         },
         "due_after": {
           "type": "string",
-          "description": "only those due from then on: a day or a moment; leaves out those without a due date"
+          "description": "Due from this date/datetime onward; excludes undated to-dos."
         },
         "overdue": {
           "type": "boolean",
-          "description": "only open ones whose due date has passed"
+          "description": "Open and past due."
         },
         "with_agents": {
           "type": "boolean",
-          "description": "true: only those agents work on (tasks); false: only the user's own"
+          "description": "true: with agents (tasks); false: user's own."
         },
         "query": {
           "type": "string",
@@ -2635,7 +3038,7 @@
         },
         "project": {
           "type": "string",
-          "description": "only the to-dos in this knowledge-base project (its slug or name)"
+          "description": "Existing knowledge-base project slug/name."
         },
         "kind": {
           "type": "string",
@@ -2643,18 +3046,18 @@
             "todo",
             "concern"
           ],
-          "description": "only concerns (things the user raised in the main conversation that wait for you to report their outcome), or only the other to-dos; both when left out"
+          "description": "todo or user-raised concerns awaiting concern_report; omitted includes both."
         },
         "limit": {
           "type": "integer",
-          "description": "at most this many (default 50, at most 200)"
+          "description": "Default 50; maximum 200."
         }
       }
     }
   },
   {
     "name": "todo_get",
-    "description": "One of the user's Persona to-dos in full: its title, state, priority, due date, reminder (and whether it was pushed), when it was made and changed, the conversation and plan it came from when it is a task, its notes, the agents that work or worked on it, and the decisions in force on it.",
+    "description": "Read a to-do's title/state, priority, due/reminder and push status, timestamps, origin/plan, notes, agents, decisions and canonical repository/issue/PR associations. Maintain links with todo_repository_links_add or the revision-checked set tools; associations do not prove completion.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2670,7 +3073,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day. When it clearly belongs to one of the user's areas of work, give project: the To-dos page groups to-dos by it. With kind concern it records a concern of the user's instead: open until you report its outcome with concern_report. In a leader conversation it records a piece of your direction's work instead: it shows under your direction as not started, you supervise it, and to have an agent do it you use task_plan with its todo_id (no second to-do); finish one done without an agent with todo_complete.",
+    "description": "Create a Persona to-do when the user asks or agrees to record work or a reminder. Immediate, without confirmation; agents execute via task_plan. An open title/due duplicate returns the existing to-do, but refuses supplied bindings: edit those with todo_repositories_get/set. Use a short action title in the user's language and details in notes. In a leader chat, records a piece of that direction; dispatch with task_plan todo_id, or finish unassigned work with todo_complete. Optional repository_bindings save atomically; get IDs/catalog_revision from repositories_list. Metadata does not create files or advance task progress.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2683,15 +3086,15 @@
         },
         "notes": {
           "type": "string",
-          "description": "details: where it came from, links, amounts, what to bring"
+          "description": "Source, links, amounts and other details."
         },
         "due": {
           "type": "string",
-          "description": "when it is due: a day (2026-11-15) when only the day is known, else a moment (2026-11-15 18:00 in the user's time zone, or RFC 3339 with its offset); 2h / 3d from now also work"
+          "description": "Due date YYYY-MM-DD when only the day is known; otherwise YYYY-MM-DD HH:MM in the user's time zone or RFC3339. Relative 2h/3d also accepted."
         },
         "remind": {
           "type": "string",
-          "description": "when to push the phone about it: a moment (2026-11-14 09:00 in the user's time zone, or RFC 3339), or 30m / 2h / 1d from now; not in the past. Leave it out unless the user asked for a reminder or the deadline is close and matters"
+          "description": "Reminder datetime (user's time zone or RFC3339) or relative 30m/2h/1d; never past. Omit unless requested or the deadline is close and important."
         },
         "priority": {
           "type": "string",
@@ -2708,18 +3111,97 @@
             "todo",
             "concern"
           ],
-          "description": "concern (main conversation only): something the user raised and wants an answer to, recorded so it is followed until you report its outcome to them with concern_report; nothing else closes it. todo (the default): one of the user's own to-dos"
+          "description": "todo (default); concern (main chat only) tracks a user-raised matter until concern_report reports its outcome; other completion tools cannot close it."
         },
         "project": {
           "type": "string",
-          "description": "the knowledge-base project it belongs to: the slug or name of an existing project, usually a long-term one for an area of the user's work (kb_list projects). Set it when the area is clear; never make up a near-duplicate of an existing project"
+          "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates."
+        },
+        "repository_bindings": {
+          "type": "object",
+          "required": [
+            "catalog_revision",
+            "repositories"
+          ],
+          "properties": {
+            "catalog_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "repositories": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "required": [
+                  "repo_id"
+                ],
+                "properties": {
+                  "repo_id": {
+                    "type": "string"
+                  },
+                  "directory_alias": {
+                    "type": "string"
+                  },
+                  "requested_ref": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "default",
+                          "branch",
+                          "tag",
+                          "commit",
+                          "ref"
+                        ]
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "issue",
+                            "pull_request"
+                          ]
+                        },
+                        "number": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
+                          "maxLength": 1024
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         }
       }
     }
   },
   {
     "name": "todo_update",
-    "description": "Change one of the user's Persona to-dos: its title, notes, due date, reminder, priority or project. Only what you give changes; \"\" clears notes, due, remind or project. A new reminder time is pushed again even when the old one already was. Done at once, nothing to confirm, also for a task's to-do. To mark it done or open it again use todo_complete / todo_reopen.",
+    "description": "Update supplied title, notes, due/reminder, priority or project immediately, including task to-dos; no confirmation. Omitted fields stay; \"\" clears notes/due/remind/project. New reminder times notify again. Completion/reopening uses todo_complete/todo_reopen.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2728,7 +3210,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "the to-do's id (todo_…), as todo_list gives it"
+          "description": "To-do id from todo_list."
         },
         "title": {
           "type": "string",
@@ -2736,15 +3218,15 @@
         },
         "notes": {
           "type": "string",
-          "description": "the new notes (they replace the old ones: keep what should stay); \"\" clears them"
+          "description": "Replacement notes; retain anything still needed. \"\" clears."
         },
         "due": {
           "type": "string",
-          "description": "the new due date: a day (2026-11-15) or a moment (2026-11-15 18:00 in the user's time zone, RFC 3339); \"\" clears it"
+          "description": "New due date YYYY-MM-DD or datetime (user's time zone/RFC3339); \"\" clears."
         },
         "remind": {
           "type": "string",
-          "description": "the new reminder: a moment (2026-11-14 09:00, RFC 3339) or 30m / 2h / 1d from now, not in the past; \"\" clears it"
+          "description": "New reminder datetime (user's time zone/RFC3339) or relative 30m/2h/1d; never past. \"\" clears."
         },
         "priority": {
           "type": "string",
@@ -2756,7 +3238,7 @@
         },
         "project": {
           "type": "string",
-          "description": "the knowledge-base project it belongs to: the slug or name of an existing project, usually a long-term one for an area of the user's work (kb_list projects). Set it when the area is clear; never make up a near-duplicate of an existing project; \"\" takes it out of its project"
+          "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; do not invent near-duplicates. \"\" clears."
         }
       }
     }

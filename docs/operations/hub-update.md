@@ -316,7 +316,7 @@ Package contract:
   ordinary files/directories are accepted. No links, special files, traversal, absolute/drive/UNC/backslash paths,
   reserved names, duplicate entries, case/Unicode-normalization collisions or internal provisioning stamps.
 - Preview extracts into a private temporary sibling and removes it before replying; only bounded, expiring metadata
-  receipts remain (32 per node, ten minutes). Install rechecks the exact same ZIP, current environment and conflicts,
+  receipts remain (32 operations per node, ten minutes, with lookup aliases for completed installs). Install rechecks the exact same ZIP, current environment and conflicts,
   then publishes by an exclusive atomic rename. No existing directory, built-in, plugin or local runtime skill is
   overwritten or shadowed. Unsupported exclusive-rename platforms fail closed. Failure/cancellation removes staging.
 
@@ -330,6 +330,21 @@ for the user; no background job deletes it or reinstalls an undone package.
 A canceled preview has no durable staged files. Cancellation before the atomic publish cleans staging; a lost response
 after publish may mean the whole installation completed, so refresh the list before retrying. Writes are never
 automatically retried. Repeated/concurrent installation cannot replace the winning name.
+
+Assistant-only MCP `skill_import` exposes `preview`, `install`, `status`, `cancel` and `undo` through that same manager
+service and importer. It accepts base64 ZIP bytes, not download URLs or local paths. Preview returns an environment
+and receipt; install sends the identical bytes with both. Before install or undo, the manager reads the exact node
+receipt and shows a localized permission card naming the validated skill, computer and shared-account impact.
+Only the user's own approval counts; no archive bytes or skill instructions appear in the card. The settings lock
+is released while waiting and reacquired to recheck the target before the node call. New tools remain subject to
+existing assistant/meeting restrictions; ordinary coding Agents do not receive them.
+
+`status` accepts the original preview or install reference and environment. It records `previewed`, `installed` or
+`undone` and recovers the installation's undo receipt or retained recovery location after a lost response. It does
+not replay the effect or claim to be a live inventory. Receipt metadata survives only for its ten-minute node
+lifetime; expiration or node restart requires inspecting Settings › Skills instead of assuming failure. Older
+nodes without receipt status require an update before MCP installation. HTTP clients keep their existing flow and
+may also query status; the additive result fields are backward compatible.
 
 Discovery uses existing provisioning: `assistantLarkEnv` links the user store into `.claude/skills`, and
 `assistantRuntimeSkills` links it into `.agents/skills`. Claude reads the existing assistant directory; Codex's
@@ -572,6 +587,7 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 
 - **Which source**: `hub.json`'s `update.url` when set (`docs/operations/config.md`), else the URL the build was made with (`main.updateURL`). The value is the directory `latest.json` is in. A GitHub repository's release base works as it is:
   `https://github.com/<owner>/<repo>/releases/latest/download` redirects `latest.json` and `personad-<os>-<arch>.gz` to the newest release's assets, and the client follows the redirects. A release build made without an update URL updates itself once `update.url` gives one.
+- **A release published between a check and the update** (#9263): the update installs the release it checked, and takes every file of it (the hub's binary, the programs beside it, the node builds) from where that release stays. From a GitHub repository's `releases/latest/download` that is the release's own tag, `releases/download/v<version>/` (the tags releases are published under, `docs/operations/release.md`); a repository whose tags are not `v<version>` has no such tag, and its files come from the base as before. Any other source (a publish site's `dl/`, a mirror, a `file://` copy) has the files only beside `latest.json`, where a newer release replaces them, so a download there that does not match its manifest is followed by one more read of `latest.json`. When that names another release, the update stops saying a newer release was published while the checked one was downloading, the hub offers the newer release from then on as a check would, and the next **Update** (or automatic update) installs it. When it names the same release the download is broken, and the update fails with the mismatch as before. Nothing is downloaded again either way. Before this, a hub on the GitHub source failed every **Update** with "the download does not match the release's manifest" from the moment a newer release was published until it checked again.
 - **What follows it**: everything the hub fetches as "the release": its checks, downloads and node binaries for every platform; the node builds the manager fetches when `node_packages.url` is empty; the manager install script's download address (its sha256s come from the same `latest.json`); and the `install.sh` line for a new computer (the source without its `/dl`).
   GitHub's base has no `<version>/manifest.json` or `<version>/` builds, so a manager there takes the node builds `latest.json` lists, from beside it: the hub's own version's when the newest release is the hub's, else the newest release's when it drives them (`docs/operations/node-update.md` ("Node packages")).
 - **What it may be**: `https://`, `http://` only to this machine (nothing is signed, "Security"), or `file:///<directory>` (a private publisher's copy), with no user, password, query or fragment, and not `latest.json` itself. One that does not read leaves the hub with no source rather than the build's: Settings › hub says why (`why_not`), and the log says so at the start. The error never shows the address.
@@ -610,6 +626,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
      now a missing platform is one that should have been in the release, and installing cannot recover it later. The release script uploads every `.gz` first, then switches the site serving `latest.json`
      (`scripts/release/publish.sh`), so "listed in the manifest but not uploaded yet" cannot happen;
    - Restart interrupted downloads, at most 3 attempts; rename the temporary file only after the download finishes.
+   - Every file comes from where the release checked stays, its tag on GitHub, so a release published since the check cannot serve its files in its place; another source is read once more when a download does not match, to tell a newer release from a broken download ("Update source", #9263).
    - The downloads live only as long as the update: `<build>/` is removed when the update fails (download, check, swap or restart), once it is confirmed and its node binaries are in place, and when it goes back. A hub start also removes every other `<build>/` (one that went back through the watchdog or the entry process, which run the old build, or one an older build left), keeping only the one it is confirming.
 2. **Verify**:
    - Continue only if both sha256 values match the manifest; otherwise delete the download and report an error, leaving the current binary untouched;
@@ -782,6 +799,7 @@ does not satisfy that contract.
   - Skills: symlink creation and cleanup, automatic migration of old installs, user precedence on a name collision, gate command only present with its skill; built-in skill directory contains only redistributable skills;
   - dev / docker channels never install, however new the manifest is (API 409);
   - **No downgrade** (`TestNoDowngrade`): a directly deployed binary (build number = build time) does not install a manifest with a smaller or equal build number; only larger ones install;
+  - **A release published between check and update** (`server/internal/update/pin_test.go`, `server/internal/hub/selfupdate_pin_test.go`, `server/internal/devices/packages_pin_test.go`): with a source that publishes a newer release (its `latest.json` and files) after the check, the update installs the release checked from its GitHub tag, hub binary, programs and node builds alike; another source is read once more and the update stops naming the newer release, which it offers and installs next; the node build a manager looked up is fetched the same way; a broken download still fails with the mismatch, and no file is fetched twice;
   - **Update source** (`selfupdate_source_test.go`): `hub.json`'s `update.url` replaces the build's for checks, install scripts and node builds, and the view says which; a URL that does not read (plain http elsewhere, a password, a query, `latest.json` itself) leaves no source and never shows the password; `update.proxy` carries the update's requests with its credentials and nothing else, and one that does not read fails checks without a direct request;
   - **Release manifest** (`update/verify_test.go`, `cmd/personad/release_test.go`): a manifest over binaries of another build (this platform's runs and says so, another's lacks the build number), another version, a changed or missing download is refused, and `release manifest` writes nothing then;
 - publish.sh: no publishing if the build number does not increase or the live commit is not an ancestor.

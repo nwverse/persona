@@ -3,6 +3,8 @@ const field = document.querySelector("#hub");
 const error = document.querySelector("#error");
 const state = document.querySelector("#link-state");
 const result = document.querySelector("#link-result");
+const pluginToggle = document.querySelector("#claude-plugin");
+const pluginStatus = document.querySelector("#claude-plugin-status");
 let words = {};
 
 function t(key, variables = {}) {
@@ -24,8 +26,11 @@ async function refreshLink() {
     document.querySelector("#node-install").hidden = true;
     document.querySelector("#link-install-guide").hidden = false;
     document.querySelector("#link-install").hidden = false;
+    pluginToggle.disabled = true;
+    pluginStatus.textContent = "";
     return;
   }
+  showPlugin(status.claude_plugin);
   const link = status.link || {};
   state.textContent = t("link_state", { state: link.state || t("not_running") }) + (status.machine_name || status.machine ? ` · ${status.machine_name || status.machine}` : "");
   document.querySelector("#link-reconnect").disabled = false;
@@ -36,6 +41,23 @@ async function refreshLink() {
   document.querySelector("#link-install-guide").hidden = true;
   document.querySelector("#link-install").hidden = true;
 }
+
+// The Persona plugin for Claude Code, which the resident node keeps installed. Checked: installed and kept up to date.
+// Checking it installs it now (turning it back on where it was turned off in Claude Code); clearing it removes it and
+// stops the automatic install. Nothing to install into, or nothing to install: no toggle.
+function showPlugin(plugin) {
+  const state = plugin && plugin.state;
+  pluginToggle.disabled = state === "claude_missing" || state === "unavailable";
+  pluginToggle.checked = Boolean(plugin && plugin.auto && ["installed", "outdated", "error"].includes(state));
+  const known = ["installed", "outdated", "disabled", "not_installed", "claude_missing", "unavailable", "error"];
+  const words = known.includes(state) ? state : "unknown";
+  pluginStatus.textContent = t(`claude_plugin_${words}`, { version: (plugin && plugin.version) || "" });
+}
+
+pluginToggle.addEventListener("change", async () => {
+  pluginToggle.disabled = true;
+  await command({ action: pluginToggle.checked ? "plugin-install" : "plugin-uninstall" });
+});
 
 async function command(value) {
   result.textContent = t("working");

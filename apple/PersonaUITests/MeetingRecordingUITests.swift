@@ -17,8 +17,8 @@ final class MeetingRecordingUITests: XCTestCase {
         app.launchPinned()
         let start = app.buttons["recording-meeting-start"]
         XCTAssertTrue(start.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertEqual(start.label, "录音")
-        XCTAssertFalse(app.buttons["recording-start"].exists, "one Record button: a note is the Type choice under it")
+        XCTAssertEqual(start.label, "开始会议")
+        XCTAssertFalse(app.buttons["recording-start"].exists, "one start button: a note is the Type choice under it")
         try shot(app, "recordings")
 
         app.terminate()
@@ -27,7 +27,7 @@ final class MeetingRecordingUITests: XCTestCase {
         openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(row.label.contains("录音") && !row.label.contains("会议"), row.label)
+        XCTAssertTrue(row.label.contains("会议") && !row.label.contains("会议中"), row.label) // the place, Meetings (#8731)
     }
 
     /// A meeting being recorded: its name from the calendar, the time, Meeting, its bookmarks; the drawer's row opens it;
@@ -56,7 +56,7 @@ final class MeetingRecordingUITests: XCTestCase {
         openDrawer(app)
         let row = app.buttons["sidebar-meeting-recording"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(row.label.contains("录音中"), row.label)
+        XCTAssertTrue(row.label.contains("会议中"), row.label) // a meeting runs: In a Meeting… Open (#8731)
         row.tap()
         XCTAssertTrue(app.descendants(matching: .any)["recording-now-title"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
     }
@@ -74,7 +74,8 @@ final class MeetingRecordingUITests: XCTestCase {
     }
 
     /// The meeting's Live Activity: Dynamic Island compact and expanded, Lock Screen. PERSONA_MEETING_PHASE=recording
-    /// (default) | paused | interrupted. Shots, not a pass / fail check of the drawing; the Lock Screen's Stop is checked.
+    /// (default) | paused | interrupted | stopped (stale, as after iOS ended the app, #9108). Shots, not a pass / fail check
+    /// of the drawing; the Lock Screen's Stop is checked.
     @MainActor func testLiveActivityShots() throws {
         let hub = try mockHub()
         let phase = ProcessInfo.processInfo.environment["PERSONA_MEETING_PHASE"] ?? "recording"
@@ -118,7 +119,7 @@ final class MeetingRecordingUITests: XCTestCase {
         try minutesMode(hub, "ready")
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes"]
-        app.launchPinned()
+        launchFollowingMinutes(app)
         // Uploaded, written by the hub, read again (every 15 s while it waits).
         let copy = app.buttons["minutes-copy"]
         XCTAssertTrue(copy.waitForExistence(timeout: 45), app.debugDescription)
@@ -163,7 +164,7 @@ final class MeetingRecordingUITests: XCTestCase {
         try minutesMode(hub, "pending")
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "pending"]
-        app.launchPinned()
+        launchFollowingMinutes(app)
         let writing = app.descendants(matching: .any)["minutes-waiting"].firstMatch
         XCTAssertTrue(writing.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(wait(30) { writing.label.contains("正在整理纪要") }, writing.label)
@@ -176,7 +177,7 @@ final class MeetingRecordingUITests: XCTestCase {
         try minutesMode(hub, "failed")
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "pending"]
-        app.launchPinned()
+        launchFollowingMinutes(app)
         let again = app.buttons["minutes-retry"].firstMatch
         XCTAssertTrue(again.waitForExistence(timeout: 45), app.debugDescription)
         again.tap()
@@ -195,7 +196,7 @@ final class MeetingRecordingUITests: XCTestCase {
             app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes",
                                    "-ui.scheme", look == "dark" ? "dark" : "light"]
                 + (look == "large" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] : [])
-            app.launchPinned()
+            launchFollowingMinutes(app)
             // At the largest text the meeting's own card fills the first screens, the minutes run many screens more, and a
             // list builds no rows away from the screen: go down slowly to the transcript, then back up until Copy (at the
             // minutes' top) has been on the screen, again while they load (#5144).
@@ -263,10 +264,9 @@ final class MeetingRecordingUITests: XCTestCase {
                 let app = XCUIApplication()
                 app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "minutes",
                                        "-ui.scheme", look, "-AppleLanguages", "(\(language))", "-AppleLocale", locale]
-                app.launchPinned()
+                launchFollowingMinutes(app)
                 let when = app.descendants(matching: .any)["minutes-when"].firstMatch
                 XCTAssertTrue(when.waitForExistence(timeout: 45), "\(language) \(look): no minutes:\n\(app.debugDescription)")
-                acceptIconAlert(timeout: 2)
                 XCTAssertTrue(when.label.contains("月") && !when.label.contains("2027-"), "\(language) \(look): \(when.label)")
                 try shot(app, "minutes-when-\(language)", look: look)
                 app.terminate()
@@ -281,7 +281,7 @@ final class MeetingRecordingUITests: XCTestCase {
         try minutesMode(hub, "ready")
         let app = XCUIApplication()
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-showMeetingSample", "flow"]
-        app.launchPinned()
+        launchFollowingMinutes(app)
         let stop = app.buttons["recording-stop"].firstMatch
         XCTAssertTrue(stop.waitForExistence(timeout: 20), app.debugDescription)
         XCTAssertTrue(app.staticTexts["产品周会"].firstMatch.exists, app.debugDescription)
@@ -293,7 +293,7 @@ final class MeetingRecordingUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["recording-timeline-bookmark"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
         // Stop asks first; Cancel keeps recording.
         stop.tap()
-        let confirm = app.buttons["停止录音"].firstMatch
+        let confirm = app.buttons.matching(NSPredicate(format: "label IN %@", ["结束并生成纪要", "停止录音"])).firstMatch // the meeting room's End (#8731), else Stop Recording
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         try shot(app, "stop-dialog")
         confirm.tap()
@@ -306,6 +306,15 @@ final class MeetingRecordingUITests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Launches, then clears SpringBoard's "You have changed the icon" alert: a launch with another `-ui.scheme` than the
+    /// last one (this test's, or an earlier test's) switches the app's icon to match. While that alert is up the scene is
+    /// inactive, and the recording's page and wrap-up follow the minutes only in an active scene (#8035), so a test that
+    /// waits for them must not leave it there.
+    @MainActor private func launchFollowingMinutes(_ app: XCUIApplication) {
+        app.launchPinned()
+        acceptIconAlert()
+    }
 
     private func minutesMode(_ hub: String, _ mode: String) throws {
         var request = URLRequest(url: URL(string: hub + "/mock/recording_minutes")!)

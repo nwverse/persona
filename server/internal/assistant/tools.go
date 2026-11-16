@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,18 +29,21 @@ import (
 
 // toolNames are the tools only assistant conversations get; their descriptions and schemas are in prompts/mcp
 // (docs/assistant/prompts.md).
-var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
+var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
-	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
+	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
 	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
+	if s.urgentOn(ctx) { // only while the owner has urgent calls on (urgent_call.go)
+		return toolsNamed(append(slices.Clip(toolNames), "urgent_call"))
+	}
 	return toolsNamed(toolNames)
 }
 
@@ -55,6 +59,9 @@ func toolsNamed(names []string) []proto.Tool {
 
 // Tool runs one of the assistant's MCP tools for the conversation call.SessionID on machine call.MachineID.
 func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
+	if err := s.conversationAvailable(ctx, call.MachineID, call.SessionID); err != nil {
+		return proto.TextResult(err.Error(), true)
+	}
 	call.Name = compat.Tool(call.Name)
 	args := call.Arguments
 	if len(args) == 0 {
@@ -155,6 +162,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 		}
 		return res, err
+	case "todo_repository_links_add":
+		return s.toolTodoRepositoryLinksAdd(ctx, machine, self, name, args)
+	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set":
+		return s.toolTodoRepositories(ctx, machine, self, name, args)
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "direction_name":
@@ -173,6 +184,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolAskEscalate(ctx, self, args) // ask_route.go
 	case "secret_run":
 		return s.toolSecretRun(ctx, machine, self, args) // secret_run.go
+	case "skill_import":
+		return s.toolSkillImport(ctx, machine, self, args)
 	case "list_places":
 		return s.toolListPlaces(ctx) // places.go
 	case "save_place":
@@ -232,6 +245,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		s.recordNotify(ctx, machine, self, notifyMissed(res)) // an interruption when a device took it (north_star.go)
 		s.promoteSupervision(self)
 		return notifyAnswerText(s.lang(ctx), res, copies.wait(notifyCopyWait)), nil
+	case "urgent_call":
+		return s.toolUrgentCall(ctx, machine, self, args) // urgent_call_tool.go
 	case "conversations_list":
 		return s.toolConversationsList(ctx, self, args)
 	case "conversation_read":
@@ -244,6 +259,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolConversationNew(ctx, self, args)
 	case "conversation_send":
 		return s.toolConversationSend(ctx, self, args)
+	case "schedule_state_set":
+		return s.toolScheduleStateSet(ctx, machine, self, args)
 	case "list_followups":
 		space, _ := s.knownSpace(ctx, self)
 		return s.describeSchedule(ctx, space), nil
@@ -254,7 +271,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", err
 		}
 		if name == "schedule_routine" {
-			return s.toolScheduleRoutine(ctx, self, args)
+			return s.toolScheduleRoutine(ctx, machine, self, args)
 		}
 		return s.toolScheduleFollowup(ctx, machine, self, args)
 	case "delete_routine", "cancel_followup":
@@ -268,7 +285,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if !s.taskInSpace(ctx, a.ID, space) { // another space's task is as good as none (health.go)
 			return "", fmt.Errorf("no task %q", a.ID)
 		}
-		ok, err := s.deleteTask(ctx, a.ID)
+		ok, err := s.deleteTaskFrom(ctx, a.ID, self) // this conversation may ask for it again (scheduleOwn)
 		if err != nil {
 			return "", err
 		}
@@ -396,18 +413,34 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
 			params["text"] = withAttachments(text, handed)
 		}
-		unsent := s.noteAgentSend(self, am.ID, c.SessionID) // more from its task's conversation reopens an accepted task (#6726)
+		sending, _ := params["text"].(string)
 		// A resume goes through the user's Resume's node call, the text as its first message (agent_resume.go).
 		if resume != "" {
-			return s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task, unsent)
+			return s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
 		}
 		if c.Status != proto.StatusOffline {
+			// A running agent takes it at once. A send of more for an accepted task holds a turn of the agent that
+			// starts meanwhile for its answer, so it is bounded however long the caller waits (a runtime's tool call
+			// has no deadline) and the turn is not held for good; any other send waits as long as its caller (#7539).
+			lctx, cancel := context.WithTimeout(ctx, liveSendWait)
+			defer cancel()
+			note, err := s.noteAgentSend(lctx, self, am.ID, c.SessionID, "", sending) // more from its task's conversation reopens an accepted task (#6726, #7539)
+			if err != nil {
+				return "", task.sendFailed(ctx, s, err)
+			}
+			if !note.reopens() {
+				lctx = ctx
+			}
 			var sent struct {
 				Queued bool `json:"queued"` // the runtime holds it behind the turn under way (#8097)
 			}
-			if err := s.call(ctx, am.ID, DeviceSessionSend, params, &sent); err != nil {
-				if !startResultUnknown(err) { // it may still arrive and start the turn
-					unsent()
+			err = s.call(lctx, am.ID, DeviceSessionSend, params, &sent)
+			note.sent(lctx, err) // an unknown answer counts for the agent's next turn: it may still arrive
+			if err != nil {
+				if note.reopens() && sendUnknown(err) {
+					// Its own wait ran out, or the link dropped, while the node may still type it in: the model reads
+					// the agent before it sends the text twice.
+					err = fmt.Errorf("%w (it may still arrive; check with agent_read before sending again)", err)
 				}
 				return "", task.sendFailed(ctx, s, err)
 			}
@@ -422,10 +455,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
-		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
-			if !startResultUnknown(err) { // it may still arrive and start the turn
-				unsent()
-			}
+		note, err := s.noteAgentSend(sctx, self, am.ID, c.SessionID, "", sending)
+		if err != nil {
+			return "", task.sendFailed(sctx, s, err)
+		}
+		err = s.call(sctx, am.ID, DeviceSessionSend, params, nil)
+		note.sent(sctx, err)
+		if err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
 		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
@@ -743,6 +779,33 @@ func startResultUnknown(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
 		errors.Is(err, rpc.ErrClosed) || errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
 }
+
+// sendUnknown: a session.send or session.start that failed though its text may have reached the agent: its answer
+// never came back (startResultUnknown), or the node's error says the text may have arrived or did (nodeMayHaveTaken).
+// Not when the manager's own connection says it never went out (rpc.ErrNotSent: the caller's wait ran out, or the
+// connection closed, before it was written, or the node's not-started refusals outlasted the retries).
+func sendUnknown(err error) bool {
+	return (startResultUnknown(err) || nodeMayHaveTaken(err)) && !errors.Is(err, rpc.ErrNotSent)
+}
+
+// nodeMayHaveTaken: err is the node's, and its delivered says the text may have arrived ("unknown": typing failed part
+// way, or a Claude's inbox read it but the session has not confirmed it yet, peer_unconfirmed) or did ("yes"). A refusal
+// says "none" (nothing was typed); an error that says neither is read by its kind alone (startResultUnknown).
+func nodeMayHaveTaken(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || len(re.Data) == 0 {
+		return false
+	}
+	var d struct {
+		Delivered string `json:"delivered"`
+	}
+	_ = json.Unmarshal(re.Data, &d)
+	return d.Delivered == "unknown" || d.Delivered == "yes"
+}
+
+// liveSendWait bounds a send to an agent that runs when the send may reopen its accepted task (agent_send), and the
+// owner's message on a task's card: its node types it in at once. A var so tests shorten it.
+var liveSendWait = 90 * time.Second
 
 // startedWithoutAnswer answers an agent_start whose result is unknown. A list showing the new session the node
 // built (not present before the start) adopts and links it like an answered start; otherwise the model gets neutral
@@ -1136,7 +1199,11 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		} else if ix.Kind == proto.IxScreen {
 			what = "终端对话框等你处理"
 		}
-		k := [2]string{ix.MachineID, ix.SessionID}
+		session := ix.SessionID
+		if ix.FoldedUnder != "" {
+			session = ix.FoldedUnder
+		}
+		k := [2]string{ix.MachineID, session}
 		what += " (interaction_id=" + ix.ID + ")"
 		pending[k] = append(pending[k], clip(what, 400))
 	}
@@ -1159,9 +1226,10 @@ func (s *Service) describeAgents(ctx context.Context, state, machine, query stri
 		}
 		list, muted, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant {
+			if c.Assistant || c.FoldedUnder() != "" {
 				continue
 			}
+			c.State = c.FoldedState()
 			// Archived ones are out of the apps' lists: only "archived" lists them, and "all" with them marked.
 			switch state {
 			case "all":

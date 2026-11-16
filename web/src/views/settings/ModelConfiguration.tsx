@@ -6,11 +6,13 @@ import {
   type ModelBinding, type ModelConfigurationBody, type ModelDraft, type ModelProvider, type ModelPurpose, type ModelPurposeBody,
 } from "../../lib/model-config";
 import {
-  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
-  parentCategory, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
+  agentsOverride, catalogLists, chooseProvider, claudeCodeOnly, configDirChoices, configDirLabel, draftFor, effortOffered, executionForm, followedCategory, modelConfiguration, modelPatch, overridden,
+  ownRecord, parentCategory, providersFor, purposeDescription, purposeGroups, purposeLaunch, resetPatch, runtimeChoices, saveModelPurpose, supportsField, withPurposeAfter,
   withUsesAfterCategories,
 } from "../../lib/model-config-execution";
+import { ASSISTANT_MODEL_PICK_FEATURE, mainChatAgentMismatch } from "../../lib/assistant-models";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
+import type { AssistantLaunchers } from "../../lib/session-models";
 import { effortChoices, providerModels, takesEffort } from "../../lib/launcher-models";
 import { useStore } from "../../lib/store";
 import { t } from "../../i18n";
@@ -21,7 +23,10 @@ import { ModelPicker, type ModelList } from "../../ui/ModelPicker";
 import { Group, Pill, Row } from "./SettingsParts";
 import { MANAGER_HEADER } from "../../lib/manager-choice";
 import { ConfigurationManager } from "./ConfigurationManager";
+import { DirectAPIEditor } from "./DirectAPIEditor";
 import { ModelProfiles } from "./ModelProfiles";
+
+const UNVERIFIED_STATUS = "未验证"; // i18n-ignore: stable wire sentinel, not user-facing text.
 
 function agentsOverrideStatus(binding: ModelBinding): string {
   return overridden(binding)
@@ -107,6 +112,8 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
 function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { purpose: ModelPurpose; providers: ModelProvider[]; sourceName: (id?: string) => string | undefined; category?: ModelPurpose; onOpen: () => void }) {
   const machines = useStore((s) => s.machines);
   const form = executionForm(p, providers, machines);
+  const directAPI = p.kind === "api" && !ownRecord(p) && providers.find((v) => v.id === p.effective.provider)?.kind === "api";
+  const status = directAPI && p.status === UNVERIFIED_STATUS ? "" : p.status;
   const [help, setHelp] = useState(false);
   const [pinned, setPinned] = useState(false);
   const row = useRef<HTMLDivElement>(null);
@@ -135,7 +142,7 @@ function PurposeRow({ purpose: p, providers, sourceName, category, onOpen }: { p
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Pill wrap>{form.label} · {form.backend}</Pill>
             {inheritance && <span className="whitespace-normal">{inheritance}</span>}
-            {p.status && <span>{p.status}</span>}
+            {status && <span>{status}</span>}
           </div>
         </>} />
       </div>
@@ -181,6 +188,13 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const refreshNext = useRef(false);
   const search = useRef<HTMLInputElement>(null);
   const machines = useStore((s) => s.machines);
+  const mainSession = useStore((s) => {
+    const a = s.assistant;
+    if (!a?.main) return undefined;
+    return (s.sessions[a.machine_id] ?? []).find((row) => row.session_id === a.main)
+      ?? a.conversations.find((row) => row.machine_id === a.machine_id && row.session_id === a.main);
+  });
+  const kept = useStore((s) => s.features.includes(ASSISTANT_MODEL_PICK_FEATURE));
   const load = async () => {
     if (!id) return;
     try {
@@ -218,6 +232,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
   const follow = followsAgents ? t("settings-modelconfiguration.follow_agents") : category ? t("settings-modelconfiguration.follow_category", { name: category.name }) : "";
   const onlyClaudeID = useId();
   const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
+  // The Direct API editor (model discovery, efforts by model, draft test: #6887) is for a direct API category's own
+  // binding. A use with a record of its own under a category (ownRecord: Meeting minutes, an extension's purpose) keeps
+  // the shared editor, whose empty draft follows that category's binding and whose effort goes by effortOffered (#7980).
+  const directAPI = !!p && p.kind === "api" && !ownRecord(p) && chosen?.kind === "api" && writable;
   const effectiveProvider = data?.providers.find((v) => v.id === p?.effective?.provider);
   // by the provider the draft runs on, not only by the fields the hub sent for the one in effect
   const effortAllowed = !!p && effortOffered(p, chosen, effectiveProvider, followsAgents);
@@ -246,7 +264,24 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     ? effortChoices(launcherList.list, draft.model, inherited) : (p?.id === "inbox.triage" || p?.kind === "api" ? ["off", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"]);
   const effectiveAgent = providerAgent(effectiveProvider, p?.effective?.provider);
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, runsOn);
+  const mainDefaultProvider = draft.provider || p?.effective?.provider;
+  const mainInfo: AssistantLaunchers = {
+    launchers: (data?.providers ?? []).map((v) => ({ name: v.id, display_name: v.name, agent: providerAgent(v) })),
+    def: mainDefaultProvider ? { provider: mainDefaultProvider } : undefined,
+    unavailable: [],
+  };
+  const mainMismatch = p?.id === "assistant"
+    ? mainChatAgentMismatch({ session: mainSession, isMain: true, kept, config: mainDefaultProvider }, mainInfo)
+    : undefined;
+  const mainLauncherName = (launcher: string) => {
+    const all = data?.providers ?? [];
+    // A session names its launcher; Model configuration prefixes launcher providers. Prefer an exact managed-provider id.
+    return (all.find((v) => v.id === launcher) ?? all.find((v) => v.id === `launcher.${launcher}`))?.name ?? launcher;
+  };
+  const configuredMainName = mainMismatch ? mainLauncherName(mainMismatch.configuredLauncher) : "";
+  const actualMainName = mainMismatch ? mainLauncherName(mainMismatch.actualLauncher) : "";
   const runtimes = p ? runtimeChoices(p, chosenAgent) : [];
+  const configDirs = p ? configDirChoices(p, chosenAgent) : [];
   const previewForm = p ? executionForm({ ...p, effective: { ...p.effective, provider: runsOn, runtime: draft.runtime || p.effective?.runtime } }, data?.providers, machines) : undefined;
   const listMachine = machines.find((m) => m.id === launcherList.machine)?.name ?? launcherList.machine;
   const save = async (restore = false) => {
@@ -254,9 +289,10 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     setBusy(true);
     setError("");
     try {
-      // one patch: the reset's (a use with a record of its own clears all three whatever this page grouped it under),
+      // one patch: the reset's, keeping the runtime and the profile (a use with a record of its own clears all three
+      // whatever this page grouped it under),
       // else the draft's fields, effort with them where the provider it runs on takes one
-      const patch = restore ? resetPatch(p, draft.runtime) : modelPatch(p, draft, supportsField(p, "effort") || effortAllowed);
+      const patch = restore ? resetPatch(p, draft.runtime, draft.config_dir) : modelPatch(p, draft, supportsField(p, "effort") || effortAllowed);
       const r = await saveModelPurpose(p, patch, manager);
       if (!alive.current) return;
       setData(r);
@@ -294,7 +330,8 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
           <Row label={t("settings-modelconfiguration.provider")} mono><span className="max-w-[220px] truncate">{providerName(p.effective?.provider, data?.providers) ?? t("settings-modelconfiguration.not_configured")}</span></Row>
           <Row label={t("settings-modelconfiguration.model")} mono><span className="max-w-[220px] truncate">{p.effective?.model || t("settings-modelconfiguration.provider_default")}</span></Row>
           {runtimes.length > 0 && <Row label={t("settings-modelconfiguration.runtime")}><span>{runtimeLabel(p.effective?.runtime, effectiveAgent)}</span></Row>}
-          {p.status && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
+          {configDirChoices(p, effectiveAgent).length > 0 && <Row label={t("settings-modelconfiguration.config_dir")}><span>{configDirLabel(p.effective?.config_dir)}</span></Row>}
+          {p.status && !(directAPI && p.status === UNVERIFIED_STATUS) && <Row label={t("settings-modelconfiguration.status")}><Pill>{p.status}</Pill></Row>}
         </Group>
         {supportsField(p, "provider") && <div>
           <label className="block">
@@ -309,7 +346,9 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
           {claudeCodeOnly(p) && <span id={onlyClaudeID} data-testid="claude-code-only" className="mt-1 block text-submeta text-ink-3">{t("settings-modelconfiguration.claude_code_only")}</span>}
         </div>}
         {previewForm && <div data-execution-preview><Pill wrap>{previewForm.label} · {previewForm.backend}</Pill></div>}
-        {supportsField(p, "model") && <div className="block">
+        {directAPI && <DirectAPIEditor key={`${manager}:${chosen.id}:${draft.provider}`} manager={manager} purpose={p} provider={chosen} draft={draft}
+          disabled={busy} effortAllowed={effortAllowed} onChange={(patch) => setDraft((value) => ({ ...value, ...patch }))} />}
+        {!directAPI && supportsField(p, "model") && <div className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.specific_model")}</span>
           {p.kind === "plugin" ? <select aria-label={t("settings-modelconfiguration.specific_model")} className={inputClass} value={draft.model} disabled={busy || (!!modelsError && models.length === 0)} onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}>
             <option value="">{t("settings-modelconfiguration.follow_extension_default")}</option>
@@ -348,7 +387,7 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
             </span>
           )}
         </div>}
-        {effortAllowed && <label className="block">
+        {!directAPI && effortAllowed && <label className="block">
           <span className="mb-1 block text-[12px] font-medium text-ink-2">{t("settings-modelconfiguration.effort")}</span>
           <input className={inputClass} value={draft.effort} disabled={busy} placeholder={(following && !draft.provider ? parent?.effective?.effort : p.effective?.effort) || t("settings-modelconfiguration.follow_default")} list="model-efforts"
             onChange={(e) => setDraft((d) => ({ ...d, effort: e.target.value }))} />
@@ -359,6 +398,15 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
           <Segmented label={t("settings-modelconfiguration.runtime")} value={chosenAgent === "claude" ? draft.runtime : "cli"} options={runtimes.map((r) => ({ v: r.id, label: r.label }))}
             onChange={(runtime) => { if (!busy && chosenAgent === "claude") setDraft((d) => ({ ...d, runtime })); }} />
           {chosenAgent === "claude" && <span className="mt-1 block text-[11px] text-ink-3">{t("settings-modelconfiguration.runtime_hint")}</span>}
+        </div>}
+        {mainMismatch && <p data-main-chat-agent-setting className="rounded-control bg-inset px-3 py-2 text-xs leading-relaxed text-ink-2">
+          {t("settings-modelconfiguration.main_other_kind", { configured: configuredMainName, actual: actualMainName })}
+        </p>}
+        {configDirs.length > 0 && <div className="block">
+          <span className="mb-1 block text-label font-medium text-ink-2">{t("settings-modelconfiguration.config_dir")}</span>
+          <Segmented label={t("settings-modelconfiguration.config_dir")} value={draft.config_dir ?? "private"} options={configDirs.map((c) => ({ v: c.id, label: c.label }))}
+            onChange={(config_dir) => { if (!busy) setDraft((d) => ({ ...d, config_dir })); }} />
+          <span className="mt-1 block text-submeta text-ink-3">{t("settings-modelconfiguration.config_dir_hint")}</span>
         </div>}
         <p className="text-[11.5px] leading-relaxed text-ink-3">{p.kind === "plugin" ? t("settings-modelconfiguration.save_note_plugin") : t("settings-modelconfiguration.save_note")}</p>
       </div>}

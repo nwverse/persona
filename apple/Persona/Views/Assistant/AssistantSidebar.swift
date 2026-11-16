@@ -791,10 +791,6 @@ struct AssistantSidebar: View {
     /// The Sidebar layout (#6332): Messages (the Lark chats, the Separate layout's third page) among the places while
     /// it is turned on; nil leaves it out.
     var openMessages: (() -> Void)? = nil
-    /// The column's own button that folds it away, at its top trailing corner, as ChatGPT's on iPhone Duo open (#2623).
-    /// Search goes to its foot then, beside Persona's name and where it runs, and the main conversation's row holds what
-    /// the face's menu at the top of the page did (the switch has that place). nil elsewhere.
-    var collapse: (() -> Void)? = nil
     private var isShell: Bool { openInbox != nil }
     /// Which part this draws (#6332): the whole sidebar, or one piece of the Sidebar layout's column, which lays the
     /// rows inside the Agents list and puts the head, the main conversation and the foot around it
@@ -1051,8 +1047,7 @@ enum AssistantSidebarPart {
     var query = ""
     var searchOpen = false
     #if os(iOS)
-    /// The search over the whole window: the open iPhone Duo's (`footerSearch`), and the Sidebar layout's one search from
-    /// its foot (#4206).
+    /// The search over the whole window: the Sidebar layout's one search from its foot (#4206).
     var fullSearch = false
     /// What it starts looking through: the Agents where an Agent's chat is in front (#4206).
     var searchScope = AssistantFullSearch.Scope.chats
@@ -1207,12 +1202,7 @@ extension AssistantSidebar {
                     #endif
                 }
                 Spacer(minLength: Theme.Space.s)
-                if let collapse {
-                    AssistantTopBar.circle(Theme.Icon.sidebar, label: String(localized: "Hide Sidebar"), id: "assistant-sidebar-collapse") {
-                        Haptics.tap()
-                        collapse()
-                    }
-                } else if part == .header {
+                if part == .header {
                     // The Sidebar layout searches from its foot, over the whole window, Persona's chats and the Agents
                     // (#4206, the owner): no field here. Beside a page, the button that folds the column.
                     if let foldColumn {
@@ -1238,17 +1228,6 @@ extension AssistantSidebar {
                 }
             }
         }
-    }
-
-    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open): it
-    /// opens over the whole window, its field at the foot (`AssistantFullSearch`, #3705).
-    private var footerSearch: (() -> Void)? {
-        guard collapse != nil else { return nil }
-        #if os(iOS)
-        return { ui.fullSearch = true }
-        #else
-        return { openSearch() }
-        #endif
     }
 
     private func openSearch() {
@@ -1360,15 +1339,14 @@ extension AssistantSidebar {
         }
     }
 
-    /// First among the places: Recordings, a place like the rows under it, so a tap opens the page and its Record button
-    /// starts a recording (#5517: as Record, the tap recorded at once, and in zh-Hans and ja it reads as the page's name).
-    /// While a recording runs, the row says so and opens it.
+    /// First among the places: Meetings (#8731; Recordings before), a place like the rows under it, so a tap opens the page
+    /// and its Start Meeting starts one (#5517: as Record, the tap recorded at once). While something records, the row says
+    /// what (`MeetingWords.running`) and opens it.
     @ViewBuilder private var meetingRow: some View {
         #if os(iOS)
         if let openRecordingsPage {
-            let recording = RecordingCapture.shared.state != .idle
-            action(recording ? String(localized: "Recording… Open") : String(localized: "Recordings"),
-                   Theme.Icon.recording, id: "sidebar-meeting-recording", place: .recordings, run: openRecordingsPage)
+            action(MeetingWords.running ?? MeetingWords.place,
+                   Theme.Icon.meeting, id: "sidebar-meeting-recording", place: .recordings, run: openRecordingsPage)
         }
         #endif
     }
@@ -1482,7 +1460,6 @@ extension AssistantSidebar {
         .disabled(key == nil && model.assistantConfig == nil)
         .contextMenu {
             if let key {
-                if collapse != nil { MainChatPlaceItems(key: key, openKnowledge: openKnowledge, openProfile: openProfile) }
                 MainConversationMenu(key: key) // Compact context, New Main Chat… (#1762)
                 Button {
                     UIPasteboard.general.string = key.sessionID
@@ -1896,7 +1873,7 @@ extension AssistantSidebar {
             // The iPad's column (the shell's places beside the conversation): Persona's face and where it runs stay
             // at the foot, under the shell's New Chat + Settings (2026-11-05 user: the bottom left is fine).
             if drawer == nil {
-                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil, search: footerSearch)
+                AssistantProfileFooter(machineID: machineID, openProfile: openProfile, openSettings: nil)
             }
         } else {
             #if os(macOS)
@@ -1994,46 +1971,6 @@ extension AssistantSidebar {
     }
 }
 
-/// What the face's menu at the top of the page held, on the main conversation's long press too (iPhone Duo open, where the
-/// Assistant | Agents switch takes the face's place, #2623; the user asked for it there): whose Persona it is (several
-/// hubs), Knowledge and Details, the directory and the facts to copy. The switch's Assistant, tapped while it is
-/// selected, keeps the whole menu, as in the shell.
-private struct MainChatPlaceItems: View {
-    @Environment(AppModel.self) private var model
-    let key: SessionKey
-    let openKnowledge: () -> Void
-    let openProfile: () -> Void
-
-    var body: some View {
-        if model.isMultiHub, let current = model.hub?.group {
-            Section("hub") {
-                Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
-                    ForEach(model.groupIDs, id: \.self) { g in
-                        Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(g)
-                    }
-                }
-            }
-        }
-        Section {
-            Button(action: openKnowledge) { Label("Knowledge", systemImage: Theme.Icon.knowledge) }
-            Button(action: openProfile) { Label("Details [Assistant Top Bar 1932da]", systemImage: Theme.Icon.person) }
-        }
-        Section {
-            Button { copy(AssistantCopyText.cwd(key, in: model), String(localized: "Working Directory Copied")) } label: {
-                Label("Copy Directory", systemImage: Theme.Icon.folder)
-            }
-            Button { copy(AssistantCopyText.info(key, in: model), String(localized: "Chat Info Copied")) } label: {
-                Label("Copy Info", systemImage: Theme.Icon.copy)
-            }
-        }
-    }
-
-    private func copy(_ text: String, _ done: String) {
-        UIPasteboard.general.string = text
-        model.toast = Toast(done, style: .success)
-    }
-}
-
 /// Persona's face and name with where it runs, Settings on the right: a view of its own, so the machines' heartbeats (and
 /// the page coming to the front) draw this row again, not the conversations' list.
 private struct AssistantProfileFooter: View {
@@ -2042,8 +1979,6 @@ private struct AssistantProfileFooter: View {
     let machineID: String
     let openProfile: () -> Void
     let openSettings: (() -> Void)?
-    /// Search on the right, where ChatGPT has it beside the account on iPhone Duo open (#2623); nil, none.
-    var search: (() -> Void)? = nil
 
     var body: some View {
         // Behind another section (the Mac keeps the page): the machine as it is now, not each push's heartbeat.
@@ -2076,20 +2011,6 @@ private struct AssistantProfileFooter: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(model.assistantShownName), \(state), view profile")
                 Spacer(minLength: Theme.Space.s)
-                if let search {
-                    // The shell's foot's round button (Settings beside New Chat), as the row above has it.
-                    Button(action: search) {
-                        ThemedIcon(Theme.Icon.search)
-                            .font(Theme.Font.heading)
-                            .foregroundStyle(Color.primary)
-                            .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
-                            .contentShape(.circle)
-                    }
-                    .buttonStyle(.plain)
-                    .surface(interactive: true, in: .circle)
-                    .accessibilityLabel("Search Chats [Assistant Sidebar 55c9e4]")
-                    .accessibilityIdentifier("assistant-sidebar-search")
-                }
                 if let openSettings {
                     Button(action: openSettings) {
                         ThemedIcon(Theme.Icon.settings).font(Theme.Font.title).foregroundStyle(Color.primary)

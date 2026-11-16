@@ -96,6 +96,7 @@ struct InboxHandOffBar: View {
         .padding(.vertical, Theme.Space.s)
         .frame(maxWidth: Theme.Size.readable)
         .frame(maxWidth: .infinity)
+        .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
         // What scrolls under it stays under it: the page's text never runs through the chips.
         .background(.bar, ignoresSafeAreaEdges: .bottom)
         .animation(Theme.Motion.standard, value: toastKey)
@@ -116,7 +117,9 @@ struct InboxHandOffBar: View {
         #if os(iOS)
         .sheet(item: $newAgent) { p in
             NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: [p.card], forwardedIcon: Theme.Icon.inbox,
-                        nameHint: p.nameHint, onlyGroup: p.group) { s in
+                        nameHint: p.nameHint, onlyGroup: p.group, onFirstMessage: { s, message in
+                handOff.newAgentFirstMessage(message, for: s.key)
+            }) { s in
                 newAgent = nil
                 started(s.key, prefill: p)
             }

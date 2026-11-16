@@ -1211,6 +1211,31 @@ final class VNCTests: XCTestCase {
         }
     }
 
+    /// #8859: a line under the codec names x264 while the user's own ffmpeg encodes, or says why x264, on for that Mac,
+    /// stopped (the demos with `-showScreenX264Demo` / `-showScreenX264OffDemo`), in light and dark, at the
+    /// default size and at xxxLarge.
+    @MainActor func testTheOverlayNamesTheEncoder() throws {
+        for (demo, name) in [("-showScreenX264Demo", "x264"), ("-showScreenX264OffDemo", "x264-off")] {
+            for (scheme, size) in [("light", "L"), ("dark", "L"), ("light", "XXXL"), ("dark", "XXXL")] {
+                let (app, _) = try signedInMachinePage(["-showScreenStatsDemo", "YES", demo, "YES", "-ui.scheme", scheme,
+                                                        "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"])
+                let overlay = app.descendants(matching: .any)["screen-stats"].firstMatch
+                XCTAssertTrue(overlay.waitForExistence(timeout: 10), "the overlay:\n\(app.debugDescription)")
+                if name == "x264" {
+                    XCTAssertTrue(overlay.label.contains("H.264") && overlay.label.contains("x264"), "the encoder: \(overlay.label)")
+                } else {
+                    XCTAssertTrue(overlay.label.contains("x264") && overlay.label.contains("HEVC"), "why x264 stopped: \(overlay.label)")
+                }
+                for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] { // the icon follows the look
+                    let alert = source.alerts.containing(NSPredicate(format: "label CONTAINS[c] 'icon' OR label CONTAINS '图标'")).firstMatch
+                    if alert.exists, alert.buttons.firstMatch.exists { alert.buttons.firstMatch.tap() }
+                }
+                shot(app, "vnc-overlay-\(name)-\(scheme)-\(size == "L" ? "default" : "xxxl")")
+                app.terminate()
+            }
+        }
+    }
+
     /// #6398: a phone that asks the hub for a screen session (direct routes on, `-showScreenRoutes`) and a hub that
     /// doesn't offer one (the mock, like an older hub or node) keep today's live screen through the same raw streams:
     /// RFB signs in and, with the mock's video channel, video takes the picture and reports frames.
@@ -1310,6 +1335,73 @@ final class VNCTests: XCTestCase {
             usleep(250_000)
         }
         return false
+    }
+
+    /// Phone Screen (#9314) against a mock Mac that has it (MOCK_PHONE_SCREEN=1, TEST_RUNNER_PERSONA_PHONE_SCREEN=1): ⋯ ›
+    /// Mode › Phone Screen starts it at the picture's size, the window list opens, a tap puts a window there, the page
+    /// shows only that display, one finger scrolls it, and Mouse Mode again stops it.
+    @MainActor func testPhoneScreen() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_PHONE_SCREEN"] == "1" else {
+            throw XCTSkip("needs MOCK_PHONE_SCREEN=1 (TEST_RUNNER_PERSONA_PHONE_SCREEN=1)")
+        }
+        let (app, _) = try signedInMachinePage()
+        let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
+        XCTAssertTrue(screen.waitForExistence(timeout: 10))
+        let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
+        // The mode is kept per Mac: an earlier run may have left Phone Screen on. Mouse Mode first.
+        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap()
+        rest()
+        shot(app, "phone-screen-0-mouse")
+        app.buttons["vnc-more"].tap()
+        let item = app.buttons["手机屏"].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "Phone Screen in ⋯:\n\(app.debugDescription)")
+        shot(app, "phone-screen-1-menu")
+        item.tap()
+
+        // The window list comes up by itself the first time, with the Mac's windows by app.
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15), "the window list:\n\(app.debugDescription)")
+        let rows = app.buttons.matching(identifier: "phone-screen-window")
+        let dev = rows.matching(NSPredicate(format: "label == %@", "build — npm run dev")).firstMatch
+        XCTAssertTrue(dev.waitForExistence(timeout: 10), "the windows:\n\(app.debugDescription)")
+        XCTAssertTrue(rows.matching(NSPredicate(format: "label CONTAINS %@", "已最小化")).firstMatch.exists, "a minimized window says so")
+        rest()
+        shot(app, "phone-screen-2-windows")
+        hold("phone-screen-2-windows")
+        dev.tap()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10), "the list closes once the window is there")
+        rest()
+        var calls = try mockState()["phone_screen"] as? [[String: Any]] ?? []
+        let start = calls.first { $0["op"] as? String == "start" }
+        XCTAssertNotNil(start, "started: \(calls)")
+        let w = start?["width"] as? Double ?? 0, h = start?["height"] as? Double ?? 0
+        XCTAssertTrue(w > 300 && h > w, "the picture's size, portrait: \(w)×\(h)")
+        XCTAssertTrue(calls.contains { $0["op"] as? String == "place" && $0["pid"] as? Int == 501 && $0["window"] as? Int == 12 }, "placed: \(calls)")
+        // Only the portrait display shows: the picture is taller than wide.
+        XCTAssertTrue(screen.frame.height > screen.frame.width, "\(screen.frame)")
+        shot(app, "phone-screen-3-window")
+        hold("phone-screen-3-window")
+
+        // One finger scrolls (wheel notches here: this mock's Mac has no Persona Input for pixels), never a drag.
+        let before = (try mockState()["clicks"] as? [[String: Any]] ?? []).count
+        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            .press(forDuration: 0.05, thenDragTo: screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)))
+        rest(2)
+        let after = (try mockState()["clicks"] as? [[String: Any]] ?? []).dropFirst(before)
+        XCTAssertTrue(after.contains { $0["scroll"] != nil }, "a one-finger drag scrolls: \(Array(after))")
+        XCTAssertFalse(after.contains { $0["down"] as? Bool == true }, "a one-finger drag pressed the button: \(Array(after))")
+
+        // The Windows button opens the list again; Mouse Mode stops it.
+        app.buttons["phone-screen-windows-button"].tap()
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10))
+        app.buttons["完成"].firstMatch.tap()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10))
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap()
+        rest()
+        calls = try mockState()["phone_screen"] as? [[String: Any]] ?? []
+        XCTAssertEqual(calls.last?["op"] as? String, "stop", "\(calls)")
     }
 
     @MainActor private func live(_ app: XCUIApplication) -> Bool {

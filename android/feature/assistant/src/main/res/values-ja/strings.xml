@@ -7,6 +7,8 @@
     <string name="assistant_profile">アシスタントのプロフィール</string>
     <string name="assistant_got_it">OK</string>
     <string name="assistant_composer_placeholder">%1$sに質問…</string>
+    <string name="assistant_model_setup_title">アシスタントのモデルを接続</string>
+    <string name="assistant_model_setup_detail">アシスタントは%1$sで動作しています。このClaude Code設定ではモデルに接続できません。既存のプロバイダーを選ぶか、お使いのゲートウェイを追加してください。</string>
     <string name="assistant_info_settings">アシスタントの設定</string>
     <string name="assistant_info_knowledge">ナレッジ</string>
     <string name="assistant_info_schedule">定期タスク</string>
@@ -84,7 +86,12 @@
     <string name="assistant_phone_tools_unavailable">スマホのツールは利用不可</string>
     <string name="assistant_phone_permissions_pending">スマホの権限を確認待ち</string>
     <string name="assistant_search_chats">チャットを検索</string>
+    <string name="assistant_hide_sidebar">サイドバーを非表示</string>
     <string name="assistant_search_partial">以前のチャットを整理中です。まだ表示されないものがあります。</string>
+    <plurals name="assistant_full_search_chats">
+        <item quantity="other">%1$d件のチャット</item>
+    </plurals>
+    <string name="assistant_full_search_no_results">「%1$s」の結果はありません</string>
     <string name="assistant_start_main">メインチャットを開始</string>
     <string name="assistant_main_chat">メインチャット</string>
     <!-- The drawer's newest eligible chats, between 常驻 and All chats (#4922, #5196) -->

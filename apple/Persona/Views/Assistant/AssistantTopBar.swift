@@ -29,8 +29,6 @@ struct AssistantTopBar: View {
     /// Duo, the iPad's Persona column): its one entry (#4206, the owner), so the page has none, the column out or away.
     /// A phone keeps this one.
     var newChatInSidebar = false
-    /// A phone's tabs (iPhone Duo open): the Assistant | Agents switch in the face's place (#2623).
-    @Environment(\.pageTabSwitch) private var pageTabSwitch
     var openSidebar: () -> Void
     var newConversation: () -> Void
     var openKnowledge: () -> Void
@@ -105,7 +103,7 @@ struct AssistantTopBar: View {
             .sheet(isPresented: Binding(get: { typingFor != nil && key != nil }, set: { if !$0 { typingFor = nil } }),
                    onDismiss: { Task { await loadModelOptions() } }) {
                 if let l = typingFor {
-                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, initial: typedPick(l),
+                    TypedModelSheet(machine: model.hubRef(machineID), launcher: l, purpose: "assistant", initial: typedPick(l),
                                     note: String(localized: "This chat uses it from the next message.")) { id in pick(l, model: id) }
                 }
             }
@@ -114,8 +112,10 @@ struct AssistantTopBar: View {
                 if UserDefaults.standard.bool(forKey: "showInfo") { try? await Task.sleep(for: .seconds(2)); showInfo = true }
             }
             #endif
-        .task(id: model.hubRef(machineID)) {
-            launchers = ((try? await model.launchers(model.hubRef(machineID))) ?? []).filter(\.runsAssistant)
+        .task(id: "\(model.hubRef(machineID).path)|\(model.assistantLauncherRequestRevision)") {
+            if let answer = try? await model.assistantLaunchers(model.hubRef(machineID)), !Task.isCancelled {
+                launchers = answer.launchers.filter(\.runsAssistant)
+            }
             await loadModelOptions()
         }
     }
@@ -279,11 +279,11 @@ struct AssistantTopBar: View {
     }
 
     private var classicBar: some View {
-        // On a phone's tabs, and beside the one sidebar's column (#4206), the column's own button folds it, at its top:
-        // this one only brings it back, and is not there while the column is out. Left out, not faded: a glass button
-        // made see-through (or slid away) while the split moved its columns left the page taking no touches at all on
-        // iPhone Duo open (2026-11-10).
-        let sidebarButtonShown = !((pageTabSwitch || sidebarCounts) && sidebarIsColumn && sidebarShown)
+        // Beside the one sidebar's column (#4206) the column's own button folds it, at its top: this one only brings it
+        // back, and is not there while the column is out. Left out, not faded: a glass button made see-through (or slid
+        // away) while the split moved its columns left the page taking no touches at all on iPhone Duo open
+        // (2026-11-10).
+        let sidebarButtonShown = !(sidebarCounts && sidebarIsColumn && sidebarShown)
         return HStack(alignment: .top) {
             if !sidebarButtonShown && newChatInSidebar {
                 // Its room kept, empty, as New Chat's on the other side: the face stays in the middle.
@@ -300,7 +300,7 @@ struct AssistantTopBar: View {
                 .transition(.identity)
             }
             Spacer(minLength: 8)
-            if !pageTabSwitch { face }
+            face
             Spacer(minLength: 8)
             if newChatInSidebar {
                 // Its room kept, empty, so the face stays in the middle.
@@ -322,12 +322,6 @@ struct AssistantTopBar: View {
         .padding(.leading, max(0, titleRowLeading - Theme.Space.l))
         #endif
         .padding(.top, Self.topInset)
-        #if os(iOS)
-        // Clear of the round buttons on both sides, whichever are there: over New Chat it took its taps in a narrow column.
-        .overlay(alignment: .top) {
-            if pageTabSwitch { pageSwitch.padding(.top, Self.topInset).padding(.horizontal, Self.sideRoom) }
-        }
-        #endif
         .frame(height: Self.height, alignment: .top)
         .background(alignment: .top) {
             // Solid down to the bar's bottom edge, fading out below it (fading under the pill let the messages show
@@ -335,31 +329,6 @@ struct AssistantTopBar: View {
             BarFog(solid: Self.fogSolid, fade: Self.fade)
         }
     }
-
-    #if os(iOS)
-    /// What the switch leaves free on each side of the bar: a round button and the bar's margin.
-    private static let sideRoom: CGFloat = Theme.Size.tapTarget + Theme.Space.l + Theme.Space.s
-
-    /// ChatGPT's Chat | Work at the top of the page, in the face's place, centered whatever the buttons beside it
-    /// (#2623): tapping Assistant while it is selected opens the face's menu, as in the shell. Beside it, what the face's
-    /// pill said while the hub is out of reach (under it, several managers' switcher covered it); a copy's confirmation
-    /// is a toast here (`copy`).
-    private var pageSwitch: some View {
-        @Bindable var model = model
-        let link = model.connection.shown
-        return HStack(spacing: Theme.Space.s) {
-            ViewThatFits(in: .horizontal) {
-                ShellSwitch(tab: $model.selectedTab) { menuItems(link) }
-                    .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
-                ShellSwitch(tab: $model.selectedTab) { menuItems(link) }
-                    .dynamicTypeSize(...Theme.Shell.compactSwitchLargestTypeSize)
-            }
-            if link != .online { ShellLinkPill(phase: link).transition(.opacity) }
-        }
-        .animation(Theme.Motion.standard, value: link)
-        .connectionDetails($showLink)
-    }
-    #endif
 
     /// The bar's round icon button; also the sidebar header's search button when the sidebar is the split's column.
     static func circle(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
@@ -524,14 +493,14 @@ struct AssistantTopBar: View {
     /// Each launcher's /model list; a failure just leaves the submenu without entries.
     private func loadModelOptions() async {
         let machine = model.hubRef(machineID)
-        guard let api = model.api(machine.group), !launchers.isEmpty else { return }
+        guard let api = model.api(machine.group), !launchers.isEmpty, !Task.isCancelled else { return }
         await withTaskGroup(of: (String, [AgentModelOption]?).self) { group in
             for l in launchers {
-                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name)) }
+                group.addTask { (l.name, try? await api.launcherModels(machine: machine.id, launcher: l.name, purpose: "assistant")) }
             }
             // An empty answer counts too (the last typed ID forgotten); a failed one keeps what was there.
             for await (name, options) in group {
-                if let options { modelOptions[name] = options }
+                if let options, !Task.isCancelled { modelOptions[name] = options }
             }
         }
     }
@@ -580,8 +549,8 @@ struct AssistantTopBar: View {
                 Button { copy(ChatTrace.shared.text(key), String(localized: "Diagnostics copied")) } label: { Label(String(localized: "Copy Diagnostics"), systemImage: Theme.Icon.diagnostics) }
             }
         }
-        if model.canCompact(key) || model.canStartNewMain(key) {
-            Section { MainConversationMenu(key: key) } // Compact context, New Main Chat… (#1762)
+        if model.canCompact(key) || model.canClearMain(key) || model.canStartNewMain(key) {
+            Section { MainConversationMenu(key: key) } // Compact context, Clear context, New Main Chat… (#1762, #5100)
         }
         if let key {
             Section {
@@ -659,9 +628,7 @@ struct AssistantTopBar: View {
     private func copy(_ text: String, _ done: String) {
         UIPasteboard.general.string = text
         Haptics.success()
-        // The face's pill is not there on a phone's tabs (the switch has its place): a toast says it, as the main
-        // conversation's row does.
-        if pageTabSwitch { model.toast = Toast(done, style: .success) } else { hint = done }
+        hint = done
         AccessibilityNotification.Announcement(done).post()
     }
 }

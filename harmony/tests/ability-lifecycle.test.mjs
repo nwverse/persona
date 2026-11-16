@@ -22,7 +22,7 @@ registerHooks({
    export const deviceFeatures={async background(){},async foreground(){}};
    export const KnowledgeRecording={async backgroundAll(){s.recordingStops++;}};
    export const deviceLook={async initialize(){},async bind(owner){if(owner===undefined)s.lookUnbinds++;}};
-   export const nativeEnvironment={update(){}};
+   export const nativeEnvironment={update(){},bindWindow(){},unbindWindow(){}};
    export const client={get ready(){return s.ready;},set ready(value){s.ready=value;},appearance:0,get language(){return s.language;},announceLanguage(){s.localeAnnouncements++;},error:'',initialize:()=>s.init,activateForeground(){s.activated++;},async foregrounded(){s.foregrounded++;},async background(){s.background++;},async shutdown(){s.background++;},async openNotification(target){s.notifications.push(target);}};
   `};
   if(url.endsWith('.ets')||url.endsWith('.ts'))return {format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};

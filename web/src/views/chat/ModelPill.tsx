@@ -6,8 +6,9 @@
 // context size, `pillShortName`) and gives way
 // only when the row is short, under 520 px its text and marks are a step smaller, under 420 px it keeps only the
 // provider's tile and the chevron (64 px). An agent that can switch neither its model nor its effort gets the same
-// words as a label, not a button. A Persona chat (and the new-chat page) has `AssistantModelPill` (#5033): the same pill
-// over what the assistant's computer can run Persona chats on, its panel saying whether the chat follows the default.
+// words as a label, except Codex: its panel explains why. A Persona chat (and the new-chat page) has `AssistantModelPill`
+// (#5033): the same pill over what the assistant's computer can run Persona chats on, its panel saying whether the chat
+// follows the default.
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
@@ -15,9 +16,10 @@ import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  assistantLaunchers, ENGINE_SWITCH_FEATURE, engineSwitchable, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -94,9 +96,12 @@ export function ModelPill({
   // what the next message runs on, before its model: the engine when it changes (Cindy's case), else the launcher
   // (Persona's in-session switch, #5035)
   const target = pending ? (pending.engine !== current.engine ? agentName(pending.engine, pending.engineLabel) : pending.provider) : "";
-  const label = pending
-    ? t(effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending", { agent: target, model: name, effort })
-    : t(effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria", { model: name, effort });
+  const label = t(
+    pending
+      ? (effort ? "chat-modelpill.aria_pending_effort" : "chat-modelpill.aria_pending")
+      : (effort ? "chat-modelpill.aria_effort" : "chat-modelpill.aria"),
+    { agent: target, model: name, effort },
+  );
 
   const body: ReactNode = (
     <>
@@ -179,18 +184,19 @@ export function ModelPill({
 }
 
 /** An Agent's pill: what the session runs, and its panel. Loads the session's own model list once, for the name its list
- *  gives the model and to say when that list can't be read. It opens where the model or the effort can change, or the
- *  engine (a Codex Agent in a terminal on a hub that moves it to Claude Code, #5054). */
+ *  gives the model and to say when that list can't be read. It opens where the model or effort can change, and for Codex
+ *  to explain unsupported effort controls (including a terminal Agent that may switch engines, #5054). */
 export const AgentModelPill = memo(function AgentModelPill({ session }: { session: Session }) {
   useModelLists();
+  const scope = agentCatalogScope();
   const mid = session.machine_id;
   const own = sessionLauncher(session);
   const switches = sessionSwitches(session);
-  const engineSwitch = useStore((s) => hubHas(s.features, ENGINE_SWITCH_FEATURE)) && engineSwitchable(session);
-  const opens = switches.model || switches.effort || engineSwitch;
+  const view = pillView(session, modelList(mid, own));
+  const opens = switches.model || switches.effort || view.engine === "codex";
   useEffect(() => {
     if (opens) void readModels(mid, own, { first: true });
-  }, [opens, mid, own]);
+  }, [opens, mid, own, scope]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const key = `${mid}/${session.session_id}`;
@@ -200,19 +206,19 @@ export const AgentModelPill = memo(function AgentModelPill({ session }: { sessio
     if (!opens) setAnchor(null);
   }, [opens]);
   const close = useCallback(() => setAnchor(null), []);
+  useEffect(close, [close, scope]);
   const shown = Boolean(anchor) && opens;
   // every list again behind the one shown, once per opening (while the panel's code loads, the first time)
   useEffect(() => {
     if (shown) readForPanel(mid, own);
-  }, [shown, mid, own]);
+  }, [shown, mid, own, scope]);
 
   // a switch to another launcher that the next message carries out (#5035): its list names the model picked
   const target = session.pending_switch?.launcher;
   useEffect(() => {
     if (target && target !== own) void readModels(mid, target);
-  }, [target, own, mid]);
+  }, [target, own, mid, scope]);
 
-  const view = pillView(session, modelList(mid, own));
   const pending = pendingView(session, (name) => modelList(mid, name));
   if (!opens && !view.model) return null;
   const workflow = ultracodeOn(session) ? {} : view.engine === "codex" && session.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
@@ -237,26 +243,21 @@ const AssistantModelPanel = lazyOverlay(() => import("./AssistantModelPanel").th
 
 /** A Persona chat's pill (#5033): the launcher, model and effort its next message runs on (its own pick, the default, or
  *  what it started with: lib/assistant-models.ts), opening the unified panel (scope "assistant"). `session` absent: the
- *  new-conversation page, whose pick goes with the start. Persona chats switch whatever their state: the hub applies a
- *  pick from the next message. */
+ *  new-conversation page, whose pick goes with the start. Every Persona chat has one (#9248) and switches whatever its
+ *  state: the hub applies a pick from the next message. */
 export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
-  const main = useStore((s) => s.assistant?.main);
-  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
-  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
-  // new-main-chat page, whose pick goes with the main conversation's start. Mounting the inner pill here, rather than
-  // returning from it below, keeps its hook count constant when the hub names another main conversation (#7070).
-  if (session && main !== session.session_id) return null;
-  return <AssistantModelPillInner session={session} />;
-});
-
-function AssistantModelPillInner({ session }: { session?: Session }) {
   const version = useModelLists();
+  const scope = assistantCatalogScope();
   const assistant = useStore((s) => s.assistant);
   const kept = useStore((s) => hubHas(s.features, ASSISTANT_MODEL_PICK_FEATURE));
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
   const isMain = Boolean(session && assistant?.main === session.session_id);
-  const chat: AssistantChat = { session, isMain, kept, config: assistant?.launcher };
+  // Without a pick, what the next message runs on is a default: Main chat's for the main conversation, a leader and a
+  // scheduled task's own conversation (origin "task"); the supervisor's own model purpose for the background supervisor.
+  const supervisor = Boolean(session && isBackgroundSupervisor(assistant, session.session_id));
+  const followsDefault = isMain || supervisor || Boolean(session && (assistant?.leaders?.includes(session.session_id) || session.origin === "task"));
+  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(supervisor ? { def: superviseDefault(mid) } : {}) };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
@@ -266,8 +267,10 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
-    if (mid) void readAssistantLaunchers(mid);
-  }, [mid]);
+    if (!mid) return;
+    void readAssistantLaunchers(mid);
+    if (supervisor) void readSuperviseDefault(mid);
+  }, [mid, scope, supervisor]);
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
   const lastRev = useRef<number | undefined>(session?.rev);
@@ -275,7 +278,8 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
     if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
     lastRev.current = session.rev;
     void readAssistantLaunchers(mid, { again: true });
-  }, [mid, session?.rev]);
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
+  }, [mid, scope, session?.rev, supervisor]);
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -292,28 +296,31 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
       pickFast(false);
       return;
     }
-    const list = modelList(mid, setup.provider).list;
+    const list = modelList(mid, setup.provider, "assistant").list;
     if (!list) return;
     if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
   }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
-    if (mid) void readModels(mid, setup.provider, { first: true });
-  }, [mid, setup.provider]);
+    if (mid) void readModels(mid, setup.provider, { purpose: "assistant", first: true });
+  }, [mid, scope, setup.provider]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAnchor(null), []);
+  useEffect(close, [close, scope]);
   const shown = Boolean(anchor) && Boolean(mid);
   // every list again behind the one shown, once per opening
   useEffect(() => {
     if (!shown) return;
-    void readModels(mid, setup.provider, { again: true, first: true });
+    void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
-      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { again: true });
+      if (scope !== assistantCatalogScope()) return;
+      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
-  }, [shown, mid]);
+  }, [shown, mid, scope]);
   if (!mid) return null;
-  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider));
+  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider, "assistant"));
   const workflow = view.engine === "codex" && view.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
   return (
     <>
@@ -321,4 +328,4 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
       {shown && anchor && <AssistantModelPanel chat={chat} mid={mid} anchor={anchor} onClose={close} />}
     </>
   );
-}
+});

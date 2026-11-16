@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,6 +178,77 @@ func TestReadinessClaudeUnanswered(t *testing.T) {
 	}
 }
 
+// The node found Claude Code when it connected, and a later self-check finds none: Claude Code updating itself through
+// npm removes and relinks its package, and a check caught then must not block the main conversation. A start refused
+// because claude is missing still says so.
+func TestReadinessClaudeMissingWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	f.doctor["server"] = "读不到 claude 的版本"
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepUnknown || cl.Code == proto.CodeClaudeMissing || r.Mode != ReadinessFull {
+		t.Fatalf("claude = %+v (%s)", cl, r.Mode)
+	}
+	data, _ := json.Marshal(map[string]string{"delivered": "none", "launcher": "claude"})
+	f.mu.Lock()
+	f.failAssistant = &rpc.Error{Code: proto.CodeClaudeMissing, Message: "zsh:1: command not found: claude", Data: data}
+	f.mu.Unlock()
+	if status, _ := serveJSON(t, s, "POST", "/api/v1/assistant/conversations", "", `{"prompt":"你好","main":true}`); status != 409 {
+		t.Fatalf("start: %d", status)
+	}
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("after a refused start: %+v", cl)
+	}
+}
+
+// A launcher health check caught in the same self-update records "command not found: claude" once: the node's
+// self-check decides, so Send stays on. A second miss in a row stands.
+func TestReadinessClaudeHealthMissWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	record := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: classifyLauncherError("zsh:1: command not found: claude"),
+		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1, MissingFails: 1}
+	s.health.loaded = true
+	s.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &record}
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepOK || r.Mode != ReadinessFull {
+		t.Fatalf("one miss: claude = %+v (%s)", cl, r.Mode)
+	}
+	record.Fails, record.MissingFails = 2, 2
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
+// An earlier failure of another kind is not a miss (#7670 review): after an auth failure, the first "command not found:
+// claude" of a self-update still defers to the self-check; a second miss in a row stands, and anything else in between
+// starts the count again.
+func TestReadinessClaudeHealthMissAfterAnotherFailure(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	ctx := context.Background()
+	fail := func(err string) LauncherHealth {
+		return s.recordHealth(ctx, "server", "claude", healthResult{agent: "claude", err: err, source: healthSourceCheck})
+	}
+	claude := func() ReadinessStep { return readinessStep(t, getReadiness(t, s, "", ""), StepClaude) }
+	fail("401 unauthorized")
+	if h := fail("zsh:1: command not found: claude"); h.Fails != 2 || h.MissingFails != 1 {
+		t.Fatalf("record = %+v", h)
+	}
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("auth failure, then one miss: %+v", cl)
+	}
+	fail("timed out waiting for the model")
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("a timeout between two misses: %+v", cl)
+	}
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
 // A node with no self-check (an old one) leaves Claude Code unknown, which does not stop the main conversation.
 func TestReadinessOldNodeUnknown(t *testing.T) {
 	f, s, _ := readyMachine(t)
@@ -250,9 +322,53 @@ func TestReadinessNotLoggedIn(t *testing.T) {
 	m, first := readinessStep(t, r, StepModel), readinessStep(t, r, StepFirstMessage)
 	if r.Mode != ReadinessSetup || nextOf(r) != StepModel || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn ||
 		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" ||
-		m.Title != "Claude Code 还没登录" || m.Detail != "在 server 上登录一次，或者改用 API Key。" || m.Launcher != "claude" ||
-		first.State != StepProblem || first.Code != proto.TurnErrorNotLoggedIn {
+		m.Title != "Claude Code 命令行还没登录" || m.Detail != notLoggedInZh || m.Launcher != "claude" ||
+		first.State != StepProblem || first.Code != proto.TurnErrorNotLoggedIn || first.Detail != notLoggedInZh {
 		t.Fatalf("readiness = %+v", r)
+	}
+}
+
+const (
+	notLoggedInZh       = "主对话用的是 Claude Code 命令行，Claude 桌面版登录了也不算。在 server 的终端里运行 claude auth login，或者改用 API Key。"
+	notLoggedInSwitchZh = "主对话用的是 Claude Code 命令行，Claude 桌面版登录了也不算。在 server 的终端里运行 claude auth login，改用 API Key，或在设置 › 模型中选择此电脑上运行主对话的其他应用或配置。"
+	desktopAgentZh      = "想用桌面版的登录，新建 Agent 时选 claude-desktop，会话会在 Claude 桌面版里运行。"
+)
+
+// Claude Code's CLI signed out on a Mac whose Claude desktop app keeps sessions (#9366): the app's sign-in is not the
+// CLI's, and its launcher runs no main chat, so it is no main chat to switch to; the words say an Agent started with
+// it runs in the app. The Codex App's launcher runs none either. A launcher that does run the main chat is still the
+// switch (#4355), with the desktop app's word after it.
+func TestReadinessNotLoggedInDesktopLauncher(t *testing.T) {
+	f, s, _ := readyMachine(t, proto.Session{SessionID: "m1", State: proto.StateIdle, LastText: "Not logged in · Please run /login",
+		UpdatedAt: time.Now()})
+	desktop := proto.Launcher{Name: "claude-desktop", Source: proto.SourceClaudeDesktop, Agent: "claude"}
+	codexApp := proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex"}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {desktop, codexApp}}
+	f.mu.Unlock()
+	m := readinessStep(t, getReadiness(t, s, "", ""), StepModel)
+	if m.Code != proto.TurnErrorNotLoggedIn || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" ||
+		m.Title != "Claude Code 命令行还没登录" || m.Detail != notLoggedInZh+desktopAgentZh {
+		t.Fatalf("desktop app only: %+v", m)
+	}
+	en := readinessStep(t, getReadiness(t, s, "", "en"), StepModel)
+	if en.Title != "Claude Code CLI isn't signed in" || !strings.Contains(en.Detail, "the Claude desktop app's sign-in doesn't count") ||
+		!strings.Contains(en.Detail, "Run claude auth login in a terminal on server") || !strings.Contains(en.Detail, "start an agent with claude-desktop") {
+		t.Fatalf("en: %+v", en)
+	}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {desktop, codexApp, {Name: "cx", Agent: "codex"}}}
+	f.mu.Unlock()
+	m = readinessStep(t, getReadiness(t, s, "", ""), StepModel)
+	if len(m.AltActions) != 2 || m.AltActions[0].ID != "login_claude" || m.AltActions[1].ID != "main_chat_model" ||
+		m.Detail != notLoggedInSwitchZh+desktopAgentZh {
+		t.Fatalf("with a Codex launcher too: %+v", m)
+	}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cx", Agent: "codex"}}}
+	f.mu.Unlock()
+	if m = readinessStep(t, getReadiness(t, s, "", ""), StepModel); len(m.AltActions) != 2 || m.Detail != notLoggedInSwitchZh {
+		t.Fatalf("no desktop app: %+v", m)
 	}
 }
 
@@ -543,7 +659,7 @@ func TestReadinessSignedOutStatus(t *testing.T) {
 	r := getReadiness(t, s, "", "")
 	m := readinessStep(t, r, StepModel)
 	if r.Mode != ReadinessSetup || nextOf(r) != StepModel || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn ||
-		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" || m.Title != "Claude Code 还没登录" {
+		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" || m.Title != "Claude Code 命令行还没登录" {
 		t.Fatalf("readiness = %+v", r)
 	}
 	getReadiness(t, s, "", "")

@@ -13,6 +13,13 @@ sys.path.insert(0, str(HERE))
 import pr_watch_repair
 
 
+def real_dir(directory):
+    """directory with its symlinks resolved, as the repair copy the watcher hands the worker is (repair_repository_copy):
+    the sandbox mounts the checkout where it really is, so a path under a temp dir reached through a link is not there
+    (#9204)."""
+    return Path(directory).resolve()
+
+
 class RepairIntegrationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="pr-watch-repair-")
@@ -154,6 +161,46 @@ class RepairIntegrationTests(unittest.TestCase):
         branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
         self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
 
+    def test_fork_continuation_retries_an_unchanged_absent_branch_without_force(self):
+        pr, merged, base = self.fork_merge()
+        snapshots = {7: pr, 8: dict(merged, number=8)}
+        created = []
+        original_checked = pr_watch_repair.checked
+        pushes = []
+
+        def reject_first_push(argv, **kwargs):
+            if argv[:2] == ["git", "push"]:
+                pushes.append(argv)
+                if len(pushes) == 1:
+                    raise pr_watch_repair.WatchError(
+                        "git failed (1): [remote rejected] missing necessary objects")
+            return original_checked(argv, **kwargs)
+
+        def github(argv, **kwargs):
+            if argv[:2] == ["pr", "list"]:
+                return []
+            created.append(json.loads(kwargs["input_text"]))
+            return {"number": 8}
+
+        common = dict(verify_config={"profile": "commands", "commands": [["true"]]},
+                      allow_merge_only=True, original_pr=pr)
+        with patch.object(pr_watch_repair, "verify", return_value=[]), self.passthrough(), \
+                patch.object(pr_watch_repair, "privacy_scanner_environment", return_value={}), \
+                patch.object(pr_watch_repair, "pr_snapshot", side_effect=lambda repo, number: snapshots[number]), \
+                patch.object(pr_watch_repair, "gh_json", side_effect=github), \
+                patch.object(pr_watch_repair, "checked", side_effect=reject_first_push):
+            with self.assertRaisesRegex(pr_watch_repair.WatchError, "missing necessary objects"):
+                pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure", **common)
+            self.assertEqual(created, [])
+            self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
+            self.assertEqual(self.git("rev-parse", "HEAD"), merged["headRefOid"])
+            number, _ = pr_watch_repair.commit_and_push_repair("example/one", merged, str(self.repo), base, "failure", **common)
+        self.assertEqual(number, 8)
+        self.assertTrue(all("--force" not in argv and "--force-with-lease" not in argv for argv in pushes))
+        branch = "refs/heads/pr-watch/repair-7-" + merged["headRefOid"][:12]
+        self.assertEqual(self.git("ls-remote", "origin", branch).split()[0], merged["headRefOid"])
+        self.assertEqual(created[0]["head"], "example:pr-watch/repair-7-" + merged["headRefOid"][:12])
+
     def test_fork_continuation_refuses_a_main_rewritten_before_the_push(self):
         pr, merged, base = self.fork_merge()
         rewritten = self.push_main("rewritten", parent=self.base)
@@ -276,7 +323,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_conflict_sandbox_only_exposes_conflict_files_for_writing(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             (root / "other.txt").write_text("keep\n")
             (root / "home").mkdir()
@@ -291,7 +338,7 @@ class RepairIntegrationTests(unittest.TestCase):
                              [argv[i:i + 3] for i in range(len(argv) - 2)])
     def test_large_mount_vector_reaches_the_worker_without_execve_overflow(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             for index in range(6000):
                 path = root / ("directory-%04d" % index) / "nested" / "deeper" / ("a-much-longer-file-name-%04d.txt" % index)
@@ -382,7 +429,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_nested_conflict_directory_stays_writable_in_real_bwrap(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             nested = root / "src" / "deep"
             nested.mkdir(parents=True)
             (nested / "file.txt").write_text("base\n")

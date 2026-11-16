@@ -184,6 +184,9 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
   node rejects a second process with the same id (`runtime_conflict`). If a runtime changes its id but still runs the same kind of Agent, set `agent` to that Agent (a renamed DSH sets `dsh`), and session rows carry `agent_label`.
 - Session ids are unique on the machine, at most 128 characters, and can't be paths. `launcher` names shouldn't clash with launchers in `~/.zshrc` (on a clash the shell's wins and the runtime's isn't listed, except where every start goes to the runtime as an engine with `caps.same_kind`: there its own wins);
   if two runtimes' launchers clash, only the one that connected first provides it.
+  The ordinary `agy` executable discovered on PATH is a terminal fallback, not an explicit shell override: its connected
+  companion supplies the launcher, models and assistant support. An actual alias, function or helper definition of that
+  name keeps shell precedence. Discovery provenance stays inside the node and adds no wire field (#9181).
 
 ## Minimal example
 
@@ -289,11 +292,13 @@ workspace catalog lists them with or without sessions in them, its sessions sit 
 worktree as one of them. It implements `createWorkspace` and `prepareWorkspace` (the SDK then declares `caps.workspaces`)
 and calls `rt.workspacesChanged(list)` with the whole list whenever it changes (`docs/protocol/protocol.md` ("Runtime ↔ node")).
 
-- **A row** is `{workspace_id, title?, cwd, kind, branch?, space_id?, space_name?, repo_root?, owned?}`. `workspace_id` is
+- **A row** is `{workspace_id, title?, cwd, kind, branch?, space_id?, space_name?, repo_root?, owned?, pinned_at?}`. `workspace_id` is
   what its sessions name in their own `workspace_id` (the session id rule); `cwd` is absolute; `kind` is `checkout` (a
   repository's main checkout), `worktree` (a linked worktree) or `folder` (no repository; anything else counts as one);
   `space_id` / `space_name` are the space its sessions are grouped in; `repo_root` is the repository's main checkout;
-  `owned` says the runtime made the checkout and removes it with the workspace. At most 2000 rows; invalid ones are dropped.
+  `owned` says the runtime made the checkout and removes it with the workspace. Optional `pinned_at` is the host's native
+  workspace pin time (RFC3339), separate from Persona's session/project pins; absent, cleared or invalid means unpinned.
+  A changed timestamp or an unpin is part of the next full push. At most 2000 rows; invalid ones are dropped.
 - **Only an engine's count**: the node uses the list while the runtime is one of the computer's enabled engines (Paseo) on
   its own socket; a runtime that is connected but not enabled makes, lists and deletes no workspaces. Its rows are then `workspaces.list` rows whose `source` is the runtime id (`project_id` its `space_id`, `is_main`
   true for a checkout, `workspace_kind` `git` or `folder`), and its session rows keep their `workspace_id`. Any other
@@ -423,6 +428,7 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | omp (`omp-<pid>`) | `integrations/omp`: the pi host under omp's identity (agent and name `omp`); no companion and no auto-update | `docs/integrations/omp.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Grok CLI (`grok-chat`) | `integrations/grok/companion.mjs`: optional standalone ACP companion with assistant tools, permission hooks, native renaming and restart recovery; also lists conversations started in a terminal (read-only while the terminal holds them) | `integrations/grok/README.md` |
 | Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
 
@@ -498,6 +504,13 @@ and nanosecond modification/change times, bounded to 16 files and 64 MiB of sour
 last second bypass the cache because rapid same-size writes can share a filesystem timestamp tick.
 
 ### Shared runtime behavior
+
+Antigravity item identities include native creation time and the replacement branch's generation (#9410). Native
+step indices remain pagination sequences, not globally reusable item or tool-call IDs: after rewind a repeated input
+must not inherit the abandoned branch's pending-send binding or reply cache. Retained prefix records and same-step
+completion updates keep their identities. The history scope includes `:step-ids-v2` to discard older numeric-only
+item caches; full-item lookup resolves only the current branch's exact ID. Identity metadata is computed with parsed
+records, kept outside native JSON and reused by list, push, page and full-item reads.
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".
