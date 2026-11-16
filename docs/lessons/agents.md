@@ -1039,6 +1039,15 @@ screen, saw a queue in the transcript and no hint.
 - Read a hint by its shape, on its own line or after a gap, never from the screen joined into one line: a queued message
   that ends in a key name ("…with ctrl+c") would otherwise lend its key to the chord.
 
+## Rewind positions are not message identities (#9410)
+
+AGY reused a user step's numeric ID after rewind, so the node attached an earlier send's persisted client message ID
+to a new input. The current pending bubble could not settle, and reply caches could reuse abandoned content. Keep
+pagination position separate from immutable item identity: native birth time plus a cumulative replacement generation
+distinguishes even repeated prompts with identical timestamps. Preserve prefix and same-step IDs, namespace tool-call
+pairing too, and invalidate old cached pages once. Test normal runtime pages and full-item reads across append and
+complete-file replacement; fresh sessions and distinct sequential prompts do not exercise reused identities.
+
 ## An installed CLI is not an explicit runtime override (#9181)
 
 Plain AGY discovery joined the shell launcher cache and shadowed its connected assistant-capable companion. New
