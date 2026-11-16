@@ -865,14 +865,22 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                 }
                             }
                         }
+                        val splitDetail = agentsSplitDetail(
+                            tab = tab,
+                            stack = stacks.getValue(tab),
+                            twoPanes = sceneDirective.maxHorizontalPartitions > 1 && !columnsOver,
+                            listHidden = listDetail.listHidden,
+                            onShowList = listDetail::expand,
+                        )
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
+                                LocalSplitDetail provides splitDetail,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
                                 val display: @Composable () -> Unit = {
                                     NavDisplay(backStack = stacks.getValue(tab),
                                         modifier = Modifier.fillMaxSize().then(if (shown || tab == AppTab.Persona) Modifier else Modifier.unplaced()),
                                         onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                        sceneStrategies = listOf(agentsOverlay, listDetail),
+                                        sceneStrategies = listOf(agentsOverlay, listDetail.strategy),
                                         // A pushed page slides in over the page it came from, which stays drawn underneath; going
                                         // back, it slides away over the page below. Pages stay opaque the whole way (fading them
                                         // showed both pages' text on top of each other) and nothing in between shows the background.

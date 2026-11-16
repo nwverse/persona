@@ -1,6 +1,7 @@
 package persona.android.navigation
 
 import androidx.navigation3.runtime.NavKey
+import persona.core.designsystem.SplitDetailContext
 import persona.core.navigation.*
 import persona.feature.inbox.ConnectorThreadRoute
 import persona.feature.inbox.InboxEventRoute
@@ -35,6 +36,30 @@ internal fun isInboxDestination(key: NavKey): Boolean = when (key) {
 /** Secondary Settings/Inbox lists never inherit the primary Agents page's collapse policy. */
 internal fun canCollapseList(stack: List<NavKey>): Boolean =
     stack.lastOrNull { it == AgentsRoute || it == InboxRoute || it == SettingsRoute } == AgentsRoute
+
+/**
+ * Split-pane context for the Agents tab's two-pane list-detail layout (matching iOS `SplitDetail`):
+ * - First detail page directly opened from the Agents list (`[AgentsRoute, detail]`): hides Back while the list is
+ *   beside it, or shows the sidebar button to call [onShowList] while the list is collapsed.
+ * - Any deeper pushed page, compact/overlaid layout, secondary list on the Agents stack, or other tab: returns null
+ *   (or `isFirstPage = false`) so Back stays as usual.
+ */
+internal fun agentsSplitDetail(
+    tab: AppTab,
+    stack: List<NavKey>,
+    twoPanes: Boolean,
+    listHidden: Boolean,
+    onShowList: () -> Unit,
+): SplitDetailContext? {
+    if (!twoPanes || tab != AppTab.Agents || !canCollapseList(stack)) return null
+    val detailCount = stack.size - 1
+    if (detailCount <= 0 || !stack.drop(1).all(::isDetailDestination)) return null
+    return SplitDetailContext(
+        isFirstPage = detailCount == 1,
+        listHidden = listHidden,
+        onShowList = if (listHidden) onShowList else null,
+    )
+}
 
 /**
  * The detail a tab's list marks as open beside it (`LocalDetailKey`): the top of the tab's stack when that is a

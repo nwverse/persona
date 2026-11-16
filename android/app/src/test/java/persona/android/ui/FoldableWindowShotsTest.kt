@@ -206,6 +206,13 @@ class FoldableWindowShotsTest {
                     val stack = stacks.getValue(selected)
                     val listDetail = rememberShellListDetail(selected, directive, width, emptyList(), detailOf(stack) != null,
                         store = dividerStore, collapsible = canCollapseList(stack))
+                    val splitDetail = agentsSplitDetail(
+                        tab = selected,
+                        stack = stack,
+                        twoPanes = directive.maxHorizontalPartitions > 1 && !over,
+                        listHidden = listDetail.listHidden,
+                        onShowList = listDetail::expand,
+                    )
                     val overlay = rememberAgentsOverlayStrategy(over && selected == AppTab.Agents, agentsOverShown) {
                         CompositionLocalProvider(LocalHomeChrome provides HomeChrome(navigationItems(emptyMap()), selected.name,
                             onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
@@ -216,9 +223,10 @@ class FoldableWindowShotsTest {
                     }
                     Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
                         JShellDrawer(drawerShown.value, onDismiss = { drawerShown.value = false }, drawer = sidebar) {
-                            NavDisplay(backStack = stack, onBack = navigator::back,
-                                entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator(), chrome),
-                                sceneStrategies = listOf(overlay, listDetail),
+                            CompositionLocalProvider(LocalSplitDetail provides splitDetail) {
+                                NavDisplay(backStack = stack, onBack = navigator::back,
+                                    entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator(), chrome),
+                                    sceneStrategies = listOf(overlay, listDetail.strategy),
                                 transitionSpec = { ContentTransform(EnterTransition.None, ExitTransition.None) },
                                 popTransitionSpec = { ContentTransform(EnterTransition.None, ExitTransition.None) },
                                 entryProvider = { key ->
@@ -246,6 +254,7 @@ class FoldableWindowShotsTest {
                                     }
                                     NavEntry(key, entry.contentKey, entry.metadata + metadata) { entry.Content() }
                                 })
+                            }
                         }
                     }
                 }
