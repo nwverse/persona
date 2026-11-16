@@ -1898,6 +1898,20 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(state["outcome"], "retry")
         self.assertEqual(state["repair_rounds"], 1)
 
+    def test_under_budget_interrupted_repair_is_not_marked_exhausted(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, outcome="repairing", repair_rounds=2)
+        result = self.watcher.exhaust_repair("example/one", 7, pr(),
+                                             "example/one#7@" + SHA_BASE + ".." + SHA_A,
+                                             "worker interrupted")
+        state = self.watcher.state.get("example/one", 7)
+        self.assertFalse(result)
+        self.assertEqual(state["outcome"], "retry")
+        self.assertEqual(state["repair_rounds"], 2)
+        self.assertNotIn("repair_exhausted", state)
+        self.assertEqual(self.comments, [])
+
     def test_repair_stops_after_three_rounds(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=3)
         with patch.object(self.watcher, "comment") as comment, \

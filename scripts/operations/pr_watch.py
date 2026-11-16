@@ -595,9 +595,18 @@ class Watcher:
         if previous.get("head") != pr["headRefOid"] or previous.get("evidence_key") != evidence_key:
             self.log("%s#%s discarded an exhausted repair result for a superseded head" % (repo, number))
             return False
+        rounds = int(previous.get("repair_rounds", 0))
+        if rounds < REPAIR_LIMIT and not previous.get("repair_exhausted"):
+            # Starting a worker is not a completed repair round. An interrupted
+            # publication or infrastructure retry must not fabricate exhaustion.
+            self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                           outcome="retry", retry_after=time.time() + 60,
+                           repair_rounds=rounds, failure=reason)
+            self.log("%s#%s retains its remaining repair budget after an interrupted attempt" % (repo, number))
+            return False
         current = self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                                  outcome="repair_exhausted", repair_exhausted=True, failure=reason,
-                                 repair_rounds=max(int(previous.get("repair_rounds", 0)), REPAIR_LIMIT))
+                                 repair_rounds=rounds)
         if not current.get("failure_posted") or current.get("published_failure") != reason:
             if self.dry_run:
                 return False
