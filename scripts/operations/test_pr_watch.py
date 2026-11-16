@@ -383,7 +383,7 @@ class WatcherTests(unittest.TestCase):
     def test_base_update_retry_recovers_after_exhausted_backoff(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
-                               base=SHA_BASE, format=1, outcome="retry", review_attempts=3,
+                               base=SHA_BASE, format=1, outcome="retry", repair_attempts=3,
                                retry_reason="base_update", retry_after=0)
         with patch.object(pr_watch, "pr_snapshot", return_value=pr(mergeable="CONFLICTING", mergeStateStatus="DIRTY")), \
                 patch.object(pr_watch_repair, "update_branch_with_main", return_value=False) as update:

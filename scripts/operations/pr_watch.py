@@ -757,7 +757,7 @@ class Watcher:
             return
         if old.get("head") == head and old.get("evidence_key") == evidence_key \
                 and old.get("retry_reason") in ("semantic_review", "verification_repair", "semantic_repair", "base_update") \
-                and ((old.get("retry_reason") in ("semantic_review", "base_update") and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
+                and ((old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
                      or (old.get("retry_reason") in ("verification_repair", "semantic_repair", "base_update")
                          and int(old.get("repair_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)):
             # The completed backoff permits a fresh independent attempt budget.
@@ -926,23 +926,23 @@ class Watcher:
                             self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
                     self.recover_infrastructure(repo, worktree, error)
-                    attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + 1
+                    attempts = int(self.state.get(repo, number).get("repair_attempts", 0)) + 1
                     rounds = int(self.state.get(repo, number).get("repair_rounds", 0))
                     if rounds > REPAIR_LIMIT or rounds == REPAIR_LIMIT and conflict_started[0]:
                         return self.exhaust_repair(repo, number, pr, evidence_key, error)
                     if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                         self.state.put(repo, number, head, evidence_key=evidence_key,
-                                       outcome="retry", review_attempts=attempts,
+                                       outcome="retry", repair_attempts=attempts,
                                        retry_after=time.time() + 3600,
                                        retry_reason="base_update", failure=str(error))
                         if not self.state.get(repo, number).get("failure_posted") and not self.dry_run:
                             self.comment(repo, number, "Automatic base update could not complete after three attempts. No merge was attempted.\n\n```text\n%s\n```" % bounded(str(error), 6000))
                             self.state.put(repo, number, head, evidence_key=evidence_key,
-                                           outcome="retry", review_attempts=attempts, retry_after=time.time() + 3600,
+                                           outcome="retry", repair_attempts=attempts, retry_after=time.time() + 3600,
                                            retry_reason="base_update", failure=str(error), failure_posted=True)
                     else:
                         self.state.put(repo, number, head, evidence_key=evidence_key,
-                                       outcome="retry", review_attempts=attempts,
+                                       outcome="retry", repair_attempts=attempts,
                                        retry_after=time.time() + 60 * attempts, failure=str(error))
                     self.log("%s#%s automatic base update failed: %s" % (repo, number, bounded(error, 500)))
                 finally:
