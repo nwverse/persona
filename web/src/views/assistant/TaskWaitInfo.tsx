@@ -55,10 +55,10 @@ export function TaskWaitInfo({ todo, merges = [], expanded = false }: { todo: To
       <summary className="cursor-pointer text-ink-3 pointer-coarse:min-h-11">{t("task-wait.details")}</summary>
       <div className="mt-1 space-y-1">{extra}</div>
     </details>}
-    {info.canRemind && <Button testId="wait-reminder" onClick={() => setDraft((previous) => previous ?? t("task-wait.reminder", { target, title: todo.title, request: contact!.request }))}>{t("task-wait.draft_reminder")}</Button>}
+    {info.canRemind && <Button testId="wait-reminder" className="pointer-coarse:min-h-11" onClick={() => setDraft((previous) => previous ?? t("task-wait.reminder", { target, title: todo.title, request: contact!.request }))}>{t("task-wait.draft_reminder")}</Button>}
     {draft !== undefined && <Dialog open onClose={() => setDraft(undefined)} title={t("task-wait.draft_reminder")} footer={<>
-      <Button onClick={() => setDraft(undefined)}>{t("common.cancel")}</Button>
-      <Button tone="primary" onClick={() => { void copyText(draft!); }}>{t("task-wait.copy_draft")}</Button>
+      <Button className="pointer-coarse:min-h-11" onClick={() => setDraft(undefined)}>{t("common.cancel")}</Button>
+      <Button className="pointer-coarse:min-h-11" tone="primary" onClick={() => { void copyText(draft!); }}>{t("task-wait.copy_draft")}</Button>
     </>}>
       <p className="mb-3 text-sm text-ink-2">{t("task-wait.draft_note")}</p>
       <label htmlFor={draftId} className="mb-1 block text-xs text-ink-2">{t("task-wait.message")}</label>
