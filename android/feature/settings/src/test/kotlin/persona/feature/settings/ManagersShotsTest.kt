@@ -170,6 +170,24 @@ class ManagersShotsTest {
         rule.onNode(hasText("新建助手") and hasClickAction()).assertIsDisplayed()
     }
 
+    /** Show in the switcher at the largest text size (Glass, light and dark): the label and the note wrap, the switch stays whole. */
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h2100dp-xhdpi", fontScale = 2f)
+    @Test fun theSwitchAtTheLargestTextSize() {
+        var dark by mutableStateOf(false)
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    ManagerContent(hidden, "assistant", ManagersNow, {}, {}, {}, {}, {}, {})
+                }
+            }
+        }
+        for (d in listOf(false, true)) {
+            dark = d
+            rule.onNode(hasText("在切换器里显示") and hasClickAction()).assertIsDisplayed().assertIsOff().assertIsEnabled()
+            capture("managers-builtinhidden-large-glass-${if (d) "dark" else "light"}")
+        }
+    }
+
     /**
      * Install elsewhere warns first, then shows the new code with the hub's commands; Done closes it. (The name dialogs are
      * not driven here: a focused text field in a dialog never lets Robolectric's compose go idle. The model's test
