@@ -127,7 +127,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_same_head_replacement_push_refreshes_stale_activity(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
-        with patch.object(pr_watch, "gh_json", side_effect=[[], []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A, "stale_updated_at": pr_watch_common.github_time("2026-11-15T00:00:00Z")})
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-01T00:00:00Z"))
@@ -255,11 +255,11 @@ class WatcherTests(unittest.TestCase):
         notice = "This PR has had no substantive progress for more than seven days"
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice},
                     {"createdAt": "2026-11-08T00:00:01Z", "body": "I am still working on this"}]
-        with patch.object(pr_watch, "gh_json", side_effect=[comments, []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A}, ignore_notice=notice)
         self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
-        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], [], []]):
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A}, ignore_notice=notice)
         self.assertEqual(activity, pr_watch_common.github_time("2026-11-01T00:00:00Z"))
@@ -288,17 +288,25 @@ class WatcherTests(unittest.TestCase):
         old = time.time() - 8 * 86400
         snapshot = pr(createdAt=datetime.fromtimestamp(old - 86400, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                       updatedAt=datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        with patch.object(pr_watch, "gh_json", side_effect=[[], []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {})
         self.assertGreater(time.time() - progress, 0)
         self.assertLess(time.time() - progress, 60)
 
     def test_stale_marker_does_not_change_activity_without_new_work(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
-        with patch.object(pr_watch, "gh_json", side_effect=[[], []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A, "last_progress_at": pr_watch_common.github_time("2026-11-08T00:00:00Z")})
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
+
+    def test_stale_review_comments_count_as_progress(self):
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
+        inline = [{"createdAt": "2026-11-15T00:00:00Z", "body": "**P1** — newly published failure"}]
+        with patch.object(pr_watch, "gh_json", side_effect=[[], [], inline]):
+            progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
+                                                         {"stale_head": SHA_A})
+        self.assertEqual(progress, pr_watch_common.github_time("2026-11-15T00:00:00Z"))
 
     def test_stale_marker_does_not_count_as_new_progress(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-08T00:00:00Z")
@@ -306,7 +314,7 @@ class WatcherTests(unittest.TestCase):
         old_state = {"stale_head": snapshot["headRefOid"], "stale_notice": notice,
                      "last_progress_at": pr_watch_common.github_time("2026-11-08T00:00:00Z")}
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice}]
-        with patch.object(pr_watch, "gh_json", side_effect=[comments, []]):
+        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, old_state)
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
 

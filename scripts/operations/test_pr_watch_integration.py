@@ -25,8 +25,8 @@ if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
     entry["review"] = json.loads(entry["input"]) if entry["input"] and len(args) > 1 and args[1].endswith("/reviews") else None
 if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
-    kind = next((suffix for suffix in ("/comments", "/reviews", "/commits") if args[1].endswith(suffix)), "")
-    records = {"comments": state.get("comments", []), "reviews": state.get("reviews", []), "commits": state.get("commits", [])}[kind[1:]]
+    records = {"issues/7/comments": state.get("comments", []), "pulls/7/comments": state.get("review_comments", []),
+               "pulls/7/reviews": state.get("reviews", []), "pulls/7/commits": state.get("commits", [])}[args[1].split("repos/example/one/", 1)[1]]
     print("\n".join(json.dumps(record) for record in records))
     entry["returncode"] = 0
     with open(log_path, "a") as log:

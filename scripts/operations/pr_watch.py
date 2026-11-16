@@ -828,6 +828,11 @@ class Watcher:
         """Use actual GitHub activity, never aggregate timestamps or polling."""
         comments = self.stale_activity_json(repo, number, "issues", "comments", ".created_at, body: .body")
         reviews = self.stale_activity_json(repo, number, "pulls", "reviews", ".submitted_at")
+        inline = self.stale_activity_json(repo, number, "pulls", "comments", ".created_at, body: .body")
+        if isinstance(inline, dict):
+            inline = [inline]
+        if not isinstance(inline, list):
+            raise WatchError("stale review comments must be a JSON array")
         if isinstance(comments, dict):
             comments = [comments]
         if isinstance(reviews, dict):
@@ -836,11 +841,13 @@ class Watcher:
             raise WatchError("stale activity endpoints must return JSON arrays")
         if old.get("stale_notice"):
             comments = [item for item in comments if item.get("body") != old["stale_notice"]]
+            inline = [item for item in inline if item.get("body") != old["stale_notice"]]
         if ignore_notice is not None:
             # Only the exact notice posted by this invocation is excluded;
             # other new contributor comments still keep the PR open.
             comments = [item for item in comments if item.get("body") != ignore_notice]
-        progress = pr_watch_common.progress_timestamp(pr, comments, reviews, [])
+            inline = [item for item in inline if item.get("body") != ignore_notice]
+        progress = pr_watch_common.progress_timestamp(pr, comments + inline, reviews, [])
         if old.get("last_progress_at"):
             progress = max(progress, float(old["last_progress_at"]))
         # Aggregate PR timestamps include our own reviews and labels. Only a
