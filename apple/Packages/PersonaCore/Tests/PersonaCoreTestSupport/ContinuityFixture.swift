@@ -52,10 +52,6 @@ public enum ContinuityJSON: Equatable, Sendable {
         }
         // Foundation otherwise rejects fragments with an Objective-C exception rather than a Swift error. Only
         // display_answer's bare JSON string is a C input; other scalar values here are diagnostic renderings.
-        // Check before Foundation can raise an Objective-C exception for a non-finite or non-JSON scalar.
-        guard JSONSerialization.isValidJSONObject(foundation) else {
-            throw ContinuityFixtureError.invalidFixture("cannot encode a non-finite JSON number")
-        }
         let options: JSONSerialization.WritingOptions = [.fragmentsAllowed]
         let data = try JSONSerialization.data(withJSONObject: foundation, options: options)
         return String(decoding: data, as: UTF8.self)
@@ -65,7 +61,7 @@ public enum ContinuityJSON: Equatable, Sendable {
         switch self {
         case .null: NSNull()
         case .bool(let value): value
-        case .number(let value): value
+        case .number(let value): NSDecimalNumber(string: value)
         case .string(let value): value
         case .array(let values): values.map(\.foundation)
         case .object(let values): values.mapValues(\.foundation)
@@ -73,16 +69,21 @@ public enum ContinuityJSON: Equatable, Sendable {
     }
 
     private static func jsonNumber(_ value: NSNumber) throws -> ContinuityJSON {
+        guard JSONSerialization.isValidJSONObject([value]) else {
+            throw ContinuityFixtureError.invalidFixture("non-finite JSON number")
+        }
         let text = value.stringValue
         guard isExactJSONNumber(text) else {
-            throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
+            throw ContinuityFixtureError.invalidFixture("out-of-range JSON number")
         }
         return .number(text)
     }
 
     private static func isExactJSONNumber(_ text: String) -> Bool {
-        guard let decimal = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return false }
-        return NSDecimalNumber(decimal: decimal).stringValue == text
+        guard JSONSerialization.isValidJSONObject([text]),
+              let value = try? JSONSerialization.jsonObject(with: Data("[\(text)]".utf8)) as? [NSNumber],
+              let number = value.first else { return false }
+        return number.stringValue == text
     }
 }
 
