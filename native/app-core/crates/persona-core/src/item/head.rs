@@ -31,7 +31,7 @@ impl Slot for Raw<'_> {
 keyed! {
     /// The keys iOS's `Item` declares with a plain type, read without failing on their type so a wire fault names
     /// its key. Cache uses the same `keyed!` scanner below with its legacy field types.
-    pub struct ItemHead<'a> {
+    pub_fields struct ItemHead<'a> {
         id = "id": Seen<Cow<'a, str>>,
         seq = "seq": Seen<i64>,
         role = "role": Seen<Cow<'a, str>>,
@@ -52,7 +52,7 @@ keyed! {
 
 keyed! {
     /// The keys of iOS's `Fold` with a plain type, shared by strict wire validation and tolerant cache defaults.
-    pub struct ItemFold<'a> {
+    pub_fields struct ItemFold<'a> {
         items = "items": Seen<i64>,
         tools = "tools": Seen<i64>,
         thoughts = "thoughts": Seen<i64>,
@@ -96,7 +96,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for CacheSeen<T> {
 keyed! {
     /// The legacy cache field types and declaration order. This is not another duplicate-key algorithm: `keyed!`
     /// performs exactly the same selection as `ItemHead`; only the boundary's type/default policy differs.
-    pub struct CacheHead<'a> {
+    pub_fields struct CacheHead<'a> {
         id = "id": CacheSeen<String>,
         seq = "seq": CacheSeen<i64>,
         kind = "kind": CacheSeen<Option<String>>,

@@ -35,6 +35,9 @@ pub struct Session {
     pub workflow_progress: Option<crate::state::WorkflowRun>,
     #[serde(default)]
     pub app_hub_group: Option<String>,
+    /// The machine's manager within the Hub, when a client distinguishes owners sharing an ID.
+    #[serde(default)]
+    pub manager: Option<String>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -77,6 +80,9 @@ pub struct Session {
     pub attention_reason: Option<String>,
     #[serde(default)]
     pub assistant: bool,
+    /// A persisted archive snapshot, whose offline state is historical rather than live membership.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub awaits_reply: bool,
     #[serde(default)]
@@ -84,6 +90,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// A hub-local `machine/session`, or iOS's `group|machine/session`. An unqualified id belongs only to its own hub.
+    pub fn matches_preference(&self, id: &str) -> bool {
+        if let Some((owner, rest)) = id.split_once('|') {
+            let qualified = self.manager.as_deref().map_or_else(
+                || self.app_hub_group.clone().unwrap_or_default(),
+                |manager| manager.to_owned(),
+            );
+            return owner == qualified && rest == format!("{}/{}", self.machine_id, self.session_id);
+        }
+        id == format!("{}/{}", self.machine_id, self.session_id)
+    }
+
     pub fn is_waiting(&self) -> bool {
         let detailed = self.loop_info.is_some()
             || self.background.as_ref().is_some_and(|tasks| !tasks.is_empty())

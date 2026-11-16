@@ -160,6 +160,15 @@ fixed() { LAUNCHER_MODEL=fixed-model command claude --model fixed-model "$@" }
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("ZDOTDIR", home)
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	// The probe's login shell inherits this process's environment, and a runner started from an agent has the
+	// agent's model and effort there (Claude Code sets ANTHROPIC_MODEL, CLAUDE_CODE_EFFORT_LEVEL, ...): they would
+	// decide the fixture's default model and effort (#9113). t.Setenv restores each one afterwards.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "ANTHROPIC_") || strings.HasPrefix(name, "CLAUDE_") {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
+	}
 	launcherCache.Lock()
 	oldAt, oldList, oldSettings := launcherCache.at, launcherCache.list, launcherCache.settings
 	launcherCache.at, launcherCache.list, launcherCache.settings = time.Now(), []proto.Launcher{{Name: "mine"}, {Name: "fixed"}}, map[string]string{}

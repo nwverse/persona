@@ -237,7 +237,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 			}
 		}
 	}
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
+	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix), s.ixInAssistant(ctx, ix))
 	if ix.Kind == proto.IxPermission {
 		l := s.lang(ctx)
 		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
@@ -507,6 +507,17 @@ func endStatus(r proto.Resolution) string {
 }
 
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
+var errInvalidEditedAnswer = errors.New("edited_text requires an editable permission card and a plain allow")
+
+// editedAnswerAllowed rejects an edit before its card or channel owner action is consumed. The node still has to
+// prove that the rewritten command has the same tool, gate, method, path and query; this checks only the answer envelope.
+func editedAnswerAllowed(ix proto.Interaction, r proto.Resolution) bool {
+	if r.EditedText == "" {
+		return true
+	}
+	return ix.Kind == proto.IxPermission && ix.EditableText != "" && len(ix.Fields) == 0 &&
+		strings.TrimSpace(r.EditedText) != "" && r.PlainAllowWithEditedText()
+}
 
 // resolve answers an interaction. A screen card acts right away and its error comes back (the dialog changed:
 // nothing pressed, a new card follows).
@@ -548,6 +559,10 @@ func (s *Service) resolveAnswer(id string, r proto.Resolution, remember bool, au
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
+	}
+	if p != nil && !editedAnswerAllowed(p.ix, r) {
+		s.fleet.mu.Unlock()
+		return errInvalidEditedAnswer
 	}
 	if p != nil && p.ix.Kind == proto.IxElicitation && !r.Dismiss &&
 		r.Action != "accept" && r.Action != "decline" && r.Action != "cancel" {
@@ -782,6 +797,7 @@ func (s *Service) finishInteraction(id string) {
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
+	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
 	done := assistantwire.FleetResolved{ID: p.ix.ID, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
@@ -915,20 +931,37 @@ const maxAlwaysKeys = 32
 // Whether a card's "Always allow" is kept is the manager's word (proto.Interaction.AlwaysHonored, #3590), never a
 // node's: the apps offer it only where it is.
 
-// nodeCard is a node's card as the apps get it. On an assistant conversation only the manager keeps Always (its
-// agent is given no session rule): honored when the manager will remember the keys the card names (remembering is a
-// conversation's store), not when it names keys it will not (too many, a card with fields, no store) or is a health
-// conversation's (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps
-// it itself). A node names no tool for people, and has no say in either: only the manager does, on its own cards and
-// on a node's card for one of Persona's own MCP tools (personaToolTitle).
-func nodeCard(ix proto.Interaction, remembers, health bool) proto.Interaction {
+// nodeCard is a node's card as the apps get it. On an assistant conversation (assistant) only the manager keeps
+// Always (its agent is given no session rule): honored when the manager will remember the keys the card names
+// (remembering is a conversation's store), not when it names keys it will not (too many, a card with fields, no store),
+// names none (a gated command confirmed whole: nothing narrower to keep, #9075) or is a health conversation's
+// (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps it itself). A
+// node names no tool for people, and has no say in either: only the manager does, on its own cards and on a node's
+// card for one of Persona's own MCP tools (personaToolTitle).
+func nodeCard(ix proto.Interaction, remembers, health, assistant bool) proto.Interaction {
 	ix.AlwaysHonored, ix.ToolTitle, ix.ToolNameTitle = nil, "", ""
-	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health) {
+	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health && !assistant) {
 		return ix
 	}
 	kept := remembers && !health && alwaysCard(ix)
 	ix.AlwaysHonored = &kept
 	return ix
+}
+
+// ixInAssistant: ix is a card of one of this manager's assistant conversations (isAssistant), by the working directory
+// the node gave it, else the conversation's as the machine lists it.
+func (s *Service) ixInAssistant(ctx context.Context, ix proto.Interaction) bool {
+	m, ok := s.fleetMachine(ix.MachineID)
+	if !ok || ix.SessionID == "" {
+		return false
+	}
+	sess := proto.Session{SessionID: ix.SessionID, Cwd: ix.Cwd}
+	if sess.Cwd == "" {
+		if c, ok := s.session(ctx, ix.MachineID, ix.SessionID); ok {
+			sess = c
+		}
+	}
+	return m.isAssistant(sess)
 }
 
 // honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not

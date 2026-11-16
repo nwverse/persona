@@ -81,34 +81,56 @@ public enum X264Plan {
     }
 }
 
-/// Whether x264 keeps up with a stream (#8859): it falls back to VideoToolbox when any frame takes over 50 ms, or when
-/// more than 10% of the frames in the last 2 s took over 8 ms (VideoToolbox's own time). A process's first frame counts
-/// for neither: it is a keyframe, and ffmpeg sets up its encoder on it (5–7 ms from a waiting process, 30–40 ms from a
-/// cold Homebrew ffmpeg, which loads many libraries); only `overdueMicros` bounds it. Times are µs on the helper's
-/// monotonic clock; nothing here reads a clock.
+/// Whether x264 keeps up with a stream (#8859): it falls back to VideoToolbox when any frame takes over 50 ms of its own,
+/// or when more than 10% of the frames in the last 2 s took over 8 ms of their own (VideoToolbox's whole time). A
+/// frame's own time starts when ffmpeg could start on it (`ownMicros`), so waiting behind the frame before it isn't
+/// counted twice. A process's first frame counts for neither: it is a keyframe, and ffmpeg sets up its encoder on it
+/// (5–7 ms from a waiting process, 30–40 ms from a cold Homebrew ffmpeg, which loads many libraries); only
+/// `overdueMicros` bounds it. Its next `warmupFrames` (about half a second at 60 fps) count only against the 50 ms
+/// bound, and the share is judged on at least `minFrames` (about a second): on the first real session 2 of the first 16
+/// frames took over 8 ms of their own (x264's threads starting, the capture's fresh buffers read for the first time)
+/// and stopped x264 a third of a second in. Times are µs on the helper's monotonic clock; nothing here reads a clock.
 public struct X264Watch {
     public static let windowMicros: UInt64 = 2_000_000
     public static let slowMicros: Int64 = 8_000
     public static let slowShare = 0.10
     /// Fewer frames than this in the window say nothing about a share.
-    public static let minFrames = 10
+    public static let minFrames = 60
+    /// A process's frames after its first that count only against `stallMicros`: its warm-up.
+    public static let warmupFrames = 30
     public static let stallMicros: Int64 = 50_000
     /// A frame given to ffmpeg and not back after this long: it has stalled.
     public static let overdueMicros: UInt64 = 200_000
 
-    private var window: [(at: UInt64, slow: Bool)] = []
+    private var window: [(at: UInt64, micros: Int64)] = []
+    /// Why `encoded` last said too slow, for the helper's log.
+    public private(set) var why = ""
 
     public init() {}
 
-    /// One frame came back after `micros`. True: too slow, fall back.
-    public mutating func encoded(micros: Int64, at now: UInt64, first: Bool) -> Bool {
+    /// A frame's own encode time: from when it was given, or when the frame before it came out if that was later (it
+    /// waited behind it), to `now`.
+    public static func ownMicros(given: UInt64, lastOut: UInt64, now: UInt64) -> Int64 {
+        Int64(bitPattern: now &- max(given, lastOut))
+    }
+
+    /// The `index`th frame of its process (from 0) came back after `micros` of its own. True: too slow, fall back.
+    public mutating func encoded(micros: Int64, at now: UInt64, index: Int) -> Bool {
         window.removeAll { now &- $0.at > Self.windowMicros }
-        guard !first else { return false }
-        if micros > Self.stallMicros { return true }
-        window.append((now, micros > Self.slowMicros))
+        guard index > 0 else { return false }
+        if micros > Self.stallMicros {
+            why = String(format: "%.1f ms on its own", Double(micros) / 1000)
+            return true
+        }
+        guard index > Self.warmupFrames else { return false }
+        window.append((now, micros))
         guard window.count >= Self.minFrames else { return false }
-        let slow = window.filter(\.slow).count
-        return Double(slow) / Double(window.count) > Self.slowShare
+        let slow = window.filter { $0.micros > Self.slowMicros }.count
+        guard Double(slow) / Double(window.count) > Self.slowShare else { return false }
+        let sorted = window.map(\.micros).sorted()
+        why = String(format: "%d of the last %d frames over 8 ms on their own (median %.1f ms, max %.1f ms)", slow,
+                     window.count, Double(sorted[sorted.count / 2]) / 1000, Double(sorted[sorted.count - 1]) / 1000)
+        return true
     }
 
     /// The oldest frame still with ffmpeg was given to it at `oldest`: true when that is overdue.

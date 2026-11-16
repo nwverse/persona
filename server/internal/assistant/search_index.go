@@ -164,11 +164,27 @@ func (s *Service) searchLoad(ctx context.Context, st searchStore) bool {
 		s.logf("assistant: search index: read cursors: %v", err)
 		return false
 	}
+	for _, r := range rows {
+		_, deleted, err := s.deletedConversation(ctx, r.MachineID, r.SessionID)
+		if err != nil {
+			return false
+		}
+		if deleted {
+			if err := s.dropSearchIndex(ctx, st, r.MachineID, r.SessionID); err != nil {
+				return false
+			}
+		}
+	}
+	s.conversationWrites.RLock()
+	defer s.conversationWrites.RUnlock()
 	s.search.mu.Lock()
 	defer s.search.mu.Unlock()
 	s.search.cursors, s.search.readRev, s.search.readAt, s.search.retry, s.search.gone = nil, nil, nil, nil, nil
 	s.search.init()
 	for _, r := range rows {
+		if s.conversationAvailable(ctx, r.MachineID, r.SessionID) != nil {
+			continue
+		}
 		s.search.cursors[searchKey{r.MachineID, r.SessionID}] = searchCursor{history: r.History, afterSeq: r.AfterSeq}
 	}
 	s.search.loaded, s.search.reset = true, reset
@@ -213,35 +229,34 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 		}
 		todo = append(todo, due{c: c, cur: cur, backup: !read})
 	}
-	// conversations the list no longer has: gone from the index after a while (never while the list is empty: the
-	// assistant's computer may just be offline)
+	// Permanent deletions leave immediately, even with an empty inventory.
+	// Ordinary missing chats keep the grace period: the computer may be offline.
 	var drop []searchKey
-	if len(list) > 0 {
-		for k := range s.search.cursors {
-			if listed[k] {
-				continue
-			}
-			since, ok := s.search.gone[k]
-			if !ok {
-				s.search.gone[k] = now
-			} else if now.Sub(since) >= searchGoneAfter {
-				drop = append(drop, k)
-			}
+	for k := range s.search.cursors {
+		if _, deleted, err := s.deletedConversation(ctx, k.machine, k.session); err == nil && deleted {
+			drop = append(drop, k)
+			continue
+		}
+		if len(list) == 0 {
+			continue
+		}
+		if listed[k] {
+			continue
+		}
+		since, ok := s.search.gone[k]
+		if !ok {
+			s.search.gone[k] = now
+		} else if now.Sub(since) >= searchGoneAfter {
+			drop = append(drop, k)
 		}
 	}
 	s.search.mu.Unlock()
 
 	for _, k := range drop {
-		if err := st.DropSearchConversation(ctx, k.machine, k.session); err != nil {
+		if err := s.dropSearchIndex(ctx, st, k.machine, k.session); err != nil {
 			s.logf("assistant: search index: drop a conversation: %v", err)
 			continue
 		}
-		s.search.mu.Lock()
-		delete(s.search.cursors, k)
-		delete(s.search.readRev, k)
-		delete(s.search.readAt, k)
-		delete(s.search.gone, k)
-		s.search.mu.Unlock()
 	}
 	// what changed first (new messages in a chat already read), then the backfill, the latest updated first
 	sort.SliceStable(todo, func(i, j int) bool {
@@ -256,6 +271,11 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 		}
 		k := searchKey{d.c.MachineID, d.c.SessionID}
 		cur, done, err := s.searchRead(ctx, st, d.c, d.cur, d.backup)
+		s.conversationWrites.RLock()
+		if s.conversationAvailable(ctx, k.machine, k.session) != nil {
+			s.conversationWrites.RUnlock()
+			continue
+		}
 		s.search.mu.Lock()
 		if cur != d.cur {
 			s.search.cursors[k] = cur
@@ -271,6 +291,7 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 			}
 		}
 		s.search.mu.Unlock()
+		s.conversationWrites.RUnlock()
 		if err == nil && !done {
 			next = 0 // more to read: come back at once
 		}
@@ -282,6 +303,9 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 func (s *Service) searchRead(ctx context.Context, st searchStore, c proto.Session, cur searchCursor, backfill bool) (searchCursor, bool, error) {
 	reset := false
 	for range searchPagesPerRun {
+		if err := s.conversationAvailable(ctx, c.MachineID, c.SessionID); err != nil {
+			return cur, false, err
+		}
 		page, err := s.searchFetch(ctx, c.MachineID, c.SessionID, cur.afterSeq)
 		if err != nil {
 			return cur, false, err
@@ -297,7 +321,15 @@ func (s *Service) searchRead(ctx context.Context, st searchStore, c proto.Sessio
 		if history == "" {
 			history = cur.history
 		}
-		if err := st.PutSearchItems(ctx, c.MachineID, c.SessionID, history, after, rows, reset); err != nil {
+		s.conversationWrites.RLock()
+		err = s.conversationAvailable(ctx, c.MachineID, c.SessionID)
+		if err == nil {
+			writeCtx, cancel := context.WithTimeout(ctx, searchCallTimeout)
+			err = st.PutSearchItems(writeCtx, c.MachineID, c.SessionID, history, after, rows, reset)
+			cancel()
+		}
+		s.conversationWrites.RUnlock()
+		if err != nil {
 			return cur, false, err
 		}
 		cur, reset = searchCursor{history: history, afterSeq: after}, false

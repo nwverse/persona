@@ -292,6 +292,37 @@ describe("Markdown tables (#5275)", () => {
   });
 });
 
+// A table on a wide column (#9146): cells wrap at a reading length, not at a phone's 18em, and a short code chip in a
+// cell stays whole.
+describe("Markdown table cells on a wide column (#9146)", () => {
+  it("marks a cell's short code chips, not its long ones nor code outside a table", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const long = "x".repeat(25);
+    const fits = "y".repeat(24);
+    const md = `Outside \`invalid_token\`.\n\n| Item | Result |\n| --- | --- |\n| Service | answers 401 \`invalid_token\`, \`${fits}\` and \`${long}\` |`;
+    const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
+    const chips = [...html.matchAll(/<code [^>]*>([^<]*)<\/code>/g)].map((m) => [m[1], m[0].includes("data-chip")]);
+    expect(chips).toEqual([
+      ["invalid_token", false],
+      ["invalid_token", true],
+      [fits, true],
+      [long, false],
+    ]);
+  });
+
+  it("styles.css: cells wrap at 40em, and a chip in a cell does not wrap", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    const rule = (sel: RegExp) => css.match(new RegExp(`(?:^|\\n)${sel.source}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule(/\.prose-j th,\s*\.prose-j td/)).toMatch(/max-width:\s*40em;/);
+    expect(css).not.toMatch(/max-width:\s*18em/);
+    expect(rule(/\.prose-j td code\[data-chip\]/)).toMatch(/white-space:\s*nowrap/);
+  });
+});
+
 // A table on a phone (audit item 77): a column is as narrow as its words, and the copy button never sits on header words.
 describe("Markdown table widths and the copy button (audit item 77)", () => {
   it("marks the cells short enough for one line; long ones keep their minimum and wrap", async () => {
