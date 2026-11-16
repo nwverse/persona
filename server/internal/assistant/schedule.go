@@ -2187,7 +2187,12 @@ func retryCancelled(cur Task, found bool, failed ScheduleRun, runs []ScheduleRun
 //   - it is known to have ended: the watcher saw it working before it went idle (ran), or the turn has its end
 //     marker (turn_duration). A changed last item alone may be the prompt landing while the session's state still
 //     lags, and an assistant item may be thinking while the model goes on (#3777 review).
+//
+// All of it is judged on the latest turn alone, from the prompt that started it: the node's one-turn page starts at
+// the last prompt it counts as a user's, and a run's prompt is an injected one it does not count, so in a chat the task
+// reuses the page also holds the previous run, whose reply would hide this run's silence (#8901).
 func silentRun(items []proto.Item, t Task, ran bool) bool {
+	_, items = splitLastTurn(items)
 	if !silentTurn(items) {
 		return false
 	}
