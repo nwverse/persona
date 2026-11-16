@@ -24,6 +24,7 @@ dependencies {
     implementation(project(":core:contracts"))
     implementation(project(":feature:chat"))
     implementation(project(":core:domain"))
+    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":core:navigation"))
     implementation(libs.androidx.lifecycle.compose)
