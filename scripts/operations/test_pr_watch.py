@@ -263,7 +263,7 @@ class WatcherTests(unittest.TestCase):
     def test_p1_findings_are_published_then_repaired_instead_of_merging(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr()] + [pr(head=SHA_B)] * 4), \
-                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(pr_watch, "semantic_review", return_value=findings) as review, \
                 patch.object(pr_watch, "verify") as verify, \
                 patch.object(self.watcher, "merge") as merge, \
                 patch.object(pr_watch_repair, "repair_with_model") as worker, \
@@ -277,6 +277,9 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(worker.call_count, 2)
         self.assertEqual(worker.call_args_list[0].args[1]["headRefOid"], SHA_A)
         self.assertEqual(worker.call_args_list[1].args[1]["headRefOid"], SHA_B)
+        self.assertGreaterEqual(review.call_count, 2)
+        self.assertEqual(review.call_args_list[0].args[1]["headRefOid"], SHA_A)
+        self.assertEqual(review.call_args_list[1].args[1]["headRefOid"], SHA_B)
         self.assertEqual(api.call_count, 2)
         self.assertTrue(all(call.args[0][:2] == ["gh", "api"] for call in api.call_args_list))
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
