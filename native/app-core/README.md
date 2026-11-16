@@ -63,7 +63,10 @@ gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings o
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
-UI timing or connect a production Android adapter.
+UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
+`TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
+checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
+consumer state, UI badges or actual background execution.
 
 ```sh
 cd android && ./gradlew :core:rustcore:test
