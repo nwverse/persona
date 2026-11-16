@@ -9372,6 +9372,17 @@ URGENT_CALL = {"id": "call_mock", "title": "云账单扣费失控", "body": "要
                "rule": {"id": "money_loss", "text": "资金或资源正在损失：扣费失控还在涨、云资源被删、账号被盗刷或出现陌生扣款。"},
                "machine_id": "server", "conversation_id": ASK1, "interaction_id": "", "state": "answered", "attempt": 1,
                "seconds": 0, "outcome": "", "transcript": ""}
+# The calls GET /api/v1/assistant/calls?conversation=… lists with MOCK_URGENT_CALL=1: one answered with its transcript and
+# one missed twice, in Persona's main conversation (the web's call rows).
+URGENT_CALLS = []
+if os.environ.get("MOCK_URGENT_CALL") == "1":
+    URGENT_CALLS = [
+        dict(URGENT_CALL, id="call_done", state="ended", created_at=ago(minutes=50), rang_at=ago(minutes=50), seconds=125,
+             outcome="现在停掉", transcript="Persona：训练任务起的 8 台 GPU 实例近 1 小时扣了 2300 元，还在涨。要不要现在停掉？\n你：现在停掉\nPersona：你选的是：现在停掉。说“确认”就照这样做。\n你：确认"),
+        dict(URGENT_CALL, id="call_missed", title="学校提前放学", why="rule", rule={"id": "r_kids", "text": "接孩子相关的事"},
+             happening="学校群说 15:00 提前放学，还没人去接", body="", interaction_id="", state="missed", attempt=2,
+             created_at=ago(minutes=20), rang_at=ago(minutes=20), seconds=0, outcome="", transcript=""),
+    ]
 if os.environ.get("MOCK_URGENT_CALL") == "1":
     INTERACTIONS.append({
         "id": "ix_urgent", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
@@ -25373,7 +25384,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/assistant/urgent-call":  # Settings › Urgent Calls (docs/assistant/urgent-call.md)
             return self.send_json(dict(URGENT, can_write=True))
         if p == "/api/v1/assistant/calls":
-            return self.send_json({"calls": []})
+            return self.send_json({"calls": [c for c in URGENT_CALLS if c["conversation_id"] == q.get("conversation", [""])[0]]})
         if p.startswith("/api/v1/assistant/calls/"):
             return self.send_json(URGENT_CALL)
         if p == "/api/v1/push/ln-mode":
