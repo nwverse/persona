@@ -90,4 +90,10 @@ internal object NativeBridge {
 
     /** Formats a question option's display text and recommendation flag. Pure function, no runtime handle needed. */
     @JvmStatic external fun displayAnswer(label: String): String
+
+    /** Projects background-task calls, descriptions and notice status sequences from JSON items. Pure function. */
+    @JvmStatic external fun projectTaskIndex(input: String): String
+
+    /** Projects the viewed-image strip for the first represented work group in a lines input. Pure function. */
+    @JvmStatic external fun projectViewedImages(input: String): String
 }

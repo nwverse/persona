@@ -1250,7 +1250,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 - Gateways return `HTTP 429 account_quota_exhausted` for exhausted quota and `HTTP 503 account_concurrency_full` for full concurrency. Previously each caller treated these as ordinary failures: knowledge processing and Inbox sorting retried item by item, producing 429 requests and log lines in 15 minutes; Inbox items were marked sorted "by rules" and weren't reprocessed after quota recovery.
   Handle rate limits per connection in the shared client (`ai/limit.go`, `docs/assistant/model-config.md` ("Upstream rate limits")): while paused, return `ai.PausedError` without sending; callers seeing `ai.IsPaused` stop the round, don't log, and don't mark items processed. New model-calling loops must do the same.
-- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`; a recognized code wins over wording, while an unknown code must retain the previous fallback. `X-Should-Retry: false` overrides status-based transience. A 429 carrying it together with `Retry-After` is a quota pause until the reset, not busy backoff; HTTP 402 and explicit budget-exhaustion codes are quota pauses too. Keep model-unavailable, missing-endpoint and excess-context classifications separate, and never infer an automatic model switch from any of them (#8776).
+- Classify gateway errors by `error.code`, not by an envelope's broad `type` or by status alone. OpenAI- and Anthropic-shaped bodies can carry `code` at the top level or inside `error`, as a string or number; decode fields independently so a malformed field cannot erase a valid message or type. A recognized code wins over wording, while an unknown code keeps the previous fallback. `X-Should-Retry: false` makes the original response non-transient, not the gate: only a 429 with a positive, valid `Retry-After` is the quota-reset exception. Zero, malformed or absent cooldown keeps the existing busy gate. A bounded compatibility request with a rejected field changed is not a same-request retry and remains allowed. Keep model-unavailable, missing-endpoint and excess-context classifications separate: Anthropic's 404 `not_found_error` with a `model:` message is a missing model, but overload wording such as `model service unavailable` is not. `model_unavailable` on model.complete means no configured/callable model, never an upstream model failure; use `model_failed` for the latter (#8833).
 - Thinking models (e.g. `claude-haiku-5-5` thinks by default) count thinking tokens toward `max_tokens` too (2026-11-03, #1000): a project profile of about 2000 Chinese characters needs 3.7–4.7K,
   so `kb.project`'s old 4000 cap often truncated into thinking plus half a JSON object, reported as "unterminated JSON object", retrying every 2 minutes.
   Inspect Messages `stop_reason`: if `ai.JSONMax` lacks a complete object and stopped on `max_tokens`, double the cap and retry once; if still truncated, return `ai.ErrTruncated`.
@@ -2509,3 +2509,16 @@ nothing ran the old build after the new one.
   has another Claude launcher (#5908), so a node check that asks "is it in my list?" refuses what the picker offers
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
+
+## A probe on the caller's context must not cache its failure (2026-11-16, #8859)
+
+- The node's ffmpeg probe for the live screen's x264 ran on the status call's context and cached its answer per file,
+  pass or fail. On the first deployed node a fresh process found Homebrew's ffmpeg in 0.12 s under the node's own
+  environment, yet the node kept reporting none: its first probe had failed, and nothing would try again until the
+  ffmpeg file changed. The probe logged nothing, so why it failed couldn't be read back.
+- A check whose answer is kept runs on a deadline of its own (`context.WithoutCancel` plus its timeout), not the
+  caller's: a cancelled or nearly expired call must not decide what every later call sees.
+- Keep a pass as long as what it checked is unchanged; keep a failure only for a while (a minute here), then try again.
+- Log each outcome once, with the reason for a failure, so the next "it says none" is read from the log, not guessed.
+- Verify on the real machine before calling a probe done: the tests passed with a fake and with the real ffmpeg in a
+  fresh process; only the long-running node showed the cached failure.

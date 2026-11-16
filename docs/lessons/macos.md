@@ -399,3 +399,20 @@ the same cause. Recheck scrolling, folding and layout separately with synthetic 
 - Under a QoS clamp (`taskpolicy -c utility` or `-b`) the output callback comes 10–30 ms late while the engine's own
   time barely moves: a windowless helper that encodes holds a latency-critical activity (`ProcessInfo.beginActivity`).
 - `ReferenceBufferCount` 1 makes the low-latency H.264 encoder drop every frame.
+
+## Live-screen x264: ffmpeg, not the x264 tool, and a child process has its parent's privacy grants (2026-11-16, #8859)
+
+- The `x264` command-line tool writes its output with stdio and never flushes. On a pipe each frame's tail waits in
+  its buffer until later frames push it out: 18–57 ms per frame, stalls of 2 s. `ffmpeg -flush_packets 1` writes each
+  packet at once (ffmpeg 8.1 and 9 do so on a pipe even without it).
+- Raw H.264 (Annex B) gives a frame's end only with the next frame's start code, one frame late. FLV tags carry their
+  length, and their AVC payload already has 4-byte NAL lengths.
+- Homebrew's ffmpeg 9.0.2 crashes (signal 11) on `-colorspace bt709` as an output option together with `ultrafast`,
+  `zerolatency`, sliced threads and CRF with a VBV cap, from raw NV12. Each option alone works. Give the colour
+  description through `-x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:range=tv`; check the SPS's VUI.
+- A process a Mac app starts is attributed to that app for TCC (its responsible process), so it can use the app's
+  grants. `responsibility_spawnattrs_setdisclaim(&attr, 1)` before `posix_spawn` (private, in libSystem; look it up
+  with `dlsym`) makes the child its own. Verified on macOS 26.6.2 (25G83): from a terminal with Accessibility,
+  `AXIsProcessTrusted()` read granted in a plain child and missing in a disclaimed one.
+- A cold Homebrew ffmpeg puts out its first frame after 34–37 ms (it loads many libraries; a minimal build takes
+  9–16 ms). A process started earlier and left waiting takes 6–7 ms.

@@ -821,6 +821,8 @@ export interface Interaction {
   questions?: Question[];
   plan?: string;
   tool_input?: Record<string, unknown>;
+  /** The outgoing text the server lets the user edit before Allow, only for a Claude Code Lark send/reply card. */
+  editable_text?: string;
   summary?: string;
   screen?: string;
   secret?: boolean;

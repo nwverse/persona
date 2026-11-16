@@ -176,12 +176,27 @@ test('device-wide avatar and accent preferences restore independently from Hub o
   const record = JSON.parse(deviceLookBoundary.saved.get('device-look'));
   assert.equal(record.avatarId, 'nwverse');
   assert.equal(record.accentId, 'avatar');
+  assert.equal(record.density, 'standard');
   assert.equal(record.infoJSON.length < 128 * 1024, true);
 
   const restored = new DeviceLook();
   await restored.initialize({ filesDir: '/private/app' });
   assert.equal(restored.avatarId, 'nwverse');
   assert.equal(restored.accentId, 'avatar');
+  assert.equal(restored.density, 'standard');
+});
+
+test('legacy records without row density restore to the reversible standard default', async () => {
+  deviceLookBoundary.reset();
+  deviceLookBoundary.saved.set('device-look', JSON.stringify({ version: 1, avatarId: 'persona', accentId: 'coral' }));
+  const model = new DeviceLook();
+  await model.initialize({ filesDir: '/private/app' });
+  assert.equal(model.density, 'standard');
+  assert.equal(model.accentId, 'coral');
+  assert.equal(await model.setDensity('compact'), true);
+  assert.equal(await model.setDensity('standard'), true);
+  assert.equal(model.density, 'standard');
+  assert.equal(JSON.parse(deviceLookBoundary.saved.get('device-look')).density, 'standard');
 });
 
 test('an older Hub uses only the documented personas fallback and stores the real image privately', async () => {
@@ -231,13 +246,29 @@ test('failed preference storage preserves the visible avatar and accent and repo
  assert.equal(await model.setAccent('coral'),false);assert.equal(model.accentId,'style');assert.equal(deviceLookBoundary.saved.size,0);
 });
 
-test('rapid independent selections serialize before publication and survive reopening',async()=>{
+test('failed density writes keep the prior density and serialized Avatar and Accent', async () => {
+  deviceLookBoundary.reset();
+  const model = await openModel(makeClient());
+  assert.equal(await model.setAccent('coral'), true);
+  const before = deviceLookBoundary.saved.get('device-look');
+  deviceLookBoundary.putError = true;
+  assert.equal(await model.setDensity('compact'), false);
+  assert.equal(model.density, 'standard');
+  assert.equal(model.accentId, 'coral');
+  assert.equal(deviceLookBoundary.saved.get('device-look'), before);
+  assert.equal(model.error, 'device_look_storage_failed');
+  assert.equal(await model.setDensity('dense'), false);
+  assert.equal(model.density, 'standard');
+});
+
+test('rapid independent Avatar, Accent, and density selections serialize before publication and survive reopening',async()=>{
  deviceLookBoundary.reset();const model=await openModel(makeClient()),gate=deferred(),entered=deferred();let writes=0;
  deviceLookBoundary.putGate=async()=>{if(++writes===1){entered.resolve();await gate.promise;}};
- const choice=model.avatars.find(item=>item.id==='nwverse'),avatar=model.setAvatar(choice.optionKey());await entered.promise;const accent=model.setAccent('coral');
- assert.equal(model.avatarId,'persona');gate.resolve();assert.deepEqual(await Promise.all([avatar,accent]),[true,true]);assert.equal(writes,2);
- const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'coral');
- await model.setAvatar(choice.optionKey());assert.equal(writes,2,'a duplicate Radio/row action must not write twice');
+ const choice=model.avatars.find(item=>item.id==='nwverse'),avatar=model.setAvatar(choice.optionKey());await entered.promise;const accent=model.setAccent('coral'),density=model.setDensity('compact');
+ assert.equal(model.avatarId,'persona');assert.equal(model.accentId,'style');assert.equal(model.density,'standard');gate.resolve();assert.deepEqual(await Promise.all([avatar,accent,density]),[true,true,true]);assert.equal(writes,3);
+ const saved=JSON.parse(deviceLookBoundary.saved.get('device-look'));assert.equal(saved.avatarId,'nwverse');assert.equal(saved.accentId,'coral');assert.equal(saved.density,'compact');
+ const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'coral');assert.equal(restored.density,'compact');
+ await model.setAvatar(choice.optionKey());assert.equal(writes,3,'a duplicate Radio/row action must not write twice');
 });
 
 test('identical package IDs and revisions from different Hubs remain independently selectable',async()=>{

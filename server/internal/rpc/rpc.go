@@ -302,11 +302,10 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 				continue
 			}
 		}
-		// A reply counts before it wakes its caller, and with no caller left too: one that comes after its ping gave
-		// up still shows that the ping got there. A deadline counts only for what the rest of its raw read holds,
-		// classified now: a deadline followed by a reply in one packet could otherwise still close a live connection,
-		// and deadline-only read-ahead must not keep it alive.
-		if replyMessage(m) && (!deadlineMessage(m) || bufferedActivity(sc.buffered())) {
+		// A reply counts before any synchronous callback can block, and with no caller left too: one that comes after its
+		// ping gave up still shows that the ping got there. A deadline alone does not count: only the rest of its raw
+		// read, classified now, can prove later activity. The same read-ahead applies behind an ordinary request/event.
+		if replyMessage(m) && !deadlineMessage(m) || bufferedActivity(sc.buffered()) {
 			lastReply = readAt
 		}
 		p.pingActivity.Store(lastReply)

@@ -4770,6 +4770,8 @@ export interface KBEntry {
   extra?: string;
   /** A chat's source (lark, mail, wechat, github…). */
   source?: string;
+  /** A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub. */
+  recording_kind?: string;
 }
 
 /**
