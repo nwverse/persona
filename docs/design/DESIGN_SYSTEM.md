@@ -2200,9 +2200,10 @@ meeting started with the live view, three pages that swipe and are named in a ro
 in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
 row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
 answers out loud or on screen; only while it is in), **Invite / Remove**, and **End** in the danger color, which asks
-first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
-with the speaker mid-meeting is an experiment behind a switch (B2). Ordinary recordings and #3746 meetings keep the live
-view, in the same dark full screen.
+first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as
+the meeting started, unless Settings › Meetings' **Experimental** switch, **Echo Cancellation with the Speaker** (off by
+default, B2), is on: then the speaker turned on mid-meeting turns it on to the end, and the microphone stops for a
+moment. Ordinary recordings and #3746 meetings keep the live view, in the same dark full screen.
 
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
@@ -2286,7 +2287,8 @@ page the user watches during the meeting is the page they keep writing in after 
   highlight is never announced. Reason: the owner sees what the meeting has come to at a glance, and the words as said
   stay one tap away on the Full Transcript page.
 - **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
-  meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
+  meeting"; none when the meeting began with Persona as the note-taker), and so is Persona invited or taken out while
+  it records ("Persona joined / left the meeting", where it happened); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
   **Persona** in `Theme.ai`, plain text in the room and Markdown in the follow-up; the end is a quiet "The meeting ended";
   the follow-up's seed is a collapsed capsule "The meeting's material", another context block one named "Context", its
