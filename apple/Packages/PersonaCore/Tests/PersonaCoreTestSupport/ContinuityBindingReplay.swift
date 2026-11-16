@@ -40,7 +40,7 @@ public struct ContinuityBindingReplay: Sendable {
             return recorded
         }) {
             switch effect {
-            case let .fetch(chat: effectChat, request: request):
+            case let .fetch(chat: effectChat, request: _):
                 guard effectChat == chat else { throw ContinuityFixtureError.invalidFixture("\(name) initial: wrong chat") }
                 initialRequests.append(try effect.requestJSON ?? .null)
             case let .rejected(reason: reason): throw ContinuityFixtureError.rejected("\(name) initial: \(reason)")
