@@ -100,9 +100,9 @@ def _row(title, outcome, on=True):
     elif outcome is None:
         row["value"] = "还没测试"
     elif outcome == "ok":
-        row.update(value="已连通 · 320 毫秒", badge={"text": "已连通", "tone": "positive"})
+        row.update(value="320 毫秒", badge={"text": "已连通", "tone": "positive"})
     else:
-        row.update(value="没连通", subtitle=outcome, badge={"text": "没连通", "tone": "danger"})
+        row.update(subtitle=outcome, badge={"text": "没连通", "tone": "danger"})
     return row
 
 

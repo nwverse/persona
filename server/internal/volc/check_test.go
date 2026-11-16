@@ -244,6 +244,11 @@ func TestStatusPage(t *testing.T) {
 	if rows[0].Badge == nil || rows[0].Badge.Tone != "positive" || rows[1].Badge == nil || rows[2].Action == nil || rows[2].Action.ID != "test" {
 		t.Errorf("after the check: %+v", rows)
 	}
+	for _, row := range rows[:2] {
+		if row.Badge != nil && strings.Contains(row.Value, row.Badge.Text) {
+			t.Errorf("%s says its state twice: %q and the badge %q", row.Key, row.Value, row.Badge.Text)
+		}
+	}
 	other := testPlugin(t, Form{}, "another-key")
 	other.board.load(dir, fingerprint(other.cred, other.form))
 	if v, _ := render(other, ""); v.Sections[0].Items[0].Value != i18n.T(i18n.En, "volc-check.untested") {

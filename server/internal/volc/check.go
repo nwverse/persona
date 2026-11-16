@@ -396,13 +396,12 @@ func (pl *Plugin) stateRow(l i18n.Lang, key, service string, st *serviceState, o
 	case st == nil:
 		row.Value = t("untested")
 	case st.OK:
-		row.Value = t("ok")
+		// The badge says it worked; the value only adds how long the check took.
 		if st.Latency > 0 {
-			row.Value = t("ok_latency", i18n.Args{"ms": st.Latency})
+			row.Value = t("latency", i18n.Args{"ms": st.Latency})
 		}
 		row.Badge = &wire.Badge{Text: t("ok"), Tone: "positive"}
 	default:
-		row.Value = t("failed")
 		row.Subtitle = whyText(l, service, pl.form, &failure{kind: st.Kind})
 		row.Badge = &wire.Badge{Text: t("failed"), Tone: "danger"}
 	}
