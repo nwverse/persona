@@ -173,7 +173,9 @@ fun TodoDetailScreen(
             JIconButton(PhIcons.DotsThree, stringResource(R.string.agents_todo_more), { menuOpen = true })
         },
         bottomBar = {
-            JBottomBar {
+            // No wider than a readable page, centered by the page frame, as iOS's row (#9009, #9008): across a tablet or an
+            // unfolded screen the buttons were each about 370dp wide. A phone is narrower than the cap and keeps its width.
+            JBottomBar(Modifier.widthIn(max = Tokens.Size.readable)) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
                     horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)

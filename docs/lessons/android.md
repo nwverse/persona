@@ -849,3 +849,17 @@ or missing workspace list is a failure, not evidence that every workspace disapp
 ## The NDK prebuilt host directory follows the OS (#9327)
 
 Choose `darwin-x86_64` on macOS and `linux-x86_64` on Linux for the release `llvm-readelf` check and the Gradle `ndkHost` / `ndkTools` inputs; NDK 29 has no `linux-x86_64` tree on a Mac, so a hard-coded path fails that check after the libraries build.
+
+## Cap a page's bottom bar on the bar, not on the row in it (#9009)
+
+`PageFrame` already limits whatever a page passes as `bottomBar` to `ReadingWidth + 40.dp` (800dp) and centers it, so two
+buttons weighted across it were each about 370dp wide on a tablet or an unfolded screen. A narrower cap for one page goes on
+the bar itself, `JBottomBar(Modifier.widthIn(max = Tokens.Size.readable))`: `JBottomBar` applies the modifier first and its own
+`fillMaxWidth()` after it, so on a wide window the bar is exactly the cap and the frame centers it. A `widthIn` on the row inside
+leaves Glass's capsule, and the hairline strip in Brief and Board, 800dp wide around a narrow row. `ReadingWidth` (760dp) is no cap here, the frame's own is
+almost as wide; `Tokens.Size.readable` (560dp, iOS's) is what a bar of a few buttons gets.
+
+Test it with a method-level `@Config(qualifiers = "en-w840dp-h700dp-xhdpi")` (the window is what `PageFrame` measures) and the
+buttons' `getUnclippedBoundsInRoot()`, in every style and with a one-button state too (`TodoBottomBarWidthTest`). To draw `main`
+for a side-by-side, run a shots test that does not name the new token in a worktree of `main`: the same file draws both sides, and
+`android_shots_diff.py` shows a phone's pictures identical and the difference on a wide one only inside the bar.
