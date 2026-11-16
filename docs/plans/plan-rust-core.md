@@ -563,10 +563,11 @@ Phase 3 lands in several PRs.
 
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
-    labels, with 15 + 8 complete fixture comparisons and Apple/CoreFoundation-derived whitespace boundaries.
+    labels. The current corpus has 15 question + 9 recommendation complete fixture comparisons (#9233 adds the
+    newline / NBSP / TAB trimming case) and Apple/CoreFoundation-derived whitespace boundaries.
   - `AnswerBindingFixtureTest` drives `projectAnswer` and `displayAnswer` through real host-JNI string boundaries
-    (#8838). All 15 + 8 cases compare complete expected objects from the unchanged fixtures, including conditional
-    next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
+    (#8838). The current corpus's 15 question + 9 recommendation cases compare complete expected objects, including
+    conditional next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
     expectation are rejected, and the U+200B boundary is exercised. This is synchronous host-JNI evidence, not UI
     timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
     remains separately #8483. The later C ABI, macOS SwiftPM and ArkTS host replays are recorded below; they do not
@@ -599,8 +600,9 @@ Phase 3 lands in several PRs.
     declaration and exact export drift checks are committed. These declarations compile with the `ohos` feature, but
     no Linux addon is loaded and no real NAPI argument conversion is claimed.
   - `harmony/tests/core-host/projections.test.mjs` calls the real Rust functions through the existing host helper and
-    compares all 15 + 8 answer/display, 21 stream-chunk and five complete task-index expectations from unchanged
-    fixtures, plus the background receipt. It pins exact case names and rejects malformed input and deliberately wrong
+    compares the current 15 + 9 answer/display, 21 stream-chunk and five complete task-index expectations from the
+    checked-in fixtures (#9233 added the ninth recommendation), plus the background receipt. It pins exact case names
+    and rejects malformed input and deliberately wrong
     expected objects for each projection. The core lane includes this replay; a missing helper fails rather than skips.
   - This is ArkTS host evidence only, not a HAP or physical-device result. No production adapter, turns, StreamRepair,
     UI timing, hub delivery or background execution is exercised. #8808 retains the separate turn NAPI loader work.
@@ -613,8 +615,8 @@ Phase 3 lands in several PRs.
     buffer. `display_answer` takes a bare JSON string (the option label), as its JNI counterpart does. The checked-in
     `include/persona_core.h` declares all five; the existing dynamic-export drift check covers them (13 exports).
   - The #8560 independently compiled C11 client now replays the unchanged fixtures through the real release library on
-    Linux: answer 15 question + 8 recommendation cases (complete conditional expected objects, invalid page/option,
-    the U+200B trim boundaries), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
+    Linux: answer 15 question + 9 recommendation cases (complete conditional expected objects, invalid page/option,
+    the U+200B trim boundaries, and #9233's newline / NBSP / TAB trimming case), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
     the checked-in `spec/fixtures/lines/ios/differences.json` overlay applied by the client (54 cases hold 62 complete
     turn objects; three compare empty arrays only), and task_index all five complete expected objects plus the
     background receipt boundary. Both sides are parsed and compared canonically (sorted object keys, exact array order
@@ -634,7 +636,8 @@ Phase 3 lands in several PRs.
     every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
     production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
   - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
-    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    answer 15 question + 9 recommendation cases (conditional expected objects, invalid page/option and U+200B; the
+    ninth recommendation is #9233), all 21
     complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
     applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
     complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact

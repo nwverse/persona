@@ -117,7 +117,8 @@ assertions from Apple's table-related tests, including half-written rows, early 
 lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
-input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
+input, a wrong expectation and the U+200B boundary. #9233 adds a ninth recommendation for newline / NBSP / TAB
+trimming and retains the same complete-object comparisons. This does not execute Swift, send a resolution to the hub, measure
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
 checks real JNI output, malformed input and a wrong expectation. It does not project rendered ChatLine, full task
