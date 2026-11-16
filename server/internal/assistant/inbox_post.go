@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -147,10 +149,22 @@ type inboxPosted struct {
 	updated bool
 }
 
+// inboxPostConversation stamps only a post's save: ordinary edits of previously
+// derived Inbox rows remain independent of their source conversation.
+type inboxPostConversation struct{}
+
 // postToInbox puts machine's conversation session into the Inbox. Under the hood it is a generic connector row of the
 // source "assistant", thread = the conversation. A post within inboxPostWindow of the conversation's row updates that
 // row, reopened when it was handled; any other makes a new one. The user's own policy for the source still applies.
 func (s *Service) postToInbox(ctx context.Context, machine, session string, a inboxPostArgs, now time.Time) (inboxPosted, error) {
+	// A delayed tool call or scheduled completion must not copy a deleted
+	// transcript into a new or existing Inbox row. Keep the check and save
+	// together with respect to deletion, while preserving already saved rows.
+	s.conversationWrites.RLock()
+	defer s.conversationWrites.RUnlock()
+	if err := s.conversationAvailable(ctx, machine, session); err != nil {
+		return inboxPosted{}, err
+	}
 	if err := s.inboxReady(ctx); err != nil {
 		return inboxPosted{}, err
 	}
@@ -173,38 +187,79 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 		Tier: connector.Tier(tier), Why: clip(oneLine(strings.TrimSpace(a.Reason)), inboxPostReasonMax)}
 
 	b := &s.inbox
-	b.mu.Lock()
-	var open *InboxItem
-	for _, it := range b.items {
-		if it.Source == inboxPostSource && it.Connector != nil && it.Connector.Thread == thread &&
-			(open == nil || newerItem(it, open)) {
-			open = it
+	// The candidate remains detached until its guarded DB commit succeeds. A
+	// reader of the live Book must never see a post that admission can reject.
+	it := &InboxItem{ID: inboxPostSource + ":" + hex.EncodeToString(sum[:8]), Source: inboxPostSource,
+		Kind: inboxPostKind, Account: inboxPostSource, AccountName: label, StartedAt: now, Count: 1}
+	var live *InboxItem
+	var before InboxItem
+	var updated bool
+	var published bool
+	apply := func(row *InboxItem) {
+		prev := seenOf(row)
+		fillConnectorItem(row, thing)
+		row.DoneAt, row.DoneBy, row.Read = nil, "", false
+		b.noteReceived(row, prev, nil)
+		row.Summary, row.TriagedBy, row.Urgent = summary, "rules", false
+		b.noteTriaged(row)
+		b.applyPolicyTier(row)
+	}
+	writeCtx := context.WithValue(ctx, inboxPostConversation{}, [2]string{machine, session})
+	failed := s.saveInboxPrepared(writeCtx, []*InboxItem{it}, func(row *InboxItem) *InboxItem {
+		// Saving is serialized before selecting the target, so concurrent posts
+		// still coalesce into the latest committed row for this conversation.
+		for _, current := range b.items {
+			if current.Source == inboxPostSource && current.Connector != nil && current.Connector.Thread == thread &&
+				(live == nil || newerItem(current, live)) {
+				live = current
+			}
 		}
-	}
-	var w *inboxWrite
-	var it *InboxItem
-	updated := open != nil && now.Sub(open.UpdatedAt) <= inboxPostWindow
-	if updated {
-		it = open
-		w = beginWrite(it)
-		prev := seenOf(it)
-		fillConnectorItem(it, thing)
-		it.DoneAt, it.DoneBy, it.Read = nil, "", false
-		b.noteReceived(it, prev, nil)
-	} else {
-		it = &InboxItem{ID: inboxPostSource + ":" + hex.EncodeToString(sum[:8]), Source: inboxPostSource, Account: inboxPostSource,
-			AccountName: label, StartedAt: now, Count: 1}
-		fillConnectorItem(it, thing)
-		b.noteReceived(it, inboxSeen{}, nil)
-		b.items[it.ID] = it
-		w = newWrite(it)
-	}
-	it.Summary, it.TriagedBy, it.Urgent = summary, "rules", false
-	b.noteTriaged(it)
-	b.applyPolicyTier(it) // the user's own rule for the source wins over what the post asked
-	b.settle(w)
-	b.mu.Unlock()
-	if failed := s.saveWrites(ctx, []*inboxWrite{w}, "an assistant post"); failed[it.ID] {
+		updated = live != nil && now.Sub(live.UpdatedAt) <= inboxPostWindow
+		if updated {
+			before = *live
+			before.Chain = slices.Clone(live.Chain)
+			*row = before
+			row.Chain = slices.Clone(before.Chain)
+		} else {
+			live = nil
+		}
+		apply(row)
+		return row
+	}, func(failed map[string]bool) {
+		if failed[it.ID] {
+			return // nothing private entered the shared Book; there is nothing to roll back
+		}
+		if live == nil {
+			if b.items[it.ID] != nil {
+				return
+			}
+			b.items[it.ID] = it
+		} else if b.items[it.ID] == live && reflect.DeepEqual(*live, before) {
+			*live = *it // publish the exact committed snapshot when no concurrent edit needs rebasing
+		} else if b.items[it.ID] == live {
+			// Rebase the committed post on the live item: notes added while IO
+			// was pending keep their chain entries, and concurrent user fields
+			// (for example Read or DoneAt) remain the user's newer values.
+			latest := *live
+			live.Chain = slices.Clone(live.Chain)
+			apply(live)
+			live.ArrivedOf, live.ArrivedAt = it.ArrivedOf, it.ArrivedAt
+			value, previous, current := reflect.ValueOf(live).Elem(), reflect.ValueOf(before), reflect.ValueOf(latest)
+			for i := range value.NumField() {
+				if name := value.Type().Field(i).Name; name == "Chain" || name == "ChainSeq" {
+					continue // apply appended the post to the chain that already holds the concurrent notes
+				}
+				if !reflect.DeepEqual(current.Field(i).Interface(), previous.Field(i).Interface()) {
+					value.Field(i).Set(current.Field(i))
+				}
+			}
+		} else {
+			return // a concurrent removal/replacement owns the live row now
+		}
+		b.touched(it.ID)
+		published = true
+	})
+	if failed[it.ID] || !published {
 		return inboxPosted{}, errInboxNotPersisted
 	}
 	return inboxPosted{id: it.ID, updated: updated}, nil
