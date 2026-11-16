@@ -2,6 +2,7 @@ package volc
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +119,21 @@ func (m *manager) audio(pcm []byte) {
 		}
 		pcm = pcm[n:]
 	}
+}
+
+// next reads the next frame, failing after a while.
+func (m *manager) next() extwire.TranscriptionFrame {
+	m.t.Helper()
+	select {
+	case f, ok := <-m.frames:
+		if !ok {
+			m.t.Fatal("the job closed")
+		}
+		return f
+	case <-time.After(10 * time.Second):
+		m.t.Fatal("no frame in 10 s")
+	}
+	return extwire.TranscriptionFrame{}
 }
 
 // until reads frames until one of type typ (returned with those before it), failing after a while.
@@ -334,6 +350,122 @@ func TestLiveJobReconnects(t *testing.T) {
 	}
 	if s := sentencesOf(got); len(s) == 3 && !near(*s[2].Start, 3.4) {
 		t.Errorf("third sentence starts at %v, want 3.4", *s[2].Start)
+	}
+}
+
+// A replay job with no transcript of record (an extension's) gives a failing window two retries and then sends it as a
+// gap (a kept window) and goes on; failures that run on into the next window end it; a final pass with a reference
+// still ends at a window's second failure (#8887).
+func TestReplayJobGaps(t *testing.T) {
+	fast(t)
+	old, oldMost, oldDelays := replayWindow, replayWindowMost, retryDelays
+	replayWindow, replayWindowMost = 2*time.Second, 3*time.Second
+	// Every retry waits, so the second window's audio is all in before it is given up (it ends where the audio is then;
+	// the first window's result between its failures would make the first delay count again).
+	retryDelays = []time.Duration{300 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond}
+	t.Cleanup(func() { replayWindow, replayWindowMost, retryDelays = old, oldMost, oldDelays })
+	windows := func(fs []extwire.TranscriptionFrame) (out []extwire.TranscriptionFrame) {
+		for _, f := range fs {
+			if f.Type == extwire.TFWindow {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	// run: a replay job (with a reference when ref), the first two windows' audio, then, once the second window's
+	// outcome is in (a window or an error), the third's and end. The frames up to done or error.
+	var fv *volctest.Service
+	run := func(drop []int, ref bool) (got []extwire.TranscriptionFrame, last extwire.TranscriptionFrame) {
+		fv = fake(t)
+		fv.Set(func(s *volctest.Script) { s.DropLines = drop })
+		m := dialJob(t, testPlugin(t, Form{}, "k"))
+		m.send(extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: "replay", Speed: 1000, At: extwire.F(0.0)})
+		m.until(extwire.TFReady)
+		if ref {
+			m.send(extwire.TranscriptionFrame{Type: extwire.TFReference, From: extwire.F(0.5), To: extwire.F(1.5), Text: extwire.F("第一句的实时字幕")}) // i18n-ignore: test data
+		}
+		m.audio(volctest.PCM(line(1, 1.4, 0.8), line(2, 1.4, 0.8)))
+		for {
+			f := m.next()
+			got = append(got, f)
+			if f.Type == extwire.TFError || f.Type == extwire.TFWindow && len(windows(got)) == 2 {
+				break
+			}
+		}
+		if got[len(got)-1].Type == extwire.TFError {
+			return got, got[len(got)-1]
+		}
+		m.audio(volctest.PCM(line(3, 1.4, 0.8)))
+		m.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+		for {
+			f := m.next()
+			if f.Type == extwire.TFDone || f.Type == extwire.TFError {
+				return got, f
+			}
+			got = append(got, f)
+		}
+	}
+
+	// Every session of the second window drops: after three, a gap between the first window and the third.
+	got, last := run([]int{2}, false)
+	w := windows(got)
+	if last.Type != extwire.TFDone || len(w) < 3 || w[0].Kept || !w[1].Kept || slices.ContainsFunc(w[2:], func(f extwire.TranscriptionFrame) bool { return f.Kept }) {
+		t.Fatalf("windows %s, then %s", frameList(w), frameList([]extwire.TranscriptionFrame{last}))
+	}
+	if !near(*w[1].From, *w[0].To) || !near(*w[2].From, *w[1].To) || *w[1].To < 4 {
+		t.Errorf("the gap does not sit between its neighbours: %s", frameList(w))
+	}
+	if !slices.Equal(texts(got), []string{volctest.Sentence(1), volctest.Sentence(3)}) {
+		t.Errorf("sentences %s", frameList(got))
+	}
+	tried := 0 // sessions that were sent the second line's speech (PCM writes it as ±1200)
+	for i := range fv.Count() {
+		pcm := fv.Session(i).Audio
+		for k := 0; k+1 < len(pcm); k += 2 {
+			if v := int16(binary.LittleEndian.Uint16(pcm[k:])); v == 1200 || v == -1200 {
+				tried++
+				break
+			}
+		}
+	}
+	if tried != replayGapTries {
+		t.Errorf("the second window was tried %d times, want %d", tried, replayGapTries)
+	}
+
+	// The service goes down after the first window: the second becomes a gap at most, and the failures that run on
+	// end the job (no window got through in between to say the service works).
+	fv = fake(t)
+	m := dialJob(t, testPlugin(t, Form{}, "k"))
+	m.send(extwire.TranscriptionFrame{Type: extwire.TFStart, Mode: "replay", Speed: 1000, At: extwire.F(0.0)})
+	m.until(extwire.TFReady)
+	m.audio(volctest.PCM(line(1, 1.4, 0.8))) // the first window ends at 2.0; the second takes what follows
+	if _, w := m.until(extwire.TFWindow); w.Kept {
+		t.Fatalf("the first window %s", frameList([]extwire.TranscriptionFrame{w}))
+	}
+	fv.Set(func(s *volctest.Script) { s.DropAll = true })
+	m.audio(volctest.PCM(line(2, 1.4, 0.8)))
+	// Either the second window's failures end the job at once (its next window failing alongside), or it becomes a gap
+	// and the next window's failures end the job. Never done, never a window that got through.
+	got = nil
+	for last = m.next(); last.Type != extwire.TFError; last = m.next() {
+		got = append(got, last)
+		if last.Type == extwire.TFWindow {
+			m.audio(volctest.PCM(line(3, 1.4, 0.8)))
+			m.send(extwire.TranscriptionFrame{Type: extwire.TFEnd})
+		}
+		if last.Type == extwire.TFDone {
+			break
+		}
+	}
+	w = windows(got)
+	if !last.Fatal || last.Code != extwire.TEUpstreamUnavailable || len(w) > 1 || len(w) == 1 && !w[0].Kept {
+		t.Errorf("a service that went down: %s, then %s", frameList(w), frameList([]extwire.TranscriptionFrame{last}))
+	}
+
+	// A final pass (it has a reference): a window's second failure ends the job, as before.
+	got, last = run([]int{2}, true)
+	if last.Type != extwire.TFError || !last.Fatal || len(windows(got)) != 1 {
+		t.Errorf("a final pass: %s", frameList(append(got, last)))
 	}
 }
 
