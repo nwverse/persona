@@ -141,10 +141,12 @@ fn escaped_quotes_in_string_values_round_trip() {
 
 #[test]
 fn unicode_lookalike_keys_do_not_confuse_the_reader() {
-    // `supervision_user` written with a Cyrillic `а` (`а`) in place of the first `a` is a *different* key
-    // and must not flip the supervision bit. Same for a Greek alpha.
+    // The first case writes `supervision_user` with a Cyrillic `а` in place of the first `a`. The second
+    // writes it with a Greek `α` in the same position. Both are *different* keys and must not flip the
+    // supervision bit. The third is an ASCII suffix variant — not a homoglyph, but still a distinct key.
     let cases = [
         r#"{"id":"a#0","seq":1,"kind":"text","role":"user","supervision_а":true}"#,
+        r#"{"id":"a#0","seq":1,"kind":"text","role":"user","supervision_α":true}"#,
         r#"{"id":"a#0","seq":1,"kind":"text","role":"user","supervision_userr":true}"#,
     ];
     for json in cases {
