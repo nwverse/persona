@@ -32,6 +32,9 @@ import (
 // The default manager: the assistant the hub starts (assistantwire.AssistantID), unless the user picked another.
 const managerDefaultKey = "managers.default"
 
+// managerBuiltinHideKey: the user asked to keep the built-in manager out of the switcher while it is not used (#9055).
+const managerBuiltinHideKey = "managers.builtin_hide"
+
 // installCodeTTL is how long an install code is good for; it works once.
 const installCodeTTL = 10 * time.Minute
 
@@ -69,7 +72,12 @@ type managerInfo struct {
 	Online  bool   `json:"online"`
 	Default bool   `json:"default,omitempty"`
 	// Builtin: the assistant this hub starts beside itself; it cannot be removed (hub.json assistant.external).
-	Builtin  bool       `json:"builtin,omitempty"`
+	Builtin bool `json:"builtin,omitempty"`
+	// Hide (the built-in manager only): the user asked to keep it out of the switcher while it is not used (PATCH
+	// {"hide"}). Hidden: that is in effect, and the apps leave it out of the switcher. Not while it is the default or
+	// owns a machine: a machine that falls back to it (its manager removed) shows it again by itself (#9055).
+	Hide     bool       `json:"hide,omitempty"`
+	Hidden   bool       `json:"hidden,omitempty"`
 	Host     string     `json:"host,omitempty"`
 	OS       string     `json:"os,omitempty"`
 	Arch     string     `json:"arch,omitempty"`
@@ -131,6 +139,7 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		return nil, err
 	}
 	def := h.defaultOwner(ctx)
+	hide := h.builtinHide(ctx)
 	live := map[string]busPresence{}
 	for _, p := range h.busRoster() {
 		live[p.ID] = p
@@ -143,6 +152,10 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		}
 		m := managerInfo{ID: b.ID, Name: b.Name, Default: b.ID == def, Builtin: h.builtinManager(b.ID),
 			Host: b.Host, OS: b.OS, Arch: b.Arch, Deploy: b.Deploy, Version: b.Version, LastSeen: b.LastSeen}
+		if m.Builtin {
+			m.Hide = hide
+			m.Hidden = hide && !m.Default && !h.managerOwnsMachine(b.ID)
+		}
 		if p, ok := live[b.ID]; ok {
 			since := p.Since
 			m.Online, m.Since = true, &since
@@ -173,6 +186,33 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// builtinHide: the user asked to keep the built-in manager out of the switcher (managerInfo.Hide); false when the
+// store cannot say.
+func (h *Hub) builtinHide(ctx context.Context) bool {
+	s := h.managerStore()
+	if s == nil {
+		return false
+	}
+	var hide bool
+	ok, err := s.Setting(ctx, managerBuiltinHideKey, &hide)
+	return err == nil && ok && hide
+}
+
+// managerOwnsMachine: a machine of hub.json's, or one the apps see (a member hub's), is manager id's (machineOwner).
+func (h *Hub) managerOwnsMachine(id string) bool {
+	for _, mc := range h.cfgEntries() {
+		if h.machineOwner(mc.ID) == id {
+			return true
+		}
+	}
+	for _, m := range h.machinesNow() {
+		if h.machineOwner(m.cfg.ID) == id {
+			return true
+		}
+	}
+	return false
 }
 
 // builtinManager: id is the assistant this hub starts itself.
@@ -498,12 +538,14 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"code": code, "expires_at": until, "commands": h.managerCommands(r, id, code)})
 	})
-	// {"name"?, "default"?: true}: rename it, make it the default.
+	// {"name"?, "default"?: true, "hide"?}: rename it, make it the default, keep the built-in one out of the switcher
+	// while it is not used (#9055).
 	api.HandleFunc("PATCH /api/v1/managers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
 			Name    *string `json:"name"`
 			Default *bool   `json:"default"`
+			Hide    *bool   `json:"hide"`
 		}
 		if err := decodeJSONBody(w, r, &req, 4<<10); err != nil {
 			writeBodyErr(w, err, err)
@@ -518,6 +560,17 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 			return
 		}
 		s := h.managerStore()
+		if req.Hide != nil {
+			if !info.Builtin {
+				writeErr(w, http.StatusBadRequest, errors.New("only the built-in assistant can be hidden"))
+				return
+			}
+			// Hidden only while it is not used: not the default (nor made it now), owning no machine.
+			if *req.Hide && (info.Default || req.Default != nil && *req.Default || h.managerOwnsMachine(id)) {
+				writeErrCode(w, http.StatusConflict, "builtin_in_use", errors.New("the built-in assistant is the default or has a computer"))
+				return
+			}
+		}
 		if req.Name != nil {
 			name, err := managerName(*req.Name)
 			if err != nil {
@@ -535,6 +588,12 @@ func (h *Hub) managerRoutes(api *http.ServeMux) {
 				return
 			}
 			if err := s.PutSetting(r.Context(), managerDefaultKey, id); err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if req.Hide != nil {
+			if err := s.PutSetting(r.Context(), managerBuiltinHideKey, *req.Hide); err != nil {
 				writeErr(w, http.StatusInternalServerError, err)
 				return
 			}
