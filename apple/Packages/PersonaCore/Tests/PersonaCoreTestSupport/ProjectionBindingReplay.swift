@@ -30,7 +30,7 @@ public enum ProjectionBindingReplay {
                 let name = try ProjectionFixture.require(item.text("name"), "answer name")
                 let input = try ProjectionFixture.require(item["input"], "answer input")
                 let expected = try ProjectionFixture.require(item["expected"], "answer expected")
-                let actual = try answer(input, recommended: file == "recommended.json", name: name)
+                let actual = try answer(input, expected: expected, recommended: file == "recommended.json", name: name)
                 try ProjectionFixture.assertEqual(actual, expected, "answer/\(name)")
                 if var wrong = actual.object, let allowed = wrong["allowed"]?.bool {
                     wrong["allowed"] = .bool(!allowed)
@@ -79,7 +79,9 @@ public enum ProjectionBindingReplay {
         return fixtures.count
     }
 
-    private static func answer(_ input: ContinuityJSON, recommended: Bool, name: String) throws -> ContinuityJSON {
+    private static func answer(
+        _ input: ContinuityJSON, expected: ContinuityJSON, recommended: Bool, name: String
+    ) throws -> ContinuityJSON {
         let transition = try ProjectionFixture.project(input, "answer", using: PersonaCoreProjections.answer)
         let operation = try ProjectionFixture.require(input["operation"], "operation")
         let page = try ProjectionFixture.require(operation.number("page"), "page")
@@ -112,18 +114,16 @@ public enum ProjectionBindingReplay {
             }
             expectedPicks = .object(picks)
         }
+            expectedPage: ContinuityJSON = expected["next_page"] ?? .number(Double(page))
         try ProjectionFixture.assertEqual(
-            try ProjectionFixture.require(transition["page"], "page"),
-            try ProjectionFixture.require(operation["page"], "page"), "answer/\(name)/page"
+            try ProjectionFixture.require(transition["page"], "page"), expectedPage, "answer/\(name)/page"
         )
         try ProjectionFixture.assertEqual(
             try ProjectionFixture.require(transition["other"], "other"), expectedOther, "answer/\(name)/other"
         )
-        if name != "multiple_pick_waits_for_submit", name != "multiple_pick_toggles_off" {
-            try ProjectionFixture.assertEqual(
-                try ProjectionFixture.require(transition["picks"], "picks"), expectedPicks, "answer/\(name)/picks"
-            )
-        }
+        try ProjectionFixture.assertEqual(
+            try ProjectionFixture.require(transition["picks"], "picks"), expectedPicks, "answer/\(name)/picks"
+        )
         var actual: [String: ContinuityJSON] = [
             "allowed": try ProjectionFixture.require(transition["allowed"], "allowed"),
             "resolution": try ProjectionFixture.require(transition["resolution"], "resolution"),
