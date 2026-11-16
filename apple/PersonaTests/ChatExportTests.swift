@@ -26,6 +26,14 @@ struct ChatExportTests {
         #expect(map["m1"] == nil, "a question brings nothing")
     }
 
+    @Test func aQuestionWithoutItsOwnReplyGoesWithTheNext() {
+        // Two turns: the first a question alone, the second a question and the reply.
+        let rows = ChatStore.buildRows([item(1, "user", "Look at the widget"), item(2, "user", "and its battery use"),
+                                        item(3, "assistant", "Both are fine.")])
+        let map = PickQuestions.map(ChatBlock.build(rows))
+        #expect(map["m3"] == ["m1", "m2"])
+    }
+
     @Test func injectedLinesAndLoopTicksAreNoQuestions() {
         let map = PickQuestions.map(blocks([item(1, "user", "/loop 5m check the build"), item(2, "assistant", "Still green.")]))
         #expect(map["m2"] == nil)
@@ -137,7 +145,8 @@ struct ChatExportTests {
 
     @Test func aPictureIsNeverEnlargedAndKeepsWithinTheColumnAndCap() {
         // Small: its own size at 3×.
-        #expect(ExportImageLayout.fit(pixels: CGSize(width: 300, height: 150), scale: 3, width: 360).size == CGSize(width: 100, height: 50))
+        let small = ExportImageLayout.fit(pixels: CGSize(width: 300, height: 225), scale: 3, width: 360)
+        #expect(small.size == CGSize(width: 100, height: 75) && !small.crops)
         // Wide: the column's width.
         let wide = ExportImageLayout.fit(pixels: CGSize(width: 3000, height: 2000), scale: 3, width: 360)
         #expect(wide.size == CGSize(width: 360, height: 240) && !wide.crops)

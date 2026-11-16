@@ -105,9 +105,11 @@ enum ChatExportRenderer {
             for (i, part) in parts.enumerated() {
                 let view = ExportPartView(part: part, assets: assets, column: column)
                 // The author goes with the first part, never alone at the foot of a page.
+                // A long code block's pieces follow each other closely: one block, cut where a page could be.
+                let follows = i > 0 && ExportParts.isCodePiece(parts[i - 1]) && ExportParts.isCodePiece(part)
                 blocks.append(i == 0
                     ? Block(view: AnyView(VStack(alignment: .leading, spacing: Theme.Space.xs) { ExportAuthor(message: m); view }), gap: gap)
-                    : Block(view: AnyView(view), gap: Layout.part))
+                    : Block(view: AnyView(view), gap: follows ? Theme.Space.xxs : Layout.part))
             }
             if parts.isEmpty { blocks.append(Block(view: AnyView(ExportAuthor(message: m)), gap: gap)) }
         }
@@ -448,6 +450,8 @@ struct ExportPartView: View {
 /// A paragraph with formulas in it: its words as text and each formula as the picture drawn first, in the line.
 struct ExportMathText: View {
     var markdown: String
+    /// How much of a formula's picture is under its baseline (KaTeX's strut, about a quarter of an em of its height).
+    static let depth: CGFloat = 0.2
 
     var body: some View {
         segments.reduce(Text(verbatim: "")) { $0 + $1 }
@@ -465,7 +469,8 @@ struct ExportMathText: View {
             out.append(words(rest[..<open.lowerBound]))
             let tex = String(rest[hit.upperBound..<close]).removingPercentEncoding ?? ""
             if let img = MarkdownRenderer.shared.cached(.inlineMath, tex, dark: false, points: ExportRenderedFence.textPoints) {
-                out.append(Text(Image(uiImage: img).renderingMode(.template)))
+                // KaTeX's box reaches below the baseline: set it down by that much, or it rides above the words.
+                out.append(Text(Image(uiImage: img).renderingMode(.template)).baselineOffset(-img.size.height * Self.depth))
             } else {
                 out.append(Text(verbatim: tex).font(Theme.Font.code))
             }

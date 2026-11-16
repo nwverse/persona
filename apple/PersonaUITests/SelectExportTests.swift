@@ -9,7 +9,9 @@ import XCTest
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> saves each step, light and dark (TEST_RUNNER_PERSONA_SCHEMES="light dark" by default).
 final class SelectExportTests: XCTestCase {
     private let session = "macbook/a1f3c2d4-0000-4000-8000-000000009468"
+    /// The reply's last line, pressed; its row while selecting is named by its first words.
     private let reply = "要我现在提交吗"
+    private let replyRow = "会多一点"
     private let question = "改成 15 分钟会更费电吗"
     private var hub = ""
 
@@ -80,7 +82,7 @@ final class SelectExportTests: XCTestCase {
             // Selecting, the reply picked; Include Questions offered and on: its question goes with it.
             let questions = app.buttons["chat.pickQuestions"]
             XCTAssertTrue(questions.waitForExistence(timeout: 5), "Include Questions is not offered:\n\(app.debugDescription)")
-            XCTAssertTrue(row(reply, in: app).isSelected, "the pressed reply is not picked")
+            XCTAssertTrue(row(replyRow, in: app).isSelected, "the pressed reply is not picked")
             XCTAssertFalse(row(question, in: app).isSelected, "its question is picked, not brought")
             XCTAssertEqual(row(question, in: app).value as? String, "随回答一起", "its question is not marked as going with it")
             XCTAssertTrue(app.staticTexts["chat.pickCount"].label.contains("1"))

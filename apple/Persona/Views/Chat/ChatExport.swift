@@ -26,18 +26,26 @@ nonisolated struct ExportMessage: Identifiable, Equatable, Sendable {
 }
 
 /// Include Questions (#9468): a reply's questions are the messages of its turn from the user's side (your own, and a
-/// relayed or another source's that opened it), in the chat's order. Injected lines and `/loop` ticks are not messages
-/// (`ChatRow.pickBar`), so never questions.
+/// relayed or another source's that opened it), in the chat's order, with those of the turns before it that got no reply
+/// (two messages sent one after the other are two turns, the first without an answer). Injected lines and `/loop` ticks
+/// are not messages (`ChatRow.pickBar`), so never questions.
 enum PickQuestions {
-    /// Every reply of every turn (its answer, and the replies its steps hold) → that turn's questions.
+    /// Every reply of every turn (its answer, and the replies its steps hold) → its questions.
     static func map(_ blocks: [ChatBlock]) -> [String: [String]] {
         var out: [String: [String]] = [:]
+        var waiting: [String] = [] // asked, no reply yet: they go with the next reply
         for case .turn(let t) in blocks {
-            let questions = t.users.compactMap { $0.pickBar?.id }
-            guard !questions.isEmpty else { continue }
-            for row in t.process + [t.answer].compactMap({ $0 }) {
-                if case .assistant(let item) = row { out[item.id] = questions }
+            let replies = (t.process + [t.answer].compactMap { $0 }).compactMap { row -> String? in
+                if case .assistant(let item) = row { item.id } else { nil }
             }
+            let questions = waiting + t.users.compactMap { $0.pickBar?.id }
+            guard !replies.isEmpty else {
+                waiting = questions
+                continue
+            }
+            waiting = []
+            guard !questions.isEmpty else { continue }
+            for id in replies { out[id] = questions }
         }
         return out
     }
@@ -194,6 +202,12 @@ enum ExportParts {
             out.replaceSubrange(open.lowerBound...close, with: "`" + tex + "`")
         }
         return out
+    }
+
+    /// One of the pieces a long code block is drawn in (`codePieces`): the next one follows it closely.
+    static func isCodePiece(_ part: ExportPart) -> Bool {
+        guard case .markdown(let md) = part, !md.contains("\n\n"), md.hasSuffix("```") || md.hasSuffix("~~~") else { return false }
+        return MarkdownFence.opening(md.prefix { $0 != "\n" }.trimmingCharacters(in: .whitespaces)) != nil
     }
 
     /// A long fenced block as several, `codeLines` each, in the same language.
