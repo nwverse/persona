@@ -58,6 +58,7 @@ class Router(
         ConnectionSettingsRoute -> resolve(SettingsPageRoute(SettingsPage.Diagnostics))
         PairingRoute, is SettingsPageRoute -> ResolvedRoute(AppTab.Persona, key)
         is ExtensionUiRoute -> key.takeIf { it.extensionId.isNotBlank() && it.uiId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is ExtensionRoute -> key.takeIf { it.extensionId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is InboxItemRoute -> key.takeIf { it.itemId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is LarkChatRoute -> key.takeIf { it.chatId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is ChatRoute -> normalizedChat(key)?.let { ResolvedRoute(it.kind.tab, it) }
@@ -111,8 +112,15 @@ class Router(
                     InteractionRoute(chat, request ?: return null)
                 else chat
             }
-            "extension" -> ExtensionUiRoute(parameters["extension"] ?: return null, parameters["ui"] ?: return null,
-                parameters["title"].orEmpty(), parameters["state"])
+            "extension" -> {
+                val extension = parameters["extension"] ?: return null
+                val ui = parameters["ui"]
+                if (ui == null) {
+                    if (parameters["trigger"] != "content") return null
+                    ExtensionRoute(extension, manager = parameters["manager"])
+                } else ExtensionUiRoute(extension, ui, parameters["title"].orEmpty(), parameters["state"],
+                    manager = parameters["manager"], notificationActionToken = parameters["notification"])
+            }
             "inbox" -> InboxItemRoute(parameters["item"] ?: return null)
             "new-todo" -> NewTodoRoute
             "lark" -> LarkChatRoute(parameters["chat"] ?: return null)

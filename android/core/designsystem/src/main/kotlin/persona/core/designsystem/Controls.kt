@@ -547,6 +547,8 @@ fun JChip(
      *  tappable one, so the × has its full touch target. */
     onRemove: (() -> Unit)? = null,
     removeLabel: String? = null,
+    /** Bounds the label inside a weighted chip while keeping its icons and count visible. */
+    boundedLabel: Boolean = false,
     breathes: Boolean = true,
 ) {
     val palette = PersonaTheme.palette
@@ -579,9 +581,15 @@ fun JChip(
         status?.let { JStatusDot(it, size = JChipTokens.dotSize, breathes = breathes); Spacer(Modifier.width(JChipTokens.dotGap)) }
         if (status == null) dot?.let { Box(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(it)); Spacer(Modifier.width(JChipTokens.dotGap)) }
         icon?.let { JIcon(it, null, size = JChipTokens.iconSize, tint = ink); Spacer(Modifier.width(JChipTokens.iconGap)) }
-        // With a ×, a long text gives way to it rather than pushing it out of the chip.
-        Text(text, if (onRemove != null) Modifier.weight(1f, fill = false) else Modifier,
-            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // With a × or a bounded label, long text gives way instead of pushing out the rest of the chip.
+        Text(
+            text,
+            modifier = if (onRemove != null || boundedLabel) Modifier.weight(1f, fill = false) else Modifier,
+            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         count?.let {
             Spacer(Modifier.width(JChipTokens.countGap))
             Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3, maxLines = 1, softWrap = false)

@@ -150,6 +150,9 @@ if [[ $LANE == full || $LANE == lint-build-test-0 ]]; then
   run_check 'icon meanings' python3 -B "$ROOT/scripts/assets/gen_icon_meanings.py" --check
 fi
 
+# The commit About shows: an explicit value, else the runner's public GITHUB_SHA, else unknown. Never read from git here.
+BUILD_COMMIT=${PERSONA_BUILD_COMMIT:-${GITHUB_SHA:-unknown}}
+
 cd "$ROOT/android"
 # Unqualified lint still covers every module; full preserves the original selectors.
 # --continue collects independent failures, never turns them into success.
@@ -162,6 +165,7 @@ if [[ ${#TASKS[@]} -gt 0 ]]; then
     -PpersonaApplicationId=com.example.persona \
     -PpersonaGoogleOAuthScheme=persona.oauth.unset \
     -PpersonaRepoRoot="$ROOT" \
+    -PpersonaBuildCommit="$BUILD_COMMIT" \
     ${PROFILE[@]+"${PROFILE[@]}"} "${TASKS[@]}"
 else
   printf 'Android CI: no modules in lane %s; no Gradle default tasks invoked\n' "$LANE"

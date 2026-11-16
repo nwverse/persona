@@ -202,7 +202,7 @@ public enum ProjectionBindingReplay {
         "recommended.json": Set([
             "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
             "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
-            "recommended_trims_prefix_space", "recommended_unspaced",
+            "recommended_trims_prefix_space", "recommended_unspaced", "recommended_corefoundation_boundary",
         ]),
     ]
 
