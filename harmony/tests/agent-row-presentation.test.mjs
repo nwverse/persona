@@ -104,18 +104,18 @@ test('identity changes refresh selection without decoding an unchanged payload',
   assert.equal(page.isRowSelected(binding), false);
   assert.equal(context.parseCount, 2, 'changing only the fallback id does not decode again');
 });
-test('same-key session changes move the native highlight through full flat and grouped reconciliation',()=>{
- for(const groupingMode of ['flat','machines']){
+test('same-key session changes move the native highlight through iOS group reconciliation',()=>{
+ for(const groupingMode of ['state','machine','space']){
   const context=fixture(),{page}=context;
   const value=row({machine_id:'m1',session_id:'s1',last_text:'Same payload'},{machine:'m1',session:'s1'});
   const group={id:'machines',rows:[value]},workspace={groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
    groups:[group],visibleRows(){return this.groups.flatMap(item=>item.rows);}};
-  Object.assign(page,{workspace,selectionVisible:true,flatRowBindings:[],groupBindings:[],rowBindingOwner:undefined,rowBindingScope:'',groupBindingSequence:0});
+  Object.assign(page,{workspace,selectionVisible:true,groupBindings:[],rowBindingOwner:undefined,rowBindingScope:'',groupBindingSequence:0});
   page.model.profile={id:'hub',manager:'work'};page.model.scope=()=> 'hub/work';
-  page.syncRowBindings();const binding=groupingMode==='flat'?page.flatRowBindings[0]:page.groupBindings[0].rows[0];
+  page.syncRowBindings();const binding=page.groupBindings[0].rows[0];
   assert.equal(page.isRowSelected(binding),true);assert.equal(context.parseCount,1);
   group.rows=[row(JSON.parse(value.raw),{machine:'m1',session:'s2'})];
-  page.syncRowBindings();const refreshed=groupingMode==='flat'?page.flatRowBindings[0]:page.groupBindings[0].rows[0];
+  page.syncRowBindings();const refreshed=page.groupBindings[0].rows[0];
   assert.equal(refreshed,binding);assert.equal(page.isRowSelected(refreshed),false);
   workspace.selectedKey=JSON.stringify(['hub','session','work','m1','s2']);assert.equal(page.isRowSelected(refreshed),true);
   assert.equal(context.parseCount,1);
@@ -168,12 +168,12 @@ test('time formatting reads the projected timestamp, follows locale changes, and
   assert.equal(context.parseCount, 1);
 });
 
-test('full row binding decodes missing machine and session once, selects by projected key, and updates after mode changes', () => {
+test('full row binding decodes missing machine and session once and updates across iOS group changes', () => {
   const context = fixture(), { page } = context;
   const initialRow = row({ machine_id: 'm1', session_id: 's1', status: 'working', last_text: 'Current' });
   const group = { id: 'machines', rows: [initialRow] };
   const workspace = {
-    groupingMode: 'flat', selectedKey: JSON.stringify(['hub', 'session', 'work', 'm1', 's1']),
+    groupingMode: 'state', selectedKey: JSON.stringify(['hub', 'session', 'work', 'm1', 's1']),
     groups: [group], visibleRows() { return this.groups.flatMap(item => item.rows); }
   };
   page.model = {
@@ -182,38 +182,38 @@ test('full row binding decodes missing machine and session once, selects by proj
     groupName: () => 'Hub', shortPath: path => path
   };
   page.workspace = workspace;
-  page.flatRowBindings = [];
+  page.groupBindings = [];
   page.groupBindings = [];
   page.rowBindingOwner = undefined;
   page.rowBindingScope = '';
   page.groupBindingSequence = 0;
 
   page.syncRowBindings();
-  assert.equal(context.parseCount, 1, 'flat and grouped bindings share one active projection pass');
-  const flatProjection = page.flatRowBindings[0].presentation;
+  assert.equal(context.parseCount, 1, 'the active core group projects each row once');
+  const flatProjection = page.groupBindings[0].rows[0].presentation;
   assert.equal(flatProjection.selectionKey, workspace.selectedKey);
   assert.equal(flatProjection.selectionKey, JSON.stringify(['hub', 'session', 'work', 'm1', 's1']));
   assert.equal(workspace.selectedKey === flatProjection.selectionKey, true);
 
   workspace.groupingMode = 'machine';
   page.syncRowBindings();
-  assert.equal(context.parseCount, 2, 'switching modes projects the newly visible grouped row once');
+  assert.equal(context.parseCount, 1, 'switching groups preserves the existing projected row');
   const groupBinding = page.groupBindings[0].rows[0];
   assert.equal(groupBinding.presentation.selectionKey, workspace.selectedKey);
   assert.equal(workspace.selectedKey === groupBinding.presentation.selectionKey, true);
 
   group.rows = [row({ machine_id: 'm1', session_id: 's1', status: 'needs_you', last_text: 'Refreshed' })];
   page.syncRowBindings();
-  assert.equal(context.parseCount, 3, 'same-key row data updates are projected once in the active mode');
+  assert.equal(context.parseCount, 2, 'same-key row data updates are projected once in the active mode');
   assert.equal(page.groupBindings[0].rows[0].presentation.selectionKey, workspace.selectedKey);
   assert.equal(page.groupBindings[0].rows[0].presentation.status, 'needs_you');
 
-  workspace.groupingMode = 'flat';
+  workspace.groupingMode = 'space';
   page.syncRowBindings();
-  assert.equal(context.parseCount, 4);
-  assert.equal(page.flatRowBindings[0].presentation.selectionKey, workspace.selectedKey);
-  assert.equal(page.flatRowBindings[0].presentation.recentContent, 'Refreshed');
-  assert.equal(workspace.selectedKey === page.flatRowBindings[0].presentation.selectionKey, true);
+  assert.equal(context.parseCount, 2, 'switching back does not decode unchanged row data');
+  assert.equal(page.groupBindings[0].rows[0].presentation.selectionKey, workspace.selectedKey);
+  assert.equal(page.groupBindings[0].rows[0].presentation.recentContent, 'Refreshed');
+  assert.equal(workspace.selectedKey === page.groupBindings[0].rows[0].presentation.selectionKey, true);
 });
 
 test('row rendering reads the projection instead of parsing ResourceRow data or recomputing workspace metadata', () => {

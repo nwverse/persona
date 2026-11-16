@@ -159,7 +159,9 @@ class AppleRenameTests(unittest.TestCase):
         self.assertIn('AssistantRootTab()', tabs)
         self.assertIn('AgentsRootTab()', tabs)
         self.assertRegex(tabs, r'#if !os\(iOS\)\s+InboxRootTab\(\)\s+SettingsRootTab\(\)\s+#endif')
-        self.assertRegex(tabs, r'#if os\(iOS\)(?:(?!#endif)[\s\S])*?\.modifier\(PadRoutes\(router: pad\)\)\s+#endif')
+        # Inside the iOS-only block; more iOS-only modifiers may follow it there (#8367 added the heads' line-up).
+        self.assertRegex(tabs, r'#if os\(iOS\)(?:(?!#endif)[\s\S])*?\.modifier\(PadRoutes\(router: pad\)\)'
+                               r'(?:(?!#if|#endif)[\s\S])*?#endif')
         for name in ('Assistant', 'Agents', 'Inbox', 'Settings'):
             self.assertRegex(root, r'private struct ' + name + r'RootTab: TabContent')
         routes = root.split('final class PadRouter: TabRouter {', 1)[1].split('private struct PadRoutes:', 1)[0]
