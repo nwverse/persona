@@ -196,8 +196,10 @@ The DEBUG launcher accepts `--es debug.answerShadow on` (then force-stop and rel
 next process). JVM `:core:domain:shadowTest` always compiles the observer separately from the production jar and is
 also a dependency of the standard root `test`. Kotlin returns before the observer's own bounded FIFO worker converts
 the question-only operation, loads the native library or calls JNI. At most 32 comparisons wait in that queue, repeated
-labels are compared once per adapter, and a full queue drops only new diagnostic work. The DEBUG answer JNI itself runs
-on a bounded Rust worker with a one-second wait; a busy native projection does not queue another input.
+labels are compared once per adapter after a successful comparison, and a full queue drops only new diagnostic work.
+The DEBUG answer JNI itself uses a bounded Rust channel (one executing job plus at most one waiting job), with a
+one-second result wait on the client's background worker. The main thread never calls it; a native thread that itself
+hangs cannot be forcibly cancelled, but it cannot make the queue unbounded.
 Permission, plan, screen, elicitation and quick-entry operations outside the pure core's contract are reported as
 unsupported, not as parity. Exact answer/display comparisons stay in that worker, including picks and custom-answer
 state for all three supported operations; a report contains only domain, rule and counts/flags/operation enums, never a
@@ -208,7 +210,8 @@ The replay compares all 15 `questions.json` and 8 `recommended.json` complete ex
 current Kotlin builder and real host JNI, with the exact fixture-name manifest. Known semantic differences are asserted
 as differences, not hidden by editing fixtures or the current production result. This is host/JVM and DEBUG observer
 evidence, not hub delivery, UI timing or a physical-device run; Release's two answer JNI exports are checked absent on
-both packaged ABIs.
+both packaged ABIs. The additional U+200B display boundary is #9189; the retained `other` draft distinction found by
+the stricter multi-step shadow is #9238. Neither is normalized by this adapter.
 
 ## Reproducing phase-1 evidence
 
