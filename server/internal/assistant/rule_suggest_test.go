@@ -726,20 +726,19 @@ func TestOwnerDecidedIsKeptWithTheDecision(t *testing.T) {
 	if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Ship", "/code/app", "claude"); err != nil {
 		t.Fatal(err)
 	}
-	decided := func(ids ...string) map[string]string {
+	decided := func() map[string]string {
 		s.waitWorkEvents()
 		events, err := database.WorkEventsBetween(ctx, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), []string{ruleDecidedEvent})
 		if err != nil {
 			t.Fatal(err)
 		}
-		all := ruleOwnerDecisions(events)
-		out := map[string]string{}
-		for _, id := range ids {
-			if why, ok := all[id]; ok {
-				out[id] = why
+		filtered := make([]db.WorkEvent, 0, len(events))
+		for _, event := range events {
+			if event.Detail["todo"] == todo.ID {
+				filtered = append(filtered, event)
 			}
 		}
-		return out
+		return ruleOwnerDecisions(filtered)
 	}
 	a := acceptAsk{Conclusion: true, Outcome: outcomeDecide, Reason: "The PR is green. What next?", Recommend: "Merge", WhyOwner: whyPriority}
 	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
@@ -749,14 +748,19 @@ func TestOwnerDecidedIsKeptWithTheDecision(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Source != db.DecisionManual {
 		t.Fatalf("decisions: %+v %v", list, err)
 	}
-	if got := decided(list[0].ID); len(got) != 1 || got[list[0].ID] != whyPriority {
-		t.Fatalf("owner_decided = %v, want %s for %s", got, whyPriority, list[0].ID)
+	decisionID := list[0].ID
+	if got := decided(); len(got) != 1 || got[decisionID] != whyPriority {
+		t.Fatalf("owner_decided = %v, want %s for %s", got, whyPriority, decisionID)
 	}
 	a.ByDefault, a.Deadline = true, time.Now()
 	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
 		t.Fatal(err)
 	}
-	if got := decided(list[0].ID); len(got) != 1 {
+	list, err = database.ListTodoDecisions(ctx, todo.ID, true)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("decisions after the default: %+v %v", list, err)
+	}
+	if got := decided(); len(got) != 1 || got[decisionID] != whyPriority {
 		t.Fatalf("the hub's own call at the deadline left owner_decided: %v", got)
 	}
 }
