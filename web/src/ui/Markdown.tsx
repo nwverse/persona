@@ -422,27 +422,6 @@ export function cellFits(node: unknown): boolean {
   return Boolean(node) && walk(node as HastNode);
 }
 
-// Inline code in a table cell short enough to keep whole (#9146): `invalid_token` or `1.2.3` is not broken across lines
-// by the cell's overflow-wrap (styles.css `td code[data-chip]`); a longer one may still wrap anywhere.
-export const CELL_CHIP_MAX = 24;
-
-/** A rehype plugin: marks inline code in a table cell of at most CELL_CHIP_MAX characters `data-chip`. */
-export function rehypeCellChips() {
-  return (tree: HastNode & { properties?: Record<string, unknown> }) => markChips(tree, false);
-}
-
-function markChips(node: HastNode & { properties?: Record<string, unknown> }, inCell: boolean) {
-  for (const c of (node.children ?? []) as (HastNode & { properties?: Record<string, unknown> })[]) {
-    if (c.type !== "element" || c.tagName === "pre") continue;
-    if (c.tagName === "code" && inCell && [...hastText(c)].length <= CELL_CHIP_MAX) c.properties = { ...c.properties, dataChip: true };
-    markChips(c, inCell || c.tagName === "td");
-  }
-}
-
-function hastText(n: HastNode): string {
-  return n.type === "text" ? (n.value ?? "") : (n.children ?? []).map(hastText).join("");
-}
-
 /** The class of a block's <code>. */
 function codeClass(children: React.ReactNode): string {
   const code = Array.isArray(children) ? children[0] : children;
@@ -608,7 +587,7 @@ export const Markdown = memo(function Markdown({ text: raw, small, compact, mid,
   const wantsMath = useMemo(() => hasMath(md), [md]);
   const katex = useMath(wantsMath);
   const rehypePlugins = useMemo<PluggableList>(
-    () => [...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode, rehypeCellChips],
+    () => [...(katex ? [katex] : []), ...(highlight ? [highlight] : []), ...(key ? [rehypePathLinks(linkable)] : []), rehypeLinkedCode],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, highlight, katex],
   );

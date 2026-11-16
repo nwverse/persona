@@ -298,9 +298,9 @@ describe("Markdown table cells on a wide column (#9146)", () => {
   it("marks a cell's short code chips, not its long ones nor code outside a table", async () => {
     const { renderToStaticMarkup } = await import("react-dom/server");
     const { createElement } = await import("react");
-    const { Markdown, CELL_CHIP_MAX } = await import("./Markdown");
-    const long = "x".repeat(CELL_CHIP_MAX + 1);
-    const fits = "y".repeat(CELL_CHIP_MAX);
+    const { Markdown } = await import("./Markdown");
+    const long = "x".repeat(25);
+    const fits = "y".repeat(24);
     const md = `Outside \`invalid_token\`.\n\n| Item | Result |\n| --- | --- |\n| Service | answers 401 \`invalid_token\`, \`${fits}\` and \`${long}\` |`;
     const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
     const chips = [...html.matchAll(/<code [^>]*>([^<]*)<\/code>/g)].map((m) => [m[1], m[0].includes("data-chip")]);
