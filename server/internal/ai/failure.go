@@ -37,10 +37,11 @@ func IsModelUnavailable(err error) bool { return FailureKindOf(err) == FailureMo
 func IsContextTooLong(err error) bool { return FailureKindOf(err) == FailureContextTooLong }
 
 // FailureKindFor classifies a gateway's HTTP error body for callers such as connection probes. An explicit,
-// recognized error.code wins over wording. An unknown code retains the wording-based behavior.
+// recognized error.code wins over type and wording. Anthropic's native not_found_error is used only for its specific
+// missing-model shape; other unknown codes retain the established wording fallback.
 func FailureKindFor(status int, raw []byte) FailureKind {
-	code, message := gatewayErrorDetails(raw)
-	return failureKindFor(status, code, message)
+	code, message, typ, _ := gatewayErrorDetailsWithType(raw)
+	return failureKindFor(status, code, message, typ)
 }
 
 // kindedError adds a classification without changing an existing error's text or unwrap chain.
@@ -65,12 +66,14 @@ func streamFailureError(event, code, msg string) error {
 	if limit := streamLimitFor(event, code, msg); limit != nil {
 		return limit
 	}
-	return withFailureKind(fmt.Errorf("ai: %s: %s", event, msg), failureKindFor(http.StatusBadRequest, code, msg))
+	return withFailureKind(fmt.Errorf("ai: %s: %s", event, msg), failureKindFor(http.StatusBadRequest, code, msg, ""))
 }
 
 var (
-	modelFailureWords   = lazyre.New(`(?i)model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported|unavailable)|model_not_found|invalid model|unknown model|knows no model`)
-	contextFailureWords = lazyre.New(`(?i)prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded`)
+	modelFailureWords       = lazyre.New(`(?i)model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model|unknown model|knows no model`)
+	modelAccessFailureWords = lazyre.New(`(?i)model(?: [a-z0-9_.:/-]+)? is (?:unavailable|not available) to this (?:api )?key`)
+	modelOverloadWords      = lazyre.New(`(?i)model service (?:is )?unavailable`)
+	contextFailureWords     = lazyre.New(`(?i)prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded`)
 )
 
 // failureKindForCode reads recognized non-limit codes. recognized is false for an unknown code, whose established
@@ -88,15 +91,30 @@ func failureKindForCode(code string) (kind FailureKind, recognized bool) {
 	}
 }
 
-func failureKindFor(status int, code, message string) FailureKind {
-	// Codes are machine semantics; a type such as not_found_error is deliberately not accepted here.
+// HasRecognizedErrorCode reports whether raw's explicit machine code already determines the outcome: a limit or a
+// recognized model/context/endpoint failure. Such a response must not trigger a modified compatibility request.
+func HasRecognizedErrorCode(raw []byte) bool {
+	code, _ := gatewayErrorDetails(raw)
+	if _, recognized := failureKindForCode(code); recognized {
+		return true
+	}
+	_, limited := limitReasonForCode(code, "")
+	return limited
+}
+
+func failureKindFor(status int, code, message, typ string) FailureKind {
+	// Codes are machine semantics; a type such as not_found_error is not a general substitute for one.
 	if kind, recognized := failureKindForCode(code); recognized {
 		return kind
+	}
+	// Anthropic's native missing-model response is distinct from an endpoint 404. Its message starts with "model:".
+	if status == http.StatusNotFound && typ == "not_found_error" && strings.HasPrefix(message, "model:") {
+		return FailureModelUnavailable
 	}
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return FailureOther
 	}
-	if modelFailureWords.MatchString(message) {
+	if modelFailureWords.MatchString(message) || modelAccessFailureWords.MatchString(message) && !modelOverloadWords.MatchString(message) {
 		return FailureModelUnavailable
 	}
 	if contextFailureWords.MatchString(message) {
@@ -106,10 +124,39 @@ func failureKindFor(status int, code, message string) FailureKind {
 }
 
 type errorEnvelope struct {
-	Type    string          `json:"type"`
-	Code    string          `json:"code"`
-	Message string          `json:"message"`
+	Type    json.RawMessage `json:"type"`
+	Code    json.RawMessage `json:"code"`
+	Message json.RawMessage `json:"message"`
 	Error   json.RawMessage `json:"error"`
+}
+
+// decodeErrorString reads one envelope field without letting a malformed sibling discard the rest of the envelope.
+func decodeErrorString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
+}
+
+// decodeErrorCode accepts both the string and numeric error codes used by compatible gateways. json.Number avoids a
+// float conversion, so an integer code keeps its exact decimal representation.
+func decodeErrorCode(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var code string
+	if json.Unmarshal(raw, &code) == nil {
+		return strings.TrimSpace(code)
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) == nil {
+		return number.String()
+	}
+	return ""
 }
 
 // gatewayErrorDetails reads OpenAI- and Anthropic-shaped envelopes. error.code is more specific than a top-level
@@ -126,7 +173,7 @@ func gatewayErrorDetailsWithType(raw []byte) (code, message, typ string, envelop
 	if json.Unmarshal(raw, &body) != nil {
 		return "", string(raw), "", false
 	}
-	code, message, typ, envelope = strings.TrimSpace(body.Code), body.Message, body.Type, true
+	code, message, typ, envelope = decodeErrorCode(body.Code), decodeErrorString(body.Message), decodeErrorString(body.Type), true
 	if typ == "error" { // the outer Messages envelope marker, not the nested error's type
 		typ = ""
 	}
@@ -141,14 +188,17 @@ func gatewayErrorDetailsWithType(raw []byte) (code, message, typ string, envelop
 		if json.Unmarshal(current, &nested) != nil {
 			break
 		}
-		if nested.Type != "" {
-			typ = nested.Type
+		if nestedType := decodeErrorString(nested.Type); nestedType != "" {
+			typ = nestedType
 		}
-		if c := strings.TrimSpace(nested.Code); c != "" {
+		if c := decodeErrorCode(nested.Code); c != "" {
 			code = c
 		}
-		if nested.Message != "" {
-			message = nested.Message
+		if nestedMessage := decodeErrorString(nested.Message); nestedMessage != "" {
+			message = nestedMessage
+		}
+		if nestedErrorText := decodeErrorString(nested.Error); nestedErrorText != "" {
+			message = nestedErrorText
 		}
 		current = nested.Error
 	}

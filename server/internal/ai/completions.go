@@ -50,26 +50,31 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 		if resp.StatusCode != http.StatusOK {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 			resp.Body.Close()
+			// Recognized machine codes always win over compatibility wording: a limit or a model/context/endpoint
+			// failure must never trigger a modified request, even when its message names a rejected field.
+			if HasRecognizedErrorCode(raw) {
+				return Reply{}, false, newHTTPError(resp, raw)
+			}
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
-			// reject stream_options or reasoning_effort. Retry only those rejected requests without an explicit no-retry
-			// signal; arbitrary 400s, non-off effort values, policy ceilings and started streams must never be replayed.
-			noRetry := NoRetry(resp.Header)
+			// reject stream_options or reasoning_effort. Each such response leads to a modified request, not a replay
+			// of the rejected one, so X-Should-Retry: false forbids neither the modified request nor learning from it.
+			// Arbitrary 400s, non-off effort values, policy ceilings and started streams must never be replayed.
 			fieldRejected := ChatRejectsReasoningEffort(raw)
 			offValueRejected := !fieldRejected && ChatNoThinking(c.cfg.ReasoningEffort) && ChatRejectsNoEffortValue(raw)
-			if !noRetry && !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && (fieldRejected || offValueRejected) {
+			if !droppedEffort && c.cfg.ReasoningEffort != "" && resp.StatusCode == http.StatusBadRequest && (fieldRejected || offValueRejected) {
 				RememberChatEffortRejection(c.cfg.BaseURL, key, c.cfg.Model, c.cfg.ViaMachine, offValueRejected)
 				droppedEffort = true
 				delete(body, "reasoning_effort")
 				logf("ai: chat/completions: gateway rejected reasoning_effort; retrying once without it")
 				continue
 			}
-			if !noRetry && !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
+			if !renamedTokens && r.MaxTokens > 0 && resp.StatusCode == http.StatusBadRequest && ChatRequiresCompletionTokens(raw) {
 				renamedTokens = true
 				delete(body, "max_tokens")
 				body["max_completion_tokens"] = r.MaxTokens
 				continue
 			}
-			if !noRetry && !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
+			if !droppedStreamOptions && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) && chatRejectsStreamOptions(raw) {
 				droppedStreamOptions = true
 				delete(body, "stream_options")
 				continue
@@ -201,6 +206,7 @@ func ChatRequiresCompletionTokens(raw []byte) bool {
 func ChatRejectsReasoningEffort(raw []byte) bool {
 	var envelope struct {
 		Error   json.RawMessage `json:"error"`
+		Code    json.RawMessage `json:"code"`
 		Message string          `json:"message"`
 		Detail  []struct {
 			Loc []any  `json:"loc"`
@@ -208,20 +214,28 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
+		topCode := decodeErrorCode(envelope.Code)
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
-				Message string `json:"message"`
-				Param   string `json:"param"`
-				Code    string `json:"code"`
+				Message json.RawMessage `json:"message"`
+				Param   json.RawMessage `json:"param"`
+				Code    json.RawMessage `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningValueCode(object.Code) {
+				code := decodeErrorCode(object.Code)
+				if code == "" {
+					code = topCode
+				}
+				if chatReasoningValueCode(code) {
 					return false
 				}
-				return chatReasoningFieldError(object.Message, object.Param)
+				return chatReasoningFieldError(decodeErrorString(object.Message), decodeErrorString(object.Param))
 			}
 			var message string
-			return json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+			return !chatReasoningValueCode(topCode) && json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+		}
+		if chatReasoningValueCode(topCode) {
+			return false
 		}
 		if envelope.Message != "" {
 			return chatReasoningFieldError(envelope.Message, "")
@@ -259,6 +273,7 @@ func chatReasoningCeilingCode(code string) bool {
 func ChatRejectsNoEffortValue(raw []byte) bool {
 	var envelope struct {
 		Error   json.RawMessage `json:"error"`
+		Code    json.RawMessage `json:"code"`
 		Message string          `json:"message"`
 		Detail  []struct {
 			Loc []any  `json:"loc"`
@@ -266,23 +281,31 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
+		topCode := decodeErrorCode(envelope.Code)
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
-				Message string `json:"message"`
-				Param   string `json:"param"`
-				Code    string `json:"code"`
+				Message json.RawMessage `json:"message"`
+				Param   json.RawMessage `json:"param"`
+				Code    json.RawMessage `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningCeilingCode(object.Code) || strings.Contains(strings.ToLower(object.Message), "reasoning_effort_above_ceiling") {
+				code, message, param := decodeErrorCode(object.Code), decodeErrorString(object.Message), decodeErrorString(object.Param)
+				if code == "" {
+					code = topCode
+				}
+				if chatReasoningCeilingCode(code) || strings.Contains(strings.ToLower(message), "reasoning_effort_above_ceiling") {
 					return false
 				}
-				if chatReasoningValueCode(object.Code) {
-					return strings.EqualFold(strings.TrimSpace(object.Param), "reasoning_effort") || chatNoEffortValueMessage(object.Message, "")
+				if chatReasoningValueCode(code) {
+					return strings.EqualFold(strings.TrimSpace(param), "reasoning_effort") || chatNoEffortValueMessage(message, "")
 				}
-				return chatNoEffortValueMessage(object.Message, object.Param)
+				return chatNoEffortValueMessage(message, param)
 			}
 			var message string
-			return json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
+			return !chatReasoningCeilingCode(topCode) && json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
+		}
+		if chatReasoningCeilingCode(topCode) {
+			return false
 		}
 		if envelope.Message != "" {
 			return chatNoEffortValueMessage(envelope.Message, "")
@@ -306,7 +329,7 @@ func chatNoEffortValueMessage(message, param string) bool {
 		return false
 	}
 	for _, valueError := range []string{"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
-		"input should be", "not one of", "not a valid enum", "not a valid enumeration"} {
+		"input should be", "not one of", "must be one of", "not a valid enum", "not a valid enumeration"} {
 		if strings.Contains(message, valueError) {
 			return param == "reasoning_effort" || strings.Contains(message, "reasoning_effort") && strings.Contains(message, "none")
 		}
@@ -372,7 +395,7 @@ func readCompletions(body io.Reader) (Reply, error) {
 			return nil
 		}
 		var chunk struct {
-			Type    string          `json:"type"`
+			Type    json.RawMessage `json:"type"`
 			Model   string          `json:"model"`
 			Error   json.RawMessage `json:"error"`
 			Choices []struct {
@@ -396,7 +419,7 @@ func readCompletions(body io.Reader) (Reply, error) {
 		}
 		rawError := bytes.TrimSpace(chunk.Error)
 		hasError := len(rawError) > 0 && !bytes.Equal(rawError, []byte("null"))
-		if hasError || chunk.Type == "error" {
+		if hasError || decodeErrorString(chunk.Type) == "error" {
 			code, msg := gatewayErrorDetails([]byte(payload))
 			return streamFailureError("stream error", code, msg)
 		}

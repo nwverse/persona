@@ -83,7 +83,7 @@ class GroupStacks @Inject constructor(application: Application, private val runt
         fun current() = group.data === data && group.active
         val repositories = withContext(Dispatchers.IO) {
             ChatDataRepositories(data, HubChatTransport(connection), connection, foreground,
-                HttpHubPreferencesTransport(connection) { current() })
+                HttpHubPreferencesTransport(connection) { current() }, continuityFactory = app.continuityFactory)
         }
         val names = GroupNames(group.namespace)
         group.adoptSession = { previous, session -> if (current()) repositories.sessions.adoptThread(previous, session) }

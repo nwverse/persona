@@ -543,7 +543,8 @@ Android don't decode video yet: they keep RFB and show no switcher.
   per stream, whose first line is the token.
   - **Keeping its grant** (#7927): signed ad hoc, macOS holds the grant to the helper's exact bytes. So the helper is
     built only from `PersonaScreenCore` (the wire, `CapturePlan`, `CaptureTick`, `HelperArguments`, `ScreenSource`,
-    `RateController`, `Refinement`, `Timing` and `CaptureConfigGate`), never from the rest of `PersonaScreenKit` (the
+    `RateController`, `Refinement`, `Timing`, `CaptureConfigGate`, and `X264Plan` and `X264Process` for "x264 on a
+    direct LAN (#8859)"), never from the rest of `PersonaScreenKit` (the
     route session, the quality tiers), which changes far more often. `mac-link.sh` builds it with `swift build -c
     release`, linked with `-S` (no debug symbols, so no checkout paths), and keeps the executable by a hash of its
     sources, `PersonaScreenCore`'s, its Info.plist template and the architectures
@@ -577,7 +578,7 @@ Android don't decode video yet: they keep RFB and show no switcher.
     and a keyframe; no new `hello`); a new display or codec restarts capture with a fresh `hello`, `format` and keyframe. `paused` says why capture stopped (`permission`, `locked`, `login_window`,
     `display_gone`, `busy`); when the Mac unlocks it sends `resumed` and starts again. The stream closing ends the
     helper.
-- **Node** (`screen.dial {id, pair, keep_awake}`, `node/screen.go`, `node/screenhelper.go`): starts the helper and
+- **Node** (`screen.dial {id, pair, keep_awake, x264}`, `node/screen.go`, `node/screenhelper.go`): starts the helper and
   joins its socket to the stream, or refuses with `video_unavailable` (no helper or no permission), `not_signed_in` (no
   RFB stream with this `pair` past Screen Sharing's SecurityResult) or `busy` (two streams already open). It binds the
   video to the signed-in 5900 stream carrying the same `pair` and follows that handshake's security types (30, 2, 1)
@@ -618,7 +619,9 @@ Android don't decode video yet: they keep RFB and show no switcher.
   baseline again (#6396); helpers that don't know the field skip it. `kind` (`lan`, `tailscale`, `ipv6`, `relay`) and
   `via` (the phone's `wifi`, `cellular`, `wired` or `other` interface) name the cases of `LinkStats`, the route
   measurement the route choice and the quality tiers share (`LinkStats.swift`, with `PathChange` and the
-  `UpdateMessage.Path` conversions, in `PersonaScreenKit`: the helper only carries the strings).
+  `UpdateMessage.Path` conversions, in `PersonaScreenKit`: the helper only carries the strings). `start.path` (same
+  shape) is the route a stream starts on, and `hello.encoder` / `hello.fallback` say what encodes it: "x264 on a
+  direct LAN (#8859)".
 - **Adaptation** (`RateController`): the phone reports when each frame arrived; the helper turns that into a queueing
   delay and cuts the bitrate 30% over 150 ms, skips frames over 500 ms, and raises it 10% under 50 ms for 2 s. The
   delay is measured above the lowest one-way delay of the last 10 s, so the phone's and the Mac's clocks needn't agree.
@@ -1084,6 +1087,67 @@ scrolling stays on RFB's notches.
   - Measuring: `VNCTests/testPixelScrolling` (mock `MOCK_SCREEN_INPUT=granted`) and `testPersonaInputNotice`
     (`=missing`, with the notice's screenshots). The mock's relay takes records out as the node does and lists them as
     `input`.
+
+### x264 on a direct LAN (#8859)
+
+When the user has installed ffmpeg with libx264 themselves and x264 is on for a Mac, Persona Screen may encode that
+Mac's live screen with x264 instead of VideoToolbox, on a direct LAN route only. On an M1 Ultra at 1080p60 a frame
+comes back in 1.5–2.8 ms p50 (1.7–4.5 ms p95), against VideoToolbox's 7–8 ms plus about 1 ms to hand it back, for
+0.3–0.5 of a core and about 1.3–1.5× the bits for the same quality (measurements in #8859).
+
+- **License boundary**: Persona ships, links, downloads and installs nothing of x264's or ffmpeg's (Homebrew's ffmpeg
+  is GPL with libx264), and no x264 header is in the build. The helper starts the user's `ffmpeg` as a separate
+  program with fixed arguments: raw NV12 frames in, an FLV stream out. The GPL FAQ treats pipes, sockets and
+  command-line arguments as communication between separate programs. Never `dlopen` libx264 or libavcodec into the
+  helper: that makes one program with them, and code the user installed would run inside the process that holds the
+  Screen Recording grant. Docs may tell the user to install ffmpeg (`brew install ffmpeg`); nothing installs it for them.
+- **Finding ffmpeg** (node, `node/screenx264.go`): at fixed paths only, `/opt/homebrew/bin`, `/usr/local/bin` and
+  `/opt/local/bin`, never `PATH`. One counts when `-encoders` lists libx264 and a 3-frame self-test through the
+  helper's command line gives back 3 FLV frames, the first a keyframe. The answer is kept for the file's path, size
+  and modification time (a `brew upgrade` is tested again; a probe takes about 0.3 s) and reported as
+  `screen_video.x264` (`"ffmpeg 9.0.2"`). The x264 command-line tool alone won't do: it never flushes its output, so
+  each frame waits for later ones (18–57 ms).
+- **Switching it on**: per Mac and off by default; the hub's switch and the phone's side come in a later step of
+  #8859. `screen.dial {…, x264: true}` makes the node start the helper with `--x264 <ffmpeg>` when its probe passed;
+  otherwise the helper starts as before and uses VideoToolbox.
+- **Which encoder** (`X264Plan.encoder`): x264 only while the phone says the stream is on a direct LAN route: kind
+  `lan` in `start.path` (the route the stream starts on, shaped like `update.path`), then in each `update.path`. A
+  phone that sends no `start.path` (one from before #8859) and the web page get VideoToolbox. `hello.encoder` is
+  `hardware` or `x264`; `hello.fallback` says why x264, on for this Mac, isn't the encoder now: `unavailable` (no
+  disclaim call, ffmpeg didn't start, or the phone offers no H.264), `route`, `slow`, `failed` or `congested`. A
+  route change across the LAN's edge, or x264 stopping, starts capture again with a new `hello`, as a new codec does;
+  a reason x264 stopped holds for the rest of the stream.
+- **Running ffmpeg** (`X264Process`, `X264Session`): started as **its own responsible process** with
+  `responsibility_spawnattrs_setdisclaim`, a private libSystem call (Chromium uses it for its helpers), looked up with
+  `dlsym`. A child is otherwise attributed to its parent for macOS's privacy checks and could use Persona Screen's
+  Screen Recording grant; verified on macOS 26.6.2 (25G83) that a disclaimed child no longer has its parent's grants.
+  Without the call the helper offers no x264. ffmpeg gets an empty environment and only stdin (a socket pair with
+  16 MB buffers), stdout (a pipe) and /dev/null as stderr; it is killed when the stream stops, and ends by itself at
+  end of input when the helper is gone. Its arguments (`X264Plan.arguments`): raw NV12 at the capture's size and frame
+  rate, `-fps_mode passthrough`, libx264 `ultrafast` + `zerolatency` with sliced threads (the performance cores, at
+  most 8) and `keyint=infinite`, CRF 20 under the phone's `max_kbps` (`-maxrate`, a buffer of 1/20 s), BT.709 video
+  range through `-x264-params` (ffmpeg 9.0.2 crashes on the `-colorspace` output option with these settings), and
+  `-flush_packets 1 -f flv`.
+- **Frames**: an FLV tag carries its length, so a frame's end is known when it arrives (raw H.264 says so only with the
+  next frame), and its AVC payload is already the wire's NAL units with 4-byte lengths. The sequence header becomes
+  `format`; tag frame type 1 is the keyframe flag; SEI (x264's 680 bytes of version text) and access unit delimiters
+  are dropped. Each tag's timestamp (frame i at i/fps s, to the millisecond) maps it back to the picture given in, and
+  `timing.encode_ms` runs from the write to the end of the tag. The stream is Constrained Baseline with no B-frames and
+  8 slices per frame in one sample, which the phone decodes as it is.
+- **Keyframes and bitrate**: ffmpeg can't be asked for a keyframe or another bitrate while it runs. The rate controller
+  still reads the reports, but only VideoToolbox follows it. A keyframe (the phone's `keyframe`, a decoding error, the
+  node after dropping frames) comes from a spare ffmpeg, started and waiting: its first frame always is one (6–7 ms; a
+  cold Homebrew ffmpeg takes 34–37 ms, so both start when capture opens). The old process ends and the frames still in
+  it are dropped. A new size or frame rate starts new processes. Refinement stays VideoToolbox's: x264 already encodes
+  at a constant quality.
+- **Falling back**, for the rest of the stream: ffmpeg can't start (`unavailable`); it ends, or puts out something
+  that isn't the next frame (`failed`); any frame takes over 50 ms, more than 10% of the last 2 s's frames take over
+  8 ms (a process's first frame aside), or a frame is still inside after 200 ms (`slow`); a report cuts the bitrate or
+  skips frames (`congested`: VideoToolbox can lower its bitrate as it runs, ffmpeg can't).
+- **Verifying**: `PERSONA_TEST_FFMPEG=/opt/homebrew/bin/ffmpeg swift test --filter X264` in
+  `apple/Packages/PersonaScreenCore` (encodes, decodes with VideoToolbox as the phone does, a keyframe from the spare)
+  and `PERSONA_TEST_FFMPEG=… go test -run 'X264|FFmpeg' ./internal/node/` (the probe on the real thing). Without the
+  variable both skip the parts that need ffmpeg.
 
 ## Locking, preventing sleep and per-App approval (plan, #1507, decided)
 

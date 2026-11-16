@@ -61,7 +61,7 @@ var (
 
 // ---- the timeline ----
 
-// TimelineRole is one role change of the timeline: the role (AttendanceOff, AttendanceListener,
+// TimelineRole is one role change of the timeline: the role (AttendanceOff, AttendanceNotes, AttendanceListener,
 // AttendanceParticipant) from recording second At on.
 type TimelineRole struct {
 	At         float64 `json:"at"`
@@ -76,10 +76,10 @@ type Timeline struct {
 	Speaking []SpokenSpan   `json:"speaking,omitempty"`
 }
 
-// timelineRole is attendance as a timeline has it ("" when it is not one of the three roles).
+// timelineRole is attendance as a timeline has it ("" when it is not one of the four roles).
 func timelineRole(attendance string) string {
 	switch a := strings.ToLower(strings.TrimSpace(attendance)); a {
-	case AttendanceOff, AttendanceListener, AttendanceParticipant:
+	case AttendanceOff, AttendanceNotes, AttendanceListener, AttendanceParticipant:
 		return a
 	}
 	return ""
@@ -88,7 +88,7 @@ func timelineRole(attendance string) string {
 // ParseTimeline reads a timeline as the upload and the socket's start carry it: an object with roles
 // ([{"at", "attendance"}]) and speaking ([{"start", "end", "text"?}], as an upload's spoken; a text over maxSpokenText
 // bytes is cut at a character boundary). ok is false when it is absent, malformed or over the limits: a timeline with
-// any entry that is not one (an at that is not a number of 0 or more, a role that is not one of the three, a span that
+// any entry that is not one (an at that is not a number of 0 or more, a role that is not one of the four, a span that
 // is not an object with numbers start and end, 0 <= start <= end, and a string text if any) is ignored whole, never an
 // error.
 func ParseTimeline(raw json.RawMessage) (t Timeline, ok bool) {
