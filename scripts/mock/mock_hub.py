@@ -11933,6 +11933,9 @@ def inbox_list(query):
 
 # What each bulk "Handled" / "Undo" asked for (POST /api/v1/inbox/done), kept at /mock/inbox_bulk.
 INBOX_BULK = []
+# Open unless /mock/inbox_done_hold: then GET /api/v1/inbox/done with `before` waits for /mock/inbox_done_release (#6661).
+INBOX_DONE_GATE = threading.Event()
+INBOX_DONE_GATE.set()
 
 
 def inbox_bulk(body):
@@ -21360,6 +21363,22 @@ FAKE_BG_COLORS = {"black": (0, 0, 0), "white": (255, 255, 255), "gray": (128, 12
 FAKE_TEXT = (204, 204, 204)
 if FAKE_BG["kind"]:
     FAKE_W, FAKE_H = 1920, 1080
+# MOCK_PHONE_SCREEN=1 (#9314): the mock Mac (MOCK_SCREEN=fake) shows Phone Screen's portrait display right of its main
+# one, as the Mac does while a phone has it: the main display 480×300 pixels (240×150 points at 2×), the portrait one
+# 270×510 (135×255 points at 2×) with a terminal-like window filling it. Its computer status offers `phone_screen`, and
+# POST …/computer/phone-screen answers start / windows / place / stop (PHONE_SCREEN keeps what it was asked).
+PHONE_SCREEN = {"on": os.environ.get("MOCK_PHONE_SCREEN") == "1", "calls": [], "placed": None}
+PHONE_DISPLAY = {"id": 9, "x": 240, "y": 0, "width": 135, "height": 255, "scale": 2}
+PHONE_MAIN = {"id": 1, "x": 0, "y": 0, "width": 240, "height": 150, "scale": 2, "main": True}
+PHONE_WINDOWS = [
+    {"pid": 501, "window": 11, "app": "Terminal", "bundle": "com.apple.Terminal", "title": "~/projects/site — zsh"},
+    {"pid": 501, "window": 12, "app": "Terminal", "bundle": "com.apple.Terminal", "title": "build — npm run dev"},
+    {"pid": 502, "window": 21, "app": "Safari", "bundle": "com.apple.Safari", "title": "Docs — Getting started"},
+    {"pid": 503, "window": 31, "app": "Notes", "bundle": "com.apple.Notes", "title": "Ideas", "minimized": True},
+    {"pid": 504, "window": 41, "app": "TextEdit", "bundle": "com.apple.TextEdit", "title": "Draft.txt"},
+]
+if PHONE_SCREEN["on"]:
+    FAKE_W, FAKE_H = 750, 510
 # macOS's arrow at 1× as its Screen Sharing sends it ("#" black, "o" white), its hot spot at its tip.
 FAKE_ARROW = ["oo........", "o#o.......", "o##o......", "o###o.....", "o####o....", "o#####o...", "o######o..", "o#######o.",
               "o########o", "o########o", "o#####oooo", "o##o##+o..", "o+ooo##o..", ".o+.o##+o.", "....o+##o.", ".....o++o.",
@@ -21440,6 +21459,9 @@ def fake_frame(t=0):
     bx, by = 80 + (t * 7) % 300, 120 + (t * 3) % 120
     for y in range(FAKE_H):
         for x in range(FAKE_W):
+            if PHONE_SCREEN["on"] and (x >= 480 or y >= 300):  # Phone Screen's display: a window filling it (#9314)
+                px.append(phone_frame_pixel(x - 480, y) if x >= 480 else (0, 0, 0))
+                continue
             d, lx = divmod(x, 480)
             if bx <= x < bx + 40 and by <= y < by + 40 and not FAKE_SCROLL["on"]: px.append((255, 159, 10))
             elif 60 <= lx < 420 and 50 <= y < 250:
@@ -21451,6 +21473,15 @@ def fake_frame(t=0):
             elif d == 0: px.append((40 + y // 6, 90 + y // 8, 160))
             else: px.append((40 + y // 8, 150 + y // 6 % 60, 90))
     return px
+
+
+def phone_frame_pixel(lx, y):
+    """Phone Screen's display in the mock (#9314): a menu bar, a dark window's title bar, then lines of text."""
+    if y < 14: return (232, 232, 235)
+    if y < 34: return (58, 58, 62) if not (8 <= lx < 50 and 20 <= y < 28) else (110, 110, 116)
+    row, dy = divmod(y - 40, 14)
+    if 4 <= dy < 10 and 10 <= lx < 10 + 60 + (row * 53) % 180: return (190, 230, 190) if row % 6 == 0 else (204, 204, 204)
+    return (28, 28, 30)
 
 
 def zrle_rect(px, W, x, y, w, h, z):
@@ -22783,6 +22814,9 @@ def computer_of(machine_id, enabled):
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
         c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
         if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
+    if machine_id == "macbook" and c.get("screen_sharing") and PHONE_SCREEN["on"]:  # MOCK_PHONE_SCREEN (#9314)
+        c["phone_screen"] = {"version": 1, "permission": "granted"}
+        c["displays"] = [PHONE_MAIN]
     return c
 
 
@@ -24407,7 +24441,14 @@ def markets_route(handler, p, body):
             ui += PLUGINS[volc_mock.EXT]["ui"]
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
-                    "placement": "nav_page", "size": "full", "icon": "calendar"}]
+                    "placement": "nav_page", "size": "full", "icon": "calendar",
+                    **({"group": {"id": "workbench", "title": "工作台"}} if SIDEBAR_GROUPS else {})}]
+        if SIDEBAR_GROUPS and placement in ("", "nav_page"):
+            # made-up pages naming the sidebar's groups (#9071): two more for 工作台, one each for 资产 and 家里
+            ui += [{"plugin": "example-console", "plugin_name": "Example Console", "id": i, "title": title, "placement": "nav_page",
+                    "size": "full", "icon": icon, "group": {"id": g, "title": gt}}
+                   for i, title, icon, g, gt in (("lark", "Lark", "list", "workbench", "工作台"), ("calendar", "Calendar", "calendar", "workbench", "工作台"),
+                                                 ("assets", "Assets", "money", "assets", "资产"), ("home", "Home devices", "gauge", "home", "家里"))]
         if GAUGE_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
                     "placement": "nav_page", "size": "full", "icon": "gauge"}]
@@ -25546,6 +25587,7 @@ class H(BaseHTTPRequestHandler):
                     if conn.pop("waiting", False):
                         try: conn["redraw"]()
                         except OSError: pass
+            if q.get("clear") == ["1"]: PHONE_SCREEN["calls"].clear()
             if "slow" in q: FAKE_SCREEN["slow"] = float(q["slow"][0])
             if "down" in q:
                 FAKE_SCREEN["down"] = q["down"][0] == "1"
@@ -25555,7 +25597,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"signins": FAKE_SCREEN["signins"], "typed": FAKE_SCREEN["typed"], "clicks": FAKE_SCREEN["clicks"],
                                    "pointer": FAKE_SCREEN["pointer"], "clipboard": FAKE_SCREEN["clipboard"], "frames": FAKE_SCREEN["frames"],
                                    "events": FAKE_SCREEN["events"][-200:], "wheel_in": FAKE_SCREEN["wheel_in"],
-                                   "input": FAKE_SCREEN["input"]})
+                                   "input": FAKE_SCREEN["input"], "phone_screen": PHONE_SCREEN["calls"]})
         if p == "/mock/churn":
             CHURN["rounds"] = 0
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
@@ -25945,6 +25987,10 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
         if p == "/mock/inbox_actions": return self.send_json({"requests": INBOX_ACTIONS})
+        if p in ("/mock/inbox_done_hold", "/mock/inbox_done_release"):  # Done's group pages held / let go (#6661)
+            if p.endswith("hold"): INBOX_DONE_GATE.clear()
+            else: INBOX_DONE_GATE.set()
+            return self.send_json({"held": not INBOX_DONE_GATE.is_set()})
         if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
             PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
             return self.send_json({"fail": PREFS_FAIL[0]})
@@ -26157,6 +26203,10 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(days) if days else self.send_json({"error": "tz must be a time zone name"}, 400)
         if p == "/api/v1/inbox/done":
             if os.environ.get("MOCK_INBOX_HISTORY") == "none": return self.send_json({"error": "not found"}, 404)
+            # A page asked from a moment (`before`: a Done group's, an older page) waits while /mock/inbox_done_hold holds
+            # them, until /mock/inbox_done_release (at most 60 s); the list's first page does not: Jump To a group still
+            # loading (#6661, docs/operations/testing.md)
+            if (q.get("before") or [""])[0]: INBOX_DONE_GATE.wait(60)
             other = other_manager(self)  # the history is each manager's own: the others have none here
             if other: return self.send_json(*other[1]) if other[1] else self.send_json({"items": []})
             return self.send_json(inbox_done(q))
@@ -26630,12 +26680,16 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "hidden": op == "hide"})
         if p == "/api/v1/navigation" and self.command == "PUT":
             if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
-            start = json.loads(self.last_body or b"{}").get("start")
-            if not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)):
-                return self.send_json({"error": "start must be empty, a page's key or p:<extension>/<page>"}, 400)
-            NAVIGATION["start"] = start
+            body = json.loads(self.last_body or b"{}")
+            start, pages = body.get("start"), body.get("pages")
+            if (start is None and pages is None) or (start is not None and (not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)))) \
+                    or (pages is not None and not isinstance(pages, dict)):
+                return self.send_json({"error": "start or pages, of their shapes"}, 400)
+            event = {"type": "navigation"}
+            if start is not None: NAVIGATION["start"] = event["start"] = start
+            if pages is not None: NAVIGATION["pages"] = event["pages"] = pages
             for c in list(CLIENTS.values()):
-                try: c["send"]({"type": "navigation", "start": start})
+                try: c["send"](event)
                 except Exception: pass
             return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
@@ -26704,6 +26758,24 @@ class H(BaseHTTPRequestHandler):
                     "tab_id": "%s:t%d" % (req.get("workspace_id", "w1"), n), "workspace_id": req.get("workspace_id", "w1"), "title": "zsh", "cwd": "/home/me/persona"}
             PANES_NEW[mid].append((req.get("workspace_id", "w1"), pane))
             return self.send_json({"pane": pane["pane"], "terminal": pane["terminal"], "tab_id": pane["tab_id"]})
+        if p.startswith("/api/v1/machines/") and p.endswith("/computer/phone-screen") and PHONE_SCREEN["on"]:  # #9314
+            req = json.loads(self.last_body or b"{}")
+            PHONE_SCREEN["calls"].append({k: req.get(k) for k in ("op", "width", "height", "pid", "window")})
+            op = req.get("op")
+            if op == "start":
+                return self.send_json({"display": PHONE_DISPLAY, "displays": [PHONE_MAIN, PHONE_DISPLAY]})
+            if op == "windows":
+                return self.send_json({"windows": [dict(w, **({"placed": True} if PHONE_SCREEN["placed"] == (w["pid"], w["window"]) else {}))
+                                                   for w in PHONE_WINDOWS]})
+            if op == "place":
+                w = next((w for w in PHONE_WINDOWS if (w["pid"], w["window"]) == (req.get("pid"), req.get("window"))), None)
+                if not w: return self.send_json({"error": "the window is gone", "code": "window_gone"}, 404)
+                PHONE_SCREEN["placed"] = (w["pid"], w["window"])
+                return self.send_json({"display": PHONE_DISPLAY, "placed": dict(w, placed=True)})
+            if op == "stop":
+                PHONE_SCREEN["placed"] = None
+                return self.send_json({})
+            return self.send_json({"error": "bad op", "code": "bad_request"}, 400)
         if p.startswith("/api/v1/machines/") and p.endswith("/computer/clipboard") and os.environ.get("MOCK_SCREEN") == "fake":
             FAKE_SCREEN["clipboard"] = json.loads(self.last_body or b"{}").get("text", "")  # pbcopy on the Mac (#1343)
             FAKE_SCREEN["events"].append({"clipboard": FAKE_SCREEN["clipboard"], "via": "node"})
@@ -29009,6 +29081,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_SIDEBAR_GROUPS=1  (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1) Today, Lark and Calendar name the sidebar group 工作台, Assets 资产 and Home devices 家里 (#9071)")
 MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
@@ -29619,6 +29692,8 @@ def plugins_route(handler, p, body):
 # each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
 # bottom rows push a plain page of the card's (its state); a row's own action answers a toast. All names are invented.
 COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
+# MOCK_SIDEBAR_GROUPS=1 (with MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1): nav_pages naming sidebar groups (#9071)
+SIDEBAR_GROUPS = os.environ.get("MOCK_SIDEBAR_GROUPS") == "1"
 
 
 def _today_row(key, title, subtitle="", value="", **extra):

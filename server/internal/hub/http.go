@@ -1365,7 +1365,10 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 			if c.delta {
 				h.snapshotSessions(c, m)
 			} else {
-				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": h.shown(m.cfg.ID, h.decorated(m))})
+				// The kept list, not decorated's copy of every row the manager listed: the archived rows told apart are
+				// never shown (#6836), and stamped copies only when a row lacks the manager.
+				shown := h.shown(m.cfg.ID, stamped(m.keptSessions(), h.machineOwner(m.cfg.ID)))
+				c.sendJSON(map[string]any{"type": "sessions", "machine_id": m.cfg.ID, "sessions": shown})
 			}
 		}
 	}
