@@ -434,7 +434,8 @@ test("stdin failures remain observable beside a genuine child close", async () =
   assert.equal(result.stdout, "stdin closed\n");
   assert.equal(result.code, 0);
   assert.equal(result.closed, true);
-  assert.match(result.error, /stdin:.*EPIPE/);
+  // A real closed-pipe write reports EOF on Windows libuv; POSIX reports EPIPE.
+  assert.match(result.error, process.platform === "win32" ? /^stdin: write (?:EOF|EPIPE)$/ : /^stdin: write EPIPE$/);
   assert.equal(result.stdout.includes("private fixture input"), false);
 });
 
