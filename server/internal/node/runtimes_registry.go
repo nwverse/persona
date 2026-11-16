@@ -116,18 +116,22 @@ func (b *runtimeRegistry) warnOnce(key, format string, args ...any) {
 	b.logf(format, args...)
 }
 
-// besideShell drops the runtimes' launchers named like one of the login shell's (shell) from a terminal host's list: a
-// start there with that name runs the shell's (runtimeStart), so the form lists it once. Where the start's host is an
+// withShell merges runtime launchers with the login shell's, replacing only discovered CLI fallbacks. An explicit
+// shell definition keeps its name (runtimeStart), so the form lists it once. Where the start's host is an
 // engine runtime that runs only its own launchers, its list is its own and it runs its provider of the name
 // (engineHostLaunchers, runtimeOfIn; runtimes_samekind.go). Logged once per name.
-func (b *runtimeRegistry) besideShell(runtime, shell []proto.Launcher) []proto.Launcher {
-	names := map[string]bool{}
-	for _, l := range shell {
-		names[l.Name] = true
+func (b *runtimeRegistry) withShell(runtime, shell []proto.Launcher) []proto.Launcher {
+	names := map[string]int{}
+	for i, l := range shell {
+		names[l.Name] = i
 	}
-	out := make([]proto.Launcher, 0, len(runtime))
+	out := slices.Clone(shell)
 	for _, l := range runtime {
-		if names[l.Name] {
+		if i, exists := names[l.Name]; exists {
+			if shell[i].RuntimeFallback {
+				out[i] = l
+				continue
+			}
 			b.mu.Lock()
 			b.warnOnce("shell launcher "+l.Name, "runtime %s: launcher %q has the name of a launcher in the login shell, which a start in a terminal host "+
 				"runs instead; a start whose host is %s runs its own", l.Source, l.Name, l.Source)
@@ -139,14 +143,16 @@ func (b *runtimeRegistry) besideShell(runtime, shell []proto.Launcher) []proto.L
 	return out
 }
 
-// shellLauncherNames are the login shell's launcher names as last listed (none before the first list; nothing is run
-// to get them).
+// shellLauncherNames are explicit shell launchers, excluding discovered CLI fallbacks that connected runtimes may
+// own (none before the first list; nothing is run to get them).
 func shellLauncherNames() map[string]bool {
 	launcherCache.Lock()
 	defer launcherCache.Unlock()
 	names := make(map[string]bool, len(launcherCache.list))
 	for _, l := range launcherCache.list {
-		names[l.Name] = true
+		if !l.RuntimeFallback {
+			names[l.Name] = true
+		}
 	}
 	return names
 }

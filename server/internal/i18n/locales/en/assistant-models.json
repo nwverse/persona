@@ -104,6 +104,7 @@
   "err_not_callable": "The hub can’t call this provider’s API directly",
   "err_not_api": "Not an API provider",
   "err_api_protocol": "This API protocol isn’t supported",
+  "err_tier_alias_unresolved": "“{model}” is a Claude Code tier, and {provider} names no model for it. Pick a model, or set the tier’s model on {provider}.",
   "err_provider_type": "Provider must be a string or null",
   "err_field_type": "Model fields must be strings or null",
   "err_field_invalid": "Model fields can’t be empty or contain line breaks",

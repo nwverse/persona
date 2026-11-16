@@ -41,12 +41,13 @@ builds `native/app-core`'s `host_replay` example and runs `tests/core-host/repla
 Rust bytes for independently built values. It found the `u32` width defect (#7485). It exercises neither the NAPI glue
 (argument conversion, thread-safe callbacks) nor a HAP, so `coreReplay` above remains the only device test of those.
 
-The Agents list has its existing ArkTS projection behind `NativeAgentListAdapter`. DEBUG alone dynamically loads a
-serial `taskpool` shadow that compares plain input/output snapshots through `coreProjectSort`; release does not load
-it. Diagnostics contain only domain, rule and input counts/flags. The core lane's
-`tests/core-host/agent-sort-adapter.test.mjs` runs both the production adapter and real core over all 30
-`agents_list` fixtures without weakening expectations. Current host parity is 1/30; the 29 differing cases and their
-`counts` / `group-order` / `unread-shown` rules are recorded in #8966. This is neither full parity nor a NAPI/HAP or
-physical-device result (**blocked: no physical device**). The environment used for this addition has no DevEco CLI.
+The Agents list's production adapter calls `coreProjectSort` directly. The temporary ArkTS sorter and DEBUG shadow
+have been removed. By Status is the default, with By Machine and By Project available from the existing grouping
+control; the core owns pinned/quiet/folded groups, quick filters, search and ordering. Localized group labels and
+fold controls use the existing native tokens and components. The core lane's `tests/core-host/agent-sort-adapter.test.mjs`
+verifies **30/30** unchanged `agents_list` fixtures through the production adapter and real core. The portable
+`agent-workspace` suite also uses a synchronous real-core host fake, checking row identity, folds, preferences and
+offline-history membership. These are host-only results, not a HAP/NAPI or physical-device run (**blocked: no physical
+device**). No DevEco CLI is installed in this environment, so no native screenshot or release HAP was produced.
 
 The application icon reuses Persona's approved artwork. Run `python3 scripts/export-icons.py` from this directory to regenerate its layers, startup image and provenance manifest. The system applies its own launcher mask.
