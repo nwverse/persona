@@ -2510,15 +2510,21 @@ nothing ran the old build after the new one.
   and what an Agent start runs. A check of what can run asks whether it runs (the login shell's `command -v`), as
   `knownLauncher` does.
 
-## A probe on the caller's context must not cache its failure (2026-11-16, #8859)
+## On a Mac with a resident node, the hub's node deploy doesn't reach it (2026-11-16, #8859)
 
-- The node's ffmpeg probe for the live screen's x264 ran on the status call's context and cached its answer per file,
-  pass or fail. On the first deployed node a fresh process found Homebrew's ffmpeg in 0.12 s under the node's own
-  environment, yet the node kept reporting none: its first probe had failed, and nothing would try again until the
-  ffmpeg file changed. The probe logged nothing, so why it failed couldn't be read back.
-- A check whose answer is kept runs on a deadline of its own (`context.WithoutCancel` plus its timeout), not the
-  caller's: a cancelled or nearly expired call must not decide what every later call sees.
-- Keep a pass as long as what it checked is unchanged; keep a failure only for a while (a minute here), then try again.
-- Log each outcome once, with the reason for a failure, so the next "it says none" is read from the log, not guessed.
-- Verify on the real machine before calling a probe done: the tests passed with a fake and with the real ffmpeg in a
-  fresh process; only the long-running node showed the cached failure.
+- On a computer where Persona Link installed the resident node (`com.persona.node` → `~/.persona/bin/persona-node node
+  --attach`), the `personad node --stdio` the hub starts over ssh only relays to it. A hub deploy replaces `personad`
+  on that computer, but the program that answers is still the resident one. `scripts/app/mac-link.sh install` installs
+  that resident node once (a Mac without one gets it: "Installed and started the resident node service") and leaves it
+  alone after that ("already installed … leaving it unchanged", `docs/operations/node-update.md`).
+- So a node change can look deployed and still not run. The live screen's x264 probe (#8883) never reported on such a
+  Mac: its resident node predated the probe. A first guess blamed a cached failed probe and changed the probe (#8989:
+  its own deadline, a failure retried after a minute, each outcome logged), which is sound but wasn't the cause.
+- Before debugging a node's behaviour, read the version the hub has for it: `node_version` / `node_mismatch` in `GET
+  /api/v1/machines`, or the hub's connect line "[<machine>] node <version> is not build <hub's>: an update is offered".
+- **Redeploy** (`POST /api/v1/machines/{mid}/deploy`) and automatic node updates send the hub's own node packages,
+  `$PERSONA_HOME/bin/nodes` on the hub machine. `scripts/deploy/deploy.sh`'s hub step refreshes them (`personad-<plat>`,
+  `persona-node-<plat>` and its `.version`). A deploy that skips that step leaves them at an older build, and Redeploy
+  then installs that older build: here it moved a resident node back five days, to a build without the live screen's
+  video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
+  `node_mismatch`.
