@@ -377,6 +377,31 @@ class ViewedImageBindingFixtureTest {
         assertLineEqual("a queued image-only user also ends the first segment",
             viewed("vi-1#0", listOf("p:/w/first.png")),
             replay(buildJsonObject { put("items", JsonArray(imageQueued)) }))
+
+        val multiBlock = items.toMutableList()
+        val queuedText = multiBlock.single { it.getValue("id").jsonPrimitive.content == "5#0" }
+        val queuedImage = buildJsonObject {
+            put("id", "5#1")
+            put("seq", 5)
+            put("role", "user")
+            put("kind", "image")
+            put("queued", true)
+            put("image", buildJsonObject {
+                put("mime", "image/png")
+                put("data", "aGVsbG8=")
+            })
+        }
+        val queuedIndex = multiBlock.indexOf(queuedText)
+        multiBlock.add(queuedIndex + 1, queuedImage)
+        val multiBlockInput = buildJsonObject { put("items", JsonArray(multiBlock)) }
+        val turnOutput = NativeBridge.projectTurns(multiBlockInput.toString())
+        assertTrue("an absent optional fold payload must not reject a queued text+image message", turnOutput.isNotEmpty())
+        val turns = Json.parseToJsonElement(turnOutput).jsonArray
+        val firstTurn = turns.map { it.jsonObject }.single { it.getValue("id").jsonPrimitive.content == "1#0" }
+        val users = firstTurn.getValue("user_ids").jsonArray.map { it.jsonPrimitive.content }
+        assertEquals("both queued message blocks stay in the first turn", listOf("1#0", "5#0", "5#1"), users)
+        assertLineEqual("queued text+image does not suppress the prior viewed segment",
+            viewed("vi-1#0", listOf("p:/w/first.png")), replay(multiBlockInput))
     }
     private fun viewed(id: String, ids: List<String>): JsonObject = buildJsonObject {
         put("id", id)
