@@ -1,4 +1,4 @@
-Atomically replace using revisions from todo_repositories_get/repositories_list. [] removes only metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Use {url} or {kind,number}; omitted/empty titles keep. Conflict: reread/reconcile. No files, progress or completion changes.
+Replace atomically using revisions from todo_repositories_get/repositories_list. [] removes metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Omitted/empty titles keep. Reread/reconcile conflicts. No files, progress or completion changes.
 
 ```json
 {
@@ -40,7 +40,6 @@ Atomically replace using revisions from todo_repositories_get/repositories_list.
             "type": "object",
             "properties": {
               "kind": {
-                "type": "string",
                 "enum": [
                   "default",
                   "branch",
@@ -58,30 +57,15 @@ Atomically replace using revisions from todo_repositories_get/repositories_list.
             "required": [
               "kind"
             ],
-            "anyOf": [
+            "oneOf": [
               {
                 "properties": {
                   "kind": {
                     "const": "default"
                   }
-                },
-                "not": {
-                  "required": [
-                    "value"
-                  ]
                 }
               },
               {
-                "properties": {
-                  "kind": {
-                    "enum": [
-                      "branch",
-                      "tag",
-                      "commit",
-                      "ref"
-                    ]
-                  }
-                },
                 "required": [
                   "value"
                 ]
@@ -94,10 +78,10 @@ Atomically replace using revisions from todo_repositories_get/repositories_list.
               "type": "object",
               "properties": {
                 "url": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1
                 },
                 "kind": {
-                  "type": "string",
                   "enum": [
                     "issue",
                     "pull_request"
@@ -109,11 +93,43 @@ Atomically replace using revisions from todo_repositories_get/repositories_list.
                 },
                 "title": {
                   "type": "string",
-                  "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+                  "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
                   "maxLength": 1024
                 }
               },
-              "additionalProperties": false
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "required": [
+                    "url"
+                  ],
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "number"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "kind",
+                    "number"
+                  ],
+                  "not": {
+                    "required": [
+                      "url"
+                    ]
+                  }
+                }
+              ]
             },
             "maxItems": 50
           }

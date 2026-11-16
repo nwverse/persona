@@ -71,6 +71,17 @@ class TodoRepositorySchemaTests(unittest.TestCase):
                 self.check_links([{"kind": kind, "number": number}], valid)
         self.check_links([{"url": "https://github.com/example/web/pull/7", "title": "Example fix"}], True)
 
+    def test_links_require_one_complete_identity(self):
+        url = "https://github.com/example/web/pull/7"
+        for link, valid in [({}, False), ({"title": "Only a title"}, False),
+                            ({"kind": "issue"}, False), ({"number": "7"}, False),
+                            ({"url": ""}, False), ({"url": url}, True),
+                            ({"kind": "issue", "number": "7"}, True),
+                            ({"url": url, "kind": "issue"}, False),
+                            ({"url": url, "number": "7"}, False),
+                            ({"url": url, "kind": "issue", "number": "7"}, False)]:
+            self.check_links([link], valid)
+
 
 if __name__ == "__main__":
     unittest.main()

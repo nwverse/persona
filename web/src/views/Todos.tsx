@@ -1,3 +1,4 @@
+import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { defaultManager, useShownManager } from "../lib/manager-choice";
@@ -26,7 +27,6 @@ import { dropTodo, refresh, refreshTodos, useStore, withTaskRows } from "../lib/
 import {
   addTodoDecision,
   createTodo,
-  decisionSourceLabel,
   DECISIONS_FIRST,
   type DecisionsView,
   deleteTodo,
@@ -2743,7 +2743,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
  *  (lib/shortcuts.ts keeps Mod+Enter for dialogs); a multi-line field keeps Enter for its new lines. The form's own
  *  submit decides, so one busy or incomplete stays as it is. */
 function submitOnModEnter(e: React.KeyboardEvent<HTMLFormElement>) {
-  if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
+  if (e.defaultPrevented || e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
   e.preventDefault();
   e.currentTarget.requestSubmit();
 }
@@ -2848,6 +2848,7 @@ function NewTodoDialog({
   const repositoryContext = useRepositoryRequestContext(manager, owner);
   const [repositoryBindings, setRepositoryBindings] = useState<CreateRepositoryBindings>();
   const [repositoryCatalog, setRepositoryCatalog] = useState<RepositoryCatalog>();
+  const creating = useRef(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2883,7 +2884,8 @@ function NewTodoDialog({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!title.trim() || busy || !bindingsValid || !repositoryContext.isCurrent()) return;
+    if (!title.trim() || creating.current || !bindingsValid || !repositoryContext.isCurrent()) return;
+    creating.current = true;
     setBusy(true);
     try {
       const todo = repositoryBindings
@@ -2900,6 +2902,7 @@ function NewTodoDialog({
     } catch (err) {
       if (repositoryContext.isCurrent()) toast(t("todos.create_failed", { error: errorText(err) }), "error");
     } finally {
+      creating.current = false;
       setBusy(false);
     }
   };

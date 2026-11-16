@@ -1,4 +1,4 @@
-Record requested/agreed work or reminders immediately, without confirmation; agents execute via task_plan. Open title/due duplicates return the existing to-do but refuse bindings: use todo_repositories_get/set. Short action title in the user's language; details in notes. In leader chats: record that direction's work; task_plan(todo_id) dispatches, todo_complete finishes unassigned work. Optional bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.
+Record requested/agreed work or reminders immediately, without confirmation; execute via task_plan. Open title/due duplicates return existing to-dos but refuse bindings: use todo_repositories_get/set. Short title in the user's language; details in notes. In leader chats: record that direction's work; task_plan dispatches, todo_complete finishes unassigned work. Bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.
 
 ```json
 {
@@ -74,7 +74,6 @@ Record requested/agreed work or reminders immediately, without confirmation; age
                 "type": "object",
                 "properties": {
                   "kind": {
-                    "type": "string",
                     "enum": [
                       "default",
                       "branch",
@@ -92,30 +91,15 @@ Record requested/agreed work or reminders immediately, without confirmation; age
                 "required": [
                   "kind"
                 ],
-                "anyOf": [
+                "oneOf": [
                   {
                     "properties": {
                       "kind": {
                         "const": "default"
                       }
-                    },
-                    "not": {
-                      "required": [
-                        "value"
-                      ]
                     }
                   },
                   {
-                    "properties": {
-                      "kind": {
-                        "enum": [
-                          "branch",
-                          "tag",
-                          "commit",
-                          "ref"
-                        ]
-                      }
-                    },
                     "required": [
                       "value"
                     ]
@@ -128,10 +112,10 @@ Record requested/agreed work or reminders immediately, without confirmation; age
                   "type": "object",
                   "properties": {
                     "url": {
-                      "type": "string"
+                      "type": "string",
+                      "minLength": 1
                     },
                     "kind": {
-                      "type": "string",
                       "enum": [
                         "issue",
                         "pull_request"
@@ -143,11 +127,43 @@ Record requested/agreed work or reminders immediately, without confirmation; age
                     },
                     "title": {
                       "type": "string",
-                      "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+                      "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
                       "maxLength": 1024
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "oneOf": [
+                    {
+                      "required": [
+                        "url"
+                      ],
+                      "not": {
+                        "anyOf": [
+                          {
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "number"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "required": [
+                        "kind",
+                        "number"
+                      ],
+                      "not": {
+                        "required": [
+                          "url"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 "maxItems": 50
               }

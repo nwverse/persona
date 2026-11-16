@@ -58,7 +58,7 @@ TODO_ID, LEGACY_PR = TODO["id"], TODO.get("pr_url", "")
 def fixture_source(legacy=False, empty=False, rich=False):
     """The whole page's fetch shim, installed before any page script so the section's first read finds it."""
     return """(() => {
-  const state = window.repoFixture = {calls: [], creation: null, revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s, rich: %(rich)s};
+  const state = window.repoFixture = {calls: [], creation: null, creations: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s, rich: %(rich)s};
   const identity = %(identity)s, gitlabIdentity = %(gitlab)s, catalog = %(catalog)s, todoId = %(todo)s;
   const row = (id, source, links) => ({repo_id: id, requested_ref: {kind: 'default'},
     source_snapshot: {identity: source, clone_url: source.canonical_url, catalog_revision: 4, transport_origin: 'canonical_default'},
@@ -87,6 +87,7 @@ def fixture_source(legacy=False, empty=False, rich=False):
     if (path === '/todos' && method === 'POST') {
       const body = init.body ? JSON.parse(init.body) : {};
       state.creation = body;
+      state.creations.push(body);
       return reply({todo: {id: 'created_todo', title: body.title || 'Created', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), agents: []}});
     }
     if (!path || !path.includes('/repositories')) return original(url, init);
@@ -446,6 +447,14 @@ def set_input(selector, value):
 
 def run_creation(theme, width, suffix=""):
     where = f"{theme} {width}px{suffix} creation"
+    def mod_enter(selector):
+        js(f"{selector}.focus(); true")
+        modifiers = 2 if theme == "light" else 4  # Ctrl / Meta, on the actual focused field.
+        for event_type in ("keyDown", "keyUp"):
+            cdp("Input.dispatchKeyEvent", type=event_type, key="Enter", code="Enter",
+                windowsVirtualKeyCode=13, nativeVirtualKeyCode=13, modifiers=modifiers)
+        settle()
+
     open_creation(theme, width, suffix)
     js("""(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim().includes('New to-do') || x.getAttribute('aria-label') === 'New to-do'); b.click(); })()""")
     eventually("!!document.querySelector('[role=dialog]')")
@@ -454,8 +463,9 @@ def run_creation(theme, width, suffix=""):
     eventually("!!document.querySelector('[data-task-repository-editor]')")
     js("""(() => { const b = [...document.querySelectorAll('[role=dialog] button')].find((x) => x.textContent.trim() === 'Add repository'); b.click(); })()""")
     eventually("!!document.querySelector('[data-repository-picker]')")
-    js("document.querySelector('[data-repository-picker] [role=option]').click(); true")
-    settle()
+    mod_enter("document.querySelector('[data-repository-picker] input')")
+    check(js("window.repoFixture.creations.length === 0 && document.querySelectorAll('[role=dialog] [data-repository-row]').length === 1"),
+          f"{where}: picker Mod+Enter selects the repository without creating a to-do")
     js("document.querySelector('[data-task-repository-editor] details summary').click(); true")
     js("""(() => { const s = document.querySelector('[role=dialog] select'); s.value = 'branch'; s.dispatchEvent(new Event('change', {bubbles: true})); })()""")
     eventually("document.querySelector('[role=dialog]').innerText.includes('Use a valid branch, tag, commit or Git ref.')")
@@ -478,10 +488,21 @@ def run_creation(theme, width, suffix=""):
         press("Add issue or PR")
         eventually("!!document.querySelector('[role=dialog] input[type=url]')")
         type_url(url)
-        press("Add issue or PR")
+        mod_enter("document.querySelector('[role=dialog] input[type=url]')")
         eventually("!document.querySelector('[role=dialog] input[type=url]')")
-        settle()
-    add_link("https://github.com/example/web/issues/7")
+        check(js("window.repoFixture.creations.length === 0"), f"{where}: link Mod+Enter stays inside the editor")
+
+    press("Add issue or PR")
+    eventually("!!document.querySelector('[role=dialog] input[type=url]')")
+    type_url("https://github.com/example/docs/issues/7")
+    mod_enter("document.querySelector('[role=dialog] input[type=url]')")
+    check(js("window.repoFixture.creations.length === 0 && !!document.querySelector('[role=dialog] [role=alert]')"),
+          f"{where}: invalid link Mod+Enter keeps the error and sends no creation")
+    shot(f"creation-keyboard-invalid-{width}-{theme}{suffix}")
+    type_url("HTTPS://github.com/Example/Web/issues/7")
+    mod_enter("document.querySelector('[role=dialog] input[type=url]')")
+    eventually("!document.querySelector('[role=dialog] input[type=url]')")
+    check(js("window.repoFixture.creations.length === 0"), f"{where}: correcting the link adds it without submitting")
     add_link("HTTP://github.com/Example/Web/issues/7")
     check(js("document.querySelectorAll('[role=dialog] [data-repository-link]').length") == 1,
           f"{where}: the alias of an existing link is deduplicated")
@@ -490,8 +511,12 @@ def run_creation(theme, width, suffix=""):
     check(js("document.querySelectorAll('[role=dialog] [data-repository-link]').length") == 2,
           f"{where}: a different issue is added")
     shot(f"creation-links-{width}-{theme}{suffix}")
-    js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create' && b.type === 'submit').click(); true")
+    if width > 600:
+        mod_enter("document.querySelector('[role=dialog] textarea')")
+    else:
+        js("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === 'Create' && b.type === 'submit').click(); true")
     eventually("!!window.repoFixture.creation")
+    check(js("window.repoFixture.creations.length") == 1, f"{where}: exactly one creation POST is sent")
     body = json.loads(js("JSON.stringify(window.repoFixture.creation)"))
     check(body["title"] == "Pack", f"{where}: the corrected title is sent")
     bindings = body["repository_bindings"]

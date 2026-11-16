@@ -156,6 +156,54 @@ describe("⌘↩ / Ctrl+↩ in the To-dos page's dialogs", () => {
     expect(posts("/todos/t1/decisions")).toEqual([{ question: "Which hotel?", choice: "The one by the station", reason: "Early train" }]);
   });
 
+  it.each([{ metaKey: true }, { ctrlKey: true }])("keeps repository picker and link Enter local (%j)", async (modifier) => {
+    await act(async () => button(t("todos.new_todo"))!.click());
+    await flush();
+    await write(dialog()!.querySelector<HTMLInputElement>("input[type=text]")!, "Pack");
+    await act(async () => button(t("task-repositories.title"))!.click());
+    await flush();
+    await act(async () => button(t("task-repositories.add"))!.click());
+    await flush();
+    const search = dialog()!.querySelector<HTMLInputElement>("[data-repository-picker] input")!;
+    await press(search, modifier);
+    expect(posts("/todos")).toEqual([]);
+    expect(dialog()!.querySelectorAll("[data-repository-row]")).toHaveLength(1);
+    await act(async () => button(t("task-repositories.add_link"))!.click());
+    const link = dialog()!.querySelector<HTMLInputElement>("input[type=url]")!;
+    await write(link, "https://github.com/example/docs/issues/7");
+    await press(link, modifier);
+    expect(posts("/todos")).toEqual([]);
+    expect(dialog()!.textContent).toContain(t("task-repositories.link_invalid"));
+    await write(link, "HTTPS://github.com/Example/Web/issues/7");
+    await press(link, modifier);
+    expect(posts("/todos")).toEqual([]);
+    expect(dialog()!.querySelectorAll("[data-repository-link]")).toHaveLength(1);
+    await press(dialog()!.querySelector("textarea")!, modifier);
+    expect(posts("/todos")).toMatchObject([{
+      title: "Pack",
+      repository_bindings: { repositories: [{ repo_id: "web", links: [{ url: "https://github.com/example/web/issues/7" }] }] },
+    }]);
+    expect(posts("/todos")).toHaveLength(1);
+  });
+
+  it("admits only one creation when submit events arrive before the pending render", async () => {
+    await act(async () => button(t("todos.new_todo"))!.click());
+    await flush();
+    await write(dialog()!.querySelector<HTMLInputElement>("input[type=text]")!, "Pack");
+    await act(async () => button(t("task-repositories.title"))!.click());
+    await flush();
+    await act(async () => button(t("task-repositories.add"))!.click());
+    await flush();
+    await act(async () => dialog()!.querySelector<HTMLElement>('[role="option"]')!.click());
+    const form = dialog()!.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(posts("/todos")).toHaveLength(1);
+  });
+
   it("hands the to-do to a new agent from what to tell it", async () => {
     await act(async () => button(t("todos.hand_over"))!.click());
     await flush();

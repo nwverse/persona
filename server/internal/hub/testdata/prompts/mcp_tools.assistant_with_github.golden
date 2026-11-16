@@ -2710,7 +2710,7 @@
   },
   {
     "name": "todo_repositories_set",
-    "description": "Atomically replace using revisions from todo_repositories_get/repositories_list. [] removes only metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Use {url} or {kind,number}; omitted/empty titles keep. Conflict: reread/reconcile. No files, progress or completion changes.",
+    "description": "Replace atomically using revisions from todo_repositories_get/repositories_list. [] removes metadata. Frozen source snapshots: remove/reselect to adopt catalog identity changes. Editable after execution. Omit links to keep; [] clears. Omitted/empty titles keep. Reread/reconcile conflicts. No files, progress or completion changes.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2750,7 +2750,6 @@
                 "type": "object",
                 "properties": {
                   "kind": {
-                    "type": "string",
                     "enum": [
                       "default",
                       "branch",
@@ -2768,30 +2767,15 @@
                 "required": [
                   "kind"
                 ],
-                "anyOf": [
+                "oneOf": [
                   {
                     "properties": {
                       "kind": {
                         "const": "default"
                       }
-                    },
-                    "not": {
-                      "required": [
-                        "value"
-                      ]
                     }
                   },
                   {
-                    "properties": {
-                      "kind": {
-                        "enum": [
-                          "branch",
-                          "tag",
-                          "commit",
-                          "ref"
-                        ]
-                      }
-                    },
                     "required": [
                       "value"
                     ]
@@ -2804,10 +2788,10 @@
                   "type": "object",
                   "properties": {
                     "url": {
-                      "type": "string"
+                      "type": "string",
+                      "minLength": 1
                     },
                     "kind": {
-                      "type": "string",
                       "enum": [
                         "issue",
                         "pull_request"
@@ -2819,11 +2803,43 @@
                     },
                     "title": {
                       "type": "string",
-                      "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+                      "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
                       "maxLength": 1024
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "oneOf": [
+                    {
+                      "required": [
+                        "url"
+                      ],
+                      "not": {
+                        "anyOf": [
+                          {
+                            "required": [
+                              "kind"
+                            ]
+                          },
+                          {
+                            "required": [
+                              "number"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "required": [
+                        "kind",
+                        "number"
+                      ],
+                      "not": {
+                        "required": [
+                          "url"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 "maxItems": 50
               }
@@ -2837,7 +2853,7 @@
   },
   {
     "name": "todo_repository_links_set",
-    "description": "Replace repo_id links at the todo_repositories_get revision; URLs must match its saved identity. Use {url} or {kind,number}. [] clears; omitted/empty titles keep. Conflict: reread/reconcile. No files, progress or completion changes.",
+    "description": "Set saved-source links. [] clears; absent/empty titles keep. Reread conflicts. Metadata only.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2864,10 +2880,10 @@
             "type": "object",
             "properties": {
               "url": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               },
               "kind": {
-                "type": "string",
                 "enum": [
                   "issue",
                   "pull_request"
@@ -2879,11 +2895,43 @@
               },
               "title": {
                 "type": "string",
-                "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+                "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
                 "maxLength": 1024
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "required": [
+                  "url"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "kind"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "number"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "kind",
+                  "number"
+                ],
+                "not": {
+                  "required": [
+                    "url"
+                  ]
+                }
+              }
+            ]
           }
         }
       },
@@ -3019,7 +3067,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Record requested/agreed work or reminders immediately, without confirmation; agents execute via task_plan. Open title/due duplicates return the existing to-do but refuse bindings: use todo_repositories_get/set. Short action title in the user's language; details in notes. In leader chats: record that direction's work; task_plan(todo_id) dispatches, todo_complete finishes unassigned work. Optional bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.",
+    "description": "Record requested/agreed work or reminders immediately, without confirmation; execute via task_plan. Open title/due duplicates return existing to-dos but refuse bindings: use todo_repositories_get/set. Short title in the user's language; details in notes. In leader chats: record that direction's work; task_plan dispatches, todo_complete finishes unassigned work. Bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3093,7 +3141,6 @@
                     "type": "object",
                     "properties": {
                       "kind": {
-                        "type": "string",
                         "enum": [
                           "default",
                           "branch",
@@ -3111,30 +3158,15 @@
                     "required": [
                       "kind"
                     ],
-                    "anyOf": [
+                    "oneOf": [
                       {
                         "properties": {
                           "kind": {
                             "const": "default"
                           }
-                        },
-                        "not": {
-                          "required": [
-                            "value"
-                          ]
                         }
                       },
                       {
-                        "properties": {
-                          "kind": {
-                            "enum": [
-                              "branch",
-                              "tag",
-                              "commit",
-                              "ref"
-                            ]
-                          }
-                        },
                         "required": [
                           "value"
                         ]
@@ -3147,10 +3179,10 @@
                       "type": "object",
                       "properties": {
                         "url": {
-                          "type": "string"
+                          "type": "string",
+                          "minLength": 1
                         },
                         "kind": {
-                          "type": "string",
                           "enum": [
                             "issue",
                             "pull_request"
@@ -3162,11 +3194,43 @@
                         },
                         "title": {
                           "type": "string",
-                          "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+                          "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
                           "maxLength": 1024
                         }
                       },
-                      "additionalProperties": false
+                      "additionalProperties": false,
+                      "oneOf": [
+                        {
+                          "required": [
+                            "url"
+                          ],
+                          "not": {
+                            "anyOf": [
+                              {
+                                "required": [
+                                  "kind"
+                                ]
+                              },
+                              {
+                                "required": [
+                                  "number"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "required": [
+                            "kind",
+                            "number"
+                          ],
+                          "not": {
+                            "required": [
+                              "url"
+                            ]
+                          }
+                        }
+                      ]
                     },
                     "maxItems": 50
                   }

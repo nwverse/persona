@@ -1,4 +1,4 @@
-Replace repo_id links at the todo_repositories_get revision; URLs must match its saved identity. Use {url} or {kind,number}. [] clears; omitted/empty titles keep. Conflict: reread/reconcile. No files, progress or completion changes.
+Set saved-source links. [] clears; absent/empty titles keep. Reread conflicts. Metadata only.
 
 ```json
 {
@@ -27,10 +27,10 @@ Replace repo_id links at the todo_repositories_get revision; URLs must match its
         "type": "object",
         "properties": {
           "url": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "kind": {
-            "type": "string",
             "enum": [
               "issue",
               "pull_request"
@@ -42,11 +42,43 @@ Replace repo_id links at the todo_repositories_get revision; URLs must match its
           },
           "title": {
             "type": "string",
-            "description": "Full plain source title; ≤1,024 UTF-8 bytes after trimming.",
+            "description": "Plain source title; trim; ≤1024 UTF-8 bytes.",
             "maxLength": 1024
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "url"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "kind"
+                  ]
+                },
+                {
+                  "required": [
+                    "number"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "kind",
+              "number"
+            ],
+            "not": {
+              "required": [
+                "url"
+              ]
+            }
+          }
+        ]
       }
     }
   },
