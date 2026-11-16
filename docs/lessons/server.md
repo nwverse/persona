@@ -1930,6 +1930,8 @@ Compare the original CSV decimal with the exact decimal written by the 15-signif
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
 
+Cached spreadsheet formula ranges can expand millions of absent cells from a tiny input. Bound both each range and the aggregate work across a workbook, check coordinates before arithmetic, and leave the formula uncached for Excel to recalculate when the budget is exceeded. Test the generated file and normal aggregate results as well as the bound.
+
 ## Decimal rounding scales can overflow before the result does (#1335)
 
 `ROUND` can have a finite result even when its power of ten or scaled intermediate overflows. Bound places by the float64 range, split large positive scales for tiny inputs, and retain numbers whose rounding place is already below their precision. Only a genuinely overflowing rounded result becomes `#NUM!`. Test emitted XLSX caches, including subnormal values, large finite results, 15-digit ties and `IFERROR`.

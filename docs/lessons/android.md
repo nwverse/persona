@@ -36,6 +36,22 @@ these races: use real JNI with independently controlled worker completion, frame
 
 An intermittent test is not verified by repeatedly running only its own class. In the hand-off recording tests, background work wrote the reply journal on `Dispatchers.IO` while the test deleted its directory, and the race appeared only under whole-module concurrency; `advanceUntilIdle()` drains the test scheduler but not those IO threads, so `cancelAndJoin()` the repository's scope before cleanup and run the whole module.
 
+## A Robolectric FileProvider keeps the cache directory of the test that first used it (#9365)
+
+`FileProvider` takes the folders it serves the first time it is asked and keeps them for the life of the instance (`mLocalPathStrategy`); the
+static `sCache` only feeds that first binding and `getUriForFile`. Robolectric creates the provider when something first asks the content
+resolver for its authority, and forgets it after each test. A job an earlier test left on `Dispatchers.IO` can be that first asker once its test
+is over: when `NewAgentAttachmentsShotsTest`'s trip test ends, the photo's thumbnail is still decoding inside `FileProvider.getType` (every run), and
+`ImageDecoder` asks the content resolver again when its first open fails (a provider that emptied the registry and threw `FileNotFoundException` found a
+new `FileProvider` registered afterwards). A provider bound to another test's cache directory deletes nothing: `delete` returns 0, the page's `runCatching`
+hides it, and a cancelled camera's file stays. No wait helps: with such a provider registered by hand, the folder was still full after a 3 s `waitUntil`.
+
+Emptying `sCache` in `@Before` is not enough. Also register the manifest's provider there (`Robolectric.buildContentProvider(FileProvider::class.java).create()`)
+and make one harmless call (a `delete` of a file that is not there) so it takes its folders under this test; it replaces whatever was registered, and
+nothing creates another one later. `Robolectric.setupContentProvider(FileProvider::class.java, authority)` is not that: it builds a bare `ProviderInfo`
+and `FileProvider.attachInfo` throws `Provider must grant uri permissions`. And before choosing a wait for a file a page deletes, read where it deletes:
+the camera's cancel callback does it at once on the main thread, while `discard` runs on `Dispatchers.IO`.
+
 ## Selecting a message's words in place: what `SelectionContainer` leaves to you (#4210 T5)
 
 `rememberSelectionState()` and `SelectionContainer(state, …)` are public in Compose Foundation 1.12: `selectAll()`, `clear()`
