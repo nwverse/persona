@@ -624,6 +624,10 @@ func (d *Devices) fetchPackage(ctx context.Context, p nodePackage) (string, erro
 		if errors.As(err, &away) {
 			return "", i18n.Err("devices-deploy.package_unreachable", i18n.Args{"os": p.goos, "arch": p.arch, "err": redacted(err, p.base).Error()})
 		}
+		var moved *update.MovedError
+		if errors.As(err, &moved) {
+			return "", i18n.Err("devices-deploy.package_moved", i18n.Args{"os": p.goos, "arch": p.arch, "version": moved.Now.Manifest.Version})
+		}
 		return "", i18n.Err("devices-deploy.package_bad", i18n.Args{"os": p.goos, "arch": p.arch, "err": redacted(err, p.base).Error()})
 	}
 	return bin, nil
@@ -708,8 +712,9 @@ func (d *Devices) downloadPackage(ctx context.Context, p nodePackage, bin, entry
 	defer cancel()
 	got, err := update.Download(ctx, client, p.base+"/"+url.PathEscape(p.dir), p.file, stage) // size, sha256, binary_sha256
 	if p.flat && update.IsNotFound(err) {
-		// No dl/<version>/ there (a GitHub release base): the file beside latest.json, checked against the same manifest.
-		got, err = update.Download(ctx, client, p.base, p.file, stage)
+		// No dl/<version>/ there (a GitHub release base): the release's own tag on GitHub, else the file beside
+		// latest.json, checked against the same manifest; a release published since the lookup is said as such (#9263).
+		got, err = update.DownloadRelease(ctx, client, p.base, &update.Manifest{Version: p.Version, Build: p.build}, p.file, stage)
 	}
 	if err != nil {
 		var local *fs.PathError

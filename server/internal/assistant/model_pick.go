@@ -206,6 +206,19 @@ func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPic
 	return s.applyPickedModel(ctx, p)
 }
 
+// relayOnPick puts conversation sid's pick into params, a message the hub relays to it (supervision, notices, another
+// conversation's): it runs on the pick like one the user types, so the model the apps show is the next one's. A pick
+// that can't run here leaves the message on what the conversation ran last, saying why in the log; the user's own
+// messages are the ones refused with the reason (sendOnPick).
+func (s *Service) relayOnPick(ctx context.Context, machine, sid string, params map[string]any, pick modelPick) {
+	p := maps.Clone(params)
+	if err := s.sendOnPick(ctx, machine, sid, p, pick, s.lang(ctx)); err != nil {
+		s.logf("[%s] %s: its pick can't run a relayed message: %v; it keeps what it ran last", machine, short(sid), err)
+		return
+	}
+	maps.Copy(params, p)
+}
+
 // pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it
 // through POST …/modes (#2416), and the next message would otherwise put the pick's back. A conversation without a
 // pick keeps its modes on the node, so they change nothing here.

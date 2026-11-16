@@ -378,7 +378,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 	for _, failure := range []string{"", "automatic", "build", "backup", "adopt", "preimage", "partial", "restore"} {
 		t.Run(failure, func(t *testing.T) {
 			p := newPublisher(t, "unused", 202611021700)
-			h, _, target, execs := updatingHub(t, p, "release")
+			h, machine, target, execs := updatingHub(t, p, "release")
+			machine.info.OS, machine.info.Arch = "plan9", "arm"
+			h.cfg.Machines = append(h.cfg.Machines, machine.cfg)
 			u := h.upd
 			u.client = newUpdater(h).client
 			nodes := filepath.Join(t.TempDir(), "nodes")
@@ -415,12 +417,17 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				case "resolve":
 					response = update.DevelopmentCandidate{Branch: "main", Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-13T10:00:00Z"}
 				case "build":
-					if got := input["platforms"].([]string); !slices.Equal(got, []string{runtime.GOOS + "-" + runtime.GOARCH}) {
+					wantPlatforms := []string{runtime.GOOS + "-" + runtime.GOARCH, "plan9-arm"}
+					slices.Sort(wantPlatforms)
+					if got := input["platforms"].([]string); !slices.Equal(got, wantPlatforms) {
 						t.Fatalf("unexpected build platforms: %v", got)
 					}
 					artifacts := t.TempDir()
 					script := []byte(fmt.Sprintf("#!/bin/sh\necho %s\necho 'channel release, build %d'\n", input["version"], input["build"]))
 					os.WriteFile(filepath.Join(artifacts, "personad-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
+					// The prepared feed can include another registered computer's platform.
+					// It must come from this build even when fleet auto-update is off.
+					os.WriteFile(filepath.Join(artifacts, "personad-plan9-arm.gz"), gz([]byte("development node")), 0600)
 					for _, name := range update.ProgramNames {
 						os.WriteFile(filepath.Join(artifacts, name+"-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
 					}
@@ -531,6 +538,9 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			u.confirm(context.Background(), pending)
 			if _, err := os.Stat(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
 				t.Fatal("manual node package missing with automatic fleet updates off", err)
+			}
+			if data, err := os.ReadFile(filepath.Join(nodes, "personad-plan9-arm")); err != nil || string(data) != "development node" {
+				t.Fatal("another platform did not use the prepared development feed", err)
 			}
 			if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("unrebuilt package would claim the new Hub version", err)

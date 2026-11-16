@@ -24,6 +24,7 @@
   "why_bad_source": "hub.json 里的 update.url 用不了：{error}",
   "why_dev": "开发版（{version}）",
   "err_no_binary": "这个版本没有 {platform} 的二进制",
+  "err_release_moved": "下载 {version} 期间发布了新版本 {newer}，这次没有装。再点「更新」就会装它",
   "busy_redeploying": "正在重新部署",
   "err_no_image": "不知道这个 hub 是哪个镜像：compose 没把 PERSONA_IMAGE 传进容器",
   "image_private": "查不了新镜像：{error}。在 .env 里设 PERSONA_REGISTRY_TOKEN（能读这个镜像的 token），或者把镜像改成公开",

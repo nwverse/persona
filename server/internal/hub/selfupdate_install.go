@@ -159,16 +159,12 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		return
 	}
 	u.set("downloading", "hub", "")
-	source := u.h.updateURL()
-	if r.Source != "" {
-		source = r.Source
-	}
-	bin, err := update.Download(ctx, u.client, source, file, staged)
+	bin, err := u.download(ctx, m, file, staged, r.Source)
 	if err != nil {
 		fail(err)
 		return
 	}
-	nodes, err := u.stageNodesFrom(ctx, m, staged, bin, source, r.Development != nil)
+	nodes, err := u.stageNodesFrom(ctx, m, staged, bin, r.Source, r.Development != nil)
 	if err != nil {
 		fail(err)
 		return
@@ -187,7 +183,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 			continue
 		}
 		u.set("downloading", name, "")
-		pb, err := update.Download(ctx, u.client, source, f, filepath.Join(staged, "programs"))
+		pb, err := u.download(ctx, m, f, filepath.Join(staged, "programs"), r.Source)
 		if err != nil {
 			fail(err)
 			return
@@ -360,6 +356,32 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		}
 		fail(err)
 	}
+}
+
+// download fetches f of release m, the one the update installs, into dir: from the release's own address where the
+// update source has one, so a release published since the check cannot serve its files in m's place (#9263). When
+// the source moved on to another release all the same (update.MovedError), the hub offers that one from now on, as a
+// check would, and the update fails saying so rather than that the download did not match.
+// localSource names the prepared artifacts of a development build or retained backup. Those files are already
+// pinned to the candidate; never replace them or its offer with a release from the configured moving source.
+func (u *updater) download(ctx context.Context, m *update.Manifest, f update.File, dir, localSource string) (string, error) {
+	if localSource != "" {
+		return update.Download(ctx, u.client, localSource, f, dir)
+	}
+	src := u.h.updateSource()
+	bin, err := update.DownloadRelease(ctx, u.client, src.url, m, f, dir)
+	var moved *update.MovedError
+	if !errors.As(err, &moved) {
+		return bin, err
+	}
+	u.h.logf("update: %v", err)
+	blocked := u.unreplaced(moved.Now.Manifest)
+	u.mu.Lock()
+	u.lastCheck = time.Now()
+	u.release, u.releaseRead, u.blocked = moved.Now, u.lastCheck, blocked
+	u.mu.Unlock()
+	u.noteBehind(src, moved.Now.Manifest)
+	return "", i18n.Err("hub-selfupdate.err_release_moved", i18n.Args{"version": m.Version, "newer": moved.Now.Manifest.Version})
 }
 
 // stagedDir is where the update to build downloads its files: the hub's binary, the node binaries in nodes/ and the

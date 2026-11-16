@@ -25,6 +25,7 @@
   "why_bad_source": "hub.json’s update.url can’t be used: {error}",
   "why_dev": "Development build ({version})",
   "err_no_binary": "This version has no binary for {platform}",
+  "err_release_moved": "A newer release, {newer}, was published while {version} was downloading. Update again to install it",
   "busy_redeploying": "Redeploying",
   "err_no_image": "Don’t know which image this hub is: compose didn’t pass PERSONA_IMAGE into the container",
   "image_private": "Couldn’t check for a new image: {error}. Set PERSONA_REGISTRY_TOKEN in .env (a token that can read this image), or make the image public",
