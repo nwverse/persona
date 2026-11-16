@@ -20373,6 +20373,10 @@ PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" e
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
+# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page. Empty until something is stored;
+# MOCK_NAVIGATION=off is a hub (or a default manager) from before, which answers 404 and keeps nothing.
+NAVIGATION = {}
+NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
 
 def personal_prefs():
     return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
@@ -26088,6 +26092,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             return self.send_json(personal_prefs())
+        if p == "/api/v1/navigation":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -26617,6 +26624,16 @@ class H(BaseHTTPRequestHandler):
                 try: c["send"]({"type": "agents"})
                 except Exception: pass
             return self.send_json({"ok": True, "hidden": op == "hide"})
+        if p == "/api/v1/navigation" and self.command == "PUT":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            start = json.loads(self.last_body or b"{}").get("start")
+            if not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)):
+                return self.send_json({"error": "start must be empty, a page's key or p:<extension>/<page>"}, 400)
+            NAVIGATION["start"] = start
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "navigation", "start": start})
+                except Exception: pass
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             if PERSONAL_PREF_FAIL["status"]:
@@ -28988,6 +29005,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")

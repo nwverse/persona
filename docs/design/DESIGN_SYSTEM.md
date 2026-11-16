@@ -2136,6 +2136,19 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - `HardwareShortcutHost` keeps the same parent and content call site in every window and provides its controller and `onKeyEvent` listener only in a large window. On entering a large window the shell host uses public focus state to request its own focus only when that window has none; Settings disables host auto-focus so dialog content keeps its field focus, and an already-large resize makes no focus request. Its listeners run after focused children, never in the preview phase. Shared text inputs, including `LargeWindowComposer`'s small field outside IME composition, handle only Ctrl+/ in their own preview phase because editors consume it before a parent listener; all other keys follow the ordinary path, so a focused terminal or IME keeps Escape, Tab, Shift+Tab, Ctrl+C, arrows and Ctrl+/. `JSheet`, `JDialog`, `FullTextReader`, `MessageSharePage` and `ChatSearchScreen` register their existing dismiss callbacks with stable tokens; Escape invokes only the last registration and consumes its key-up and repeats. With no registration it is a consumed no-op, never App exit, navigation pop or Agent interruption. `ExpandedComposer` and `JPointerMenu` retain their own Escape handling.
 - Ctrl+/ opens `KeyboardShortcutsSheet` as the top dialog. It lists only implemented send, newline, dismiss, help and existing terminal keys, with `en`, `zh-Hans` and `ja` resources and a single-line Close button. Its content scrolls at large text sizes. Opening it does not clear a draft, change a selected conversation or stop terminal work; closing the dialog returns to the previous window and its focused content. Compact windows add no help entry or new key handling.
 
+## A chosen page that is not there now (#9071)
+
+A setting that names something which can come and go (the web's **Open on**, Settings › General › Start page: a page of
+the sidebar, an extension's included) keeps the user's choice when its target goes away, and the product uses the default
+meanwhile, without a toast or a dialog at the moment it happens. The setting itself says so: its menu keeps the choice
+selected under a plain name (**A page that isn't available now**, not its id), and the row's line under the label, the
+`Row` hint in `--ink-3`, changes from what the setting does to why it falls back and until when (**…opens on the main chat
+until it's back**). Choosing anything else in the same menu replaces it. Reason: the target is usually away for a while
+(an extension turned off, another default assistant), so clearing the choice would undo the user's decision behind their
+back (principle 3), and a toast at every opening would be noise for something they can read where they would change it.
+The same rule as a chosen look whose extension is switched off ("the choice stays: the default only shows meanwhile",
+`server/internal/hub/looks.go` `looksGone`). It reuses Settings' `Row`, its hint line and a native select; no new component.
+
 ## Values a form fills in by itself (#4975)
 
 Where a form can work out a value from what the user already gave it (the web provider wizard's Claude Code tiers, read
@@ -2211,9 +2224,10 @@ meeting started with the live view, three pages that swipe and are named in a ro
 in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
 row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
 answers out loud or on screen; only while it is in), **Invite / Remove**, and **End** in the danger color, which asks
-first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
-with the speaker mid-meeting is an experiment behind a switch (B2). Ordinary recordings and #3746 meetings keep the live
-view, in the same dark full screen.
+first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as
+the meeting started, unless Settings › Meetings' **Experimental** switch, **Echo Cancellation with the Speaker** (off by
+default, B2), is on: then the speaker turned on mid-meeting turns it on to the end, and the microphone stops for a
+moment. Ordinary recordings and #3746 meetings keep the live view, in the same dark full screen.
 
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
@@ -2297,7 +2311,8 @@ page the user watches during the meeting is the page they keep writing in after 
   highlight is never announced. Reason: the owner sees what the meeting has come to at a glance, and the words as said
   stay one tap away on the Full Transcript page.
 - **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
-  meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
+  meeting"; none when the meeting began with Persona as the note-taker), and so is Persona invited or taken out while
+  it records ("Persona joined / left the meeting", where it happened); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
   **Persona** in `Theme.ai`, plain text in the room and Markdown in the follow-up; the end is a quiet "The meeting ended";
   the follow-up's seed is a collapsed capsule "The meeting's material", another context block one named "Context", its
