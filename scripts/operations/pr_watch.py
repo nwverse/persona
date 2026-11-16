@@ -816,8 +816,8 @@ class Watcher:
             raise WatchError("PR has an outstanding changes request")
         return True
 
-    def stale_progress_at(self, repo, number, pr, old, ignore_notice=None, include_push_timestamp=True):
-        """Use actual GitHub activity, never repeated polling or retry state."""
+    def stale_progress_at(self, repo, number, pr, old, ignore_notice=None):
+        """Use actual GitHub activity, never aggregate timestamps or polling."""
         comments = gh_json(["api", "repos/%s/issues/%s/comments" % (repo, number),
                             "--paginate", "--jq", ".[] | {createdAt: .created_at, body: .body}"], timeout=90)
         reviews = gh_json(["api", "repos/%s/pulls/%s/reviews" % (repo, number),
@@ -835,25 +835,13 @@ class Watcher:
             # other new contributor comments still keep the PR open.
             comments = [item for item in comments if item.get("body") != ignore_notice]
         progress = pr_watch_common.progress_timestamp(pr, comments, reviews, [])
-        if old.get("stale_updated_at"):
-            # Once a stale check has run, the previous substantive activity is
-            # the baseline. The watcher's own labels/comments cannot replace it.
-            progress = max(progress, float(old["stale_updated_at"]))
         if old.get("last_progress_at"):
             progress = max(progress, float(old["last_progress_at"]))
-        # GitHub's PR timestamp advances on a push, including an old commit,
-        # not just on commit creation. A marker alone never changes head, so
-        # the watcher's own stale bookkeeping cannot extend the interval.
-        # A replacement push may keep the same SHA. Compare the observed
-        # GitHub update timestamp, not a remembered head marker, so force-push
-        # and new head activity still reset the inactivity interval.
-        updated_at = pr_watch_common.github_time(pr["updatedAt"])
-        previous_update = float(old.get("stale_updated_at", old.get("last_progress_at", 0)))
-        if include_push_timestamp and updated_at > previous_update:
-            # updatedAt also advances when a replacement push keeps the same
-            # SHA. Our remembered baseline is the previous observation, not a
-            # commit creation date.
-            progress = max(progress, updated_at)
+        # Aggregate PR timestamps include our own reviews and labels. Only a
+        # changed head is independent evidence of new work. A same-head update
+        # without any contributor comment/review is not enough to close a PR.
+        if old.get("stale_head") != pr["headRefOid"]:
+            progress = max(progress, pr_watch_common.github_time(pr["updatedAt"]))
         return progress
 
     def mark_and_close_stale(self, config, pr, old):
@@ -889,8 +877,7 @@ class Watcher:
             self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
         marked = self.state.get(repo, number)
-        progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason,
-                                          include_push_timestamp=False)
+        progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
         # the marker write cannot make its own timestamp look like new work.

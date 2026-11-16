@@ -146,7 +146,29 @@ class RecoveryIntegrationTests(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertNotIn(str(stale), state.data["worktree_leases"])
 
-    def test_companion_lease_is_retained_until_its_directory_is_gone(self):
+    def test_companion_is_reclaimed_with_its_main_worktree(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        companion = Path(str(stale) + "-base-check")
+        companion.mkdir()
+        (companion / "evidence").write_text("full base checkout")
+        state = type("State", (), {"lock": __import__("threading").RLock(),
+                                   "data": {"worktree_leases": {
+                                       str(stale): {"active": False, "heartbeat": 1},
+                                       str(companion): {"active": False, "heartbeat": 1},
+                                   }}})()
+        removed = []
+        def remove(checkout, state_file, path):
+            removed.append(path)
+            (companion / "evidence").unlink(missing_ok=True)
+            path.rmdir()
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=remove):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 1)
+        self.assertEqual(removed, [companion, stale])
+        self.assertNotIn(str(companion), state.data["worktree_leases"])
+        self.assertNotIn(str(stale), state.data["worktree_leases"])
+
+    def test_companion_removal_failure_retains_the_lease(self):
         stale = self.worktrees / "persona-7-old"
         stale.mkdir()
         companion = Path(str(stale) + "-base-check")
@@ -157,8 +179,8 @@ class RecoveryIntegrationTests(unittest.TestCase):
                                        str(stale): {"active": False, "heartbeat": 1},
                                        str(companion): {"active": False, "heartbeat": 1},
                                    }}})()
-        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=lambda checkout, state_file, path: stale.rmdir()):
-            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 1)
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=pr_watch_common.WatchError("still registered")):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state, state=state), 0)
         self.assertIn(str(companion), state.data["worktree_leases"])
         self.assertTrue(companion.exists())
 

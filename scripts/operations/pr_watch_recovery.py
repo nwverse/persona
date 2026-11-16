@@ -44,13 +44,18 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         keep = {Path(path).resolve(strict=False) for path in protected}
         candidates = []
         for name, lease in leases.items():
+            if name.endswith("-base-check"):
+                continue
             try:
                 path = owned_path(state_file, name)
-                expired = time.time() - float(lease.get("heartbeat", 0)) >= older_than
+                companion = Path(str(path) + "-base-check")
+                companion_lease = leases.get(str(companion), {})
+                expired = all(time.time() - float(item.get("heartbeat", 0)) >= older_than
+                              for item in (lease, companion_lease))
             except (WatchError, TypeError, ValueError, OSError):
                 continue
-            if (path in keep or lease.get("active")
-                    or repo is not None and lease.get("repository") != repo
+            if (path in keep or companion in keep or lease.get("active") or companion_lease.get("active")
+                    or repo is not None and (lease.get("repository") != repo or companion_lease.get("repository") not in (None, repo))
                     or not expired):
                 continue
             candidates.append(path)
@@ -58,26 +63,29 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
             return 0
         removed = 0
         for path in candidates:
+            companion = Path(str(path) + "-base-check")
             lease = leases.get(str(path), {})
+            companion_lease = leases.get(str(companion), {})
             try:
-                expired = time.time() - float(lease.get("heartbeat", 0)) >= older_than
+                expired = all(time.time() - float(item.get("heartbeat", 0)) >= older_than
+                              for item in (lease, companion_lease))
             except (TypeError, ValueError, OSError):
                 continue
-            if (path in keep or lease.get("active")
-                    or repo is not None and lease.get("repository") != repo
+            if (path in keep or companion in keep or lease.get("active") or companion_lease.get("active")
+                    or repo is not None and (lease.get("repository") != repo or companion_lease.get("repository") not in (None, repo))
                     or not expired):
                 continue
             try:
-                existed = path.exists()
-                remove_worktree(checkout, state_file, path)
-                if existed and not path.exists():
-                    companion = Path(str(path) + "-base-check")
-                    if not companion.exists():
-                        leases.pop(str(path) + "-base-check", None)
-                    # A nonempty companion remains leased and recoverable; do
-                    # not unregister it merely because the main path vanished.
+                existed = path.exists() or companion.exists()
+                if companion.exists():
+                    remove_worktree(checkout, state_file, companion)
+                if path.exists():
+                    remove_worktree(checkout, state_file, path)
+                if not path.exists() and not companion.exists():
                     leases.pop(str(path), None)
-                    removed += 1
+                    leases.pop(str(companion), None)
+                    if existed:
+                        removed += 1
                     if state is not None:
                         try:
                             atomic_leases(state_file, current)
