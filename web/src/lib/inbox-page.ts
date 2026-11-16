@@ -58,11 +58,14 @@ export function canDraft(it: InboxItem): boolean {
   return !it.connector || !!it.connector.can_reply;
 }
 
-/** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the summary), so it is not drawn twice. */
+/** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the
+ *  summary, or its first words cut with an ellipsis when it is long), so it is not drawn twice. */
 export function repeatsSummary(it: InboxItem): boolean {
   const summary = it.summary?.trim();
   const text = it.preview?.trim();
-  return it.source === "assistant" && !!summary && !!text && (text === summary || text.startsWith(summary));
+  if (it.source !== "assistant" || !summary || !text) return false;
+  const head = text.endsWith("…") ? text.slice(0, -1) : text;
+  return text.startsWith(summary) || (!!head && summary.startsWith(head));
 }
 
 /** Where it came from, for the detail page's subtitle. */
