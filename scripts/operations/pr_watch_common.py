@@ -228,8 +228,21 @@ def gh_json(argv, timeout=90, environ=None, input_text=None):
 
 
 def pr_snapshot(repo, number, timeout=90, environ=None):
-    data = gh_json(["pr", "view", str(number), "--repo", repository(repo), "--json", PR_FIELDS],
-                   timeout=timeout, environ=environ)
+    argv = ["gh", "pr", "view", str(number), "--repo", repository(repo), "--json", PR_FIELDS]
+    result = run(argv, timeout=timeout, environ=environ)
+    if result.returncode:
+        if "Unknown JSON field: \"baseRefOid\"" not in result.stderr:
+            raise WatchError("gh failed (%s): %s" % (result.returncode, bounded(result.stderr or result.stdout, 1000)))
+        # Older gh releases reject an unknown optional field before returning
+        # the PR. Re-read the supported fields, then use the commits fallback.
+        legacy = PR_FIELDS.replace("baseRefOid,", "")
+        data = gh_json(["pr", "view", str(number), "--repo", repository(repo), "--json", legacy],
+                       timeout=timeout, environ=environ)
+    else:
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise WatchError("gh returned invalid PR snapshot JSON: %s" % error) from error
     if not isinstance(data, dict) or data.get("number") != number:
         raise WatchError("unexpected PR snapshot")
     for field in ("headRefOid", "baseRefOid"):

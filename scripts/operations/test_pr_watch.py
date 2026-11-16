@@ -92,10 +92,26 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(after["findings"], [finding])
         self.assertEqual(after["repair_rounds"], 2)
 
+    def test_snapshot_retries_supported_fields_when_gh_rejects_base_oid(self):
+        fields = pr()
+        fields.pop("baseRefOid")
+        with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 1, "", 'Unknown JSON field: "baseRefOid"')) as execute, \
+                patch.object(pr_watch_common, "gh_json", return_value=fields) as fallback, \
+                patch.object(pr_watch_common, "checked", return_value=SHA_BASE + "\n"):
+            result = pr_watch_common.pr_snapshot("example/one", 7)
+        self.assertEqual(result["baseRefOid"], SHA_BASE)
+        self.assertNotIn("baseRefOid", fallback.call_args.args[0][-1])
+        self.assertEqual(execute.call_count, 1)
+
+    def test_snapshot_rejects_other_gh_errors(self):
+        with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 1, "", "network unavailable")):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_common.pr_snapshot("example/one", 7)
+
     def test_snapshot_falls_back_to_current_base_when_gh_omits_base_oid(self):
         fields = pr()
         fields.pop("baseRefOid")
-        with patch.object(pr_watch_common, "gh_json", return_value=fields) as snapshot, \
+        with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(fields), "")) as snapshot, \
                 patch.object(pr_watch_common, "checked", return_value=SHA_BASE + "\n") as base:
             result = pr_watch_common.pr_snapshot("example/one", 7)
         self.assertEqual(result["baseRefOid"], SHA_BASE)
