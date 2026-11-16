@@ -8,6 +8,15 @@ enum ExactJSONNumbers {
         var scanner = Scanner(data)
         try scanner.value()
         try scanner.end()
+        // A lexeme accepted by the scanner can still be rounded when Foundation materializes NSNumber. Every integer
+        // token must survive that conversion exactly; decimals/exponents use the scanner's bounded grammar instead.
+        for token in scanner.integerTokens {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(token.utf8), options: [.fragmentsAllowed]),
+                  let number = object as? NSNumber,
+                  normalizedInteger(number.stringValue) == normalizedInteger(token) else {
+                throw ContinuityFixtureError.invalidFixture("JSON integer loses precision during decoding")
+            }
+        }
     }
 
     static func isValid(_ text: String) -> Bool {
@@ -15,7 +24,7 @@ enum ExactJSONNumbers {
     }
 
     static func normalizedInteger(_ text: String) -> String? {
-        guard text.first != "0", text.first != "-", text.allSatisfy(\.isNumber) else { return nil }
+        guard !text.isEmpty, text.first != "-", text.allSatisfy(\.isNumber) else { return nil }
         let digits = text.drop(while: { $0 == "0" })
         return digits.isEmpty ? "0" : String(digits)
     }
@@ -24,6 +33,7 @@ enum ExactJSONNumbers {
 private struct Scanner {
     let data: Data
     var index = 0
+    var integerTokens: [String] = []
 
     init(_ data: Data) { self.data = data }
 
@@ -113,6 +123,7 @@ private struct Scanner {
         let text = String(decoding: data[start..<index], as: UTF8.self)
         guard let mantissaEnd = text.firstIndex(where: { $0 == "." || $0 == "e" || $0 == "E" }) else {
             // Arbitrarily long integers remain comparable, not silently converted through a bounded numeric type.
+            integerTokens.append(text)
             return
         }
         let exponentText = text[text.index(after: mantissaEnd)...]

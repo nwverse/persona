@@ -46,7 +46,7 @@ public struct ContinuityBindingReplay: Sendable {
             case let .rejected(reason: reason): throw ContinuityFixtureError.rejected("\(name) initial: \(reason)")
             }
         }
-        try compare(initialPatch, list, try expectedInitial(initial, initialRequests), "\(name) initial", actions: .array(initialRequests))
+        try compare(initialPatch, list, try expectedInitial(initial), "\(name) initial", actions: .array(initialRequests))
         for (index, event) in `case`.events.enumerated() {
             let label = "\(name) step \(index)"
             let action: Action
@@ -129,16 +129,22 @@ public struct ContinuityBindingReplay: Sendable {
         return patch
     }
 
-    private static func expectedInitial(_ initial: ContinuityJSON, _ requests: [ContinuityJSON]) throws -> ContinuityJSON {
+    private static func expectedInitial(_ initial: ContinuityJSON) throws -> ContinuityJSON {
         guard let object = initial.object else { return initial }
         var expected = object
-        if !requests.isEmpty {
-            // OpenChat restores cached items, then a coverage gap starts a catch-up at the watermark. Cached items
-            // stay visible while the gap clears; no first-patch item is silently dropped.
+        let watermark = initial.number("covered") ?? 0
+        let firstSequence = initial["items"]?.array?.first?.number("seq") ?? 0
+        if firstSequence != watermark {
+            // The fixture's cache watermark, not the recorded request, determines the opening catch-up. An empty
+            // snapshot at zero has no fetch. A snapshot that starts away from its watermark requests that exact point.
             expected["covered"] = .number("0")
+            expected["actions"] = .array([.object([
+                "kind": .string("fetch_after"), "after_seq": .number(String(watermark)),
+            ])])
+        } else {
+            expected["actions"] = .array([])
         }
         expected["item_ids"] = .array(initial["items"]?.array?.map { $0["id"] ?? .null } ?? [])
-        expected["actions"] = .array(requests)
         return .object(expected)
     }
 
