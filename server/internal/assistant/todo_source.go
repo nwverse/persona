@@ -425,7 +425,6 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 		minutes = *st.SourceReportDelayMinutes
 	}
 	delay := time.Duration(minutes) * time.Minute
-	due := s.tposts.clock().Add(delay)
 	if delay > 0 {
 		key := "source_report_notice"
 		if fullReply {
@@ -435,7 +434,7 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 		if t.Source.Anchor != "" {
 			suffix = "_chat"
 		}
-		uuid := "sn:" + t.ID + due.UTC().Format(time.RFC3339Nano)
+		uuid := "sn:" + t.ID + s.tposts.clock().UTC().Format(time.RFC3339Nano)
 		args := i18n.Args{"minutes": minutes, "text": text}
 		if !s.tellOwner(ctx, t, st, key+suffix, args, uuid, fullReply) {
 			return
@@ -449,6 +448,7 @@ func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStat
 			}
 		}
 	}
+	due := s.tposts.clock().Add(delay)
 	planned, err := s.planSourceReport(ctx, t, text, due, fullReply)
 	if err != nil {
 		s.logf("todo %s: plan the report back: %v", t.ID, err)
