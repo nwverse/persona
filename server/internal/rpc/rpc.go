@@ -129,10 +129,7 @@ type Peer struct {
 	// a stalled relay WebSocket), and whoever waits behind it must still return on its ctx or on Close.
 	wsem         chan struct{}
 	nextID       atomic.Int64
-	readSeq      atomic.Uint64
-	lastRead     atomic.Int64 // unix nanoseconds; any positive raw read, including part of a JSON line
-	lastActivity atomic.Int64 // last input that was not a deadline error response
-	deadlineRead atomic.Uint64
+	pingActivity atomic.Int64 // unix nanoseconds; the latest input that can explain a late pong (PingActivity)
 	writeWaiters atomic.Int64
 	mu           sync.Mutex
 	pending      map[string]chan message
@@ -184,22 +181,19 @@ func New(prefix string, w io.Writer) *Peer {
 	return &Peer{prefix: prefix, w: w, pending: map[string]chan message{}, methods: map[string]string{}, running: map[string]context.CancelFunc{}, closed: make(chan struct{}), wsem: make(chan struct{}, 1)}
 }
 
-// PingActivity is when this connection last showed activity that can make a ping timeout ambiguous: any recent raw
-// input, except that a deadline error response does not prove anything beyond the relay having answered. Partial JSON
-// lines count. If ordinary traffic is already buffered behind a deadline in the same raw read, that read counts.
+// PingActivity is when this connection last received input that can explain a ping answered late (#8771): a reply to a
+// call from this side, on time or late, as the other side got that call; or the middle of a frame still arriving (a
+// read that continues a line begun before it and does not finish it), which a pong can be queued behind on the other
+// side's single writer. Only a frame already bigger than pingFrameMiddleBytes can be such a queue: small lines are
+// split across reads by the transport itself (streaming decompression, lost segments), so their pieces never count.
+// A frame that has arrived whole counts no more: a pong behind it comes next, and counts as a reply. Requests and
+// events the other side starts itself do not count: they keep coming when nothing sent from here gets through (a node
+// with running Agents sends them, its session list of hundreds of KiB among them, every few seconds over a link whose
+// other direction has stalled). Neither does a deadline error reply, which only says a relay answered its own timeout,
+// nor a read that begins or finishes a line: a busy peer's small lines are cut at arbitrary read boundaries too. A
+// line that cannot be decoded still counts, as nothing shows it is not a reply.
 func (p *Peer) PingActivity() time.Time {
-	if seq := p.readSeq.Load(); seq != 0 && seq == p.deadlineRead.Load() {
-		ns := p.lastActivity.Load()
-		if ns == 0 {
-			return time.Time{}
-		}
-		return time.Unix(0, ns)
-	}
-	return p.lastReadTime()
-}
-
-func (p *Peer) lastReadTime() time.Time {
-	ns := p.lastRead.Load()
+	ns := p.pingActivity.Load()
 	if ns == 0 {
 		return time.Time{}
 	}
@@ -209,16 +203,17 @@ func (p *Peer) lastReadTime() time.Time {
 // WriteWaiters is how many messages are queued for the writer, not counting the write that currently owns it.
 func (p *Peer) WriteWaiters() int64 { return p.writeWaiters.Load() }
 
+// readActivity notes when Serve's latest raw read came in: when the lines taken from it, or the middle of a frame it
+// carried, arrived.
 type readActivity struct {
-	peer *Peer
-	r    io.Reader
+	r  io.Reader
+	at int64 // unix nanoseconds
 }
 
-func (r readActivity) Read(b []byte) (int, error) {
+func (r *readActivity) Read(b []byte) (int, error) {
 	n, err := r.r.Read(b)
 	if n > 0 {
-		r.peer.readSeq.Add(1)
-		r.peer.lastRead.Store(time.Now().UnixNano())
+		r.at = time.Now().UnixNano()
 	}
 	return n, err
 }
@@ -227,17 +222,24 @@ func deadlineMessage(m message) bool {
 	return m.ID != "" && m.Error != nil && m.Error.Code == "" && m.Error.Message == context.DeadlineExceeded.Error()
 }
 
-// nonDeadlineTraffic reports traffic already buffered behind a deadline reply that cannot be another deadline reply.
-// Complete later lines are decoded exactly. An unfinished line counts only once its prefix identifies an event,
-// request or result; a partial error remains uncounted until its whole line proves that it is not another deadline.
-func nonDeadlineTraffic(b []byte) bool {
+// replyMessage: m answers a call (an id with a result or an error, and no method or event).
+func replyMessage(m message) bool {
+	return m.ID != "" && m.Method == "" && m.Event == "" && (m.Result != nil || m.Error != nil)
+}
+
+// bufferedActivity reports ping activity already read behind a deadline reply, so that it counts before the deadline
+// wakes its caller: a complete later line that is a reply but not another deadline, or that cannot be decoded; or an
+// unfinished line whose envelope names a result but no method or event (a line names those before params or a result).
+// A partial error remains uncounted until its whole line proves that it is not another deadline. Requests and events do
+// not count, whole or begun: a line begun in this read is not the middle of a frame (lineReader.middle).
+func bufferedActivity(b []byte) bool {
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
 		if i < 0 {
 			break
 		}
 		var m message
-		if err := json.Unmarshal(dropCR(b[:i]), &m); err != nil || !deadlineMessage(m) {
+		if err := json.Unmarshal(dropCR(b[:i]), &m); err != nil || replyMessage(m) && !deadlineMessage(m) {
 			return true
 		}
 		b = b[i+1:]
@@ -248,9 +250,17 @@ func nonDeadlineTraffic(b []byte) bool {
 	}
 	var m message
 	if err := json.Unmarshal(tail, &m); err == nil {
-		return !deadlineMessage(m)
+		return replyMessage(m) && !deadlineMessage(m)
 	}
-	return bytes.Contains(tail, []byte(`"event"`)) || bytes.Contains(tail, []byte(`"method"`)) || bytes.Contains(tail, []byte(`"result"`))
+	// A tail cut off inside params can contain a nested "result" key that belongs to a request or event, so only an
+	// envelope prefix with the reply's own id and result (and no method or event) counts. A piece that starts inside a
+	// params object carries no envelope id and stays unclassified rather than keeping a dead link alive.
+	head := tail
+	if i := bytes.Index(tail, []byte(`"params"`)); i >= 0 {
+		head = tail[:i]
+	}
+	return bytes.Contains(head, []byte(`"id"`)) && bytes.Contains(head, []byte(`"result"`)) &&
+		!bytes.Contains(head, []byte(`"method"`)) && !bytes.Contains(head, []byte(`"event"`))
 }
 
 // Serve reads messages until r fails; it returns the read error.
@@ -272,28 +282,34 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 	if p.Limits.FrameBytes > 0 {
 		maximum = p.Limits.FrameBytes
 	}
-	sc := newLineReader(readActivity{peer: p, r: r}, maximum) // raw reads count partial lines as activity too
+	act := &readActivity{r: r}
+	sc := newLineReader(act, maximum)
+	// lastReply is when the latest reply, or line that could be one (it did not decode), arrived. The middle of a frame
+	// counts only while that frame is still arriving (lineReader.middle); when the line is whole, activity goes back to
+	// the last reply, so a large request or event the other side started cannot keep clearing misses once it is
+	// through: a pong behind it would then be the next line and arrive as a reply.
+	var lastReply int64
+	sc.middle = func() { p.pingActivity.Store(act.at) }
 	for sc.Scan() {
-		readAt := p.lastReadTime()
+		readAt := act.at
 		var m message
 		// A line in a buffer of its own keeps its params or result where they are (ownedline.go); any other is in the
 		// reader's buffer, which the next line overwrites, so they are copied out of it.
 		if !sc.Owned() || !unmarshalOwned(sc.Bytes(), &m) {
 			if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
-				p.lastActivity.Store(readAt.UnixNano())
+				lastReply = readAt
+				p.pingActivity.Store(lastReply)
 				continue
 			}
 		}
-		if deadlineMessage(m) {
-			// Classify the rest of this raw read before waking the caller. Otherwise a deadline followed by an ordinary
-			// message in one packet could still close a live connection; deadline-only read-ahead must not keep it alive.
-			if nonDeadlineTraffic(sc.buffered()) {
-				p.lastActivity.Store(readAt.UnixNano())
-			}
-			p.deadlineRead.Store(p.readSeq.Load())
-		} else {
-			p.lastActivity.Store(readAt.UnixNano())
+		// A reply counts before it wakes its caller, and with no caller left too: one that comes after its ping gave
+		// up still shows that the ping got there. A deadline counts only for what the rest of its raw read holds,
+		// classified now: a deadline followed by a reply in one packet could otherwise still close a live connection,
+		// and deadline-only read-ahead must not keep it alive.
+		if replyMessage(m) && (!deadlineMessage(m) || bufferedActivity(sc.buffered())) {
+			lastReply = readAt
 		}
+		p.pingActivity.Store(lastReply)
 		switch {
 		case m.Method != "":
 			// Registered before the handler starts: a cancel right behind the request finds it.
