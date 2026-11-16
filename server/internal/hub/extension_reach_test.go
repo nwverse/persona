@@ -167,9 +167,43 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 	_ = h
 }
 
+func TestTodoRepositoryRoutesStayOnTheirManager(t *testing.T) {
+	h, url, a, b := reachHub(t)
+	h.noteTodoOwner("todo-a", assistantwire.AssistantID)
+	h.noteTodoOwner("todo-b", "m-0b0b0b")
+	for _, route := range []struct{ method, suffix, body string }{
+		{"GET", "/repositories", ""},
+		{"PUT", "/repositories", `{}`},
+		{"PUT", "/repositories/repo-b/links", `{}`},
+	} {
+		beforeA, beforeB := len(reached(a)), len(reached(b))
+		if code, out := extDo(t, url, route.method, "/api/v1/todos/todo-a"+route.suffix, route.body, nil); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
+			t.Errorf("%s %s: another manager's Todo: %d %s", route.method, route.suffix, code, clip(out, 200))
+		}
+		if got := len(reached(a)); got != beforeA {
+			t.Errorf("%s %s: A was reached: %v", route.method, route.suffix, reached(a)[beforeA:])
+		}
+		if got := len(reached(b)); got != beforeB {
+			t.Errorf("%s %s: a foreign Todo reached B: %v", route.method, route.suffix, reached(b)[beforeB:])
+		}
+
+		ownPath := "/api/v1/todos/todo-b" + route.suffix
+		if code, out := extDo(t, url, route.method, ownPath, route.body, nil); code != http.StatusOK {
+			t.Errorf("%s %s: own Todo: %d %s", route.method, route.suffix, code, clip(out, 200))
+		}
+		if got := len(reached(a)); got != beforeA {
+			t.Errorf("%s %s: own Todo reached A: %v", route.method, route.suffix, reached(a)[beforeA:])
+		}
+		calls := reached(b)[beforeB:]
+		if len(calls) != 1 || !strings.HasPrefix(calls[0], assistantwire.MethodHTTP+" ") || !strings.Contains(calls[0], ownPath) {
+			t.Errorf("%s %s: own Todo did not reach only B: %v", route.method, route.suffix, calls)
+		}
+	}
+}
+
 // Every route an extension's token can open (extwire.RouteScopes) is bounded to its manager one way or another; a new
 // one has to say how here. "path": its machine, session, card or conversation is in the path (extensionReach);
-// "manager": it goes to the extension's own manager (requestManager, byConversation, mergeList), which is held to its
+// "manager": it goes to the extension's own manager (requestManager, byConversation, byTodo, mergeList), which is held to its
 // own machines like any manager; "own": the hub's own answer, limited to the manager's things; "body": the route
 // checks what its body or query names itself.
 func TestEveryExtensionRouteIsBounded(t *testing.T) {
@@ -199,35 +233,47 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/agents":                                 "manager", "GET /api/v1/agents/sessions": "manager",
 		"GET /api/v1/agents/sessions/{id}": "manager", "GET /api/v1/agents/sessions/{id}/messages": "manager",
 		"GET /api/v1/agents/sessions/{id}/avatar": "manager",
+		"GET /api/v1/saved-agent-searches":        "manager",
 		"GET /api/v1/workspaces":                  "manager", "GET /api/v1/workspace-board": "manager",
-		"POST /api/v1/sessions":                                              "body", // machine_id, resume_session_id: its manager's (startSession)
-		"POST /api/v1/sessions/{mid}/{sid}/messages":                         "path",
-		"POST /api/v1/sessions/{mid}/{sid}/interrupt":                        "path",
-		"POST /api/v1/sessions/{mid}/{sid}/queue":                            "path",
-		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now":                   "path",
-		"POST /api/v1/sessions/{mid}/{sid}/seen":                             "path",
-		"POST /api/v1/sessions/{mid}/{sid}/rename":                           "path",
-		"POST /api/v1/sessions/{mid}/{sid}/modes":                            "path", // and only of a conversation its extension opened (extensionModeRefused)
-		"POST /api/v1/interactions/{id}/choose":                              "path",
-		"POST /api/v1/interactions/{id}/resolve":                             "path",
-		"POST /api/v1/interactions/{id}/reanswer":                            "path", // pending: its card; no longer pending: its manager
-		"POST /api/v1/agents/sessions/{id}/messages":                         "manager",
-		"POST /api/v1/agents/sessions/{id}/read":                             "manager",
-		"GET /api/v1/machines":                                               "own",
-		"GET /api/v1/machines/{id}/metrics":                                  "path",
-		"GET /api/v1/machines/{id}/usage":                                    "path",
-		"GET /api/v1/machines/{mid}/stat":                                    "path",
-		"POST /api/v1/notify":                                                "body", // machine_id, session_id: its manager's (ownsRef)
-		"GET /api/v1/assistant":                                              "manager",
-		"GET /api/v1/assistant/capabilities":                                 "manager",
-		"POST /api/v1/assistant/conversations":                               "manager",
-		"GET /api/v1/assistant/conversations/{id}/feed":                      "path",
-		"POST /api/v1/assistant/conversations/{id}/stop":                     "path",
-		"GET /api/v1/assistant/reporters":                                    "manager",
-		"GET /api/v1/assistant/leaders":                                      "manager",
-		"GET /api/v1/todos/{id}/repositories":                                "manager",
-		"PUT /api/v1/todos/{id}/repositories":                                "manager",
-		"PUT /api/v1/todos/{id}/repositories/{repo_id}/links":                "manager",
+		"GET /api/v1/workspace-board/activity": "manager", "GET /api/v1/workspace-board/activity/{revision}": "manager",
+		"POST /api/v1/sessions":                            "body", // machine_id, resume_session_id: its manager's (startSession)
+		"POST /api/v1/sessions/{mid}/{sid}/messages":       "path",
+		"POST /api/v1/sessions/{mid}/{sid}/interrupt":      "path",
+		"POST /api/v1/sessions/{mid}/{sid}/queue":          "path",
+		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now": "path",
+		"POST /api/v1/sessions/{mid}/{sid}/seen":           "path",
+		"POST /api/v1/sessions/{mid}/{sid}/rename":         "path",
+		"POST /api/v1/sessions/{mid}/{sid}/modes":          "path", // and only of a conversation its extension opened (extensionModeRefused)
+		"POST /api/v1/interactions/{id}/choose":            "path",
+		"POST /api/v1/interactions/{id}/resolve":           "path",
+		"POST /api/v1/interactions/{id}/reanswer":          "path", // pending: its card; no longer pending: its manager
+		"POST /api/v1/agents/sessions/{id}/messages":       "manager",
+		"POST /api/v1/agents/sessions/{id}/read":           "manager",
+		"GET /api/v1/machines":                             "own",
+		"GET /api/v1/machines/{id}/metrics":                "path",
+		"GET /api/v1/machines/{id}/usage":                  "path",
+		"GET /api/v1/machines/{mid}/stat":                  "path",
+		"POST /api/v1/notify":                              "body",    // machine_id, session_id: its manager's (ownsRef)
+		"GET /api/v1/push/intercepts":                      "manager", // only entries with its manager (lnRoutes, TestLnInterceptsHeldToManager)
+		"GET /api/v1/push/ln-mode":                         "own",     // the hub-wide switch state, no manager's data in the answer
+		"GET /api/v1/push/stats/daily":                     "manager", // only its manager's counts (lnRoutes, TestPushDailyStatsHeldToManager)
+		"GET /api/v1/assistant":                            "manager",
+		"GET /api/v1/assistant/capabilities":               "manager",
+		"POST /api/v1/assistant/conversations":             "manager",
+		"GET /api/v1/assistant/conversations/{id}/feed":    "path",
+		"POST /api/v1/assistant/conversations/{id}/stop":   "path",
+		"GET /api/v1/assistant/reporters":                  "manager",
+		"GET /api/v1/assistant/leaders":                    "manager",
+		"GET /api/v1/assistant/dispatch-policy":            "manager",
+		"PUT /api/v1/assistant/dispatch-policy":            "manager",
+		"GET /api/v1/assistant/worker-presets":             "manager",
+		"GET /api/v1/assistant/start-defaults":             "manager",
+		"PUT /api/v1/assistant/start-defaults":             "manager",
+		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
+		"GET /api/v1/todos/{id}/repositories":                 "manager", // associations stay with the todo's manager
+		"PUT /api/v1/todos/{id}/repositories":                 "manager",
+		"PUT /api/v1/todos/{id}/repositories/{repo_id}/links": "manager",
+		"POST /api/v1/todos":                                  "manager", "PATCH /api/v1/todos/{id}": "manager",
 		"GET /api/v1/todos/{id}/workspace-rules":                             "manager",
 		"PUT /api/v1/todos/{id}/workspace-rules":                             "manager",
 		"POST /api/v1/todos/{id}/workspace-naming/preview":                   "manager",
@@ -239,14 +285,12 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/todos/{id}/backend-workspace/prepare":                  "manager",
 		"POST /api/v1/todos/{id}/backend-workspace/cancel":                   "manager",
 		"POST /api/v1/todos/{id}/backend-workspace/cleanup":                  "manager",
-		"GET /api/v1/todos":                                                  "manager", "GET /api/v1/todos/{id}/decisions": "manager",
-		"POST /api/v1/todos": "manager", "PATCH /api/v1/todos/{id}": "manager",
-		"POST /api/v1/todos/{id}/decisions":                 "manager",
-		"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":         "path",
-		"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":      "path",
-		"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":    "path",
-		"DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}": "path",
-		"/api/v1/extensions/{id}/":                          "manager",
+		"POST /api/v1/todos/{id}/decisions":                                  "manager",
+		"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":                          "path",
+		"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":                       "path",
+		"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":                     "path",
+		"DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}":                  "path",
+		"/api/v1/extensions/{id}/":                                           "manager",
 	}
 	for route := range extwire.RouteScopes {
 		how, ok := bounded[route]

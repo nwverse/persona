@@ -238,8 +238,9 @@ func (s *Service) briefProgress(ctx context.Context, skip map[string]bool) ([]br
 	})
 	var out []briefProgress
 	total := 0
+	lists := machineSessions{}
 	for _, t := range open {
-		if st := taskState(t, s.taskAgents(ctx, t)); st != "working" && st != "waiting" { // under way either way (#3274)
+		if st := taskState(t, s.taskAgentsIn(ctx, t, lists)); st != "working" && st != "waiting" { // under way either way (#3274)
 			continue
 		}
 		total++
@@ -405,17 +406,17 @@ func (s *Service) briefAsked(f *briefFacts, shown []string) {
 // acceptTry cannot tell an old round's button from a current one by its message id. The errors are acceptTry's: a
 // decision whose recommendation did not reach the agent, or errAcceptStore (the asks cannot be read or the acceptance
 // saved), which is not "another round".
-func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (bool, error) {
+func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (acceptResult, error) {
 	at, err := time.Parse(timeKeyLayout, askedAt)
 	if err != nil {
-		return false, nil
+		return acceptResult{}, nil
 	}
 	a, err := s.acceptAskLocked(id)
 	if err != nil {
-		return false, err
+		return acceptResult{}, err
 	}
 	if a == nil || !a.AskedAt.Equal(at) {
-		return false, nil
+		return acceptResult{}, nil
 	}
 	return s.acceptTry(ctx, id, "")
 }

@@ -78,6 +78,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.ExpiresInHours -> -R.plurals.designsystem_core_expires_in_hours
     CoreText.Key.ExpiresInDays -> -R.plurals.designsystem_core_expires_in_days
     CoreText.Key.RequestFromSubagent -> R.string.designsystem_core_request_from_subagent
+    CoreText.Key.RequestFromSide -> R.string.designsystem_core_request_from_side
     CoreText.Key.RequestFromMcp -> R.string.designsystem_core_request_from_mcp
     CoreText.Key.RequestFromMcpConfigured -> R.string.designsystem_core_request_from_mcp_configured
     CoreText.Key.RequestFromTerminal -> R.string.designsystem_core_request_from_terminal
@@ -219,6 +220,9 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.SourceIdentityConflict -> R.string.designsystem_core_source_identity_conflict
     CoreText.Key.SourceClaudeBackground -> R.string.designsystem_core_source_claude_background
     CoreText.Key.SourceClaudeDesktop -> R.string.designsystem_core_source_claude_desktop
+    CoreText.Key.AgentsCodexApp -> R.string.designsystem_core_agents_codex_app
+    CoreText.Key.AgentsDesktopApp -> R.string.designsystem_core_agents_desktop_app
+    CoreText.Key.AgentsRecentlyUsed -> R.string.designsystem_core_agents_recently_used
     CoreText.Key.SourceClaudeTerminal -> R.string.designsystem_core_source_claude_terminal
     CoreText.Key.SourceNoSend -> R.string.designsystem_core_source_no_send
     CoreText.Key.ReadOnlyBecause -> R.string.designsystem_core_read_only_because

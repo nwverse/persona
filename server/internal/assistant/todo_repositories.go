@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -22,7 +23,7 @@ type todoRepositoryStore interface {
 	SetTodoRepositoryLinks(context.Context, string, string, repository.LinksInput) (repository.TaskSet, error)
 }
 
-var _ todoRepositoryStore = (*db.DB)(nil)
+var _ todoRepositoryStore = (*repositorystore.Store)(nil)
 
 func decodeTaskRepositoryInput(raw []byte, out any) error {
 	if len(raw) > 256<<10 {
@@ -99,10 +100,39 @@ func taskRepositoriesError(w http.ResponseWriter, err error) {
 	apierr.WriteCode(w, status, "task_repositories_"+code, i18n.Err("task-repositories."+code))
 }
 func (s *Service) readTodoRepositories(ctx context.Context, id string) (repository.TaskSet, error) {
+	_, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return repository.TaskSet{}, repository.Problem("store_unavailable")
+	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
+	}
+	return s.savedTodoRepositories(ctx, id)
+}
+
+// Meeting reads must not migrate metadata or acknowledge historical reports.
+// Sessionless Agent calls conservatively use the same machine-wide meeting check.
+func (s *Service) readTodoRepositoriesForTool(ctx context.Context, machine, session, id string) (repository.TaskSet, error) {
+	running, err := s.meetingTurnRunning(ctx, machine, session)
+	if session == "" {
+		running, err = s.meetingTurnAgentRunning(ctx, machine)
+	}
+	if err != nil {
+		return repository.TaskSet{}, err
+	}
+	if running || s.isRoom(session) {
+		return s.savedTodoRepositories(ctx, id)
+	}
+	return s.readTodoRepositories(ctx, id)
+}
+
+func (s *Service) savedTodoRepositories(ctx context.Context, id string) (repository.TaskSet, error) {
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
 	}
+	// Import may have committed a new revision. The first response must describe that
+	// committed state, just like later reads, rather than a pre-import snapshot.
 	set, err := st.TodoRepositories(ctx, id)
 	if err != nil {
 		return set, err
@@ -110,12 +140,15 @@ func (s *Service) readTodoRepositories(ctx context.Context, id string) (reposito
 	return s.describeTodoRepositories(ctx, set)
 }
 func (s *Service) describeTodoRepositories(ctx context.Context, set repository.TaskSet) (repository.TaskSet, error) {
+	set.Manager = s.managerIdentity()
+	if len(set.Repositories) == 0 {
+		return set, nil
+	}
 	doc, err := s.repositoryDocument(ctx)
 	if err != nil {
 		return set, err
 	}
 	catalog := doc.taskCatalog()
-	set.Manager = s.managerIdentity()
 	for i, row := range set.Repositories {
 		set.Repositories[i].CatalogState = repository.CatalogState(row, catalog)
 	}
@@ -125,6 +158,9 @@ func (s *Service) setTodoRepositories(ctx context.Context, id string, in reposit
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
+	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
 	}
 	set, err := st.SetTodoRepositories(ctx, id, in)
 	if err != nil {
@@ -138,6 +174,9 @@ func (s *Service) setTodoRepositoryLinks(ctx context.Context, id, repoID string,
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return repository.TaskSet{}, repository.Problem("store_unavailable")
+	}
+	if err := s.importLegacyTodoRepositoryLinks(ctx, id); err != nil {
+		return repository.TaskSet{}, err
 	}
 	set, err := st.SetTodoRepositoryLinks(ctx, id, repoID, in)
 	if err != nil {
@@ -205,7 +244,7 @@ func (s *Service) toolTodoRepositories(ctx context.Context, machine, self, name 
 		if err := decodeTaskRepositoryInput(args, &in); err != nil {
 			return "", err
 		}
-		set, err := s.readTodoRepositories(ctx, in.ID)
+		set, err := s.readTodoRepositoriesForTool(ctx, machine, self, in.ID)
 		if err != nil {
 			return "", err
 		}

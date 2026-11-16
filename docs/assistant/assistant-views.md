@@ -8,7 +8,7 @@ Confirmed product decision: cards, HTML cards included, are always on, with no s
 
 When comparisons, choices, input, or progress monitoring are needed, the assistant decides to draw a card. Cards and extensions share `schema/extension/view.schema.json`, generated types, and component renderers. One-off cards in the body are saved with the transcript; cards that keep updating are handed to the hub through tools for storage.
 
-Conclusions and key numbers still belong in the body. Every card requires a plain-text `fallback` for Watch, notifications, summaries, and unsupported clients. Legacy `persona-card` continues to convert to View through `sdk/go/wire/personacard.go`, without a separate rendering implementation.
+Conclusions and key numbers still belong in the body. Every card requires a plain-text `fallback` for Watch, notifications, summaries, and unsupported clients. Legacy `persona-card` continues to convert to View through `sdk/go/wire/personacard.go`, without a separate rendering implementation. Paseo's ```paseo-ui blocks reach the apps as `persona-view`, written by the hub (`docs/integrations/paseo.md`, "Mapping").
 
 ```persona-view
 {
@@ -158,6 +158,18 @@ Rolling upgrades: the hub still sends `persona_view: true` and `html_views: true
 Prompts explain component selection: options for decisions, table for comparisons, metric / chart for numbers, progress live cards for processes, forms for information gathering; if one sentence suffices, do not draw. Each card fits one phone screen, with details in named pages or the body; at most 3 cards, fallback required, conclusions still in the body. Decisions that require waiting for the user's answer and authorization for dangerous operations still use ask_user; cards cannot bypass tool approval.
 
 The admin UI describes client support and previews static examples. Previews do not connect to real chats or send actions; describe actual client support. The hello feature `assistant_views` means APIs and events are available; each client still chooses renderer or fallback according to its actual capabilities.
+
+## Sharing a reply as a picture
+
+What you see is what you share (#7261). Share as Image (iOS `MessageShareCard`, Android `MessageShareCard`) draws a reply's cards as the chat draws them, never their JSON:
+
+- **Split by the chat's fence rules**: the picture splits the message as the chat does (iOS `ShareCardParts` over `AssistantViewBlocks`, Android `ChatMarkdownCards` over `AssistantFences`). A closed ```persona-view among the first three, within the limits and with its `fallback`, is a card; anything else is its fallback, or the placeholder when it has none. A ```persona-card in the words is drawn as always, in words when the app cannot draw it, else the placeholder. An example inside another code block stays code.
+- **Drawn with nothing to use**: the same renderer, in a picture mode (iOS `extensionPicture`, Android `ViewBlocks.picture` without a conversation's card host). Buttons, fields, segmented choices and row controls are drawn as they look, so a decision card shows its choices; nothing on it answers. On iOS, where `ImageRenderer` draws no scroll views and no UIKit controls, progress bars, switches and segmented choices are shapes and the style's icons, and tables and Markdown wrap at the picture's width.
+- **Its fallback where it only draws live**: a card with an HTML page on its first page is its fallback on both. On iOS a card with pictures that load later (an `image`, a `grid` or `carousel`, a row's thumbnail or avatar picture) is its fallback too: the picture is drawn offscreen at once, and Android records the live card, so its pictures show once loaded.
+- **Never cut or widened by its source**: a card's JSON does not count as a wide code block (`ShareCardBlocks`). The 3,000-character cut never splits a card: iOS counts a card as long as its fallback and leaves out a card past the cut whole; Android cuts before a card the cut would split.
+- **Text stays text**: Copy and Share Text keep the message's text as it is.
+
+Tests: `ShareCardPartsTests` (iOS), `MessagePictureTest` and `AssistantCardsTest.whatAPictureDraws` (Android). The web has no share-as-image of a message.
 
 ## Examples and stages
 

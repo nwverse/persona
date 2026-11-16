@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 nonisolated struct ServerConfig: Codable, Hashable, Sendable {
     var url: URL
@@ -195,6 +196,9 @@ nonisolated struct APIClient: Sendable {
     var sessionLookup = false
     /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
     var sessionList = false
+    /// The hub's hello has `sessions_hierarchy`: windowed lists and counts send `roots=1`. Older hubs do not, so a
+    /// child stays a row of its own. A parent-session page is a separate request and never sends `roots`.
+    var sessionsHierarchy = false
     /// Execution surface is diagnostic only; authorization still uses the paired hub credential.
     var clientMetadata: RequestClientMetadata = .current
     /// Answers the demo config's requests (DemoHub registers it at launch); every endpoint goes through `request`.
@@ -579,7 +583,8 @@ nonisolated struct APIClient: Sendable {
 
     struct MachinesResponse: Decodable { var machines: [Machine] }
     /// A machine's launchers and what runs with none picked (`default`, #2455; nil from an older hub). With
-    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat.
+    /// `purpose=assistant` (#5033) it also carries `unavailable`: launchers and providers that can't run the main chat;
+    /// for New Agent (`agent.new`, #8109) the Persona-managed providers left out there by their own-service rule.
     struct LaunchersResponse: Decodable, Sendable {
         var launchers: [Launcher]
         var `default`: LauncherDefault?
@@ -668,6 +673,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(no_auto_lock: on)))
     }
 
+    /// x264 for this Mac's live screen (#8859; the plugin's screen_x264, asked on the phone first).
+    func setComputerScreenX264(machine: String, _ on: Bool) async throws -> MachineComputer {
+        struct Body: Encodable { var screen_x264: Bool }
+        return try JSON.decoder.decode(MachineComputer.self, from: await request("PUT", "/api/v1/machines/\(machine)/computer", body: Body(screen_x264: on)))
+    }
+
     /// The machine page's Install Cua Driver, Grant Access and Cancel: `install`, `grant`, `cancel`.
     func computerJob(machine: String, _ action: String) async throws -> MachineComputer {
         try JSON.decoder.decode(MachineComputer.self, from: await request("POST", "/api/v1/machines/\(machine)/computer/\(action)"))
@@ -715,10 +726,16 @@ nonisolated struct APIClient: Sendable {
         struct Body: Encodable { var enabled: Bool }
         return try JSON.decoder.decode(MachineIPhone.self, from: await request("PUT", "/api/v1/machines/\(machine)/iphone", body: Body(enabled: enabled), timeout: 60))
     }
-    /// Pair (an iPhone plugged into the computer), Forget, Cancel: `pair`, `forget`, `cancel`.
+    /// Pair (an iPhone plugged into the computer), Forget, Cancel, Install (the bridge), Prepare: `pair`, `forget`,
+    /// `cancel`, `install`, `prepare`.
     func iphoneJob(machine: String, _ action: String, device: String?) async throws -> MachineIPhone {
         struct Body: Encodable { var device: String? }
         return try JSON.decoder.decode(MachineIPhone.self, from: await request("POST", "/api/v1/machines/\(machine)/iphone/\(action)", body: Body(device: device), timeout: 60))
+    }
+    /// The guided setup's Try It (#8199): a screenshot of this iPhone and Weather opened, without the model.
+    func tryIPhone(device: String) async throws -> IPhoneTryResult {
+        struct Body: Encodable { var device: String }
+        return try JSON.decoder.decode(IPhoneTryResult.self, from: await request("POST", "/api/v1/iphone/try", body: Body(device: device), timeout: 120))
     }
     /// Every iPhone the computers reach, for this iPhone to find itself among them.
     func iphones() async throws -> IPhoneList {
@@ -762,8 +779,21 @@ nonisolated struct APIClient: Sendable {
     func stamp(_ s: Session) -> Session { var s = s; s.group = group; return s }
     func stamp(_ k: SessionKey) -> SessionKey { var k = k; k.group = group; return k }
     func launcherList(machine: String, purpose: String? = nil) async throws -> LaunchersResponse {
-        try await get("/api/v1/machines/\(machine)/launchers",
-                      query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try await client.get("/api/v1/machines/\(machine)/launchers",
+                                    query: purpose.map { ["purpose": $0] } ?? [:], as: LaunchersResponse.self)
+    }
+    /// Built-in catalog prices for the ids a turn used (`POST /api/v1/launchers/catalog`, #5426). An id the catalog
+    /// leaves out is absent; a known id with no price is present and nil. Empty in, empty out.
+    func catalogPrices(_ ids: [String]) async throws -> [String: ModelPrice?] {
+        if ids.isEmpty { return [:] }
+        struct Query: Encodable { var ids: [String] }
+        struct Row: Decodable { var id: String; var price: ModelPrice? }
+        struct List: Decodable { var models: [Row] }
+        let list: List = try await post("/api/v1/launchers/catalog", body: Query(ids: ids))
+        var out: [String: ModelPrice?] = [:]
+        for row in list.models where !row.id.isEmpty { out[row.id] = row.price }
+        return out
     }
     /// Keeps a pick (launcher, optional model and effort) for one of the assistant's conversations (#5033): its next
     /// messages run on it, on every device, until it is changed or follows the default again (`deleteConversationModel`).
@@ -777,10 +807,14 @@ nonisolated struct APIClient: Sendable {
         try await delete("/api/v1/assistant/conversations/\(conversation.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? conversation)/model")
     }
     /// The models the launcher's agent lists in its /model menu (New Agent's model picker). The node starts the CLI to
-    /// ask (a few seconds, kept 10 minutes); refresh asks it again.
-    func launcherModels(machine: String, launcher: String, refresh: Bool = false) async throws -> LauncherModels {
+    /// ask (a few seconds, kept 10 minutes); refresh asks it again. Assistant purpose asks the shell launcher's list,
+    /// even when the computer's Agent engine has a provider of the same name.
+    func launcherModels(machine: String, launcher: String, refresh: Bool = false, purpose: String? = nil) async throws -> LauncherModels {
         let path = "/api/v1/machines/\(machine)/launchers/\(launcher.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? launcher)/models"
-        return try JSON.decoder.decode(LauncherModels.self, from: await request("GET", path, query: refresh ? ["refresh": "1"] : [:], timeout: 75))
+        var query = refresh ? ["refresh": "1"] : [:]
+        if let purpose { query["purpose"] = purpose }
+        let client = purpose == "assistant" ? currentAssistantSettings() : self
+        return try JSON.decoder.decode(LauncherModels.self, from: await client.request("GET", path, query: query, timeout: 75))
     }
     /// Forgets one model ID typed for this launcher on this computer (#1644, the list's Forget): the hub stops listing
     /// it (`custom: true`). Forgetting one it doesn't remember is fine too.
@@ -843,7 +877,9 @@ nonisolated struct APIClient: Sendable {
         var query = ["range": range.rawValue]
         if let model { query["model"] = model }
         if let launcher { query["launcher"] = launcher.isEmpty ? "-" : launcher }
-        return try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        var usage = try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        usage.receivedAt = Date() // the step under way has run until now (#9205)
+        return usage
     }
     func sessions() async throws -> [Session] {
         let data = try await request("GET", "/api/v1/sessions")
@@ -934,6 +970,16 @@ nonisolated struct APIClient: Sendable {
         // Images come without their bytes (`image(ref:)` fetches one when it is shown); a page is still worth
         // decoding off the main thread, which called us.
         return try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(ItemsResponse.self, from: data) }.value
+    }
+
+    /// One range of a transcript (`from_seq` through `through_seq`), a single page. A child card reads the head for
+    /// its prompt and a short fold tail for its last tool. It does not walk the whole transcript.
+    func itemRange(_ k: SessionKey, from: Int, through: Int) async throws -> [Item] {
+        struct Range: Decodable, Sendable { var items: [Item] }
+        let data = try await request("GET", sp(k) + "/items",
+                                     query: ["from_seq": String(from), "through_seq": String(through), "lazy_images": "1"])
+        let page = try await Task.detached(priority: .userInitiated) { try JSON.decoder.decode(Range.self, from: data) }.value
+        return page.items
     }
 
     /// The work a fold stands for (`Item.fold`): its lines, a page (about 1000 items) at a time.
@@ -1228,11 +1274,14 @@ nonisolated struct APIClient: Sendable {
         var turns: Int
         var startedAt: Date?
         var lastActivity: Date?
+        /// Nobody gives this session's counts (#8261, `usage_unknown`: Paseo sends no usage for an agent that is not
+        /// Claude Code's): Session Info leaves out the tokens, compactions and turns rather than showing zeros.
+        var usageUnknown: Bool?
         enum CodingKeys: String, CodingKey {
             case cwd, model, launcher, version, compactions, turns, effort
             case sessionID = "session_id", transcriptPath = "transcript_path", gitBranch = "git_branch",
                  permissionMode = "permission_mode", contextTokens = "context_tokens", outputTokens = "output_tokens",
-                 startedAt = "started_at", lastActivity = "last_activity"
+                 startedAt = "started_at", lastActivity = "last_activity", usageUnknown = "usage_unknown"
         }
     }
     func sessionInfo(_ k: SessionKey) async throws -> SessionInfo { try await get(sp(k) + "/info") }
@@ -1313,6 +1362,9 @@ nonisolated struct APIClient: Sendable {
         var timezonePicked: Bool?
         /// The main conversation's session id (the Persona tab opens it); nil until there is one.
         var main: String?
+        /// The computer the hub actually routes the main conversation to. It can differ from `machine_id`, which is
+        /// only the default for new work; older hubs omit it and use `machine_id`.
+        var mainMachineID: String?
         /// Notify Main-Chat Tasks Only in the Main Chat (#1731): tasks the main conversation starts are quiet (`TodoItem.quiet`). The
         /// value in effect (on by default); nil from a hub without the setting, which hides the switch.
         var mainTasksQuiet: Bool?
@@ -1320,6 +1372,10 @@ nonisolated struct APIClient: Sendable {
         /// conversation, a scheduled task or a follow-up started into one line. The value in effect; nil from a hub
         /// without the setting, which hides the switch and folds as if on (`backgroundFolded`).
         var mainBackgroundFolded: Bool?
+        /// Show Scheduled Task Chats in the sidebar's Recent (#8324): the chats a scheduled task or the background
+        /// supervisor started are listed there too. The value in effect, one for all of the user's devices; nil from a
+        /// hub without the setting, which hides the switch and keeps them out of Recent, as before.
+        var recentTaskChats: Bool?
         /// The role a meeting recording starts with (#2981, docs/assistant/meeting-minutes.md「Attendance fields」): `off`,
         /// `listener` or `participant`; nil from a hub without attending.
         var meetingAttendanceDefault: String?
@@ -1334,6 +1390,8 @@ nonisolated struct APIClient: Sendable {
         /// Suggest the next message after replies in open chats (#4696). Off by default; nil from a hub without the
         /// setting, which hides the switch.
         var nextSuggestions: Bool?
+        /// Organize knowledge points by topic (#3783, docs/assistant/knowledge.md "Topics"): on by default, so nil reads as on.
+        var kbTopics: Bool?
         /// The background supervisor's session id once the hub has made it (read-only); nil until then and from an
         /// older hub.
         var backgroundSupervisor: String?
@@ -1371,14 +1429,14 @@ nonisolated struct APIClient: Sendable {
         var agentAutoNamingIntervalHours: Int?
         enum CodingKeys: String, CodingKey {
             case launcher, cwd, conversations, timezone, main, leaders, manager
-            case machineID = "machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
-            case mainBackgroundFolded = "main_background_folded"
+            case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
+            case mainBackgroundFolded = "main_background_folded", recentTaskChats = "recent_task_chats"
             case meetingAttendanceDefault = "meeting_attendance_default", timezonePicked = "timezone_picked"
             case mainSupervisesOwnTasks = "main_supervises_own_tasks", backgroundSupervisor = "background_supervisor"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
             case meetingTranscriptionReady = "meeting_transcription_ready"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
@@ -1393,8 +1451,17 @@ nonisolated struct APIClient: Sendable {
 
         /// Whether the main conversation folds its background rounds: on unless the hub says off (an older hub omits it).
         var backgroundFolded: Bool { mainBackgroundFolded ?? true }
+
+        /// The confirmed main conversation on its actual computer, not merely the default computer for new work.
+        func mainKey(group: String = "") -> SessionKey? {
+            guard let main, !main.isEmpty else { return nil }
+            let route = mainMachineID?.isEmpty == false ? mainMachineID : nil
+            return SessionKey(group: group, machineID: route ?? machineID, sessionID: main)
+        }
     }
-    func assistant() async throws -> AssistantState { owned(try await get("/api/v1/assistant")) }
+    /// Decoded off the main actor: it holds every conversation, and the app reads it again each time it comes back to
+    /// the front (#8324).
+    func assistant() async throws -> AssistantState { owned(try await getDecodedOffMain("/api/v1/assistant")) }
     /// A direction as `GET /api/v1/assistant/leaders` lists it (#3519, #3695): its leader conversation's id and the name
     /// the hub gives the direction (the name set, else its project's, else the title without its "MMDD | kind | " prefix).
     struct LeaderInfo: Codable, Sendable, Equatable {
@@ -1465,6 +1532,7 @@ nonisolated struct APIClient: Sendable {
         var notes: String?
         var mainTasksQuiet: Bool?
         var mainBackgroundFolded: Bool?
+        var recentTaskChats: Bool?
         var meetingAttendanceDefault: String?
         var mainSupervisesOwnTasks: Bool?
         /// Hub transcription's settings (phase 5); `[]` clears the glossary. `meeting_transcription_ready` is read-only.
@@ -1480,13 +1548,15 @@ nonisolated struct APIClient: Sendable {
         var agentAutoNaming: Bool?
         var agentAutoNamingMax: Int?
         var agentAutoNamingIntervalHours: Int?
+        var kbTopics: Bool?
         enum CodingKeys: String, CodingKey {
             case launcher, timezone, notes
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
+            case recentTaskChats = "recent_task_chats"
             case meetingTranscriptionDefault = "meeting_transcription_default", meetingGlossary = "meeting_glossary"
             case meetingTranscriptionExtension = "meeting_transcription_extension"
-            case nextSuggestions = "next_suggestions"
+            case nextSuggestions = "next_suggestions", kbTopics = "kb_topics"
             case startRequestedTasks = "start_requested_tasks", taskWorkspacePreference = "task_workspace_preference"
             case agentTasks = "agent_tasks", idleCloseHours = "idle_close_hours", archiveClosedDays = "archive_closed_days"
             case agentAutoNaming = "agent_auto_naming", agentAutoNamingMax = "agent_auto_naming_max"
@@ -1578,8 +1648,11 @@ nonisolated struct APIClient: Sendable {
         var lastStatus: String?   // of the last run: ok / failed / skipped
         var lastError: String?
         var nextRun: Date?
+        /// Read-only (#8045): the kinds of task this task's own runs start without the plan card. Only the owner adds to it,
+        /// on one of its runs' cards; the editor shows it and removes kinds (`revokeStartGrant`), and never sends it.
+        var startGrant: StartGrant?
         enum CodingKeys: String, CodingKey {
-            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox
+            case id, title, prompt, at, time, weekdays, enabled, launcher, effort, push, inbox, startGrant = "start_grant"
             case repeats = "repeat", everyMinutes = "every_minutes", machineID = "machine_id", sessionID = "session_id"
             case permissionMode = "permission_mode", createdBy = "created_by"
             case lastRun = "last_run", lastSessionID = "last_session_id", nextRun = "next_run"
@@ -1629,6 +1702,7 @@ nonisolated struct APIClient: Sendable {
             lastRun = date(.lastRun); lastSessionID = text(.lastSessionID); lastStatus = text(.lastStatus); lastError = text(.lastError)
             nextRun = date(.nextRun)
             runMachineID = text(.runMachineID); runSessionID = text(.runSessionID)
+            startGrant = (try? c.decodeIfPresent(StartGrant.self, forKey: .startGrant)) ?? nil
         }
         func encode(to e: Encoder) throws { // only what the user edits; "" = the default
             var c = e.container(keyedBy: CodingKeys.self)
@@ -1646,6 +1720,44 @@ nonisolated struct APIClient: Sendable {
             }
         }
     }
+    /// A scheduled task's own start grant (#8045): the kinds of task its runs start without the plan card, each a trust key
+    /// ("machine|folder|read" or "…|edit", as Auto-Start Tasks' kinds), read into `kinds` once, as it is decoded.
+    struct StartGrant: Decodable, Hashable, Sendable {
+        /// One kind as the page names it: the computer, the folder (it covers the folders under it), whether the tasks only
+        /// read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it whole as the folder.
+        struct Kind: Hashable, Sendable {
+            var key: String
+            var machine: String
+            var folder: String
+            var readonly: Bool
+
+            init(key: String) {
+                self.key = key
+                let parts = key.components(separatedBy: "|")
+                let mode = parts.count > 1 ? parts[parts.count - 1] : ""
+                readonly = mode == "read"
+                if parts.count == 3, mode == "read" || mode == "edit" {
+                    machine = parts[0]; folder = parts[1]
+                } else {
+                    machine = ""
+                    folder = mode == "read" || mode == "edit" ? parts.dropLast().joined(separator: "|") : key
+                }
+            }
+        }
+        var kinds: [Kind]
+        var grantedAt: Date?
+        enum CodingKeys: String, CodingKey { case kinds, grantedAt = "granted_at" }
+
+        init(keys: [String], grantedAt: Date? = nil) {
+            kinds = keys.filter { !$0.isEmpty }.map(Kind.init(key:))
+            self.grantedAt = grantedAt
+        }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            self.init(keys: (try? c.decodeIfPresent([String].self, forKey: .kinds)) ?? [],
+                      grantedAt: (try? c.decodeIfPresent(Date.self, forKey: .grantedAt)) ?? nil)
+        }
+    }
     struct TasksBody: Decodable { var tasks: [ScheduledTask] }
     struct TaskBody: Codable { var task: ScheduledTask }
     func scheduledTasks() async throws -> [ScheduledTask] { try await get("/api/v1/assistant/tasks", as: TasksBody.self).tasks }
@@ -1658,6 +1770,12 @@ nonisolated struct APIClient: Sendable {
         return try JSON.decoder.decode(TaskBody.self, from: data).task
     }
     func deleteTask(_ id: String) async throws { try await delete("/api/v1/assistant/tasks/\(id)") }
+    /// Stops one kind (a trust key) from starting without asking in task `id`'s runs (#8045); returns the task as the hub
+    /// then has it.
+    func revokeStartGrant(task id: String, kind: String) async throws -> ScheduledTask {
+        let data = try await request("DELETE", "/api/v1/assistant/tasks/\(TodosLogic.pathComponent(id))/start-grant", body: ["kind": kind])
+        return try JSON.decoder.decode(TaskBody.self, from: data).task
+    }
 
     /// A saved place (Settings › Assistant › Saved Places, #1598): what a reminder by place goes off at when the user says
     /// "home" or "the office". The hub keeps them; the assistant reads them (`list_places`).
@@ -1966,6 +2084,11 @@ nonisolated struct APIClient: Sendable {
         /// Why the relay gave no grant, in its words ("403 topic not served", a redirect, a network error): the hub
         /// says it beside this device in Settings › Devices and `hub doctor` (#5998).
         var relayError: String?
+        /// Urgent calls (docs/assistant/urgent-call.md): the PushKit token while calls are on, the relay's grant for it
+        /// (topic `<bundle id>.voip`) and why there is none. An older hub ignores them.
+        var voipToken: String?
+        var voipGrant: String?
+        var voipError: String?
         /// What this app understands beyond the first version's pushes: `withdraw`, a silent push naming the cards that
         /// are over, whose notifications it then removes (#4349). An older hub ignores it.
         var features: [String]?
@@ -1975,13 +2098,24 @@ nonisolated struct APIClient: Sendable {
             case name, kind, topic, locale, features
             case deviceID = "device_id", apnsToken = "apns_token", apnsEnv = "apns_env"
             case pushKey = "push_key", relayURL = "relay_url", relayGrant = "relay_grant", relayError = "relay_error"
+            case voipToken = "voip_token", voipGrant = "voip_grant", voipError = "voip_error"
         }
     }
     /// Registers this device's push token; the hub answers which way its pushes take (nil: an older hub, which does
     /// not say).
     func register(device: DeviceBody) async throws -> PushRoute? {
-        struct Answer: Decodable { var push: PushRoute? }
-        return try await post("/api/v1/devices", body: device, as: Answer.self).push
+        try await registerRoutes(device: device).push
+    }
+
+    /// What a registration answers: the way pushes reach the device, and the way an urgent call's ring does (nil: an
+    /// older hub, which does not say).
+    struct DeviceRoutes: Decodable, Sendable {
+        var push: PushRoute?
+        var call: PushRoute?
+    }
+
+    func registerRoutes(device: DeviceBody) async throws -> DeviceRoutes {
+        try await post("/api/v1/devices", body: device, as: DeviceRoutes.self)
     }
 
     /// The way a hub's pushes reach a device (docs/operations/push-relay.md "Which way a device is pushed").

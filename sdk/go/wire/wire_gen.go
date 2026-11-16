@@ -267,6 +267,7 @@ type Contributes struct {
 	Connectors      []ConnectorItem      `json:"connectors,omitempty"`
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Transcription   []NamedItem          `json:"transcription,omitempty"`
+	Speech          []NamedItem          `json:"speech,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
 	Iphone          []NamedItem          `json:"iphone,omitempty"`
@@ -301,7 +302,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -333,7 +334,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -629,7 +630,7 @@ type ConnectorItem struct {
 	SendsAsUser bool `json:"sends_as_user,omitempty"`
 }
 
-// NamedItem: A contribution with only an id and a name: voice, transcription, computer, browser.
+// NamedItem: A contribution with only an id and a name: voice, transcription, speech, computer, browser.
 type NamedItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
@@ -882,6 +883,26 @@ type AuthPrompt struct {
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
+// SettingsCheckParams: settings.check (manifest settings_check): the configuration and secrets as a change would
+// leave them, before the hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+type SettingsCheckParams struct {
+	// The whole configuration as it would be saved, the schema's defaults filled in.
+	Config  json.RawMessage   `json:"config"`
+	Secrets map[string]string `json:"secrets"`
+	// The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+	// permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+	// ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's ordinary
+	// proxy (an older hub sends none).
+	Proxy string `json:"proxy,omitempty"`
+}
+
+// SettingsCheckResult: settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every
+// secret out of it and cuts it to 300 characters).
+type SettingsCheckResult struct {
+	Ok    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
 // Values of HubRole.
 const (
 	HubRoleCenter = "center"
@@ -895,10 +916,11 @@ var HubRoles = []string{"center", "member"}
 const (
 	HubCapabilityInboxGroup      = "inbox_group"
 	HubCapabilityInboxGroupState = "inbox_group_state"
+	HubCapabilityToolImages      = "tool_images"
 )
 
 // HubCapabilities are the values of HubCapability, in order.
-var HubCapabilities = []string{"inbox_group", "inbox_group_state"}
+var HubCapabilities = []string{"inbox_group", "inbox_group_state", "tool_images"}
 
 // InitializeParams: what the hub sends first. The extension is under extension; hubs before the rename (#1844) send
 // it as plugin, newer hubs send both.
@@ -1541,9 +1563,9 @@ const (
 var Platforms = []string{"ios", "mac", "android", "web"}
 
 // NavIcon: the fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the
-// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's).
-// Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old
-// name).
+// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8
+// a section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin
+// is its old name).
 const (
 	NavIconPlugin      = "plugin"
 	NavIconChart       = "chart"
@@ -1650,6 +1672,14 @@ type Section struct {
 	Items  []Component `json:"items"`
 	More   *More       `json:"more,omitempty"`
 	Pane   string      `json:"pane,omitempty"`
+	Span   string      `json:"span,omitempty"`
+	// Drawn before the title.
+	Icon      string       `json:"icon,omitempty"`
+	IconColor string       `json:"icon_color,omitempty"`
+	Link      *SectionLink `json:"link,omitempty"`
+	// How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+	// screen and when absent. Other components keep the whole width.
+	Columns int `json:"columns,omitempty"`
 }
 
 // Component: one component of a view, told apart by type. A type an app does not know is skipped and the rest drawn.
@@ -1916,14 +1946,17 @@ type Tile struct {
 
 // Layout: stack: sections one under another. split: on a wide screen the side pane's sections in a column at the
 // start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that
-// opens as a sheet.
+// opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three
+// when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow
+// one a single column, as stack. An older app gets stack.
 const (
-	LayoutStack = "stack"
-	LayoutSplit = "split"
+	LayoutStack   = "stack"
+	LayoutSplit   = "split"
+	LayoutColumns = "columns"
 )
 
 // Layouts are the values of Layout, in order.
-var Layouts = []string{"stack", "split"}
+var Layouts = []string{"stack", "split", "columns"}
 
 // Pane: where a section of a split view goes.
 const (
@@ -1933,6 +1966,23 @@ const (
 
 // Panes are the values of Pane, in order.
 var Panes = []string{"main", "side"}
+
+// SectionSpan: how much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one
+// column. Other layouts ignore it.
+const (
+	SectionSpanFull = "full"
+)
+
+// SectionSpans are the values of SectionSpan, in order.
+var SectionSpans = []string{"full"}
+
+// SectionLink: A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls
+// ui.action with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as
+// the section's last row.
+type SectionLink struct {
+	Title  string `json:"title"`
+	Action Action `json:"action"`
+}
 
 // Values of FileStatus.
 const (
@@ -3365,11 +3415,27 @@ type ConnectorCallParams struct {
 // ConnectorCallResult: tools.call and actions.do.
 type ConnectorCallResult struct {
 	Text string `json:"text,omitempty"`
+	// tools.call only (actions.do and catalog.call ignore it): pictures for the model after the text, on a hub whose
+	// initialize lists the capability tool_images (an older hub ignores them; the text must stand on its own). At most
+	// 16, each a whole JPEG, PNG or WebP of at most 1 MiB and 2000 pixels a side, together at most 4 MiB and 8 million
+	// pixels; the hub leaves out any over a limit and says so after the text.
+	Images []ConnectorToolImage `json:"images,omitempty"`
 	// actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
 	// service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
 	// sent-as-user ledger row's message_ref; one longer than 200 characters is dropped (the row has none), not cut.
 	// Leave it out when there is none.
 	MessageRef string `json:"message_ref,omitempty"`
+}
+
+// ConnectorToolImage: one picture of a tools.call answer (ConnectorCallResult.images).
+type ConnectorToolImage struct {
+	// image/jpeg, image/png or image/webp: a hint, the hub reads the type from the bytes.
+	Mime string `json:"mime,omitempty"`
+	// The bytes, base64 (standard, with padding).
+	Data string `json:"data"`
+	// One short line for the model and for people, shown before the picture (a time in a video, a picture's place in a
+	// post); the hub keeps the first 200 characters of its first line.
+	Caption string `json:"caption,omitempty"`
 }
 
 // ConnectorAction: A write as the card names it: visible says who will see it.
@@ -4465,6 +4531,8 @@ type KBEntry struct {
 	Extra string `json:"extra,omitempty"`
 	// A chat's source (lark, mail, wechat, github…).
 	Source string `json:"source,omitempty"`
+	// A recording's kind: meeting, note or day (#8870); absent on other kinds and from an older hub.
+	RecordingKind string `json:"recording_kind,omitempty"`
 }
 
 // KBRecentParams: kb.recent (kb.read): what came in from every source in [since, until), newest first, across kinds:
@@ -4842,6 +4910,9 @@ type LeaderReportEvent struct {
 	Doing    string    `json:"doing,omitempty"`
 	NeedsYou string    `json:"needs_you,omitempty"`
 	Links    []string  `json:"links,omitempty"`
+	// set only while the hub's push tiering (low-distraction switch) is on: P1 for progress, reached and stuck (keep it
+	// in the log and the briefing, alert nobody), P0 for a decision
+	Level string `json:"level,omitempty"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;
@@ -5719,6 +5790,75 @@ func (v UIPageSnapshot) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// TranscriptionErrorCode: error.code of the transcription calls besides permission_denied (data {scope:
+// "transcription"}): invalid_params (a field missing or wrong, audio that is not base64 PCM16 or over 256 KiB a call,
+// a job that is not this extension's or no longer runs); assistant_offline (the manager is away: try again);
+// transcription_unavailable (no transcription is chosen, ready or able to replay: the owner sets it up in Settings ›
+// Meetings); busy (this extension has a job running, or two extensions have); too_long (more than 15 minutes of
+// audio: the job is ended); timeout (the transcription stopped answering: the job is ended); transcription_failed
+// (the transcription failed the job; data {code}: its error code).
+const (
+	TranscriptionErrorCodeInvalidParams            = "invalid_params"
+	TranscriptionErrorCodeAssistantOffline         = "assistant_offline"
+	TranscriptionErrorCodeTranscriptionUnavailable = "transcription_unavailable"
+	TranscriptionErrorCodeBusy                     = "busy"
+	TranscriptionErrorCodeTooLong                  = "too_long"
+	TranscriptionErrorCodeTimeout                  = "timeout"
+	TranscriptionErrorCodeTranscriptionFailed      = "transcription_failed"
+)
+
+// TranscriptionErrorCodes are the values of TranscriptionErrorCode, in order.
+var TranscriptionErrorCodes = []string{"invalid_params", "assistant_offline", "transcription_unavailable", "busy", "too_long", "timeout", "transcription_failed"}
+
+// TranscriptionStartParams: transcription.start: a job for one piece of audio.
+type TranscriptionStartParams struct {
+	// A BCP 47 hint (zh-CN, en-US); the transcription still follows the speech. Empty: the transcription's own guess.
+	Language string `json:"language,omitempty"`
+	// A short name of what this is, for the manager's log (its first 40 characters); never what is said.
+	Label string `json:"label,omitempty"`
+}
+
+type TranscriptionStartResult struct {
+	// The job's id, for the calls after; it is this extension's only.
+	Job string `json:"job"`
+}
+
+// TranscriptionAudioParams: transcription.audio: the next piece of the audio, contiguous with the last: PCM16
+// little-endian, mono, 16 kHz, base64 (standard, with padding), at most 256 KiB of PCM (8 seconds) a call. The call
+// returns once the audio is with the transcription and no more than 60 seconds wait ahead of it, so sending as fast
+// as it returns paces the job.
+type TranscriptionAudioParams struct {
+	Job  string `json:"job"`
+	Data string `json:"data"`
+}
+
+// TranscriptionJobParams: transcription.finish (every piece is sent: wait for the text) and transcription.cancel
+// (drop the job and its text).
+type TranscriptionJobParams struct {
+	Job string `json:"job"`
+}
+
+// TranscriptionSegment: one sentence, from and to in seconds from the start of the audio.
+type TranscriptionSegment struct {
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+	Text string  `json:"text"`
+}
+
+// TranscriptionGap: A span the transcription did not trust any text for (its sessions did not agree: noise, music,
+// crosstalk): say so, never guess.
+type TranscriptionGap struct {
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+}
+
+type TranscriptionFinishResult struct {
+	Segments []TranscriptionSegment `json:"segments"`
+	Gaps     []TranscriptionGap     `json:"gaps,omitempty"`
+	// How much audio the job took.
+	Seconds float64 `json:"seconds"`
+}
+
 // requiredJSONComponent preserves required fields only inside stream payloads.
 type requiredJSONComponent Component
 
@@ -6035,6 +6175,8 @@ var newDef = map[string]func() any{
 	"AuthStepParams":                func() any { return new(AuthStepParams) },
 	"AuthField":                     func() any { return new(AuthField) },
 	"AuthPrompt":                    func() any { return new(AuthPrompt) },
+	"SettingsCheckParams":           func() any { return new(SettingsCheckParams) },
+	"SettingsCheckResult":           func() any { return new(SettingsCheckResult) },
 	"InitializeParams":              func() any { return new(InitializeParams) },
 	"ExportedContribution":          func() any { return new(ExportedContribution) },
 	"HubInfo":                       func() any { return new(HubInfo) },
@@ -6088,6 +6230,7 @@ var newDef = map[string]func() any{
 	"RowAction":                     func() any { return new(RowAction) },
 	"Spark":                         func() any { return new(Spark) },
 	"Tile":                          func() any { return new(Tile) },
+	"SectionLink":                   func() any { return new(SectionLink) },
 	"Tabs":                          func() any { return new(Tabs) },
 	"Tab":                           func() any { return new(Tab) },
 	"Fact":                          func() any { return new(Fact) },
@@ -6203,6 +6346,7 @@ var newDef = map[string]func() any{
 	"ConnectorTools":                func() any { return new(ConnectorTools) },
 	"ConnectorCallParams":           func() any { return new(ConnectorCallParams) },
 	"ConnectorCallResult":           func() any { return new(ConnectorCallResult) },
+	"ConnectorToolImage":            func() any { return new(ConnectorToolImage) },
 	"ConnectorAction":               func() any { return new(ConnectorAction) },
 	"ConnectorDescribeResult":       func() any { return new(ConnectorDescribeResult) },
 	"ConnectorDoParams":             func() any { return new(ConnectorDoParams) },
@@ -6402,6 +6546,13 @@ var newDef = map[string]func() any{
 	"UIStreamFailure":               func() any { return new(UIStreamFailure) },
 	"UIStreamServerEnvelope":        func() any { return new(UIStreamServerEnvelope) },
 	"UIPageSnapshot":                func() any { return new(UIPageSnapshot) },
+	"TranscriptionStartParams":      func() any { return new(TranscriptionStartParams) },
+	"TranscriptionStartResult":      func() any { return new(TranscriptionStartResult) },
+	"TranscriptionAudioParams":      func() any { return new(TranscriptionAudioParams) },
+	"TranscriptionJobParams":        func() any { return new(TranscriptionJobParams) },
+	"TranscriptionSegment":          func() any { return new(TranscriptionSegment) },
+	"TranscriptionGap":              func() any { return new(TranscriptionGap) },
+	"TranscriptionFinishResult":     func() any { return new(TranscriptionFinishResult) },
 }
 
 // Call is one call or event of an extension point's protocol (the schemas' x-methods and x-events): who
@@ -6497,4 +6648,8 @@ var Calls = map[string]Call{
 	"storage.blob.finish":            {Name: "storage.blob.finish", From: "program", Params: "StorageBlobMutateParams", Result: "StorageBlobFinishResult"},
 	"storage.blob.delete":            {Name: "storage.blob.delete", From: "program", Params: "StorageBlobMutateParams", Result: "StorageDeleteResult"},
 	"storage.blob.read":              {Name: "storage.blob.read", From: "program", Params: "StorageBlobReadParams", Result: "StorageBlobReadResult"},
+	"transcription.start":            {Name: "transcription.start", From: "program", Params: "TranscriptionStartParams", Result: "TranscriptionStartResult"},
+	"transcription.audio":            {Name: "transcription.audio", From: "program", Params: "TranscriptionAudioParams", Result: "Empty"},
+	"transcription.finish":           {Name: "transcription.finish", From: "program", Params: "TranscriptionJobParams", Result: "TranscriptionFinishResult"},
+	"transcription.cancel":           {Name: "transcription.cancel", From: "program", Params: "TranscriptionJobParams", Result: "Empty"},
 }

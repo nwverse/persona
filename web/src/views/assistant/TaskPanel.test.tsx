@@ -14,8 +14,9 @@ import { t } from "../../i18n";
 import { closePanel, openPanel, type Panel } from "../../lib/panel";
 import { href } from "../../lib/router";
 import { applyCompleteSessions, refreshTodos, reset } from "../../lib/store";
-import type { Todo } from "../../lib/todos";
+import { TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
+import { loadFeed, type TaskPlan } from "../../lib/feed";
 import { SidePanel } from "../SidePanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -27,6 +28,7 @@ const task = (sessions = [first]): Todo => ({
   agents: sessions.map((s) => ({ machine_id: s.machine_id, session_id: s.session_id, title: s.title, linked_at: at })),
 });
 let servedTodo: Todo;
+let servedPlans: Record<string, TaskPlan> = {};
 let host: HTMLDivElement;
 let root: Root;
 let newWindow: MockInstance<typeof window.open>;
@@ -38,7 +40,12 @@ beforeAll(async () => {
 }, 60_000);
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(String(url).includes("/todos") ? { todos: [servedTodo] } : String(url).includes("/items") ? { items: [], to_seq: 0 } : {}), { headers: { "Content-Type": "application/json" } })));
+  servedPlans = {};
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(
+    String(url).includes("/todos") ? { todos: [servedTodo] }
+      : String(url).includes("/feed") ? { items: [], plans: servedPlans }
+        : String(url).includes("/items") ? { items: [], to_seq: 0 } : {},
+  ), { headers: { "Content-Type": "application/json" } })));
   newWindow = vi.spyOn(window, "open").mockReturnValue(null);
   host = document.createElement("div");
   document.body.append(host);
@@ -53,18 +60,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function open(panel: Panel, todo = task(), sessions = [first]) {
+async function open(panel: Panel, todo = task(), sessions = [first], plans?: Record<string, TaskPlan>) {
   servedTodo = todo;
+  servedPlans = plans ?? {};
   await act(async () => {
     applyCompleteSessions(sessions);
     await refreshTodos();
+    if (plans) await loadFeed("example-conversation");
   });
   act(() => {
     openPanel(panel);
     root.render(<StrictMode><SidePanel /></StrictMode>);
   });
-  // the task and Agent panels load with the first one opened (SidePanel's lazy chunk)
-  for (let i = 0; i < 50 && !host.querySelector("aside header"); i++) await settle();
+  // the task and Agent panels load with the first one opened (SidePanel's lazy chunk): React.lazy suspends once on its first
+  // render even when the module is in, as long as the machine is slow. Each poll runs in act so React's retry can flush.
+  await vi.waitFor(async () => {
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(host.querySelector("aside header")).not.toBeNull();
+  }, { timeout: 5000, interval: 20 });
   for (let i = 0; i < 6; i++) await settle();
   expect(host.querySelector("aside header")).not.toBeNull();
 }
@@ -133,5 +146,89 @@ describe("Agent panel new-window destination", () => {
     } finally {
       history.replaceState({}, "", before);
     }
+  });
+});
+
+describe("task panel dispatch feedback (#7552)", () => {
+  const emptyTask = (id: string, patch: Partial<Todo> = {}): Todo => ({ ...task([]), id, ...patch });
+  const planFor = (todo: Todo, state: TaskPlan["state"], error?: string): TaskPlan => ({
+    id: `${todo.id}-plan`, conversation: "example-conversation", state,
+    tasks: [{ title: todo.title, prompt: "Synthetic task", machine: "example-computer", cwd: "/example", todo_id: todo.id, error }],
+  });
+  const panelText = () => host.querySelector("aside")?.textContent ?? "";
+  const expectNeutral = () => {
+    expect(panelText()).toContain(t("assistant-taskpanel.no_agent"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.starting"));
+  };
+
+  it.each([undefined, "example-conversation"])("does not claim a never-dispatched to-do is starting (origin %s)", async (origin) => {
+    const todo = emptyTask(`unstarted-${origin ? "conversation" : "personal"}`, { origin });
+    await open({ kind: "task", todo: todo.id }, todo, []);
+    expect(host.querySelector("aside header")?.textContent).toContain(TODO_STATUS_INFO.not_started.label);
+    expectNeutral();
+  });
+
+  it("keeps Starting while a plan-created task has not received its plan yet", async () => {
+    const todo = emptyTask("unloaded-plan-task", { plan_id: "not-loaded-plan" });
+    await open({ kind: "task", todo: todo.id }, todo, []);
+    expect(panelText()).toContain(t("assistant-taskpanel.starting"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.no_agent"));
+    expect(host.querySelector("aside header")?.textContent).toContain(t("assistant-tasks.status_starting"));
+  });
+
+  it.each(["open", "started"] as const)("keeps Starting when a loaded %s plan takes over the to-do", async (state) => {
+    const todo = emptyTask(`takeover-${state}`);
+    const plan = planFor(todo, state);
+    await open({ kind: "task", todo: todo.id }, todo, [], { [plan.id]: plan });
+    expect(panelText()).toContain(t("assistant-taskpanel.starting"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.no_agent"));
+    expect(host.querySelector("aside header")?.textContent).toContain(t("assistant-tasks.status_starting"));
+  });
+
+  it("drops the pending explanation when a takeover plan is dismissed", async () => {
+    const todo = emptyTask("dismissed-takeover");
+    const plan = planFor(todo, "started");
+    await open({ kind: "task", todo: todo.id }, todo, [], { [plan.id]: plan });
+    expect(panelText()).toContain(t("assistant-taskpanel.starting"));
+    servedPlans = { [plan.id]: { ...plan, state: "dismissed" } };
+    await act(async () => { await loadFeed("example-conversation"); });
+    expect(host.querySelector("aside header")?.textContent).toContain(TODO_STATUS_INFO.not_started.label);
+    expectNeutral();
+  });
+
+  it("updates a neutral panel when a plan later takes over the to-do", async () => {
+    const todo = emptyTask("later-takeover", { origin: undefined });
+    await open({ kind: "task", todo: todo.id }, todo, []);
+    expectNeutral();
+    const plan = planFor(todo, "open");
+    servedPlans = { [plan.id]: plan };
+    await act(async () => { await loadFeed("example-conversation"); });
+    expect(panelText()).toContain(t("assistant-taskpanel.starting"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.no_agent"));
+    expect(host.querySelector("aside header")?.textContent).toContain(t("assistant-tasks.status_starting"));
+  });
+
+  it.each(["todo", "legacy-plan"] as const)("keeps the %s start failure and retry action", async (source) => {
+    const todo = emptyTask(`failed-${source}`);
+    const plan = planFor(todo, "started", "Synthetic start failure");
+    if (source === "todo") todo.start_error = "Synthetic start failure";
+    else todo.plan_id = plan.id;
+    await open({ kind: "task", todo: todo.id }, todo, [], source === "legacy-plan" ? { [plan.id]: plan } : undefined);
+    expect(panelText()).toContain(t("assistant-taskpanel.start_failed"));
+    expect(panelText()).toContain("Synthetic start failure");
+    expect(panelText()).toContain(t("assistant-taskpanel.retry"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.starting"));
+    expect(panelText()).not.toContain(t("assistant-taskpanel.no_agent"));
+  });
+
+  it("does not describe released or completed work as a new Agent start", async () => {
+    const released = emptyTask("released-task", { agents: [{ ...task().agents![0], released_at: at }] });
+    await open({ kind: "task", todo: released.id }, released, []);
+    expectNeutral();
+    servedTodo = emptyTask("completed-task", { done_at: at, plan_id: "completed-plan" });
+    await act(async () => { await refreshTodos(); openPanel({ kind: "task", todo: servedTodo.id }); });
+    await settle();
+    expect(host.querySelector("aside header")?.textContent).toContain(TODO_STATUS_INFO.done.label);
+    expectNeutral();
   });
 });

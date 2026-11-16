@@ -743,6 +743,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 - **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. Every write to the upstream waits at most `upWriteTimeout` (10 s); on that deadline the WebSocket closes itself, `readUpstream` fails and `lost()` runs, so an upstream that stops reading cannot hold the call (or the app hanging up) forever. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
   #3502: both protocols reset if this session survives 60 seconds (`stableAfter`); three failed attempts or three consecutive drops send fatal `upstream_failed`; protocol 2 App receives `link{reconnecting}` / `link{live}`.
+  A service whose model backend is down may start the session and only then say so (`error` with `upstream_unavailable`, then a 1008 close; docs/lessons/voice.md "Errors"): such a drop is reconnected like any other, but when the reconnects run out on one, the fatal error is `upstream_unavailable` (`message` is `voice-upstream.unavailable`, in three languages, with the service's words), not `upstream_failed`, so the App says the service is unavailable rather than that the connection dropped. A failed reconnect attempt keeps its own code too (`upstream_forbidden`, `upstream_unavailable`).
   If Agent-written snapshot parts (title, goal, progress, recent turns, card questions, Agent titles) differ from the prior session (more text during disconnect), the new session has read Agent content: close user-speech gate on coming online, rejecting delegation as `unprompted` until user speaks again. Unchanged snapshot does not close it, allowing the user's pre-disconnect utterance.
 - **App-extension drops** (network switch; forwarded WS closed by hub redeploy; manager restart also restarts extension):
   - extension closes upstream, unsubscribes; runs not persisted;
@@ -1100,7 +1101,7 @@ Reject (ii), "add realtime type to model providers": it would need a new API ret
    - expanded row: voice button occupies send position when composer empty;
    - one round button per row (#3508, `ComposerVoiceButton`): idle, voice is the round button in send's place; working, stop is round and voice a plain icon like dictation;
    - compact and regular-width iOS chats use `ShellComposerBar` in every style (BeautifulUI too); the voice bar replaces the composer while voice mode is active;
-   - reuse `Theme.Icon.voiceChannel`, one meaning, one icon.
+   - reuse `Theme.Icon.voiceChannel` (a phone handset since #8730: a call with Persona, apart from dictation's microphone), one meaning, one icon.
 2. **"Voice Chat" in "+" menu**: accessible from anywhere.
 3. Main-chat and Agent pages share `ChatView`, so one change gives both entries. Without a main chat, assistant shows `ShellHome`, no phase-one entry there.
 4. **Visibility** (`VoiceAvailability`, pure function):

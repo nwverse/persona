@@ -18,7 +18,7 @@ var shortSuperviseTimings = superviseTimings{gather: 20 * time.Millisecond, ever
 // shortSupervise makes s's supervision messages come at once and often, for a test. The timings are s's own, not the
 // package's: a digest timer still running after the test ends reads only them, never another test's. The timer is
 // stopped when the test ends.
-func shortSupervise(t *testing.T, s *Service) {
+func shortSupervise(t testing.TB, s *Service) {
 	t.Helper()
 	s.superviseTimes = shortSuperviseTimings
 	t.Cleanup(func() {
@@ -201,7 +201,7 @@ func TestSupervisedTaskRound(t *testing.T) {
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
 	for _, want := range []string{"📋 督办", "Agent 停下了，但没做完（要用户决定：问用两种部署走法里的哪一种）", "验收标准：PR 合并到 master；浅色 / 深色截图贴进 PR",
-		"A 先灰度，B 直接全量", "能自己拍板的就自己拍"} {
+		"A 先灰度，B 直接全量", "signal=idle"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -284,7 +284,7 @@ func TestSupervisedTaskRound(t *testing.T) {
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewNeedsUser || v.Round != maxReworkRounds || len(sentToAgent(f)) != maxReworkRounds {
 		t.Fatalf("after the third: %+v, sent %d", v, len(sentToAgent(f)))
 	}
-	if res := review("accepted", "用户看过截图，可以"); !strings.Contains(res, "accepted and closed") {
+	if res := review("accepted", "用户看过截图，可以", completeReviewChecks(todoNow(s, todo.ID))...); !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("accepted: %s", res)
 	}
 	done := todoNow(s, todo.ID)
@@ -440,7 +440,7 @@ func TestSupervisedTaskNewMainConversationCanReview(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Main = "conv2" })
 
 	// conv3 is neither origin, nor supervisor, nor main -> refused.
-	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if _, err := s.runTool(ctx, "server", "conv3", "task_review", raw); err == nil {
 		t.Fatal("conv3 should not be allowed to review")
 	}
@@ -486,6 +486,7 @@ func TestGoldenSupervise(t *testing.T) {
 	golden(t, "supervise.rework", prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: 1, Max: 2, Note: "补深色截图",
 		Checks: []prompts.SuperviseCheck{{Criterion: "PR 合并到 master", Met: true, Evidence: "pull/901 merged"}, {Criterion: "浅色 / 深色截图贴进 PR", Evidence: "只有浅色"}}}))
 	golden(t, "supervise.done_when", prompts.RenderTaskDoneWhen([]string{"PR 合并到 master", "线上 hub 已部署并验证"}))
+	golden(t, "supervise.task_goal", prompts.RenderTaskGoal([]string{"CI is green", "the fix is merged"}))
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	golden(t, "assistant_snapshot.supervised", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC", Tasks: []prompts.SnapshotTask{
 		{ID: "todo_2", Title: "部署 hub", State: "停着", Health: "等你决定", DoneWhen: 1},

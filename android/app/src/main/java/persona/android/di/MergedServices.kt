@@ -32,6 +32,8 @@ private fun <T> GroupStack.mapped(flow: Flow<T>, transform: GroupNames.(T) -> T)
     if (names.plain) flow else flow.map { names.transform(it) }
 
 internal fun mergedSessions(stacks: GroupStacks): SessionsRepository = object : SessionsRepository, VerifiedSessionsRepository {
+    override fun supportsFeature(machineId: String, feature: String) =
+        feature in stacks.of(machineId)?.connection?.serverFeatures?.value.orEmpty()
     private val listNamespaces = MutableStateFlow<Set<String?>?>(null)
     private fun selected(stack: GroupStack) = listNamespaces.value?.contains(stack.names.namespace) != false
     override suspend fun setListNamespaces(namespaces: Set<String?>?) { listNamespaces.value = namespaces }
@@ -151,6 +153,8 @@ internal fun mergedChats(stacks: GroupStacks, storage: ChatLocalStorage): ChatRe
         override suspend fun loadOlder(session: SessionKey) = stacks.use(session) { it.repositories.chats.loadOlder(it.names.raw(session)) }
         override suspend fun expandFold(session: SessionKey, fromSeq: Int, toSeq: Int) =
             stacks.use(session) { it.repositories.chats.expandFold(it.names.raw(session), fromSeq, toSeq) }
+        override suspend fun loadRange(session: SessionKey, fromSeq: Int, throughSeq: Int) =
+            stacks.use(session) { it.repositories.chats.loadRange(it.names.raw(session), fromSeq, throughSeq) }
         override suspend fun loadImage(session: SessionKey, itemId: String) =
             stacks.use(session) { it.repositories.chats.loadImage(it.names.raw(session), itemId) }
         override suspend fun fullText(session: SessionKey, itemId: String) =
@@ -213,6 +217,9 @@ internal fun mergedMachineManagement(
     override suspend fun claudeDirs(machineId: String) = routes.on(machineId) { it.claudeDirs(machineId) }
     override suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>) =
         routes.on(machineId) { it.setBlockedClaudeDirs(machineId, blocked) }
+    override suspend fun claudeLiveReplies(machineId: String) = routes.on(machineId) { it.claudeLiveReplies(machineId) }
+    override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean) =
+        routes.on(machineId) { it.setClaudeLiveReplies(machineId, on) }
     override suspend fun doctor(machineId: String) = routes.on(machineId) { it.doctor(machineId) }
     override suspend fun fixDoctor(machineId: String) = routes.on(machineId) { it.fixDoctor(machineId) }
     override suspend fun browser(machineId: String) = routes.on(machineId) { it.browser(machineId) }
@@ -287,6 +294,10 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).panes(GroupKeys.raw(machineId)) }
         override suspend fun newTab(machineId: String, workspaceId: String, kind: String?, cwd: String?) =
             stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).newTab(GroupKeys.raw(machineId), workspaceId, kind, cwd) }
+        override suspend fun close(machineId: String, pane: String) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).close(GroupKeys.raw(machineId), pane) }
+        override suspend fun closeFinished(machineId: String, preview: Boolean, panes: List<String>) =
+            stacks.use(GroupKeys.namespaceOf(machineId)) { HttpTerminalPanes(it.connection).closeFinished(GroupKeys.raw(machineId), preview, panes) }
     }
 
     val files: SessionFiles = routedFiles { stacks.of(it)?.files }
@@ -300,8 +311,14 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
         override suspend fun sendQueuedNow(session: Session) = of(session).sendQueuedNow(session)
         override suspend fun info(session: Session) = of(session).info(session)
         override suspend fun completeRow(session: Session) = of(session).completeRow(session)
+        override suspend fun childRows(session: Session) = of(session).childRows(session)
+        override suspend fun childPage(session: Session, since: String?) = of(session).childPage(session, since)
         override suspend fun interactionHistory(session: Session) = of(session).interactionHistory(session)
         override suspend fun restoreModel(session: Session) = of(session).restoreModel(session)
+        override suspend fun catalogPrices(ids: List<String>): Map<String, ModelPrice?> {
+            val stack = stacks.selected.value ?: stacks.stacks.value.firstOrNull() ?: throw HubFailure(HubError.NoNetwork)
+            return stack.actions.catalogPrices(ids)
+        }
         override suspend fun fork(session: Session, atItemId: String) = of(session).fork(session, atItemId)
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = of(session).rewind(session, target, restore)
     }
@@ -309,18 +326,9 @@ internal class MergedShellServices(private val stacks: GroupStacks) {
     /** Every group's dashboard in one; [plain] builds the API of one group's connection (null while it has no route). */
     fun metrics(plain: (GroupStack) -> MachineMetricsApi?): MachineMetricsApi = object : MachineMetricsApi {
         private fun of(stack: GroupStack) = plain(stack) ?: throw HubFailure(HubError.NoNetwork)
-        override suspend fun dashboard(): MetricsDashboard {
-            val list = stacks.stacks.value
-            if (list.size == 1) return of(list.single()).dashboard().let { it.copy(machines = it.machines.map(list.single().names::metrics)) }
-            var failure: Exception? = null
-            val parts = list.mapNotNull { stack ->
-                try { of(stack).dashboard().let { it.copy(machines = it.machines.map(stack.names::metrics)) } }
-                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (error: Exception) { if (failure == null) failure = error; null }
-            }
-            if (parts.isEmpty()) throw failure ?: HubFailure(HubError.NoNetwork)
-            return MetricsDashboard(parts.flatMap { it.machines }, parts.first().step)
-        }
+        override suspend fun dashboard(): MetricsDashboard = mergedMetrics(stacks.stacks.value.map { stack ->
+            MetricsGroup(stack.names, { plain(stack) }, stack.metricSnapshots) { stack.current }
+        })
         override suspend fun history(machineId: String, range: MetricRange): MetricsHistory {
             val stack = stacks.of(machineId) ?: throw HubFailure(HubError.NoNetwork)
             val history = of(stack).history(GroupKeys.raw(machineId), range)
@@ -420,6 +428,7 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         private fun of(machineId: String) = list.indexOfFirst { it.owns(machineId) }.takeIf { it >= 0 }
         private fun creation(index: Int?) = index?.let { creations[it] } ?: throw HubFailure(HubError.NoNetwork)
         override suspend fun launchers(machineId: String) = creation(of(machineId)).launchers(machineId)
+        override suspend fun launcherList(machineId: String) = creation(of(machineId)).launcherList(machineId)
         override suspend fun directories(machineId: String, path: String) = creation(of(machineId)).directories(machineId, path)
         override suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult {
             val index = of(request.machineId)

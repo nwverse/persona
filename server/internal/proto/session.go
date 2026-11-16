@@ -1,7 +1,9 @@
 package proto
 
 import (
+	"encoding/json"
 	"math"
+	"slices"
 	"time"
 )
 
@@ -11,9 +13,84 @@ var (
 	PermissionModes = []string{"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
 )
 
+// PermissionModeSet is a set of Persona's permission modes (PermissionModes), on the wire the list of their ids in that
+// order: a launcher's and a session's permission_modes (Launcher.PermissionModes, SessionCapabilities.PermissionModes,
+// #8261). A byte, so the structs carrying it stay comparable and no larger (SessionCapabilities is allocated for every
+// runtime row, TestRuntimeSessionsPushAllocatesOneList). Reading it keeps the ids it knows and drops anything else,
+// whatever a runtime sent.
+type PermissionModeSet uint8
+
+// PermissionModeSetOf is the set of the ids among PermissionModes.
+func PermissionModeSetOf(ids ...string) PermissionModeSet {
+	var s PermissionModeSet
+	for _, id := range ids {
+		for i, m := range PermissionModes {
+			if id == m {
+				s |= 1 << i
+			}
+		}
+	}
+	return s
+}
+
+// Has is whether mode is in the set.
+func (s PermissionModeSet) Has(mode string) bool {
+	return s != 0 && s&PermissionModeSetOf(mode) != 0
+}
+
+// List is the set's ids in PermissionModes' order.
+func (s PermissionModeSet) List() []string {
+	out := []string{}
+	for i, m := range PermissionModes {
+		if s&(1<<i) != 0 {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (s PermissionModeSet) MarshalJSON() ([]byte, error) { return json.Marshal(s.List()) }
+
+func (s *PermissionModeSet) UnmarshalJSON(b []byte) error {
+	var ids []string
+	if json.Unmarshal(b, &ids) != nil { // not a list of strings: none
+		ids = nil
+	}
+	*s = PermissionModeSetOf(ids...)
+	return nil
+}
+
 // CodexEffortLevels are Codex's reasoning efforts, weakest first: a codex launcher's model catalog advertises ultra,
 // so a start on one takes it too (node/codex_effort.go). Claude Code's list stops at max.
 var CodexEffortLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// EffortWords are the thinking levels gateways and APIs name, weakest first: Claude Code's (EffortLevels), the APIs'
+// none and minimal below them and Codex's ultra above. Every other list of levels is a part of it in this order.
+var EffortWords = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// ProjectEfforts is levels (EffortWords) in the words vocab takes, weakest first and each once: a level vocab names
+// stays as it is, minimal becomes low and ultra max where vocab lacks them (cindy's clampEffortForClaude), and
+// anything else vocab lacks (none, a word outside EffortWords) is left out.
+func ProjectEfforts(levels, vocab []string) []string {
+	var out []string
+	for _, w := range EffortWords {
+		for _, e := range levels {
+			p := e
+			if !slices.Contains(vocab, p) {
+				switch p {
+				case "minimal":
+					p = "low"
+				case "ultra":
+					p = "max"
+				}
+			}
+			if p == w && slices.Contains(vocab, p) && !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
 
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
@@ -162,9 +239,10 @@ type Session struct {
 	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
-	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first.
-	// Speed has its own advertised choices in ServiceTiers. Empty for every other session: Claude's and the assistant's keep the apps' own
-	// list, the rest cannot change it from the phone.
+	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first; a
+	// runtime's row of an agent that is not Claude Code's, as the runtime lists them (Paseo's, #8133; the node drops
+	// them where the runtime takes no session.modes). Speed has its own advertised choices in ServiceTiers. Empty for
+	// every other session: Claude's and the assistant's keep the apps' own list, the rest cannot change it from the phone.
 	Efforts []string `json:"efforts,omitempty"`
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
 	ServiceTier  string        `json:"service_tier,omitempty"`
@@ -385,10 +463,10 @@ type Session struct {
 	Host string `json:"host,omitempty"`
 	// Hierarchy is where the session stands among the sessions that started one another, and when it began
 	// (docs/protocol/protocol.md "Session hierarchy"); nil for most rows. Its members are written on the row itself
-	// (parent_agent_id, folded_under, folded_as, children, started_at, asking_parent_session_id: sessionWire), so it has
+	// (parent_agent_id, folded_under, folded_as, children, started_at, asking_parent_session_id, deleted: sessionWire), so it has
 	// no key of its own. Read it with ParentAgentID, FoldedUnder, FoldedAs, Children, StartedAt and
-	// AskingParentSessionID; it is shared by every copy of the row, so it is never written in place: SetParentAgentID,
-	// SetFold, SetStartedAt and SetAskingParentSessionID put a new one.
+	// AskingParentSessionID and IsDeleted; it is shared by every copy of the row, so it is never written in place:
+	// SetParentAgentID, SetFold, SetStartedAt, SetAskingParentSessionID and SetDeleted put a new one.
 	Hierarchy *SessionHierarchy `json:"-"`
 }
 
@@ -441,6 +519,17 @@ const (
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
 	CodeModesNotRunning = "modes_not_running"
 )
+
+// CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
+// engine that lets idle agents go (Paseo's closed and archived ones) loads one to answer for its conversation, which
+// relaunches its provider's process, so a runtime reads such a session only while it is watched (someone has its chat
+// open, docs/integrations/runtimes.md "What to implement", #8132). Nothing was read; the text is in the request's
+// language (apierr.Call). 409.
+const CodeNotLoaded = "not_loaded"
+
+// CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
+// #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
+const CodeAgentStopped = "agent_stopped"
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine

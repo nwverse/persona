@@ -1,13 +1,16 @@
 import Foundation
+import PersonaWire
 
-/// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, chats, people, docs, meetings and
-/// events, each ranked by importance (P0–P3) and relevance to the user, with free tags.
+/// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, topics, chats, people, docs,
+/// meetings and events, each ranked by importance (P0–P3) and relevance to the user, with free tags. Topics (#3783, #7251)
+/// are what Persona curated by subject out of the projects and chats: knowledge points under subtopics.
 nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
-    case projects, chats, people, docs, meetings, events, recordings
+    case projects, topics, chats, people, docs, meetings, events, recordings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .projects: String(localized: "Project")
+        case .topics: String(localized: "Topic [Knowledge]")
         case .chats: String(localized: "Session")
         case .people: String(localized: "People")
         case .docs: String(localized: "Document")
@@ -19,6 +22,7 @@ nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
     var symbol: String {
         switch self {
         case .projects: Theme.Icon.space
+        case .topics: Theme.Icon.topic
         case .chats: Theme.Icon.feishuChats
         case .people: Theme.Icon.people
         case .docs: Theme.Icon.document
@@ -27,6 +31,12 @@ nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
         case .recordings: Theme.Icon.recording
         }
     }
+
+    /// The kinds Knowledge offers as chips: recordings are listed under meetings (#8731, "one home for meetings"), with
+    /// the meetings imported from connected apps, so there is one place for meetings and notes.
+    static var listed: [KBKind] { allCases.filter { $0 != .recordings } }
+    /// The list that shows this kind's entries: recordings' is meetings'.
+    var listedAs: KBKind { self == .recordings ? .meetings : self }
 }
 
 nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
@@ -39,11 +49,28 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
     var tags: [String]?
     var updated: Date?
     var extra: String?
+    /// A recording's kind: meeting, note or day (#8870); nil on other kinds and from a hub before it.
+    var recordingKind: String?
 
     enum CodingKeys: String, CodingKey {
         case kind, id, name, importance, relevance, tags, updated, extra
         case oneLine = "one_line"
+        case recordingKind = "recording_kind"
     }
+
+    /// The pill a recording's row carries in the meetings list: notes and all-day recordings are the exceptions among
+    /// meetings, so only they are marked; a meeting, an imported one, or a recording from an older hub, none.
+    var recordingTag: String? {
+        guard kind == KBKind.recordings.rawValue else { return nil }
+        switch recordingKind {
+        case "note": return String(localized: "Note [Recording Kind]")
+        case "day": return String(localized: "All-Day")
+        default: return nil
+        }
+    }
+
+    /// The phone's own recording this entry is, when it has it: its page opens instead of the hub's copy.
+    var localRecording: UUID? { kind == KBKind.recordings.rawValue ? UUID(uuidString: id) : nil }
 
     /// Projects: "short · active" → Short-term / Long-term and the status.
     var projectKind: String? {
@@ -51,6 +78,8 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
         return extra.hasPrefix("long") ? String(localized: "Long-term") : String(localized: "Short-term")
     }
     var projectDone: Bool { kind == KBKind.projects.rawValue && (extra ?? "").hasSuffix("done") }
+    /// A topic's knowledge points, as the list's `extra` counts them (nil for other kinds).
+    var topicPoints: Int? { kind == KBKind.topics.rawValue ? Int(extra ?? "") : nil }
     /// Marked "not a project" (by hand, or because it only came from notifications).
     var projectIgnored: Bool { kind == KBKind.projects.rawValue && (extra ?? "").hasSuffix("ignored") }
 }
@@ -58,6 +87,26 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct KBList: Decodable, Sendable {
     var items: [KBEntry]
     var tags: [String]?
+
+    /// The meetings list (#8731): the meetings imported from connected apps and the recordings made in Persona, with
+    /// each tag once.
+    static func meetings(_ meetings: KBList, recordings: KBList) -> KBList {
+        var tags: [String] = []
+        for t in (meetings.tags ?? []) + (recordings.tags ?? []) where !tags.contains(t) { tags.append(t) }
+        return KBList(items: meetings.items + recordings.items, tags: tags)
+    }
+
+    /// Newest first, entries with no time last; otherwise in the order given.
+    static func newestFirst(_ items: [KBEntry]) -> [KBEntry] {
+        items.enumerated().sorted { a, b in
+            switch (a.element.updated, b.element.updated) {
+            case let (x?, y?) where x != y: x > y
+            case (.some, nil): true
+            case (nil, .some): false
+            default: a.offset < b.offset
+            }
+        }.map(\.element)
+    }
 }
 
 nonisolated struct KBDetail: Decodable, Sendable {
@@ -71,6 +120,27 @@ nonisolated struct KBDetail: Decodable, Sendable {
     var links: [KBEntry]?
     /// A project's Moments posts (the hub's LinkMoments), newest first.
     var moments: [KBMomentRef]?
+    /// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
+    var points: [KBTopicPoint]?
+}
+
+/// One knowledge point of a topic: what it is (`kind`), the text, the reason or cause (`why`), the subtopics it is under
+/// (outermost first, 0–2), the entries it came from and the day it was last confirmed (YYYY-MM-DD).
+nonisolated struct KBTopicPoint: Decodable, Identifiable, Hashable, Sendable {
+    var id: String
+    var path: [String]?
+    var kind: String
+    var text: String
+    var why: String?
+    var sources: [KBTopicSource]?
+    var when: String?
+}
+
+/// An entry a knowledge point came from (a project or a chat), and the day.
+nonisolated struct KBTopicSource: Decodable, Hashable, Sendable {
+    var kind: String
+    var id: String
+    var day: String?
 }
 
 /// A Moments post a project shows: who, when, how many comments, the text clipped, how it bears on the project.

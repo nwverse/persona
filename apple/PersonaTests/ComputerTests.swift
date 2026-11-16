@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// Operating a Mac through Cua Driver (the hub's plugin cua, docs/extensions/computer-use.md): what the machine list says of it,
 /// and how the assistant's two tools read in the chat.
@@ -61,6 +62,21 @@ struct ComputerTests {
         #expect(!none.advertised, "version 0 is no video")
         let m = try machine(",\"computer\":{\"enabled\":true,\"screen_video\":{\"version\":2,\"codecs\":[\"hevc\"]}}")
         #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m, "round-trips")
+    }
+
+    /// #8859: the Mac's node says which ffmpeg with libx264 it found (`screen_video.x264`), and the hub whether x264 is on
+    /// for it (`screen_x264`); an older node or hub says neither, and both survive a round-trip.
+    @Test func theMachineListSaysWhetherX264CanEncodeItsScreen() throws {
+        let old = try #require(try machine(",\"computer\":{\"enabled\":true,\"screen_video\":{\"version\":1}}").computer)
+        #expect(old.screenVideo?.x264 == nil && !old.screenX264)
+        let m = try machine(",\"computer\":{\"enabled\":true,\"screen_x264\":true,"
+            + "\"screen_video\":{\"version\":1,\"codecs\":[\"hevc\",\"h264\"],\"x264\":\"ffmpeg 9.0.2\"}}")
+        let c = try #require(m.computer)
+        #expect(c.screenX264 && c.screenVideo?.x264 == "ffmpeg 9.0.2")
+        #expect(try JSON.decoder.decode(Machine.self, from: JSON.encoder.encode(m)) == m, "round-trips")
+        // Why x264 isn't encoding, in plain words for the overlay; an unknown reason reads as not available.
+        #expect(ScreenStats.x264Note("route") != ScreenStats.x264Note("slow"))
+        #expect(ScreenStats.x264Note("something-new") == ScreenStats.x264Note("unavailable"))
     }
 
     /// #1280: one step per missing permission in System Settings' own words, the allowed ones checked first.

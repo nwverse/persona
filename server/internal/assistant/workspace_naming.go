@@ -12,14 +12,15 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
 type workspaceNamingStore interface {
-	TodoWorkspaceRules(context.Context, string) (db.WorkspaceRulesRecord, error)
-	SetTodoWorkspaceRules(context.Context, string, int64, json.RawMessage) (db.WorkspaceRulesRecord, error)
+	TodoWorkspaceRules(context.Context, string) (repositorystore.WorkspaceRulesRecord, error)
+	SetTodoWorkspaceRules(context.Context, string, int64, json.RawMessage) (repositorystore.WorkspaceRulesRecord, error)
 	WorkspaceNamingPlan(context.Context, string, string) (*workspacenaming.Plan, error)
 	SaveWorkspaceNamingPlan(context.Context, string, string, int64, workspacenaming.Plan) (*workspacenaming.Plan, error)
 }

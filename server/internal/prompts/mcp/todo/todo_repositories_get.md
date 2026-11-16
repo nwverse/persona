@@ -1,4 +1,4 @@
-Read repository associations and all linked issues/PRs for one to-do in this assistant. This is metadata only; saved source snapshots can differ from the current repository catalog. No Git or remote API call is made.
+Read a to-do's saved repository/issue/PR associations and catalog status. No Git/network calls.
 
 ```json
 {

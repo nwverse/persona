@@ -52,6 +52,7 @@
         <item quantity="other">%1$d 天后过期</item>
     </plurals>
     <string name="designsystem_core_request_from_subagent">来自子 Agent · %1$s</string>
+    <string name="designsystem_core_request_from_side">来自分支会话 · %1$s</string>
     <string name="designsystem_core_request_from_mcp">来自 MCP 服务器 %1$s</string>
     <string name="designsystem_core_request_from_mcp_configured">来自 MCP 服务器 %1$s（配置来源：%2$s）</string>
     <string name="designsystem_core_request_from_terminal">这个请求来自终端：请不要同时在电脑上处理</string>
@@ -215,6 +216,9 @@
     <string name="designsystem_core_source_identity_conflict">身份冲突</string>
     <string name="designsystem_core_source_claude_background">Claude 后台</string>
     <string name="designsystem_core_source_claude_desktop">Claude 桌面版</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$s 桌面版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用</string>
     <string name="designsystem_core_source_claude_terminal">终端里的 Claude</string>
     <string name="designsystem_core_source_no_send">此来源尚未允许发送</string>
     <string name="designsystem_core_read_only_because">仅查看：%1$s</string>

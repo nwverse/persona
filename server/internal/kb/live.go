@@ -24,9 +24,12 @@ import (
 // the hub's, so it is not in an upload's undo journal (recordingFiles). Never searched (find.go searchable) and never
 // shown by Get; a delete or the retention takes it with the directory.
 
-// Attendance roles. Off is stored as "" (omitted in meta.json).
+// Attendance roles. Off is stored as "" (omitted in meta.json). Notes is a room meeting's only (#8851): its room keeps
+// the live log, the topics and the highlights while Persona answers nothing (Answering), so a meeting Persona was not
+// invited to still has its live view; #2981's top-level attendance never takes it.
 const (
 	AttendanceOff         = "off"
+	AttendanceNotes       = "notes"
 	AttendanceListener    = "listener"
 	AttendanceParticipant = "participant"
 )
@@ -234,7 +237,8 @@ func (e LiveGapError) As(target any) bool {
 	return false
 }
 
-// AttendanceRole is the role r is attended in: AttendanceOff, AttendanceListener or AttendanceParticipant. A room
+// AttendanceRole is the role r is attended in: AttendanceOff, AttendanceNotes (a room meeting's only),
+// AttendanceListener or AttendanceParticipant. A room
 // meeting's is its room's (meeting.json), never meta.json's; a trimmed recording is attended no more.
 func (r Recording) AttendanceRole() string {
 	role := r.Attendance

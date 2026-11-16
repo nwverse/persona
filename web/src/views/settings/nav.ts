@@ -8,7 +8,7 @@ import type { IconName } from "../../ui/icons";
 
 export type Tab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar";
 export const TABS: Tab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar"];
-export const AGENT_KINDS = ["claude", "codex", "agy", "omp"] as const;
+export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
 // The tab whose page opens one of its items, and the query parameter that names it.
@@ -24,6 +24,7 @@ const LEGACY_TABS: Record<string, { tab: Tab; section: SettingsSection | null }>
   codex: { tab: "agents", section: "codex" },
   agy: { tab: "agents", section: "agy" },
   omp: { tab: "agents", section: "omp" },
+  grok: { tab: "agents", section: "grok" },
   translate: { tab: "general", section: "translation" },
   assistant: { tab: "persona", section: null },
   sent: { tab: "connectors", section: null },
@@ -36,7 +37,8 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   avatar: { label: t("settings.avatar"), icon: "smile", hint: t("settings-nav.hint_avatar") },
   // the user's own "/" prompts, this assistant's (#7329, SavedPrompts.tsx)
   prompts: { label: t("settings-nav.tab_prompts"), icon: "book", hint: t("settings-nav.hint_prompts") },
-  knowledge: { label: t("settings-nav.tab_knowledge"), icon: "layers", hint: t("settings-nav.hint_knowledge") },
+  // what Persona reads and keeps: a filter on its sources (Models keeps the layers mark)
+  knowledge: { label: t("settings-nav.tab_knowledge"), icon: "filter", hint: t("settings-nav.hint_knowledge") },
   notifications: { label: t("settings-nav.tab_notifications"), icon: "bell", hint: t("settings-nav.hint_notifications") },
   models: { label: t("settings-nav.tab_models"), icon: "layers", hint: t("settings-nav.hint_models") },
   agents: { label: t("settings-nav.tab_agents"), icon: "terminal", hint: t("settings-nav.hint_agents") },
@@ -47,7 +49,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
   devices: { label: t("settings-nav.tab_devices"), icon: "key", hint: t("settings-nav.hint_devices") },
-  hub: { label: "hub", icon: "hub", hint: t("settings-nav.hint_hub") },
+  hub: { label: t("settings-nav.tab_hub"), icon: "hub", hint: t("settings-nav.hint_hub") },
   managers: { label: t("settings-nav.tab_managers"), icon: "person", hint: t("settings-nav.hint_managers") },
 };
 

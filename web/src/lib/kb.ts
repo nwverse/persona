@@ -12,12 +12,18 @@ export type KBKind = (typeof KB_KINDS)[number];
 
 export const KIND_TITLE: Record<KBKind, string> = { projects: t("lib-kb.kind_projects"), topics: t("lib-kb.kind_topics"), chats: t("lib-kb.kind_chats"), people: t("lib-kb.kind_people"), docs: t("lib-kb.kind_docs"), meetings: t("lib-kb.kind_meetings"), events: t("lib-kb.kind_events"), recordings: t("lib-kb.kind_recordings") };
 
+/** The kinds the list offers as chips: recordings are listed under meetings (#8871), with the meetings imported from
+ *  connected apps, so the knowledge base has one place for meetings and notes. */
+export const LIST_KINDS: readonly KBKind[] = KB_KINDS.filter((k) => k !== "recordings");
+
 export function isKind(k: unknown): k is KBKind {
   return typeof k === "string" && (KB_KINDS as readonly string[]).includes(k);
 }
 
-/** The kind a route names; anything else is the default list, projects. */
+/** The list a route names; anything else is the default list, projects. Recordings are listed under meetings (#8871),
+ *  so an older link to the recordings list, or a recording's own page, shows that list. */
 export function kindOf(k?: string): KBKind {
+  if (k === "recordings") return "meetings";
   return isKind(k) ? k : "projects";
 }
 
@@ -38,6 +44,24 @@ export interface KBEntry {
   updated?: string;
   /** projects: "short · active" (kind · status); chats: dm / group…; topics: how many knowledge points, in decimal */
   extra?: string;
+  /** recordings: meeting, note or day (#8870); absent from an older hub */
+  recording_kind?: string;
+}
+
+/** The tag a recording's row carries in the meetings list (#8871): notes and all-day recordings are the exceptions among
+ *  meetings, so only they are marked; a meeting, an imported one, or a recording from a hub that does not say, none. */
+export function recordingKindTag(e: KBEntry): string | null {
+  if (e.kind !== "recordings") return null;
+  if (e.recording_kind === "note") return t("lib-kb.recording_note");
+  if (e.recording_kind === "day") return t("lib-kb.recording_day");
+  return null;
+}
+
+/** The meetings list (#8871): the meetings imported from connected apps and the recordings made in Persona, read from
+ *  both lists; tags that both have appear once. */
+export function mergeMeetingLists(meetings: KBList, recordings: KBList): KBList {
+  const tags = [...(meetings.tags ?? []), ...(recordings.tags ?? [])];
+  return { items: [...(meetings.items ?? []), ...(recordings.items ?? [])], tags: [...new Set(tags)] };
 }
 
 export interface KBList {
@@ -489,6 +513,12 @@ export interface EntrySection {
  * the ranked ones, then the rest (only a name in a group, no tagging yet) folded under "Not sorted yet"; with a tag, one
  * section of everything carrying it.
  */
+/** Entries newest first (no time last), the order otherwise kept. */
+function newestFirst(list: KBEntry[]): KBEntry[] {
+  const at = (e: KBEntry) => (e.updated ? Date.parse(e.updated) : NaN);
+  return [...list].sort((a, b) => (Number.isNaN(at(b)) ? -Infinity : at(b)) - (Number.isNaN(at(a)) ? -Infinity : at(a)) || 0);
+}
+
 export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): EntrySection[] {
   const list = rankEntries(items);
   let out: EntrySection[];
@@ -515,7 +545,23 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
     const sorted = [...items].sort((a, b) => importanceRank(a.importance) - importanceRank(b.importance) || n(b) - n(a) || a.name.localeCompare(b.name));
     out = [{ key: "all", title: tag ? `#${tag}` : t("lib-kb.section_all"), items: sorted }];
   } else if (tag) {
-    out = [{ key: "tag", title: `#${tag}`, items: list }];
+    out = [{ key: "tag", title: `#${tag}`, items: kind === "meetings" ? newestFirst(list) : list }];
+  } else if (kind === "meetings") {
+    // A meeting is looked for by when it was (#8871): the sorted ones newest first with the owner's own recordings, never
+    // folded (one just ended has no importance until its summary is written), the rest folded as elsewhere.
+    const open = (e: KBEntry) => !!e.importance || e.kind === "recordings";
+    const ranked = newestFirst(list.filter(open));
+    const rest = newestFirst(list.filter((e) => !open(e)));
+    out = [
+      { key: "ranked", title: t("lib-kb.section_all"), items: ranked },
+      {
+        key: "rest",
+        title: ranked.length ? t("lib-kb.section_unsorted") : t("lib-kb.section_all"),
+        items: rest,
+        fold: ranked.length > 0,
+        footer: ranked.length ? t("lib-kb.unsorted_footer_meetings") : undefined,
+      },
+    ];
   } else {
     const ranked = list.filter((e) => e.importance);
     const rest = list.filter((e) => !e.importance);
@@ -531,11 +577,6 @@ export function groupEntries(kind: KBKind, items: KBEntry[], tag?: string): Entr
     ];
   }
   return out.filter((s) => s.items.length);
-}
-
-/** 1985 → "1985" (no grouping comma, the chip is narrow), past 9999 → "10K+" (in Chinese units). */
-export function countLabel(n: number): string {
-  return n > 9999 ? t("lib-kb.count_over") : String(n);
 }
 
 /**
@@ -812,6 +853,8 @@ export interface RecordingView {
   lines: { seconds: number; clock: string; text: string; bookmark?: boolean }[];
   /** Persona attends the meeting in this role (#2981); absent when off. */
   attendance?: "listener" | "participant";
+  /** A room meeting whose room only takes notes (#8851): Persona is not in it and answers nothing. */
+  notesOnly?: boolean;
   /** The session that attends; absent: the main chat. */
   attendingSession?: { machineId: string; sessionId: string };
   /** When its transcript expired with `recording_days` and only the minutes were kept (`meta.trimmed_at`, #3780); absent
@@ -924,6 +967,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     partial: meta?.complete !== true,
     lines,
     ...(role === "listener" || role === "participant" ? { attendance: role } : {}),
+    ...(role === "notes" ? { notesOnly: true } : {}),
     // Both ids or none: anything else names no session, and the main chat attends.
     ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
     ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),

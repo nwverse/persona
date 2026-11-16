@@ -7,18 +7,34 @@ pub mod registry;
 #[cfg(feature = "ohos")]
 mod binding {
     use napi_derive_ohos::napi;
-    use napi_ohos::bindgen_prelude::{Buffer, Result};
+    use napi_ohos::bindgen_prelude::{Buffer, FnArgs, Result, Status};
     use napi_ohos::threadsafe_function::ThreadsafeFunction;
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
 
     use crate::registry::{self, CoreHost};
 
     #[napi(catch_unwind)]
     pub fn core_create(
         config: Buffer,
-        changed: ThreadsafeFunction<i64>,
-        effects: ThreadsafeFunction<Vec<u8>>,
+        changed: ThreadsafeFunction<i64, (), i64, Status, false>,
+        effects: ThreadsafeFunction<Buffer, (), Buffer, Status, false>,
     ) -> Result<i64> {
         registry::create(config.as_ref(), CoreHost::new(changed, effects))
+    }
+
+    #[napi(catch_unwind)]
+    #[allow(clippy::type_complexity)] // Type aliases are not expanded by napi-derive's TypeScript generator.
+    pub fn core_create_with_chat(
+        config: Buffer,
+        changed: ThreadsafeFunction<i64, (), i64, Status, false>,
+        changed_chat: ThreadsafeFunction<FnArgs<(String, i64)>, (), FnArgs<(String, i64)>, Status, false>,
+        effects: ThreadsafeFunction<Buffer, (), Buffer, Status, false>,
+    ) -> Result<i64> {
+        registry::create(
+            config.as_ref(),
+            CoreHost::with_changed_chat(changed, changed_chat, effects),
+        )
     }
 
     #[napi(catch_unwind)]
@@ -32,8 +48,8 @@ mod binding {
     }
 
     #[napi(catch_unwind)]
-    pub fn core_flush(handle: i64, timeout_ms: u32) -> Result<bool> {
-        registry::flush(handle, timeout_ms)
+    pub fn core_flush(handle: i64, timeout_millis: u32) -> Result<bool> {
+        registry::flush(handle, timeout_millis)
     }
 
     #[napi(catch_unwind)]
@@ -44,5 +60,47 @@ mod binding {
     #[napi(catch_unwind)]
     pub fn core_config() -> Buffer {
         registry::config().into()
+    }
+
+    fn from_json<T: DeserializeOwned>(input: &str) -> Result<T> {
+        serde_json::from_str(input).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+    }
+
+    fn to_json<T: Serialize>(value: &T) -> Result<String> {
+        serde_json::to_string(value).map_err(|e| napi_ohos::Error::from_reason(e.to_string()))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_sort(input: String) -> Result<String> {
+        to_json(&persona_core::sort::project(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_answer(input: String) -> Result<String> {
+        let input: persona_core::answer::Input = from_json(&input)?;
+        let transition = persona_core::answer::project(&input)
+            .ok_or_else(|| napi_ohos::Error::from_reason("answer: operation has no transition"))?;
+        to_json(&transition)
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_display_answer(label: String) -> Result<String> {
+        // Unlike the object projections, this NAPI function takes the bare option label.
+        to_json(&persona_core::answer::display(&label))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_stream_chunks(input: String) -> Result<String> {
+        to_json(&persona_core::stream_chunks::split(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_task_index(input: String) -> Result<String> {
+        to_json(&persona_core::task_index::project(&from_json(&input)?))
+    }
+
+    #[napi(catch_unwind)]
+    pub fn core_project_turns(input: String) -> Result<String> {
+        to_json(&persona_core::turns::project(&from_json(&input)?))
     }
 }

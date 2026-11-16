@@ -13,8 +13,6 @@ import {
   nearestStep,
   offlineRuns,
   percentText,
-  perMinute,
-  stackLayers,
   totalTokens,
   UNKNOWN_LAUNCHER,
   USAGE_COLOR,
@@ -25,6 +23,7 @@ import {
   type UsagePoint,
   type UsageRange,
 } from "../../lib/tokens";
+import { perMinute, stackLayers } from "../../lib/usage-rate";
 import { Button, cx, Loading } from "../../ui/atoms";
 import { t } from "../../i18n";
 import { useWidth } from "../../lib/use-width";
@@ -96,7 +95,7 @@ function UsageReport({ mid, heading }: { mid: string; heading: (right: React.Rea
       try {
         const r = await api<{ usage: MachineUsage }>(`/machines/${enc(mid)}/usage?${q}`, { signal: request.signal });
         if (!active()) return;
-        const report = { ...r.usage, points: r.usage.points ?? [], models: r.usage.models ?? [], launchers: r.usage.launchers ?? [] };
+        const report = { ...r.usage, points: r.usage.points ?? [], models: r.usage.models ?? [], launchers: r.usage.launchers ?? [], at: Date.now() / 1000 };
         setAccepted({ scope, data: report });
         setCatalog(report);
         setStatus({ scope, pending: false, failure: "", unsupported: false });
@@ -241,7 +240,7 @@ function stamp(tSec: number, range: UsageRange, tz: number): string {
 /** The per-minute number by the throughput title: the held moment's, or the latest step's, of the kinds shown. */
 function shownNow(data: MachineUsage, picked: UsagePoint | undefined, kinds: UsageKind[]): number {
   const at = picked ?? [...data.points].reverse().find((p) => !p.gap);
-  return perMinute(kinds.reduce((s, k) => s + (at?.[k] ?? 0), 0), data.step);
+  return at ? perMinute(kinds.reduce((s, k) => s + (at[k] ?? 0), 0), data, at.t) : 0;
 }
 
 function Totals({ data }: { data: MachineUsage }) {
@@ -300,7 +299,7 @@ function Legend({ data, picked, hidden, onToggle }: { data: MachineUsage; picked
     <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
       {USAGE_KINDS.map((k) => {
         const off = hidden.has(k);
-        const v = picked ? formatTokens(perMinute(picked[k] ?? 0, data.step)) : formatTokens(data.total[k] ?? 0);
+        const v = picked ? formatTokens(perMinute(picked[k] ?? 0, data, picked.t)) : formatTokens(data.total[k] ?? 0);
         return (
           <button
             key={k}

@@ -14,6 +14,9 @@ interface CoreHost {
     /** Something changed at [version]: pull patches with [RustCore.drain] on the next frame. */
     fun changed(version: Long)
 
+    /** Targeted wake for adapters; existing version-only hosts keep the old callback. */
+    fun changedChat(chat: String, version: Long) = changed(version)
+
     /** A request or timer for the client to run. */
     fun run(effect: Effect)
 }
@@ -51,6 +54,8 @@ class RustCore(config: Config, host: CoreHost) : AutoCloseable {
 internal class HostBridge(private val host: CoreHost) {
     fun changed(version: Long) = host.changed(version)
 
+    fun changedChat(chat: String, version: Long) = host.changedChat(chat, version)
+
     fun run(effect: ByteArray) = host.run(Effect.bincodeDeserialize(effect))
 }
 
@@ -70,4 +75,31 @@ internal object NativeBridge {
     @JvmStatic external fun flush(handle: Long, timeoutMillis: Int): Boolean
 
     @JvmStatic external fun destroy(handle: Long)
+
+    /** Projects the source-derived WebSocket envelope. Pure diagnostic function; no runtime handle needed. */
+    @JvmStatic external fun projectWireEnvelope(input: String): String
+
+    /** Projects the Agents list from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectSort(input: String): String
+
+    /** Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectTurns(input: String): String
+
+    /** Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectStreamChunks(input: String): String
+
+    /** Repairs only an open code fence and reports this slice's code/text end state. Pure function. */
+    @JvmStatic external fun projectStreamRepair(input: String): String
+
+    /** Applies one question-answer operation from a JSON input string. Pure function, no runtime handle needed. */
+    @JvmStatic external fun projectAnswer(input: String): String
+
+    /** Formats a question option's display text and recommendation flag. Pure function, no runtime handle needed. */
+    @JvmStatic external fun displayAnswer(label: String): String
+
+    /** Projects background-task calls, descriptions and notice status sequences from JSON items. Pure function. */
+    @JvmStatic external fun projectTaskIndex(input: String): String
+
+    /** Projects the viewed-image strip for the first represented work group in a lines input. Pure function. */
+    @JvmStatic external fun projectViewedImages(input: String): String
 }

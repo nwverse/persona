@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -90,6 +89,7 @@ internal fun ChatMarkdown(text: String, id: String = text,
 private fun ChatMarkdownCards(text: String, id: String, fences: List<persona.core.domain.views.AssistantFence>,
     bodyStyle: TextStyle, color: Color, viewKeys: ((Int) -> String)?, streaming: Boolean?) {
     val blocks = LocalViewBlocks.current
+    val inPicture = LocalInPicture.current
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         var at = 0
         fences.forEachIndexed { n, fence ->
@@ -97,6 +97,8 @@ private fun ChatMarkdownCards(text: String, id: String, fences: List<persona.cor
             at = fence.end
             when {
                 blocks == null -> CodeText(fence.raw.trimEnd('\n', '\r'), fence.language, syntax = true)
+                // Share's picture: the card as it looks, with nothing that answers, never its JSON (#7261).
+                inPicture -> key(fence.start) { blocks.picture(fence.language, fence.raw, fence.complete, fence.index) }
                 // A card is not words: a selection of the message goes round it.
                 fence.isView -> key(fence.index) { DisableSelection { blocks.block(viewKeys?.invoke(fence.index) ?: "$id/local/${fence.index}", fence.raw, fence.complete) } }
                 else -> {
@@ -163,11 +165,13 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
                 textLink = TextLinkStyles(SpanStyle(color = palette.accent, textDecoration = TextDecoration.Underline))),
             components = markdownComponents(
                 orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
                 unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-                    markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = 8.dp.dense) },
-                    listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+                    markerModifier = { firstBaselineAligned().padding(end = 8.dp.dense) },
+                    listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
+                table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table,
+                    enabled = !LocalInPicture.current) },
                 codeFence = { model ->
                     MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset), color, bodyStyle) {
                         // A card fence the hub's rules do not take as standalone (in a list or a quote): an example, drawn as
@@ -340,6 +344,9 @@ internal fun ChatLineContent(
                 // only the block goes; a reply that said nothing else is not drawn at all
                 if (!hideCloseout || !onlyCloseout(textUpdates[it.id]?.text ?: it.text, cut = it.fullSize != null)) {
                     MessageContent(it, false, textUpdates[it.id], boxed = true, hideCloseout = hideCloseout)
+                    val usage = LocalReplyUsage.current[it.id]
+                    // A reply still streaming has no total yet (the web hides the bar while the turn is live).
+                    if (usage != null && textUpdates[it.id]?.streaming != true) ReplyUsageFooter(it, usage)
                 }
             }
             "thinking" -> if (!style.hidesThoughts()) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)

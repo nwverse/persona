@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Several managers on one hub (docs/assistant/managers.md "Clients"), as the app reads them outside Settings › Assistants:
 // each group's roster, read when its hub says hello and on each of its `managers` pushes. Pages that group a list read
@@ -63,9 +64,10 @@ extension AppModel {
             assistantByGroup[group] = roster.flatMap { assistantByManager[Self.managerKey(group, $0.defaultID)] }
         }
         managerRosters[group] = roster
-        // A pick of a manager that left the roster goes with it: back to the default, also should it come back. A hub
-        // without a roster leaves the pick alone: it names nothing there.
-        if let roster, let pick = assistantPicks[group], !roster.installed.contains(where: { $0.id == pick }) {
+        // A pick of a manager that left the roster goes with it: back to the default, also should it come back. So does
+        // one the hub now keeps out of the switcher (the built-in assistant hidden, #9055). A hub without a roster leaves
+        // the pick alone: it names nothing there.
+        if let roster, let pick = assistantPicks[group], !roster.canPick(pick) {
             assistantPicks[group] = nil
         }
         saveSnapshot()
@@ -173,10 +175,11 @@ extension AppModel {
 
     /// Manager `id` is the current assistant from now on, on this device (nil: the hub's default again, whichever that
     /// becomes): the Persona page's settings, conversations and readiness are that manager's. The pick is the manager
-    /// itself, so it stays when another one becomes the default. Nothing for one the roster hasn't installed.
+    /// itself, so it stays when another one becomes the default. Nothing for one the roster hasn't installed, or keeps
+    /// out of the switcher.
     func selectAssistantManager(_ id: String?) {
         guard let group = hub?.group, let roster = managerRosters[group] else { return }
-        if let id, !roster.installed.contains(where: { $0.id == id }) { return }
+        if let id, !roster.canPick(id) { return }
         let was = assistantManagerID
         assistantPicks[group] = id
         if assistantManagerID != was { assistantManagerChanged() }

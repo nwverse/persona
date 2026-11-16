@@ -76,6 +76,10 @@ func Body(status int, code string, err error) map[string]any {
 	}
 	body := map[string]any{"error": err.Error(), "code": code}
 	switch code {
+	case "search_changed":
+		body["retryable"] = true
+	case "conversation_deleted", "conversation_protected", "conversation_busy":
+		body["retryable"], body["delivered"] = false, "none"
 	case "invalid_token", "forbidden", "bad_request", "not_found", "method_not_allowed", "gone":
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
@@ -141,11 +145,13 @@ func Call(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrOffline) {
 		status = http.StatusServiceUnavailable
 	}
-	code := NodeCode(err)
 	var re *rpc.Error
 	if errors.As(err, &re) && re.Code != "" {
-		code = re.Code
-		switch code {
+		switch re.Code {
+		case "conversation_deleted":
+			status = http.StatusGone
+		case "conversation_protected":
+			status = http.StatusBadRequest
 		case "internal", "node_unreachable", "timeout":
 			status = http.StatusBadGateway
 		case proto.CodeTerminalNotReady: // the node's new tab would not take the start command; nothing ran
@@ -153,6 +159,17 @@ func Call(w http.ResponseWriter, err error) {
 		default:
 			status = http.StatusConflict
 		}
+	}
+	CallStatus(w, status, err)
+}
+
+// CallStatus writes err, a node call's error, as Call does but with status: for a route whose clients already read
+// Call's status as something else (a to-do's accept, where every app takes a 409 for "already handled", #7343).
+func CallStatus(w http.ResponseWriter, status int, err error) {
+	code := NodeCode(err)
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code != "" {
+		code = re.Code
 	}
 	body := Body(status, code, err)
 	// delivered stays what the node said (sendsafe.go): the iOS app treats "unknown" as "maybe typed" and stops
@@ -206,6 +223,7 @@ var rpcFailureKeys = map[string]string{
 	"rewind_mismatch":    "rpc-errors.rewind_mismatch",
 	"rewind_nothing":     "rpc-errors.rewind_nothing",
 	"rewind_failed":      "rpc-errors.rewind_failed",
+	proto.CodeNotLoaded:  "rpc-errors.not_loaded", // a read that would start an agent its engine let go (Paseo, #8132)
 	"skill_unavailable":  "rpc-errors.skill_unavailable",
 	"timeout":            "rpc-errors.timeout",
 	"node_unreachable":   "rpc-errors.unreachable",
@@ -230,7 +248,10 @@ var rpcFailureKeys = map[string]string{
 	"assistant_service_tier_unsupported": "rpc-errors.assistant_service_tier_unsupported",
 	"assistant_service_tier_refused":     "rpc-errors.assistant_service_tier_refused",
 	"readonly_unsupported":               "rpc-errors.readonly_unsupported",
-	"assistant_in_doubt":                 "rpc-errors.in_doubt",
+	// a start whose engine runs only its own launchers and has none of the launcher's kind (#8140); the engine's own
+	// words, naming the launcher, stay in detail
+	proto.CodeLauncherKindMissing: "rpc-errors.launcher_kind_missing",
+	"assistant_in_doubt":          "rpc-errors.in_doubt",
 	// queued messages sent now (#6088)
 	"nothing_queued":        "rpc-errors.nothing_queued",
 	"send_now_unsupported":  "rpc-errors.send_now_unsupported",
@@ -251,6 +272,7 @@ var rpcFailureKeys = map[string]string{
 	"peer_unreachable": "rpc-errors.peer_unreachable",
 	"peer_too_long":    "rpc-errors.peer_too_long",
 	"peer_unconfirmed": "rpc-errors.peer_unconfirmed",
+	"peer_held":        "rpc-errors.peer_held", // a bypass permissions session holds it for approval at the computer
 	"peer_command":     "rpc-errors.peer_command",
 	// a desktop app session nothing runs, which the app did not open in time (node/claudedesktop_open.go)
 	"desktop_open_failed": "rpc-errors.desktop_open_failed",
@@ -268,7 +290,9 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeModesOnComputer: "rpc-errors.modes_on_computer",
 	proto.CodeModesNotRunning: "rpc-errors.modes_not_running",
 	// a message to a stopped agent: read-only, its terminal page's Resume brings it back (node stopped.go, #4754)
-	"agent_stopped": "rpc-errors.agent_stopped",
+	"agent_stopped":      "rpc-errors.agent_stopped",
+	"resume_not_allowed": "rpc-errors.resume_not_allowed",
+	"stop_not_saved":     "rpc-errors.stop_not_saved",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)
@@ -286,6 +310,16 @@ var rpcFailureKeys = map[string]string{
 	proto.CodeSwitchBusy:            "rpc-errors.switch_busy",
 }
 
+// openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
+// whereOpen). One without a known where (an older node, an Agent runtime's own refusal) keeps its words.
+var openElsewhereKeys = map[string]string{
+	"desktop":     "rpc-errors.open_elsewhere_desktop",
+	"terminal":    "rpc-errors.open_elsewhere_terminal",
+	"program":     "rpc-errors.open_elsewhere_program",
+	"other":       "rpc-errors.open_elsewhere_other",
+	"agents_list": "rpc-errors.open_elsewhere_agents_list",
+}
+
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if l == "" {
 		return
@@ -299,6 +333,10 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	}
 	code, _ := body["code"].(string)
 	key := rpcFailureKeys[code]
+	if code == "open_elsewhere" {
+		where, _ := body["where"].(string)
+		key = openElsewhereKeys[where]
+	}
 	if errors.Is(err, ErrOffline) {
 		key = "rpc-errors.offline"
 	}
@@ -364,6 +402,9 @@ func OnMachine(err error, name string) error {
 	data := map[string]any{}
 	if len(re.Data) > 0 && json.Unmarshal(re.Data, &data) != nil {
 		return err
+	}
+	if data == nil {
+		data = map[string]any{}
 	}
 	if n, _ := data["machine_name"].(string); n != "" {
 		return err

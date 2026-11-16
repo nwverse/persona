@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
 const calls = vi.hoisted(() => ({ paths: [] as string[], missing: true }));

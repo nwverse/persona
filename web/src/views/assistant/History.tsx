@@ -1,3 +1,6 @@
+import { shownManager, useShownManager } from "../../lib/manager-choice";
+import { availableConversation, conversationDeleted, conversationDeletionRevision, conversationDeletionScope } from "../../lib/conversation-deleted";
+import { useCanDeleteConversation } from "../../lib/conversation-delete";
 // "All chats" (docs/assistant/assistant.md "Managing its own conversations", the iOS app's sidebar + ArchivedConversationsView): every conversation
 // Persona has, the main one first, the rest newest first by day; search on the title and the last message; a row's menu
 // renames it, copies its id, archives it (the main one can't be). The archived ones are folded at the end. The background
@@ -5,16 +8,19 @@
 // copies its id.
 import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, enc, errorText } from "../../lib/api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { ago, stateOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
-import { refreshAssistant, useStore } from "../../lib/store";
+import { onHubEvent, refreshAssistant, useStore } from "../../lib/store";
+import { isResumed } from "../../lib/reconnect";
 import type { AssistantInfo, Session } from "../../lib/types";
-import { leaderItem } from "../ConversationMenu";
+import { ConversationDeleteConfirmation, leaderItem } from "../ConversationMenu";
+import { GroupCount } from "../SidebarSection";
 import { Button, Collapse, copyText, cx, Dialog, IconButton, Loading, Menu, StatePill, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { InfoTip } from "../../ui/InfoTip";
 import { Icon } from "../../ui/icons";
 import { arrange, conversationTitle, filterConversations, mergeConversations, splitTitle, type Conversation } from "./conversations";
 import { Empty, inputClass, SectionTitle } from "./parts";
@@ -24,6 +30,8 @@ import { backgroundSupervisorTitle, isBackgroundSupervisor } from "../../lib/bac
 import { t } from "../../i18n";
 import { ASSISTANT_SEARCH_FEATURE, markParts, mergeSearch, useAssistantSearch, type AssistantSearchHit } from "../../lib/assistant-search";
 import { PHONE, useMedia } from "../../lib/viewport";
+import { saveRecentTaskChats } from "../../lib/recent-task-chats";
+import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
 
 const NONE: Session[] = [];
 // A row's line under its title: the matching words of a search, or else its last message.
@@ -32,6 +40,13 @@ const ROW_LINE = "mt-0.5 block truncate text-[12px] text-ink-3";
 const pill = (bg: string, ink: string) => `inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full ${bg} px-2 text-[11px] font-medium ${ink}`;
 
 export function History({ origin, onToggleSidebar }: { origin?: string; onToggleSidebar: () => void }) {
+  const deletionRevision = useStore(conversationDeletionRevision);
+  const manager = useShownManager();
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const epoch = useStore(conversationDeletionScope);
+  const account = JSON.stringify([owner, epoch]);
+  const priorAccount = useRef(account);
+  const reads = useRef(0);
   const filter = parseOriginFilter(origin);
   const assistant = useStore((s) => s.assistant);
   const mid = assistant?.machine_id;
@@ -60,27 +75,57 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   }, [live]);
   const nowMs = useNow(60_000);
 
+  /** Reads the list; true when it went through. */
   const load = useCallback(async () => {
+    const read = ++reads.current;
     try {
       const a = await api<AssistantInfo & { conversations: Conversation[] }>("/assistant?archived=1");
+      if (read !== reads.current || manager !== shownManager() || owner !== credentialOwner() || epoch !== conversationDeletionScope()) return;
       setFetched(a.conversations ?? []);
       setError("");
+      return true;
     } catch (e) {
+      if (read !== reads.current || manager !== shownManager() || owner !== credentialOwner() || epoch !== conversationDeletionScope()) return;
       setError(errorText(e));
+      return false;
     }
-  }, []);
+  }, [manager, owner, epoch]);
+  useLayoutEffect(() => {
+    reads.current++;
+    if (priorAccount.current !== account) { priorAccount.current = account; setQuery(""); }
+    setFetched(null); setError(""); setTitles({}); setMarked({}); setRenaming(null);
+  }, [manager, account]);
   useEffect(() => {
     void load();
   }, [load]);
+  // read again after a reconnect (#4954's rule, as the scheduled tasks are): always when the read failed while the hub
+  // was away, else when the hub could not resume, as the pushes missed meanwhile are not replayed
+  const failed = error !== "";
+  useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
+  const [retrying, setRetrying] = useState(false);
+  const [retried, setRetried] = useState(0);
+  const retry = () => {
+    setRetrying(true);
+    void load().then((ok) => {
+      setRetrying(false);
+      if (ok) setRetried((x) => x + 1);
+    });
+  };
+  // Retry goes with the error once the read works: focus that fell to the page's body goes to the first chat instead
+  const page = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!retried || (document.activeElement && document.activeElement !== document.body)) return;
+    page.current?.querySelector<HTMLElement>("a[href]")?.focus();
+  }, [retried]);
 
   const all = useMemo(
     () =>
-      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live.filter((s) => s.assistant)).map((s) => {
+      mergeConversations(fetched ?? [], assistant?.conversations ?? [], live, manager).filter(availableConversation).map((s) => {
         const title = titles[s.session_id];
         const archived = marked[s.session_id];
         return title || archived !== undefined ? { ...s, ...(title ? { title } : {}), ...(archived !== undefined ? { archived } : {}) } : s;
       }),
-    [fetched, assistant?.conversations, live, titles, marked],
+    [fetched, assistant?.conversations, live, manager, titles, marked, deletionRevision],
   );
   const background = assistant?.background_supervisor;
   // what was said in them too (#6283): the manager's search, merged into the local matches (titles, last messages), as
@@ -93,7 +138,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
     const shown = all.filter((s) => matchesOrigin(s, filter, background));
     const merged = mergeSearch(filterConversations(shown, query), said.answer, all, (r): Conversation => ({
       machine_id: r.machine_id, session_id: r.session_id, title: r.title, cwd: "", status: "idle", assistant: true, archived: r.archived, updated_at: r.updated_at, origin: r.origin,
-    })).filter(({ chat }) => matchesOrigin(chat, filter, background));
+    })).filter(({ chat }) => availableConversation(chat) && matchesOrigin(chat, filter, background));
     const byId = new Map<string, AssistantSearchHit>();
     for (const r of said.answer?.results ?? []) if (r.hits[0] && !r.title_match) byId.set(r.session_id, r.hits[0]);
     return { hits: merged.map((m) => m.chat), saidBy: byId };
@@ -126,21 +171,43 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   };
 
   const loading = fetched === null && !error;
+  const options = useMenu();
+  const recentCount = useRecentCount();
+  // The sidebar's Recent, from here (#8324): "Show scheduled task chats" (the hub's, for all devices; only from a hub
+  // that has it) and how many it lists (this browser's), the same settings as Settings has.
+  const recentTaskChats = assistant?.recent_task_chats;
+  const optionItems: MenuItem[] = [
+    ...(typeof recentTaskChats === "boolean"
+      ? [{
+          key: "task-chats", label: t("settings-assistantsettings.recent_task_chats"), checked: recentTaskChats,
+          onSelect: () => void saveRecentTaskChats(!recentTaskChats).catch((e) => toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error")),
+        }]
+      : []),
+    {
+      key: "count", label: t("ui-look.recent_chats"), hint: String(recentCount), onSelect: () => {},
+      children: RECENT_COUNTS.map((n) => ({ key: `count-${n}`, label: String(n), radio: true, checked: n === recentCount, onSelect: () => setRecentCount(n) })),
+    },
+  ];
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         <IconButton icon="sidebar" label={t("assistant-history.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
-        <h1 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-ink">
-          {t("assistant-history.title")}
-          {total > 0 && <span className="ml-2 text-[12px] font-normal text-ink-3 tabular-nums">{total}</span>}
-        </h1>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{t("sidebar.all_chats")}</h1>
+          {total > 0 && (
+            <GroupCount n={total} label={t("sidebar.unarchived_chat_count", { count: total })} className="shrink-0" />
+          )}
+          <InfoTip name={t("sidebar.all_chats")} text={t("assistant-history.scope_help")} className="[@media(pointer:coarse)]:size-11" />
+        </div>
         <IconButton icon="retry" label={t("assistant-history.refresh")} onClick={() => void after()} />
+        <IconButton icon="more" label={t("assistant-history.display_options")} onClick={options.open} active={!!options.anchor} />
+        {options.anchor && <Menu anchor={options.anchor} onClose={options.close} align="right" header={t("settings-assistantsettings.recent_task_chats_title")} items={optionItems} />}
         <Button tone="primary" icon="plus" onClick={() => navigate({ name: "persona-new" })}>{t("assistant-history.new_chat")}</Button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
+        <div ref={page} className="mx-auto max-w-[760px] px-4 py-5 sm:px-8 sm:py-6">
           <label className="mb-5 flex h-9 items-center gap-2 rounded-control bg-surface px-3 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
             <Icon name="search" size={13} stroke={2} className="text-ink-3" />
             <input
@@ -170,10 +237,18 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
               <Loading />
             </div>
           )}
-          {error && fetched === null && (
-            <Empty icon="info" title={t("assistant-history.load_failed")}>
+          {/* The read failed: in place of the list when there is nothing else to show, else one line over the chats the
+              page has from elsewhere (the sidebar's, the live sessions), which may leave out the archived ones. */}
+          {error && fetched === null && all.length === 0 && (
+            <Empty icon="info" title={t("assistant-history.load_failed")} action={<Button icon="retry" busy={retrying} onClick={retry}>{t("assistant-history-load.retry")}</Button>}>
               {error}
             </Empty>
+          )}
+          {error && fetched === null && all.length > 0 && (
+            <div role="status" className="-mt-3 mb-4 flex items-center gap-2 px-1 text-label text-ink-3">
+              <span className="min-w-0 flex-1" title={error}>{t("assistant-history-load.load_partial")}</span>
+              <Button size="sm" tone="quiet" icon="retry" busy={retrying} onClick={retry} className="touch-hit">{t("assistant-history-load.retry")}</Button>
+            </div>
           )}
           {!loading && !error && all.length === 0 && (
             <Empty icon="chat" title={t("assistant-history.empty_title")}>
@@ -208,7 +283,7 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
                 type="button"
                 aria-expanded={showArchived || searching}
                 onClick={() => setShowArchived((v) => !v)}
-                className="mb-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-ink-2"
+                className="touch-hit mb-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-[6px] px-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-ink-2"
               >
                 <Icon name="archive" size={13} />
                 {t("assistant-history.archived_count", { count: archived.length })}
@@ -270,6 +345,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
   const menu = useMenu();
   // found by what was said in it: opens at that message (#6283)
   const route: Route = conversationPage(s.session_id, s.machine_id, s.manager, said?.item_id);
+  const owner = credentialOwner(), epoch = conversationDeletionScope(), manager = shownManager();
   // the background supervisor is built in (#5082): its own name and mark, and nothing to rename, archive or make 常驻
   const builtIn = useStore((x) => isBackgroundSupervisor(x.assistant, s.session_id));
   const title = builtIn ? backgroundSupervisorTitle(s) : conversationTitle(s, main);
@@ -283,6 +359,8 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
   // the chats outside the sidebar live here: 设为常驻 puts one in its 常驻 group (#4331)
   const leader = useStore((x) => !!x.assistant?.leaders?.includes(s.session_id));
   const own = !main && !builtIn;
+  const canDelete = useCanDeleteConversation(s, main, builtIn);
+  const [deleting, setDeleting] = useState(false);
   const items: MenuItem[] = [
     ...(own && !s.archived ? [leaderItem(s, leader)] : []),
     ...(own ? [{ key: "rename", label: t("assistant-history.rename_ellipsis"), icon: "pencil" as const, onSelect: () => onRename(s) }] : []),
@@ -292,12 +370,16 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
           ? { key: "unarchive", label: t("assistant-history.unarchive"), icon: "archive" as const, onSelect: () => onArchive(s, false) }
           : { key: "archive", label: t("assistant-history.archive"), icon: "archive" as const, onSelect: () => onArchive(s, true) }]
       : []),
+    ...(canDelete ? [{ key: "delete", label: t("conversation-menu.delete"), icon: "trash" as const, danger: true, divider: true, onSelect: () => setDeleting(true) }] : []),
   ];
   return (
     <div className={cx("group relative flex items-center gap-1 pr-2 transition-colors hover:bg-hover", menu.anchor && "bg-hover")}>
       <a
         href={href(route)}
-        onClick={(e) => onLinkClick(e, route)}
+        onClick={(e) => {
+          if (conversationDeleted(s.machine_id, s.session_id) || owner !== credentialOwner() || epoch !== conversationDeletionScope() || manager !== shownManager()) e.preventDefault();
+          else onLinkClick(e, route);
+        }}
         title={[title, last].filter(Boolean).join("\n")}
         className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 focus-visible:outline-none"
       >
@@ -317,7 +399,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
               )}
             </span>
             {main && <span className={pill("bg-accent-tint", "text-accent-ink")}>{t("assistant-history.main_chat")}</span>}
-            {builtIn && <span data-testid="built-in" className={pill("bg-field", "text-ink-2")}>{t("assistant-conversations.built_in")}</span>}
+            {builtIn && <span data-testid="built-in" className={pill("bg-field", "text-ink-2")}>{t("assistant-history.built_in")}</span>}
             {origin ? <OriginMark origin={origin} size={16} /> : <ConvChannel ids={s.channels} />}
           </span>
           {said ? (
@@ -340,13 +422,15 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive }: { s: Conversa
         active={!!menu.anchor}
         className={menu.anchor ? "" : "sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"}
       />
+      {deleting && <ConversationDeleteConfirmation s={s} onClose={() => setDeleting(false)} />}
       {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} items={items} align="right" width={180} />}
     </div>
   );
 }
 
 function RenameDialog({ s, onClose, onDone }: { s: Conversation; onClose: () => void; onDone: (title: string) => void }) {
-  const [title, setTitle] = useState(conversationTitle(s) === t("assistant-conversations.untitled") ? "" : s.title);
+  // starts from the title as the list shows it (a chat titled by its context tag: the tag's title, not the tag)
+  const [title, setTitle] = useState(() => { const shown = conversationTitle(s); return shown === t("assistant-conversations.untitled") ? "" : shown; });
   const [busy, setBusy] = useState(false);
   const trimmed = title.trim();
   const save = async () => {

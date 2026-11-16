@@ -3,6 +3,9 @@ import { t } from "../i18n";
 import { sameValue } from "./stable-lines";
 
 export const SESSIONS_LIST_FEATURE = "sessions_list";
+/** Asked for in the WebSocket URL: a `sessions_list` hint after a change also says the revision before it (`since`)
+ *  and which rows changed (`changed`), so an open chat reads its row only when it is one of them (#6685). */
+export const SESSIONS_LIST_CHANGES_FEATURE = "sessions_list_changes";
 export const PAGE_SIZE = 50;
 /** UTF-8 lexical order follows Unicode code points, not locale or JavaScript's surrogate-unit order. */
 export function compareListIds(a: string, b: string): number {
@@ -44,6 +47,8 @@ export function filterQuery(filters: ListFilters, extra: Record<string, string> 
 export interface ListCounts {
   total: number;
   machine: Record<string, number>;
+  /** Non-offline Agent roots by computer. Missing on older hubs or without roots=1. */
+  active_agents_by_machine?: Record<string, number>;
   project: Record<string, number>;
   group: Record<string, number>;
   state: Record<string, number>;
@@ -69,6 +74,9 @@ export interface ListSnapshot<T> {
   rows: T[];
   loaded: boolean;
   loading: boolean;
+  /** A page someone asked for is being read (Load more, infinite scroll). A background refresh sets only `loading`, so
+   *  a Load more stays where it is while the list refreshes, and a click then queues its page (#9215). */
+  loadingMore: boolean;
   error: string | null;
   total: number;
   counts: ListCounts | null;
@@ -91,6 +99,10 @@ export interface SessionListOptions<T> {
   counts?: boolean;
 }
 
+/** What a `sessions_list` hint says of the change it follows (`sessions_list_changes`, #6685): the revision before it,
+ *  the one it reaches, and the rows changed in between as `[machine_id, session_id]`. */
+export interface ListChangeHint { revision?: unknown; since?: unknown; changed?: unknown }
+
 type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; revision: string; total: number };
 type Work = { generation: number; load: boolean; more: boolean; kind: "load" | "more" | null; promise?: Promise<void> };
 class Rebaseline extends Error {}
@@ -100,20 +112,25 @@ class Rebaseline extends Error {}
  * Rejected reads also set `error`; invalidation is fire-and-forget and records errors without rejecting globally.
  */
 export class SessionList<T> {
-  private snapshot: ListSnapshot<T> = this.empty();
+  protected snapshot: ListSnapshot<T> = this.empty();
   private listeners = new Set<() => void>();
   private filters: ListFilters = {};
   private generation = 0;
-  private work: Work = { generation: 0, load: false, more: false, kind: null };
+  protected work: Work = { generation: 0, load: false, more: false, kind: null };
   // The frozen cursor never follows the delta checkpoint. Counts are not a row checkpoint either.
-  private cursor?: string;
+  protected cursor?: string;
   private frozenRevision?: string;
-  private checkpoint?: string;
+  protected checkpoint?: string;
   private frozen = new Map<string, T>();
   // Including unmaterialized identities is essential: a later frozen page may carry their stale copies.
   private overlay = new Map<string, T | null>();
   private prefixSize = PAGE_SIZE;
-  private invalidationQueued = false;
+  protected invalidationQueued = false;
+  /** The next scheduled invalidation's read, shared by every hint in its window (`invalidate`). */
+  private invalidationTimer?: ReturnType<typeof setTimeout>;
+  /** When the last invalidation's read went out, then when it came back (0 when none): a hint inside the window waits
+   *  for the window's end. */
+  protected invalidatedAt = 0;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
   private roots: boolean;
@@ -126,7 +143,7 @@ export class SessionList<T> {
     private identity: (row: T) => string,
     private compare: (a: T, b: T) => number,
     private onRows?: (rows: T[]) => void,
-    private removeIdentity: (id: string) => string = (id) => id,
+    protected removeIdentity: (id: string) => string = (id) => id,
     options: SessionListOptions<T> = {},
   ) {
     this.summary = options.summary ?? true;
@@ -190,16 +207,33 @@ export class SessionList<T> {
     return this.lastFailure === "more" && (this.snapshot.counts || !this.counted) ? this.more() : this.load();
   }
 
+  /** A hint burst from a busy fleet (every working agent's update broadcasts a sessions_list notice) must not become
+   *  a read per hint: the hints of one 2 s window share its read, also while a read is out (docs/design/PRINCIPLES.md,
+   *  fast and local-first). A hint read at once whenever a read was out kept a busy fleet's list reading back to back:
+   *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. A grouped list's section also
+   *  passes over hints naming none of its rows (lib/section-list.ts, #9176). */
   invalidate(): void {
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
     const generation = this.generation;
     queueMicrotask(() => {
-      if (!this.current(generation)) return;
+      if (!this.current(generation) || !this.invalidationQueued) return;
+      // inside the last read's window (none yet: invalidatedAt 0 is long past)
+      const wait = this.invalidatedAt + 2_000 - Date.now();
+      if (wait > 0) {
+        // invalidationQueued stays set: further hints of this window return at once. The window's end clears it
+        // first, or its own invalidate would return at once too and no hint would ever read again.
+        this.invalidationTimer = setTimeout(() => {
+          this.invalidationTimer = undefined;
+          this.invalidationQueued = false;
+          this.invalidate();
+        }, wait);
+        return;
+      }
       this.invalidationQueued = false;
-      // Unlike an explicit duplicate load, a hint during a read needs one trailing read.
-      this.work.load = true;
-      void this.enqueue("load").catch(() => {});
+      this.invalidatedAt = Date.now();
+      if (this.work.promise) this.work.load = true; // a window that ends during a read: one trailing read after it
+      else this.load().catch(() => {});
     });
   }
 
@@ -208,11 +242,14 @@ export class SessionList<T> {
     this.generation++;
     this.work = { generation: this.generation, load: false, more: false, kind: null };
     this.invalidationQueued = false;
+    clearTimeout(this.invalidationTimer); // undefined (none pending) is a no-op
+    this.invalidationTimer = undefined;
+    this.invalidatedAt = 0;
     this.clearBaseline();
   }
 
   private empty(): ListSnapshot<T> {
-    return { rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
+    return { rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null };
   }
 
   private clearBaseline(): void {
@@ -247,11 +284,18 @@ export class SessionList<T> {
       this.publish({ loading: true, error: null });
       try {
         while (this.current(work.generation) && (work.load || work.more)) {
-          const next = work.load ? "load" : "more";
+          // a page someone asked for goes before a refresh: the frozen cursor does not depend on the checkpoint
+          const next = work.more ? "more" : "load";
           work[next] = false;
           work.kind = next;
-          if (next === "load") await this.refresh(work.generation);
-          else await this.readMore(work.generation);
+          this.publish({ loadingMore: next === "more" });
+          if (next === "more") await this.readMore(work.generation);
+          else {
+            await this.refresh(work.generation);
+            // the next window counts from when this read came back, not when it went out: a slow read still leaves
+            // the list idle between a busy fleet's reads
+            if (this.invalidatedAt && this.current(work.generation)) this.invalidatedAt = Date.now();
+          }
         }
       } catch (error) {
         if (!this.current(work.generation)) return;
@@ -262,7 +306,7 @@ export class SessionList<T> {
       } finally {
         work.kind = null;
         work.promise = undefined;
-        if (this.current(work.generation)) this.publish({ loading: false });
+        if (this.current(work.generation)) this.publish({ loading: false, loadingMore: false });
       }
     });
     return work.promise;
@@ -476,7 +520,7 @@ export class SessionList<T> {
     this.publish({ rows: this.visible(), total: first.total, hasMore: !!cursor || frozen.size > depth });
   }
 
-  private candidates(): Map<string, T> {
+  protected candidates(): Map<string, T> {
     const rows = new Map(this.frozen);
     for (const [id, row] of this.overlay) {
       if (row === null) rows.delete(id);

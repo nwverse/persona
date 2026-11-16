@@ -70,8 +70,12 @@ Every change above is done on Glass, Brief and Board keep working (decision 8), 
 
 - With #5185, which folds a tab's workers under their lead: iOS's one-line row for a tab of several agents in every row style (`TabGroupRow`), and iOS's names for a tab's agents ("Claude 2", the starter marked) (A9).
 - Deferred on 2026-11-12: the Personal Agents pill and its page, since few people use personal agents (A11).
-- With phase 3 F7: the groupings and the git and worktree actions Android lacks, and the workspace catalog iOS reads a worktree's branch, Detached HEAD and offline state from (A7).
+- With phase 3 F7: the flat By Machine grouping, the git and worktree actions Android lacks, and the workspace catalog iOS reads a worktree's branch, Detached HEAD and offline state from (A7). By App and Recently Used landed in #9199 (below).
 - Kept as they are: the "N more idle" row puts its caret after the words, where iOS puts its icon first (A8); By Status's pill draws a board of columns, since no generated glyph draws iOS's two dots (A4); iOS's search scopes and evidence snippets are not ported (A10); the computer's projects page draws the sessions the phone has loaded, where iOS reads every session it has (A11).
+
+### By App and Recently Used (#9199, 2026-11-16)
+
+Done: Android's Agents grouping menu offers **By App** and **Recently Used** with iOS's sections, order and titles (`AgentAppGroups` / `recentAgentOrder` in core/domain; `AgentGrouping.App` / `Recent` in `selectable` and `fromPreference`; default still By repository). By App: desktop apps (Claude, Codex, then others by name), then herdr / Herdr App / Orca / Tern, then Other; the app is the section heading, each project a smaller fold row (`AgentAppProjectRow`, iOS `AppProjectRow`: folder or agents mark for Other, secondary title, machine caption when the section mixes computers, idle-toned count, chevron), sessions one level in; Sort hidden. Recently Used: one flat latest-first list (offline included); no section when empty; never folds; Sort and Collapse / Expand All hidden. Strings en / zh-Hans / ja. Domain tests port iOS `AppGroupsTests` and recent `AgentListOrderTests`; menu-rule tests in `AgentsHomeAffordancesTest`; JVM shots `ByAppShotsTest` and `RecentlyUsedShotsTest` in Glass / Brief / Board, light and dark.
 
 ### Already decided by the spec: which assistant's computers show
 

@@ -1,4 +1,4 @@
-Replace the business repository associations of a to-do. Read todo_repositories_get and repositories_list first, and supply their exact revisions. An explicit empty array removes associations only, without deleting code or changing task progress. Existing source snapshots remain unchanged; remove and reselect a repository to adopt a changed catalog identity. Associations remain editable after execution. Omitted per-repository links preserve existing links; [] clears them. On conflict read again and reconcile, never blindly retry.
+Replace associations atomically using revisions from todo_repositories_get and repositories_list. [] removes metadata only. Retained source snapshots stay fixed; remove and reselect to adopt a changed catalog identity. Editable after execution. Omitted links preserve; [] clears. Use {url} or {kind,number}; omitted/empty titles preserve retained titles. On conflict reread and reconcile. No files, task progress or completion changes.
 
 ```json
 {
@@ -72,6 +72,11 @@ Replace the business repository associations of a to-do. Read todo_repositories_
                 },
                 "number": {
                   "type": "string"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Full source title as plain text; max 1,024 UTF-8 bytes after trimming.",
+                  "maxLength": 1024
                 }
               },
               "additionalProperties": false

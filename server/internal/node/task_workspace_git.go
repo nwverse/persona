@@ -5,11 +5,12 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"unicode"
 
-	"github.com/nwverse/persona/server/internal/assistant/repository"
+	repository "github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
@@ -317,16 +318,30 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 	// remain registered and are never recursively removed with their object store.
 	for i := range j.Repositories {
 		r := &j.Repositories[i]
-		if r.Removed || r.State != "ready" {
+		if !r.Removed && r.State != "ready" {
 			continue
 		}
-		if code := e.inspect(ctx, r); code != "" {
-			return e.fail(code, "cleanup", r.RepoID, r.Path)
+		if !r.Removed {
+			if code := e.inspect(ctx, r); code != "" {
+				return e.fail(code, "cleanup", r.RepoID, r.Path)
+			}
+			if r.Dirty && !req.Force {
+				return e.fail("worktree_dirty", "cleanup", r.RepoID, r.Path)
+			}
 		}
-		if r.Dirty && !req.Force {
-			return e.fail("worktree_dirty", "cleanup", r.RepoID, r.Path)
-		}
-		if req.DeleteBranch && !req.Force {
+		if req.DeleteBranch && !req.Force && !r.BranchDeleted {
+			// A partial cleanup may have removed the worktree already. Its branch
+			// still needs the same non-force protection on every retry/recovery.
+			if !e.owned(r.CommonDir) {
+				return e.fail("identity_mismatch", "cleanup", r.RepoID, r.CommonDir)
+			}
+			if _, err := workspaceReadGit(ctx, r.CommonDir, "show-ref", "--verify", "--quiet", "refs/heads/"+r.TaskBranch); err != nil {
+				var exit *exec.ExitError
+				if errors.As(err, &exit) && exit.ExitCode() == 1 {
+					continue // Deletion completed before its receipt; no branch remains to protect.
+				}
+				return e.fail("inspection_failed", "cleanup", r.RepoID, r.Path)
+			}
 			if _, err := workspaceReadGit(ctx, r.CommonDir, "merge-base", "--is-ancestor", "refs/heads/"+r.TaskBranch, "refs/persona/base"); err != nil {
 				return e.fail("worktree_unmerged", "cleanup", r.RepoID, r.Path)
 			}

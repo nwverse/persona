@@ -53,3 +53,15 @@ func Snapshot(manager, todo string, revision int64, rows []TaskRepository, selec
 func ValidRevision(revision *int64) bool              { return repositorywire.ValidRevision(revision) }
 func LinkKey(identity Identity, link TaskLink) string { return repositorywire.LinkKey(identity, link) }
 func DefaultAlias(identity Identity) string           { return repositorywire.DefaultAlias(identity) }
+
+func PreserveLinkTitles(current, next []TaskLink)          { repositorywire.PreserveLinkTitles(current, next) }
+func ParseTaskLink(raw string) (Identity, TaskLink, error) { return repositorywire.ParseTaskLink(raw) }
+func ParseTaskLinkInput(in LinkInput) (Identity, TaskLink, error) {
+	return repositorywire.ParseTaskLinkInput(in)
+}
+func MergeTaskLinks(current []TaskRepository, urls []string, catalog Catalog) ([]TaskRepository, error) {
+	return repositorywire.MergeTaskLinks(current, urls, catalog)
+}
+func MergeTaskLinkDetails(current []TaskRepository, input []LinkInput, catalog Catalog) ([]TaskRepository, error) {
+	return repositorywire.MergeTaskLinkDetails(current, input, catalog)
+}

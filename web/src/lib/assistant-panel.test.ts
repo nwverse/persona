@@ -57,6 +57,21 @@ describe("the setup a Persona chat's next message runs on", () => {
     expect(assistantSetup(chat({ session: session({ launcher: "gone", model: "kimi" }) }), info)).toEqual({ provider: "claude", model: undefined, effort: "medium", source: "own" });
   });
 
+  it("a Main chat default of another agent kind keeps what the conversation runs; same-kind and unknown defaults stay unchanged", () => {
+    const running = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5" }) });
+    expect(assistantSetup(running, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "own" });
+    expect(assistantPillView(running, assistantSetup(running, info), info, listOf("codex"))).toMatchObject({ engine: "codex", provider: "codex", model: "5.5" });
+    const fastRunning = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5", service_tier: "priority" }) });
+    expect(assistantSetup(fastRunning, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true, source: "own" });
+    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "5.5", fast: true });
+    const sameKind = { ...info, def: { provider: "codex" } };
+    expect(assistantSetup(running, sameKind)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "default" });
+    const sameProviderID = { ...info, launchers: [{ name: "launcher.codex", source: "builtin" }], def: { provider: "launcher.codex" } };
+    expect(assistantSetup(running, sameProviderID)).toEqual({ provider: "launcher.codex", model: undefined, effort: "medium", source: "default" });
+    const unknown = { ...info, def: { provider: "gone" } };
+    expect(assistantSetup(running, unknown)).toEqual({ provider: "gone", model: undefined, effort: "medium", source: "default" });
+  });
+
   it("an older hub keeps this page's pick; the new-conversation page has its own, the default otherwise", () => {
     pickLauncher("server/c1", "team-api");
     pickModel("server/c1", "claude-haiku-5-5");
@@ -92,6 +107,12 @@ describe("the panel's providers", () => {
     // the provider it runs on is the one whose models switch "at once" (Recommended); its row is the default's model
     expect(state).toEqual({ current: { provider: "claude", model: "opus", effort: "medium" }, recommended: ["claude"] });
     expect(providers.find((p) => p.id === "codex")).toMatchObject({ loading: true, models: null });
+  });
+
+  it("a Paseo provider that can't run it is off as that provider, never 'paseo' (#8142)", () => {
+    const paseo: AssistantLaunchers = { ...info, unavailable: [{ name: "grok", kind: "launcher", agent: "paseo", code: "not_main_chat", reason: "跑不了主对话" }, { name: "cursor", kind: "launcher", agent: "paseo", code: "not_main_chat", reason: "跑不了主对话" }] };
+    const { providers } = assistantPanel(assistantSetup(chat({ isMain: true }), paseo), paseo, listOf, {});
+    expect(providers.filter((p) => p.unavailable).map((p) => [p.id, p.engine])).toEqual([["grok", "grok"], ["cursor", "cursor"]]);
   });
 
   it("an ID typed before is listed (and can be forgotten); typed IDs only where the hub keeps them; a launcher that fixes its model offers its default only", () => {

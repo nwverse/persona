@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Hand to AI (docs/assistant/inbox.md "Item actions", #1194): Persona's main chat is the default and goes through the
 /// item's hand-off, Also Mark as Done stays off for every target until the user sets it, a retry of the same hand-off
@@ -71,6 +72,7 @@ struct InboxHandOffModelTests {
                 if let delay = calls.agentDelay { try? await Task.sleep(for: delay) }
                 return calls.agentAccepted ? InboxHandOffModel.AgentSendResult(delivered: true, error: nil, filed: calls.agentFiled) : .failed(calls.agentError)
             },
+            waitForNewAgent: { _, _ in .sent },
             open: { calls.went.append(($0, $1)) },
             markDone: { calls.done += 1 }))
     }

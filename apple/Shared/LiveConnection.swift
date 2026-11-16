@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import os
+import PersonaWire
 
 /// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
@@ -94,6 +96,9 @@ nonisolated enum ServerEvent: Sendable {
     /// A meeting's conversation changed (#3862, docs/assistant/meeting-minutes.md「The `meeting_live` event」): content-free,
     /// only the parts that changed (an open set) and their revisions; the app reads the newer parts with `GET …/live?parts=`.
     case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
+    /// An urgent call moved on (docs/assistant/urgent-call.md): a phone still ringing for one answered or settled
+    /// elsewhere stops.
+    case urgentCall(id: String, state: String)
     case error(SessionKey?, String)
 
     private struct EventType: Decodable { var type: String }
@@ -324,6 +329,9 @@ nonisolated enum ServerEvent: Sendable {
         case "terminal_control":
             guard let key, let state = e.state else { return nil }
             return .terminal(key, .control(state: state, cols: e.cols, rows: e.rows, why: e.error))
+        case "urgent_call":
+            guard let id = e.id, !id.isEmpty, let state = e.state else { return nil }
+            return .urgentCall(id: id, state: state)
         case "meeting_live":
             guard let id = e.recordingID, !id.isEmpty else { return nil }
             let changed = (e.changed?.array ?? []).compactMap { part -> String? in
@@ -358,7 +366,7 @@ nonisolated extension ServerEvent {
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
              .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive: return self
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall: return self
         }
     }
 }
@@ -694,6 +702,25 @@ final class LiveConnection {
             try? await Task.sleep(for: .seconds(Self.slowAfter))
             guard let self, gen == self.generation, self.state == .connected, self.lastPong < sent else { return }
             self.stalled = true
+        }
+    }
+
+    /// One ping on this connection for the live screen's Connection Stats (#6558): the round trip to the hub, or nil
+    /// without a connection or without a pong within 5 s. The heartbeat's kind of ping; it changes none of its state.
+    func roundTrip() async -> TimeInterval? {
+        guard state == .connected, let t = task else { return nil }
+        let sent = Date.now
+        return await withCheckedContinuation { (c: CheckedContinuation<TimeInterval?, Never>) in
+            let done = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (TimeInterval?) -> Void = { v in
+                let first = done.withLock { was -> Bool in
+                    defer { was = true }
+                    return !was
+                }
+                if first { c.resume(returning: v) }
+            }
+            t.sendPing { @Sendable error in finish(error == nil ? Date.now.timeIntervalSince(sent) : nil) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(nil) }
         }
     }
 

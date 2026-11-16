@@ -51,7 +51,7 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
 			case errors.Is(err, errNotPending):
 				s.writeEnded(r.Context(), w, id, res, err)
-			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel):
+			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer):
 				apierr.Write(w, http.StatusBadRequest, err)
 			default:
 				apierr.Call(w, err) // prompt_changed: 409, nothing pressed
@@ -179,9 +179,7 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 			if sess.Assistant {
 				sess.Space = identity.SpaceOf(sess.Cwd)
 			}
-			if title := s.agentDisplayName(m.ID, sess); title != "" {
-				sess.Title = title
-			}
+			s.nameAgentRow(m.ID, &sess)
 			// The node fills in no unified state: the callers that ask whether it works or waits for the user
 			// (sessionBusy, waitTurnEnd, a repair's end) read the manager's, as the lists have it.
 			if d, found := s.decoratedSession(m.ID, a.SessionID); found {
@@ -261,6 +259,9 @@ func (s *Service) channelResolve(ctx context.Context, ch, id string, r proto.Res
 			return nil, i18n.Err("assistant-channels_plugin.fill_in_app")
 		}
 		r.Values = nil
+	}
+	if !editedAnswerAllowed(ix, r) {
+		return nil, errInvalidEditedAnswer
 	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsOwnerAction, map[string]any{"interaction_id": id,
 		"action": action, "channel": ch, "kind": ix.Kind}, nil); err != nil {

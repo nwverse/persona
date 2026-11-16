@@ -2,7 +2,7 @@
   "archived_toast": "「{title}」をアーカイブしました",
   "unarchived_toast": "「{title}」のアーカイブを解除しました",
   "sidebar": "サイドバー",
-  "title": "Personaのチャット",
+  "scope_help": "Personaとのチャットを表示します。合計はアーカイブ済みのチャットを含まず、検索や絞り込みで変わりません。「アーカイブ済み」には現在の条件に一致する件数を表示します。",
   "refresh": "更新",
   "new_chat": "新しいチャット",
   "search_placeholder": "タイトルや最後のメッセージを検索",
@@ -25,5 +25,7 @@
   "renamed": "名前を変更しました",
   "rename_title": "チャットの名前を変更",
   "title_placeholder": "チャットのタイトル",
-  "rename_hint": "設定したタイトルは自動タイトルで上書きされません。"
+  "rename_hint": "設定したタイトルは自動タイトルで上書きされません。",
+  "built_in": "内蔵",
+  "display_options": "表示オプション"
 }

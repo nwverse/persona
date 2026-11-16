@@ -102,6 +102,18 @@ Tests need the system row followed by a real-shaped synthetic assistant error, p
 an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
 and the item-cache version bump separately.
 
+Behind a gateway the switch itself was the failure (#7319): Claude Code picks the fallback model's ID on its own, so a
+gateway without it answers 404 after two requests that cannot succeed. A gateway-shaped managed provider whose model
+list lacks one of Claude Code's fallback models (`refusalFallbackModels`, `node/launcherenv.go`) now launches with
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`, and the refusal ends the turn instead: a `system/model_refusal_no_fallback`
+row and a synthetic `stop_reason: "refusal"` reply. Keep both endings tested: the no-fallback one must stay a
+safeguards refusal for the assistant's recovery whether the reply carries `isApiErrorMessage`, an error code or neither,
+and must not become `model_fallback_unavailable` (no fallback row); the fallback 404 must stay
+`model_fallback_unavailable`, the user's, for every start that keeps the switch: Anthropic's own API, gateways whose list
+has every fallback model, unmanaged launchers, providers from before #2455, providers with no model list and providers
+that turn the switch back on. The fallback IDs are Claude Code's and change with its versions: when a transcript's
+`fallbackModel` names one the constant does not have, update the constant and its test.
+
 ## Subagent peer reports are nonterminal tool output (#3378)
 
 A peer display name such as `general-purpose` does not prove a subagent relationship. Associate `origin.from` /
@@ -127,7 +139,9 @@ Now it skips only small files that have been read in full (no larger than the ta
 
 The same window also lost the last words of online sessions (#1583): after the Agent said something and then made dozens of tool calls, tool results, hook receipts (`async_hook_response`), and request lines quickly exceeded 384 KB.
 `last_text` became empty, leaving task cards and main-chat snapshots showing "No activity yet" for 7 minutes. `readQuickMetaSince` now reuses the previously read text when the window contains none;
-if there is no previous value (the node has just started), it searches backward in segments (`lastWordsBefore`, up to 8 MB). For any "last X" value found only in the tail, consider that it may already be outside the window.
+if there is no previous value (the node has just started), it searches backward in segments (`lookBack`, up to 8 MB). For any "last X" value found only in the tail, consider that it may already be outside the window.
+
+That retained preview belongs to the last visible words, not necessarily the latest turn (#6221). A later silent BotMux reply, or a turn with only tools and thinking, can leave an older API error there even after the structured `TurnError` cleared. Retire that error-only preview only when a newer `turn_duration` closes a turn with a visible non-synthetic model reply and no newer error; a prompt, an unclosed reply or process exit is not recovery. The reply and its close can straddle the quick-tail boundary, so backward recovery must reread an expanding window through the current end, not treat a close without the reply as success. Do not rewrite the historical error item.
 - **A Claude Code transcript is a tree** (`uuid` / `parentUuid`): rewinding (`/rewind`) or editing and resending with ↑ writes the next message as a sibling of an earlier one. Rewound turns remain in the file. See
   `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewinding to a message");
   **pressing Esc to cancel a message before any reply, then sending again, also writes the same pair of siblings** (#3036; observed: two identical messages under the same "[Request interrupted by user]" line, with no reply to the first).
@@ -136,6 +150,25 @@ if there is no previous value (the node has just started), it searches backward 
   Do not walk backward from the end along parentUuid (parallel tool results are normal branches, and `compact_boundary` has a null parent). Abandoning a branch changes only the `history` token (`.r<n>`),
   not the item structure, so there is no need to bump the App's `ChatCache` directory version. Clients already discard and refetch local content when the token changes. Validate against a real corpus:
   build one old and one new binary with `go test -c ./internal/transcript`, compare item counts file by file with `-test.run 'TestCorpus$' -corpus <directory> -out <file>`, then run `TestCorpusWindowed`.
+
+### The head speaks for the start, never for the end (2026-11-13, #5896)
+
+`readQuickMetaSince` also reads the transcript's head, up to its first prompt, for the title and the starting directory. It used to parse the head and the tail into one `transcript.Meta`,
+so whenever the tail held no exchange, the first prompt's time, its open turn and its mode were the session's latest: the row's `updated_at` jumped back to the first message (by days for a session days old,
+so it sank in every time-sorted list), the session showed as working for up to 45 s after every turn had ended, in the mode it was started in, and a question in its last reply stopped counting as asked.
+A tail holds no exchange when its last exchange is one line bigger than the window (a screenshot's tool result, cut by the window's start and dropped as a partial line) or when a recap's `api-request-blob` fills it.
+On one machine's real transcripts: 1 of 124 was in that state when scanned, and 21 transcripts had been in it 107 times, the longest for 37 minutes.
+
+- The head and the tail each get a `Meta` of their own. Only what belongs to the start crosses over: the first prompt, the starting directory, and what a Codex rollout says once on its first line (directory, version, client).
+  One `Meta` fed from two places leaks every field by default, including the ones added later; a fresh one leaks none.
+- What the tail does not say stands as it stood before it, for every "last X" the quick read reports (words, last exchange, last prompt, turn, mode): the last read's when nothing written since is out of the tail
+  and no turn in it was gone back over (after a rewind all of that read's state may be the abandoned turn's, not only its words), else what the lines further back say (`lookBack`), starting with the line
+  the window's start cuts. No exchange known at all leaves the file's time (`lastUsed`), never the first prompt's.
+- Reading back, parse one stretch ending at the boundary into one `Meta`, a longer one each time (as `transcripttail.LastWordsBefore` does), and take every field from it. A fresh `Meta` per window,
+  each field kept from the nearest window that set it, mixes turns, and a window that starts mid-way misreads context: a local command whose output is in a newer window than the command left an ended session working.
+- The leak also hid a gap: a long turn's prompt leaves the tail after 384 KB, and the turn only read as open because the first prompt's did. Removing a wrong source of a value means supplying the right one
+  (the turn seen starting stays open until the tail ends it), and testing the case the wrong one happened to cover.
+- Check such a change against real transcripts, not only fixtures: compare the quick read with a read of the whole file, per field, and print ids and counts only.
 
 ## A subagent's report is a tool call now (2026-11-06, #5886)
 
@@ -299,3 +332,32 @@ A view that fetches once per id cannot recover when the store puts the same id b
   `rolloutAgent`). Claude rows still look again every half minute; a shared read per list pass would bound them, but it
   must not hide a newer copy that appears in another config directory meanwhile
   (`TestAssistantResumeKeepsARunningProcessProfile`).
+
+## Structural tool-input clipping must count its own marker (#2907)
+
+- A size-indexed clip pass must include the appended marker, its root comma and every change in the omission counts before
+  deciding to stop. Excluding the marker makes an exactly full result cross the budget only when the final JSON is encoded.
+  Keep the marker as a fixed root suffix: ordinary tail removal would otherwise delete it when the root is the widest object.
+- Dropping an ancestor detaches its whole subtree. Mark those descendants inactive instead of resizing their ancestors again;
+  lazy heap removal then skips them. Compare the optimized size index with a deliberately naive reference that re-encodes after
+  every removal, including nested arrays, root-wide objects and marker-key collisions.
+- Walking every ancestor to update its size after each drop is quadratic on deep nesting. Keep one running total, sum a subtree
+  only when detaching it, and pin the work with a node-visit counter rather than a clock. Each indexed node is then visited at
+  most once after the initial tree walk, plus its deactivation.
+- A top-level string metadata field becomes the title in clients that name a call by its first string argument, including
+  already-installed versions. Use an object holding the note instead. Go and the web find that note recursively; Apple and
+  Android's `cutText` handling applies to item text, not recursive tool-input detection.
+- JavaScript's `Object.keys` order (integer-like keys first) and default UTF-16 sort do not match Go's UTF-8/code-point key
+  order. Sort only the SDK's removal and preorder keys with UTF-8 bytes; delete from the original object so surviving fields
+  retain their own output order. Compare shared cases as parsed values and keep known encoder differences platform-specific.
+
+## A Codex command can outlive its turn (#8868)
+
+- Codex records one `CommandExecution` twice when a command is backgrounded: first with `status: backgrounded` and its
+  start output, later with `completed` or `failed` and the final output under the same item id. The first record is a
+  pending `tool_use`, not a finished call; emitting a result there discards the real output and exit status.
+- Suppress a repeated background record through genuinely pending state, which survives `task_started`, and mark the id
+  as seen only when its terminal record arrives. If the pending cap evicted the id, its completion must still keep the
+  final output: fall back to a standalone call and result pair, as a cold read does when it no longer tracks the call.
+- Keep the pending queue and map in sync and remove the entry on completion. Otherwise a later command that reuses the
+  id inherits the old queue position, and the cap evicts it instead of the oldest live command.

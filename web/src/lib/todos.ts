@@ -37,6 +37,9 @@ export interface TodoSpace {
   linked_at: string;
 }
 
+/** What the hub last read of a PR on GitHub (pr_status.go). */
+export interface PRFacts { url: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+
 export interface Todo {
   id: string;
   title: string;
@@ -62,6 +65,8 @@ export interface Todo {
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
+  /** "concern" records a question the owner wants answered (docs/assistant/todos.md "Concerns"); unset for other to-dos and older hubs. */
+  kind?: string;
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
@@ -83,6 +88,10 @@ export interface Todo {
   stage_kind?: string;
   /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
+  /** Fresh, observational pull request facts; these do not change the task lifecycle. */
+  pr_status?: PRFacts;
+  /** Facts of its earlier PRs, newest first (#7935): work spanning several PRs waits for merge while any is open. */
+  other_prs?: PRFacts[];
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
   /** The hub's latest automatic completion check of its work, while still current (#3180, docs/assistant/todos.md
@@ -303,9 +312,10 @@ export function isReviewDone(todo: Todo): boolean {
 }
 
 /** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
- *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks"). */
+ *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks").
+ *  An open concern still waits for its report, so neither an accepted verdict nor its done styling applies (#3582). */
 export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
-  return !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+  return todo.kind !== "concern" && !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
 }
 
 /** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
@@ -676,6 +686,8 @@ export interface TodoDecision {
   /** The newest decision that replaces this one; empty while it is in effect. */
   superseded_by: string;
   created_at: string;
+  /** Completion time for an outcome written by Persona, which may be recorded later. */
+  phase_completed_at?: string;
 }
 
 /** Where a decision came from, as the detail page says it: the agent that asked, by its title when known. */

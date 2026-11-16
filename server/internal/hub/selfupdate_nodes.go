@@ -62,7 +62,7 @@ func (u *updater) stageNodes(ctx context.Context, m *update.Manifest, staged, bi
 			}
 			continue
 		}
-		if _, err := update.Download(ctx, u.client, u.h.updateURL(), m.Files[plat], nodes); err != nil {
+		if _, err := u.download(ctx, m, m.Files[plat], nodes); err != nil {
 			return "", err
 		}
 	}

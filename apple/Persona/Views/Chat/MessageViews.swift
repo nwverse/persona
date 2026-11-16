@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 extension MarkdownUI.Theme {
     /// Reading-first markdown: system body text, roomy lists, quiet code blocks.
@@ -122,6 +123,7 @@ extension MarkdownUI.Theme {
                 .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(Theme.Level.code.size / Theme.Level.body.size)) }
                 .padding(Theme.Space.m)
         }
+        .clipped() // not past the block into the safe area beside it (`ReplyCodeBlock`, #8212)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
         .macHoverActions {
             MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
@@ -1139,7 +1141,7 @@ private struct StreamingMarkdown: View {
 }
 
 /// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
-/// (P9), at most 30 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
+/// (P9), 10 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
 /// as it comes.
 @MainActor @Observable
 final class StreamRevealClock {
@@ -1198,16 +1200,17 @@ final class StreamRevealClock {
         guard link == nil else { return }
         // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
         let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
-        // 30, not 60: each change re-measures the chat list's rows (about 4.5 ms); at 60 the main thread spent
-        // 307 ms a second on a streaming reply, at 30 about 190, and the steps are still a few characters (#7135).
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+        // 10 a second, the owner's choice between smoothness and power (#7135): each change re-measures the chat's rows
+        // and redraws the reply (about 4 ms of the main thread on the simulator), so the main thread's time while a
+        // reply streams follows the rate: 60 → about 300 ms a second, 30 → about 190. A step is then 2–15 characters.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 10, preferred: 10)
         link.add(to: .main, forMode: .common)
         self.link = link
     }
 
     fileprivate func tick(_ link: CADisplayLink) {
         guard var r = reveal else { return stop() }
-        let moved = r.advance(to: link.timestamp)
+        let moved = r.advance(to: link.timestamp, maxStep: 0.2) // a step is a tenth of a second
         reveal = r
         if moved { revision &+= 1 }
         if r.caughtUp { stop() }
@@ -1341,6 +1344,11 @@ nonisolated enum RowMemo {
 
     /// A chat's scope: its machine and session.
     static func scope(_ key: SessionKey) -> String { MemoScope.of(machine: key.machineID, session: key.sessionID) }
+
+    /// Whether rows are prewarmed while the app's scene is in `phase`: not in the background, where nothing draws them
+    /// and the app may be running only for a recording; iOS kills an app that uses too much CPU there, and the
+    /// recording with it (#9108: a row's path detection did). Back in front, the chat prewarms what came meanwhile.
+    static func prewarms(in phase: ScenePhase) -> Bool { phase != .background }
 
     /// Fills both memos off the main thread for messages just loaded (of the chat of `scope`), so a row scrolling
     /// into view only lays out.

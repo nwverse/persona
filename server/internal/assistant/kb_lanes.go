@@ -22,6 +22,8 @@ import (
 //     project rewrites see what this run's compression made due;
 //   - topics: knowledge points' distill and merge (topics and their sources' marks, under the store's topicMu);
 //   - minutes: meeting minutes from recordings (the recordings' minutes, under recMu);
+//   - titles: the live titles of recordings still recording (their meta.json, under recMu), so one never waits for a
+//     long meeting's minutes;
 //   - recap: the daily recap of all-day recordings (their notes and recaps, under recMu; kb_day.go), so a long day
 //     never holds back a meeting's minutes;
 //   - index: the search index (kb/search_index.go; .search/ in the data dir, which only this lane writes). It reads
@@ -108,6 +110,9 @@ func (s *Service) kbLaneSet(r *kbRounds) *kbLanes {
 		}},
 		// Meetings' minutes (kb/minutes.go): a recording's can take many calls, so they have their own lane.
 		&kbLane{name: "minutes", run: func(ctx context.Context, e *kb.Engine) { e.WriteMinutes(ctx, 2) }},
+		// Live titles of recordings still recording (kb/recording_title.go, #8873): a short call each, never behind a
+		// long meeting's minutes.
+		&kbLane{name: "titles", run: func(ctx context.Context, e *kb.Engine) { e.TitleRecordings(ctx, 2) }},
 		// All-day recordings' recaps (kb/day_recap_write.go): one recording's notes or recap a run, and the day's push
 		// at its recap time; appends that finished an hour wake it.
 		&kbLane{name: "recap", run: func(ctx context.Context, e *kb.Engine) { e.WriteDayRecaps(ctx, 1) }},

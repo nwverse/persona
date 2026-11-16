@@ -84,8 +84,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		return
 	}
 	u.set("downloading", "hub", "")
-	source := u.h.updateURL()
-	bin, err := update.Download(ctx, u.client, source, file, staged)
+	bin, err := u.download(ctx, m, file, staged)
 	if err != nil {
 		fail(err)
 		return
@@ -109,7 +108,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 			continue
 		}
 		u.set("downloading", name, "")
-		pb, err := update.Download(ctx, u.client, source, f, filepath.Join(staged, "programs"))
+		pb, err := u.download(ctx, m, f, filepath.Join(staged, "programs"))
 		if err != nil {
 			fail(err)
 			return
@@ -207,6 +206,27 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	}
 }
 
+// download fetches f of release m, the one the update installs, into dir: from the release's own address where the
+// update source has one, so a release published since the check cannot serve its files in m's place (#9263). When
+// the source moved on to another release all the same (update.MovedError), the hub offers that one from now on, as a
+// check would, and the update fails saying so rather than that the download did not match.
+func (u *updater) download(ctx context.Context, m *update.Manifest, f update.File, dir string) (string, error) {
+	src := u.h.updateSource()
+	bin, err := update.DownloadRelease(ctx, u.client, src.url, m, f, dir)
+	var moved *update.MovedError
+	if !errors.As(err, &moved) {
+		return bin, err
+	}
+	u.h.logf("update: %v", err)
+	blocked := u.unreplaced(moved.Now.Manifest)
+	u.mu.Lock()
+	u.lastCheck = time.Now()
+	u.release, u.releaseRead, u.blocked = moved.Now, u.lastCheck, blocked
+	u.mu.Unlock()
+	u.noteBehind(src, moved.Now.Manifest)
+	return "", i18n.Err("hub-selfupdate.err_release_moved", i18n.Args{"version": m.Version, "newer": moved.Now.Manifest.Version})
+}
+
 // stagedDir is where the update to build downloads its files: the hub's binary, the node binaries in nodes/ and the
 // programs in programs/ (docs/operations/hub-update.md "Updating").
 func (u *updater) stagedDir(build int64) string {
@@ -278,9 +298,13 @@ func (u *updater) healthURL() string {
 }
 
 // updateBusy is what a restart would interrupt: any conversation working or waiting for the user (the assistant's
-// and every agent's), and a machine being redeployed.
+// and every agent's), and a machine being redeployed. A conversation whose only cards are the assistant's ask_user
+// asked without waiting is not (#7392): no turn waits on them, and they outlive a restart (the manager claims them
+// back from its record, docs/assistant/assistant.md "Asking without holding the turn"), so such a card, up for as long
+// as 2 hours, does not hold the update back.
 func (h *Hub) updateBusy() []busyItem {
 	var out []busyItem
+	unwaited := h.unwaitedCards()
 	for _, m := range h.machinesNow() {
 		if m.snapshot().Deploying {
 			out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), Title: su(h.userLang(), "busy_redeploying")})
@@ -299,12 +323,37 @@ func (h *Hub) updateBusy() []busyItem {
 			}
 			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
 			// update back for as long as it runs, and the restart does not stop it.
-			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou {
+			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
 				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
 			}
 		}
 	}
 	return out
+}
+
+// unwaitedCards counts each session's pending cards (by machine and session): all of them, and those that are the
+// assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting).
+func (h *Hub) unwaitedCards() map[[2]string][2]int {
+	out := map[[2]string][2]int{}
+	for _, ix := range h.pendingInteractions() {
+		k := [2]string{ix.MachineID, ix.SessionID}
+		n := out[k]
+		n[0]++
+		if ix.AskedWithoutWaiting() {
+			n[1]++
+		}
+		out[k] = n
+	}
+	return out
+}
+
+// waitsOnlyUnwaited: s needs the user only for cards no turn waits on: its turn is not running, nothing blocks its
+// terminal, and every card it counts is one asked without waiting (cards, all and unwaited, from unwaitedCards). A
+// card the manager counts that the hub was not shown keeps it busy.
+func waitsOnlyUnwaited(s *proto.Session, cards [2]int) bool {
+	all, unwaited := cards[0], cards[1]
+	return s.Status != proto.StatusWorking && s.Status != proto.StatusBlocked && unwaited > 0 && unwaited == all &&
+		s.PendingInteractions <= unwaited
 }
 
 // agentTitle is an agent's title for the update's busy list.

@@ -20,12 +20,13 @@ import {
   sendRouted,
   setRoute,
   startFailure,
+  startInFlight,
   type FeedItem,
   type TaskPlan,
 } from "./feed";
 import { conversationCards } from "./assistant-views";
 import { getPanel, openPanel } from "./panel";
-import { refreshTodos } from "./store";
+import { markConversationDeleted, refreshTodos, reset } from "./store";
 import type { Todo } from "./todos";
 import type { ChatLine, Segment } from "./turns";
 import type { Item } from "./types";
@@ -143,6 +144,17 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
     expect(startFailure(todo(), plans)).toBe("rpc: connection closed"); // a hub before #1077 left the todo open
     expect(startFailure(todo({ agents: [{ machine_id: "box", session_id: "s1", linked_at: "" }] }), plans)).toBeUndefined();
     expect(startFailure(todo(), {})).toBeUndefined(); // may still be starting
+  });
+
+  it("is starting only while a dispatch is in flight, never for a to-do nobody dispatched (#7552)", () => {
+    const own = todo({ origin: undefined, plan_id: undefined });
+    expect(startInFlight(own, {})).toBe(false); // todo_create, made by hand: no plan, no start
+    expect(startInFlight(todo(), {})).toBe(true); // a plan made it and its start has not failed
+    expect(startInFlight(todo(), plans)).toBe(false); // that start failed
+    expect(startInFlight(todo({ start_error: "launcher not found" }), {})).toBe(false);
+    const taking = { p2: { id: "p2", conversation: "c1", state: "started" as const, tasks: [{ title: "", prompt: "", machine: "box", cwd: "/code/app", todo_id: "t1" }] } };
+    expect(startInFlight(own, taking)).toBe(true); // a plan took over the to-do (it keeps no plan_id)
+    expect(startInFlight(own, { p2: { ...taking.p2, state: "dismissed" } })).toBe(false);
   });
 
   describe("removing it", () => {
@@ -476,4 +488,19 @@ describe("loading a conversation's feed (docs/protocol/protocol.md: since, oldes
     expect(cards.actions["item-1/0"]?.client_msg_id).toBe("cid-1");
     expect(cards.blocks["item-1/0"]).toBe(true);
   });
+});
+
+it("discards a feed response arriving after deletion, including its plan and cards", async () => {
+  const sid = "deleted-feed-race";
+  let release!: (r: Response) => void;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => { release = r; })));
+  const read = loadFeed(sid);
+  markConversationDeleted("hub", sid);
+  release(Response.json({ items: [{ id: "late", conversation: sid, kind: "plan", at: new Date().toISOString() }], plans: { late: { id: "late", conversation: sid, tasks: [], state: "open" } }, task_cards: [] }));
+  await read;
+  expect(getFeedState().feeds[sid]).toBeUndefined();
+  expect(getFeedState().plans.late).toBeUndefined();
+  expect(getFeedState().taskCards[sid]).toBeUndefined();
+  reset();
 });

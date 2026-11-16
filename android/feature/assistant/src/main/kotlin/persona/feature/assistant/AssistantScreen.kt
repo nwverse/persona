@@ -20,6 +20,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +36,7 @@ import persona.core.contracts.api.ReadinessSuggestion
 import persona.core.contracts.api.ReadinessStep
 import persona.core.contracts.api.ChannelSources
 import persona.core.designsystem.*
+import persona.core.navigation.MessageJumps
 import persona.core.designsystem.dense
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PersonaIcons
@@ -63,6 +65,8 @@ import persona.core.navigation.ConversationKind
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
+import persona.core.navigation.SettingsPage
+import persona.core.navigation.SettingsPageRoute
 import persona.feature.assistant.proactive.AssistantProactiveScreen
 import persona.feature.assistant.settings.AssistantSettingsScreen
 import persona.feature.assistant.settings.StoredTimezoneChoice
@@ -302,13 +306,18 @@ fun AssistantScreen(
     val onHealthChat = active != null && active in healthKeys
     // "Compact context" and "New main chat" (#1727): the main conversation's menu, on hubs that offer them.
     val mainActions = if (pageManagement != null && !demo) MainActions.of(LocalHubFeatures.current) else MainActions(false, false)
-    // What the main conversation still needs (docs/assistant/onboarding.md 4.4), on hubs that work it out: asked when the tab
-    // shows, when a computer comes or goes and after the hub refused to start it.
+    // Track the main conversation's turn for readiness even while the user is reading another chat.
+    val onMain = active != null && active == snapshot.mainSession
+    val mainSession = snapshot.mainSession?.let { key -> snapshot.conversations.firstOrNull { it.key == key } }
     val readinessOn = pageManagement != null && !demo && AssistantReadinessFeature in LocalHubFeatures.current
     val mainReadiness = remember(pageManagement) { MainReadiness { probe -> requireNotNull(pageManagement).readiness(probe) } }
     var readinessHelp by remember { mutableStateOf<ReadinessHelp?>(null) }
     val machinesSeen = machines.joinToString(",") { "${it.id}:${it.online}" }
-    LaunchedEffect(mainReadiness, readinessOn, machinesSeen) { if (readinessOn) mainReadiness.refresh() }
+    // Reopening main also checks for setup changes that arrive without a turn update.
+    LaunchedEffect(mainReadiness, readinessOn, machinesSeen, onMain,
+        snapshot.mainSession, mainSession?.state, mainSession?.turnErrorCode, mainSession?.modelPick) {
+        if (readinessOn) mainReadiness.refresh()
+    }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         if (readinessOn) scope.launch { mainReadiness.refresh() }
     }
@@ -322,34 +331,52 @@ fun AssistantScreen(
         val machine = readiness?.steps?.firstOrNull { it.id == ReadinessStep.COMPUTER }?.machine
         action.destination(launcher, machine, managerChoice.shown)?.let(navigator::navigate)
     }
-    val onMain = active != null && active == snapshot.mainSession
-    val shownCompaction = if (onMain) snapshot.conversations.firstOrNull { it.key == active }?.compaction else null
-    var compaction by remember(active) { mutableStateOf(CompactionStatus()) }
-    var compacting by remember { mutableStateOf(false) }
-    var newMainOpen by remember { mutableStateOf(false) }
-    var newMainBusy by remember { mutableStateOf(false) }
-    var carrySummary by rememberSaveable { mutableStateOf(true) }
+    // The hub checks the assistant's default model and computer. An existing chat can use a different one.
+    val modelProblem = blocking?.takeIf {
+        onMain && it.id == ReadinessStep.MODEL && managers.offline == null && mainSession?.modelPick == null &&
+            readiness?.machine?.id?.takeIf(String::isNotBlank)?.let { id -> id == active?.machineId } == true
+    }
+    val mainChatGuidance: (@Composable () -> Unit)? = modelProblem?.let { step ->
+        {
+            val machine = readiness?.machine?.name?.takeIf(String::isNotBlank)
+            val guidance = if (step.code == "not_logged_in" && machine != null) step.copy(
+                title = stringResource(R.string.assistant_model_setup_title),
+                detail = stringResource(R.string.assistant_model_setup_detail, machine),
+                altActions = emptyList(),
+            ) else step
+            ReadinessStepCard(guidance, { runReadinessAction(it) },
+                Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
+        }
+    }
+    val shownCompaction = mainSession?.compaction.takeIf { onMain }
+    val mainConversation = rememberMainConversationController(pageManagement, repository, mainConversationSender, resources,
+        feedback, toast, managerChoice.shown, shownCompaction, rememberUpdatedState(active), rememberUpdatedState(snapshot.mainSession))
+    var compaction by mainConversation::compaction
+    var compacting by mainConversation::compacting
+    var newMainOpen by mainConversation::newMainOpen
+    var newMainBusy by mainConversation::newMainBusy
+    var carrySummary by mainConversation.carrySummary
+    var clearBusy by mainConversation::clearBusy
     // Clear context (#5100, the web's #5095): the main conversation it cleared, while none has started since. Then the page
     // stays a conversation page: an empty middle over the composer, where the first message starts the new main
     // conversation, not the centered start page. This page and assistant only; another main conversation forgets it.
-    var clearBusy by remember { mutableStateOf(false) }
-    var clearedMain by remember(managerChoice.hubId, managerChoice.shown) { mutableStateOf<SessionKey?>(null) }
-    LaunchedEffect(snapshot.mainSession, clearedMain) {
-        if (snapshot.mainSession != null && snapshot.mainSession != clearedMain) clearedMain = null
-    }
+    var clearedMain by mainConversation.clearedMain
     val clearedPage = clearedMain != null && active == null && newChat == null && !viewingMainQueue
-    LaunchedEffect(active, shownCompaction) { compaction = compaction.observe(shownCompaction) }
-    LaunchedEffect(compaction.line) {
-        if (compaction.line == CompactionLine.Done) {
-            kotlinx.coroutines.delay(CompactionDoneMillis)
-            compaction = compaction.dismissed()
-        }
-    }
     val groups = remember(snapshot, query, ended, archived, words, history.titles) {
         conversationGroups(snapshot.copy(conversations = history.titled(snapshot.conversations.filter { it.key !in archived }.map {
             if (it.key in ended) it.copy(status = "offline", state = "offline") else it
         })), query, words)
     }
+    val searchOn = pageManagement != null && !demo && AssistantSearchFeature in LocalHubFeatures.current
+    val knownChats = remember(snapshot.conversations, ended, archived, history.titles, history.archived) {
+        val open = history.titled(snapshot.conversations.filter { it.key !in archived }.map {
+            if (it.key in ended) it.copy(status = "offline", state = "offline") else it
+        })
+        (open + history.shownArchived(openKeys(open))).distinctBy { it.sessionId }
+    }
+    val (foundChats, searchPartial) = rememberFoundChats(
+        query, remember(groups) { (groups.directions + groups.others).distinctBy { it.sessionId } },
+        knownChats, searchOn, pageManagement, "${managerChoice.hubId.orEmpty()}|${managerChoice.shown}")
     // Persona's face (top bar and the conversation list) shows the conversation on screen, as on iOS: none on the
     // new-conversation page.
     val faceState = personaState(active?.let { key -> snapshot.conversations.firstOrNull { it.key == key } }, hubOnline,
@@ -396,92 +423,9 @@ fun AssistantScreen(
     }
     fun refusal(error: Exception): String =
         if (error is AssistantRefused) error.message.orEmpty() else persona.core.designsystem.operationFeedback(error).text.resolve(resources)
-    fun compactMain() {
-        val key = active ?: return
-        val api = pageManagement ?: return
-        if (compacting) return
-        compacting = true
-        compaction = compaction.asked(shownCompaction)
-        scope.launch {
-            try { api.compactConversation(key) }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) {
-                compaction = compaction.refused(snapshot.conversations.firstOrNull { it.key == key }?.compaction)
-                say(refusal(error))
-            }
-            finally { compacting = false }
-        }
-    }
-    fun newMain() {
-        val api = pageManagement ?: return
-        val previous = snapshot.mainSession ?: return
-        if (newMainBusy) return
-        newMainBusy = true
-        val carry = carrySummary
-        scope.launch {
-            try {
-                val result = api.newMainConversation(carry, previous.sessionId)
-                newMainOpen = false
-                // The next message to the main conversation starts the new one, here and from every other entry.
-                assistantAttempt { mainConversationSender?.mainReplaced(previous) }
-                assistantAttempt { repository.refresh() }
-                newConversation()
-                say(resources.getString(newMainNotice(result.carried, carry)))
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                newMainOpen = false
-                if ((error as? AssistantRefused)?.code == "main_changed") {
-                    // Another device put it away first: show the main conversation the hub has now.
-                    assistantAttempt { mainConversationSender?.mainReplaced(previous) }
-                    assistantAttempt { repository.refresh() }
-                }
-                say(refusal(error))
-            } finally {
-                newMainBusy = false
-            }
-        }
-    }
-    // No confirmation, as on the web and Cindy's /clear: nothing is deleted, the old conversation is archived. [onFailed]: the
-    // composer's /clear goes back into the box.
-    fun clearMain(onFailed: () -> Unit = {}) {
-        val api = pageManagement ?: return
-        val previous = snapshot.mainSession?.takeIf { it == active } ?: return
-        if (clearBusy) return
-        clearBusy = true
-        // Before the request: the hub's update without the main conversation may come before its answer.
-        clearedMain = previous
-        fun shown() = activeSession?.let { SessionKey(activeMachine.orEmpty(), it) }
-        scope.launch {
-            try {
-                api.clearMainConversation(previous.sessionId)
-                // The next message to the main conversation starts a new one, here and from every other entry.
-                assistantAttempt { mainConversationSender?.mainReplaced(previous) }
-                assistantAttempt { repository.refresh() }
-                if (shown() == previous) newConversation()
-            } catch (cancelled: CancellationException) {
-                clearedMain = null
-                throw cancelled
-            } catch (error: Exception) {
-                clearedMain = null
-                if ((error as? AssistantRefused)?.code == "main_changed") {
-                    // Another device replaced or cleared it first: show the main conversation the hub has now, as New main chat does.
-                    assistantAttempt { mainConversationSender?.mainReplaced(previous) }
-                    assistantAttempt { repository.refresh() }
-                    val now = repository.assistant.value.takeIf { it.managerId == managerChoice.shown }?.mainSession
-                    if (shown() == previous) now?.takeUnless { it == previous }?.let(::openConversation) ?: newConversation()
-                    say(refusal(error))
-                } else {
-                    onFailed()
-                    val failed = resources.getString(R.string.assistant_clear_context_failed, refusal(error))
-                    if (feedback?.notice(failed, persona.core.designsystem.FeedbackStyle.Error) != true)
-                        toast.show(persona.core.designsystem.FeedbackNotice(failed, style = persona.core.designsystem.FeedbackStyle.Error))
-                }
-            } finally {
-                clearBusy = false
-            }
-        }
-    }
+    fun compactMain() = mainConversation.compact(active, snapshot, shownCompaction)
+    fun newMain() = mainConversation.replace(snapshot.mainSession, ::newConversation)
+    fun clearMain(onFailed: () -> Unit = {}) = mainConversation.clear(snapshot.mainSession, active, onFailed, ::newConversation, ::openConversation)
     // Hidden at once; after the hub's list is refreshed (it leaves archived ones out) the hub's word is the one kept,
     // so a later message that brings the conversation back shows it again.
     fun archive(session: Session) {
@@ -852,6 +796,7 @@ fun AssistantScreen(
             showTodos = showTodos,
             onOpenTodo = { id -> scope.launch { drawerOpen = false }; navigator.navigate(TodoDetailRoute(id)) },
             onOpenAgent = { key -> scope.launch { drawerOpen = false }; navigator.navigate(ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)) },
+            found = foundChats, searchPartial = searchPartial,
         )
         ConversationHistoryDialogs(history, snapshot.conversations, scope,
             onOpen = { openConversation(it); scope.launch { drawerOpen = false } },
@@ -955,6 +900,7 @@ fun AssistantScreen(
                         ChatComposer(uploadTarget, composer, working = false, sending = sending || !draftReady,
                             // The health page sends no files: an upload goes to the main chat's machine, outside the health space.
                             canClear = false, service = composerService?.takeIf { uploadTarget.machineId.isNotBlank() && !healthPage },
+                            uploadDestination = if (onHealthChat) "health" else null,
                             onSend = { submit() }, onCommand = { composer.insert(it, composer.focused) },
                             onNotice = { message ->
                                 if (feedback?.notice(message) != true) toast.show(persona.core.designsystem.FeedbackNotice(message))
@@ -963,7 +909,7 @@ fun AssistantScreen(
                                 else stringResource(R.string.assistant_composer_placeholder, assistantName),
                             blockedLabel = blocking?.takeIf { active == null }?.let { stringResource(blockedSendLabel(it)) },
                             onBlocked = { blocking?.primaryAction()?.let { runReadinessAction(it) } },
-                            extraContent = starterQuotes.isNotEmpty(), mentions = mentions, onMention = starterMentions::add,
+                            extraContent = starterQuotes.isNotEmpty(), assistantChat = true, mentions = mentions, onMention = starterMentions::add,
                             onMentionOpen = { mentionOpen = it },
                             // Glass: the model pill and its panel (#5055, the web's new-chat page): the pick is this chat's start.
                             modelPill = if (PersonaTheme.style == AppStyle.Glass && active == null && !healthPage && pageManagement != null &&
@@ -1008,8 +954,10 @@ fun AssistantScreen(
                             CompositionLocalProvider(persona.feature.chat.LocalNewMainChat provides
                                 (if (onMain && mainActions.newMain) ({ newMainOpen = true }) else null),
                                 persona.feature.chat.LocalMainChatClear provides (if (onMain && mainActions.clear) persona.feature.chat.MainChatClear(::clearMain) else null),
+                                persona.feature.chat.LocalMainChatGuidance provides mainChatGuidance,
                                 persona.feature.chat.LocalComposerFocusAsk provides focusAsk) {
-                                if (assistantChatContent != null) assistantChatContent(active, AssistantChatOptions(readOnlyNote = managers.offline))
+                                if (assistantChatContent != null) assistantChatContent(active,
+                                    AssistantChatOptions(readOnlyNote = managers.offline, healthChat = onHealthChat))
                                 else chatContent?.invoke(active)
                             }
                         }
@@ -1075,7 +1023,8 @@ fun AssistantScreen(
             assistantAttempt { assistantMachine = pageManagement.notes().machineId }
             // The old main conversation is an ordinary one on the old machine now: back here, start the new one.
             newConversation()
-        }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration)
+        }, onOpenConversation = openFromSchedule, onModelConfiguration = openModelConfiguration,
+            onStandingAuthorizations = { navigator.navigate(SettingsPageRoute(SettingsPage.StandingAuthorizations)) })
         return@PersonaTheme
     }
     if (proactiveOpen && pageManagement != null) {
@@ -1420,6 +1369,19 @@ internal fun AssistantDrawer(
     onOpenTodo: ((String) -> Unit)? = null, onOpenAgent: ((SessionKey) -> Unit)? = null,
     /** The sidebar's head with the assistant switcher (docs/assistant/managers.md "Clients"); none: the head as it was. */
     switcher: AssistantSwitcherSlot? = null,
+    /**
+     * The results list while a query is non-blank and the hub lists assistant search: local matches at once, the
+     * manager's results merged in when they arrive. Null keeps today's groups.
+     */
+    found: List<FoundChat>? = null,
+    /** The manager is still reading older chats, so some matches may be missing. */
+    searchPartial: Boolean = false,
+    /**
+     * A regular window: the Search control opens the full-window search (#9171) via [onFullSearch] instead of the
+     * inline field. Compact drawers leave this false.
+     */
+    fullWindowSearch: Boolean = false,
+    onFullSearch: () -> Unit = {},
 ) {
     // "All chats" opens the rest of the conversations in place: this app has no all-conversations page.
     var showAllChats by rememberSaveable { mutableStateOf(false) }
@@ -1438,30 +1400,41 @@ internal fun AssistantDrawer(
     val assistantName = drawerRoster.assistantDisplayName(drawerChoice.shown, LocalPersonaName.current)
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     val drawer = LocalHomeDrawer.current
+    // Regular-window column: Search opens the full-window page. Compact Glass drawer: the inline field toggles.
+    val searchInHead = drawer || fullWindowSearch
     val resources = androidx.compose.ui.platform.LocalResources.current
     Column(Modifier.fillMaxHeight().padding(horizontal = if (drawer) Tokens.Space.s else 12.dp.dense)) {
         val headPadding = Modifier.padding(horizontal = if (drawer) Tokens.Space.l else Tokens.Space.xs).padding(top = Tokens.Space.s)
         val search: @Composable () -> Unit = {
-            JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), { searchVisible = !searchVisible }, raised = true)
+            JIconButton(PhIcons.MagnifyingGlass, stringResource(R.string.assistant_search_chats), {
+                if (fullWindowSearch) onFullSearch() else searchVisible = !searchVisible
+            }, raised = true)
         }
-        // The head as it was (the persona's name; only the compact drawer has one), where there is no switcher to show.
+        // The head as it was (the persona's name; only the compact drawer / regular-window Search has one), where there
+        // is no switcher to show.
         val plainHead: @Composable () -> Unit = {
-            if (drawer) Row(Modifier.fillMaxWidth().then(headPadding), verticalAlignment = Alignment.CenterVertically) {
+            if (searchInHead) Row(Modifier.fillMaxWidth().then(headPadding), verticalAlignment = Alignment.CenterVertically) {
                 Text(assistantName, style = PersonaTheme.type.largeTitle, color = PersonaTheme.palette.ink, modifier = Modifier.weight(1f))
                 search()
             }
         }
-        if (switcher != null) switcher(headPadding, search.takeIf { drawer }, plainHead) else plainHead()
+        if (switcher != null) switcher(headPadding, search.takeIf { searchInHead }, plainHead) else plainHead()
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp.dense)) {
             // The first row is the main conversation, as "Persona" with the app's mark, then a line (#2004, the same on
             // every platform): it is listed nowhere else, has no pin of its own, and is on show whatever the search.
             // Its session keeps its id and title; only the row reads differently.
             item(key = "persona") {
+                val mainHit = found?.firstOrNull { it.session.key == groups.main?.key }?.hit
                 PersonaRow(groups.main, selected = groups.main != null && groups.main.key == active, hasMain = hasMain,
                     name = assistantName,
-                    onMain = onMain, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
+                    onMain = {
+                        val main = groups.main
+                        if (main != null && mainHit != null) MessageJumps.request(main.machineId, main.sessionId, mainHit.itemId)
+                        onMain()
+                    }, onEnd = groups.main?.let { m -> onEnd?.let { action -> { action(m) } } },
                     onCopy = { groups.main?.let(onCopy) },
-                    onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } })
+                    onDiagnostics = groups.main?.let { m -> onDiagnostics?.let { action -> { action(m) } } },
+                    said = mainHit?.let(::markedSnippet))
                 JDivider(Modifier.padding(vertical = Tokens.Space.s))
             }
             if (!drawer) item { JSectionHeader(stringResource(R.string.assistant_more)) }
@@ -1493,7 +1466,37 @@ internal fun AssistantDrawer(
                     })
             } }
             if (drawer) item { JDivider(Modifier.padding(vertical = Tokens.Space.s)) }
-            if (!drawer || searchVisible || query.isNotBlank()) item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
+            // Regular window: the field lives in the full-window search; compact keeps the inline field (and any stale
+            // query typed before unfolding remains clearable until blank).
+            if ((!fullWindowSearch && (!drawer || searchVisible)) || query.isNotBlank()) {
+                item { JSearchField(query, onQuery, stringResource(R.string.assistant_search_chats)) }
+            }
+            if (searchPartial) item {
+                Text(stringResource(R.string.assistant_search_partial),
+                    Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+                    style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            }
+            if (found != null) {
+                val rows = found.filter { groups.main == null || it.session.key != groups.main.key }
+                itemsIndexed(rows, key = { _, row -> "found-" + row.session.key.path }) { index, row ->
+                    ConversationRow(row.session, selected = row.session.key == active,
+                        position = GroupPosition.of(index, rows.size),
+                        onOpen = {
+                            row.hit?.let { MessageJumps.request(row.session.machineId, row.session.sessionId, it.itemId) }
+                            onOpen(row.session.key)
+                        },
+                        onEnd = onEnd?.let { action -> { action(row.session) } },
+                        onCopy = { onCopy(row.session) },
+                        onArchive = onArchive?.let { action -> { action(row.session) } },
+                        onRename = onRename?.let { action -> { action(row.session) } },
+                        onDiagnostics = onDiagnostics?.let { action -> { action(row.session) } },
+                        onLeader = onLeader?.let { action -> { action(row.session) } },
+                        said = row.hit?.let(::markedSnippet))
+                }
+                if (rows.isEmpty()) item {
+                    JEmptyState(stringResource(R.string.assistant_no_match), stringResource(R.string.assistant_no_match_detail))
+                }
+            } else {
             // The leader conversations, "常驻" (#4331), under their names, each saying what it has open. Whether a chat
             // is one is the hub's answer for every device: the row's menu makes it one or ends that.
             if (groups.directions.isNotEmpty()) item(key = "directions-header") {
@@ -1567,6 +1570,7 @@ internal fun AssistantDrawer(
                 item { JEmptyState(stringResource(if (query.isBlank()) R.string.assistant_empty_title else R.string.assistant_no_match),
                     stringResource(if (query.isBlank()) R.string.assistant_empty_detail else R.string.assistant_no_match_detail)) }
             }
+            }
 
         }
         Row(Modifier.then(if (drawer) Modifier.padding(horizontal = Tokens.Space.l) else Modifier)
@@ -1602,14 +1606,23 @@ private fun ConversationRow(
     disclosure: (@Composable () -> Unit)? = null,
     /** Any Agent under this lead is working, even if the conversation's own turn is idle (#6230): the row spins. */
     working: Boolean = false,
+    /** The sentence a search found, its match marked. Replaces the last message (and, on the compact drawer, the counts). */
+    said: AnnotatedString? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     // What opened an automatic chat takes precedence; a user's own chat keeps its latest message's channel mark (#5196).
     val source = automaticConversationOrigin(origin)
     val channels = LocalChannels.current
     val channel = remember(session.channels, channels) { ChannelSources.latest(session.channels, channels) }
-    val accessory: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s) } }
+    val sourceMark: (@Composable () -> Unit)? = source?.let { s -> { ConversationOriginMark(s) } }
         ?: channel?.let { c -> { JChannelMark(c, size = MarkSize.Inline) } }
+    val archivedLabel = if (session.archived) stringResource(R.string.assistant_archived) else null
+    val accessory: (@Composable () -> Unit)? = if (sourceMark == null && archivedLabel == null) null else {
+        {
+            archivedLabel?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
+            sourceMark?.invoke()
+        }
+    }
     // [named]: a direction's name, shown instead of its leader conversation's title
     val title = named ?: session.conversationTitle(conversationWords())
     // One activity mark for the whole row (#6230): an own needs-you / unread / working turn still wins; otherwise a lead
@@ -1622,14 +1635,15 @@ private fun ConversationRow(
     val swipe = onArchive?.let { SwipeAction(stringResource(R.string.assistant_archive), PersonaIcons.archive, Status.Working, it) }
     if (LocalHomeDrawer.current) JSwipeActions(modifier, end = swipe) {
         JSidebarHistoryRow(dated?.topic ?: title, ownStatus, selected, onOpen, { menu = true },
-            stringResource(R.string.assistant_conversation_actions), hint = counts,
+            stringResource(R.string.assistant_conversation_actions), hint = if (said == null) counts else null, hintMark = said,
             titleAccessory = accessory, titleLead = dated?.head, trailingAccessory = disclosure, working = leadActive)
     } else JSwipeActions(modifier, end = swipe) { JGroupItem(position) {
         // The time goes on the line under the title, with the state: beside the title it left the title two or three
         // characters in the wide window's 300dp list (2026-11-02), and a narrow drawer cut it short too.
         JRow(dated?.topic ?: title, onClick = onOpen, onLongClick = { menu = true },
             titleAccessory = accessory, titleLead = dated?.head,
-            subtitle = session.lastText?.takeIf { it.isNotBlank() },
+            subtitle = if (said == null) session.lastText?.takeIf { it.isNotBlank() } else null,
+            subtitleMark = said,
             leading = {
                 if (leadActive) JSpinner(Modifier.size(Tokens.Size.iconXS), color = PersonaTheme.palette.accent, stroke = SpinnerTokens.compactStroke)
                 else JIcon(if (selected) PhIcons.CheckCircle else PhIcons.ChatCircle, null,
@@ -1708,13 +1722,15 @@ internal fun conversationActions(
  */
 @Composable
 private fun PersonaRow(main: Session?, selected: Boolean, hasMain: Boolean, name: String, onMain: () -> Unit, onEnd: (() -> Unit)?, onCopy: () -> Unit,
-    onDiagnostics: (() -> Unit)? = null) {
+    onDiagnostics: (() -> Unit)? = null, said: AnnotatedString? = null) {
     var menu by remember { mutableStateOf(false) }
     val status = main?.conversationStatus()
     val pending = main?.pendingInteractions ?: 0
     JRow(name, onClick = onMain, onLongClick = main?.let { { menu = true } }, selected = selected,
         // "Main chat" under the name keeps the row readable as a conversation, not a brand heading (#6327, as the web, #6293).
-        subtitle = stringResource(if (main == null && !hasMain) R.string.assistant_start_main else R.string.assistant_main_chat),
+        // A search that found this chat shows that sentence instead, and only then.
+        subtitle = if (said == null) stringResource(if (main == null && !hasMain) R.string.assistant_start_main else R.string.assistant_main_chat) else null,
+        subtitleMark = said,
         leading = { JAppMark(Tokens.Space.xl) }, chevron = false,
         trailing = if (main == null) null else ({
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {

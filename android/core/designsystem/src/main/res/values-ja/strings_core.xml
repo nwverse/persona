@@ -52,6 +52,7 @@
         <item quantity="other">%1$d日後に期限切れ</item>
     </plurals>
     <string name="designsystem_core_request_from_subagent">サブエージェントから · %1$s</string>
+    <string name="designsystem_core_request_from_side">子セッション・%1$sから</string>
     <string name="designsystem_core_request_from_mcp">MCPサーバー%1$sから</string>
     <string name="designsystem_core_request_from_mcp_configured">MCPサーバー%1$sから（設定元：%2$s）</string>
     <string name="designsystem_core_request_from_terminal">このリクエストはターミナルから来ています。コンピューターで同時に対応しないでください</string>
@@ -215,6 +216,9 @@
     <string name="designsystem_core_source_identity_conflict">ID競合</string>
     <string name="designsystem_core_source_claude_background">Claudeバックグラウンド</string>
     <string name="designsystem_core_source_claude_desktop">Claude デスクトップアプリ</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$sデスクトップ版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用した項目</string>
     <string name="designsystem_core_source_claude_terminal">ターミナルの Claude</string>
     <string name="designsystem_core_source_no_send">このソースからはまだ送信できません</string>
     <string name="designsystem_core_read_only_because">表示のみ：%1$s</string>

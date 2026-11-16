@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
@@ -99,7 +100,7 @@ func TestBackendWorkspaceManagerRecoveryAndLegacyCompatibility(t *testing.T) {
 	if err = s.ensureBackendWorkspacePlan(t.Context(), id, never); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = database.BeginTaskWorkspace(t.Context(), id, never.OperationID, s.managerIdentity()); err != nil {
+	if _, err = repositorystore.New(database).BeginTaskWorkspace(t.Context(), id, never.OperationID, s.managerIdentity()); err != nil {
 		t.Fatal(err)
 	}
 	if canceled, err := s.CancelBackendWorkspace(t.Context(), id, never.OperationID); err != nil || canceled.State != "cancelled" {
