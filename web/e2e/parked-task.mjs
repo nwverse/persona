@@ -3,7 +3,7 @@
 // Also checks the To-dos list and All board, all three languages, both themes and the largest app text size.
 // node web/e2e/parked-task.mjs <web URL> --shots <directory> [--chromium <executable>]
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
 
@@ -78,6 +78,8 @@ async function run(browser, size, theme, language, textSize = "standard") {
     else if (path === "/interactions") body = { interactions: [] };
     else if (path === "/assistant") body = { machine_id: "demo", main: sid, conversations: [session], tasks: [], memory: [] };
     else if (path === "/todos") body = { todos: list };
+    else if (path === "/assistant/repositories") body = { manager: request.headers()["x-persona-manager"] || "assistant", catalog_revision: 0, repositories: [] };
+    else if (/^\/todos\/[^/]+\/repositories$/.test(path)) body = { schema_version: 1, manager: request.headers()["x-persona-manager"] || "assistant", todo_id: decodeURIComponent(path.split("/")[2]), revision: 0, repositories: [] };
     else if (path === `/sessions/demo/${sid}`) body = { session };
     else if (path.endsWith("/feed")) body = { items: [] };
     else if (path.endsWith("/items")) body = { items: [], has_more: false };
@@ -160,6 +162,11 @@ async function run(browser, size, theme, language, textSize = "standard") {
     assert.equal(await section.locator("[data-todo]").count(), 2);
     assert.equal(await page.locator('[data-section="pr"]').count(), 0);
     assert.equal(await section.locator('a[href="https://github.com/example/demo/pull/42"]').count(), 1);
+    if (size === "wide") {
+      const empty = JSON.parse(readFileSync(new URL(`../src/i18n/locales/${language}/task-repositories.json`, import.meta.url), "utf8")).no_links;
+      await page.locator("[data-todo-repositories]").getByText(empty, { exact: true }).waitFor();
+      assert.equal(await page.locator("[data-todo-repositories] .text-red").count(), 0, "the isolated fixture has a valid empty repository envelope");
+    }
     await noOverflow();
     await page.screenshot({ path: name("list") });
     assert.deepEqual(errors, []);
