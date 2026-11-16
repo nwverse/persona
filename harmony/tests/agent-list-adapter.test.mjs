@@ -134,7 +134,6 @@ test('frozen reading uses the projected membership and a real core input, not an
     'the frozen other machine adds no missing-group or row-order mismatch');
   const native = nativeCoreProjection(frozen);
   assert.deepEqual(native.groups.map((group) => group.rows), [['machine-b/kept']]);
-  assert.deepEqual(native.groups.map((group) => group.rows), [['machine-b/kept']]);
   const snapshot = new DebugAgentListShadow().snapshot(frozen);
   assert.ok(snapshot, 'snapshot must be a plain object');
   assert.equal(Object.getPrototypeOf(snapshot.input), Object.prototype);

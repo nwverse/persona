@@ -17,11 +17,6 @@ export class NativeAgentListAdapter implements AgentListAdapter {
   project(input: AgentListInput): AgentListGroupProjection[] { return nativeAgentListProjection(input); }
 }
 
-function coreRowId(row: AgentListRow): string {
-  return (Wire.text(row.raw, 'app_hub_group') ? Wire.text(row.raw, 'app_hub_group') + '|' : '') +
-    Wire.text(row.raw, 'machine_id') + '/' + Wire.text(row.raw, 'session_id');
-}
-
 /** Translate only when a machine filter has an unambiguous owner; never strip a cross-Hub group. */
 export function coreMachineFilter(input: AgentListInput): string | undefined {
   if (!input.machineFilter) return '';
