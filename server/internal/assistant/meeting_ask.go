@@ -35,6 +35,9 @@ const purposeMeetingAnswer = "meeting.answer"
 // until it is set apart. meeting.answer stays a use of Information processing: it answers when the room cannot.
 const purposeMeetingMinutes = kb.PurposeMeetingMinutes
 
+// purposeMeetingTitle names a recording while it records (#8873).
+const purposeMeetingTitle = kb.PurposeMeetingTitle
+
 // A question's states, how it was asked, and why it failed (the contract's; the errors are an open set).
 const (
 	askPending  = "pending"

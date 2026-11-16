@@ -37,24 +37,10 @@ class AndroidContinuityFrameScheduler : ContinuityFrameScheduler {
     }
 }
 
-/** Selection is test-only in PR A. Merely creating a Kotlin adapter never initializes JNI. */
-internal object ContinuityAdapters {
-    fun create(chat: String, applied: (ContinuityAdapter.Applied) -> Unit): ContinuityAdapter =
-        if (System.getProperty("persona.continuity", "kotlin") == "rust") {
-            RustContinuityAdapter(chat, shared, applied)
-        } else KotlinContinuityAdapter(chat)
-
-    private val shared by lazy {
-        val scheduler = System.getProperty("persona.continuity.frameScheduler")?.let {
-            Class.forName(it).getDeclaredConstructor().newInstance() as ContinuityFrameScheduler
-        } ?: AndroidContinuityFrameScheduler()
-        RustContinuityDriver(scheduler)
-    }
-}
-
 /** One lazy process-wide core; tests can own a separate driver and manual frames. */
 class RustContinuityDriver(
     private val scheduler: ContinuityFrameScheduler,
+    private val onRejected: (() -> Unit)? = null,
     private val create: (CoreHost) -> RustCore = { RustCore(Config(), it) },
 ) : AutoCloseable {
     data class Rejections(val count: Long = 0, val lastReason: String? = null)
@@ -124,7 +110,11 @@ class RustContinuityDriver(
                         dirty.addAll(owners.keys)
                     }
                     // Rejected has no owner. Diagnostics must not fail another chat or release its core gates.
-                    runCatching { android.util.Log.w("ContinuityCore", effect.reason) }
+                    // A shadow observer gets only the signal, never a potentially content-bearing reason.
+                    runCatching {
+                        if (onRejected != null) onRejected.invoke()
+                        else android.util.Log.w("ContinuityCore", effect.reason)
+                    }
                     scheduleDrain()
                 }
             }
@@ -346,7 +336,9 @@ class RustContinuityAdapter(
                 reloadApplied = previous?.reloadApplied == true || result.reloadApplied,
                 afterApplied = previous?.afterApplied == true || result.afterApplied,
                 contentApplied = previous?.contentApplied == true || result.contentApplied,
-                stateChanged = previous?.stateChanged == true || result.stateChanged)
+                stateChanged = previous?.stateChanged == true || result.stateChanged,
+                rejected = previous?.rejected == true || result.rejected,
+                diagnosticOnly = result.diagnosticOnly && (previous?.diagnosticOnly != false))
         } else applied(result)
     }
 

@@ -126,6 +126,20 @@ struct PathRefsTests {
         #expect(PathLinkURL.parse(try #require(PathLinkURL.make("src/a.ts", line: nil)))?.line == nil)
         #expect(PathLinkURL.parse(URL(string: "https://example.com/a")!) == nil)
     }
+
+    /// Each ASCII letter or digit could be taken two ways, so a key ending in a hash was tried 2^n ways: seconds for
+    /// this 16-character last part, minutes for 22, hours for a 32-character hash (#8903).
+    @Test func finishesAtOnceOnALongLastPartWithNoExtension() {
+        let key = "bucket/2024/1/1/0123456789abcdef"
+        let hash32 = "0123456789abcdef0123456789abcdef"
+        let started = ContinuousClock.now
+        #expect(paths("the image key is \(key) in the store") == [])
+        #expect(paths("the image key is `\(key)`") == [])
+        #expect(paths("saved to /\(key)") == ["/\(key)"])
+        #expect(paths("saved to bucket/2024/1/1/\(hash32).png") == ["bucket/2024/1/1/\(hash32).png"])
+        #expect(paths("saved to ~/报告/\(hash32)") == ["~/报告/\(hash32)"])
+        #expect(ContinuousClock.now - started < .milliseconds(500))
+    }
 }
 
 /// An answer's Markdown with its paths linked: only the ones there, in text and whole code spans, with the line;
