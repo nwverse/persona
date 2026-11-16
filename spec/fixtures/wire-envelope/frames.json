@@ -97,6 +97,28 @@
       "expected": { "outcome": "accepted", "event": "hello", "features": [] }
     },
     {
+      "name": "inbox_raw_json_fractional_number_is_accepted",
+      "description": "原始 JSONValue 的普通小数按 Double 解码，不误判为错误类型。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope manager and case inbox",
+        "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSONValue.init(from:) Double decoding"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "manager": 1.5, "args": [2.25, { "value": 3.5 }] },
+      "expected": { "outcome": "accepted", "event": "inbox" }
+    },
+    {
+      "name": "inbox_raw_json_finite_large_integer_is_accepted",
+      "description": "原始 JSONValue 的有限大整数可作为 Double，不要求落在 Int64 内。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope account and case inbox",
+        "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSONValue.init(from:) Double decoding"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "account": 100000000000000000000 },
+      "expected": { "outcome": "accepted", "event": "inbox" }
+    },
+    {
       "name": "hello_null_optional_scalars_are_absent",
       "description": "hello 的字符串、整数与布尔可选键接受 null，并按缺省值构造。",
       "source": [
@@ -331,6 +353,17 @@
       "expected": { "outcome": "dropped", "key": "items" }
     },
     {
+      "name": "items_unprojected_number_never_panics",
+      "description": "Item 未读字段的超范围数字只得到诊断拒绝，不触发 panic，也不推断完整 iOS Item 是否接受。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope items",
+        "apple/Shared/Models.swift: Item required scalar fields; unprojected nested fields are outside this slice"
+      ],
+      "derived": true,
+      "input": { "type": "items", "machine_id": "machine-example", "session_id": "session-example", "items": [{ "id": "item-example", "seq": 1, "role": "assistant", "kind": "text", "future": 1e400 }] },
+      "expected": { "outcome": "dropped", "key": "items" }
+    },
+    {
       "name": "mesh_non_object_is_lenient",
       "description": "mesh 不是对象时只丢弃 mesh，不丢弃 hello。",
       "source": [
@@ -425,6 +458,17 @@
       ],
       "derived": true,
       "input": { "type": "inbox", "fleet": { "phase": "future", "items": [{ "id": "machine/session", "kind": "future" }] } },
+      "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null, "items": [{ "id": "machine/session", "kind": "screen" }] } }
+    },
+    {
+      "name": "inbox_fleet_non_string_kind_large_integer_defaults_to_screen",
+      "description": "fleet item kind 即使是超出整型范围的字面量，也因非字符串而宽容回退为 screen。",
+      "source": [
+        "apple/Shared/LiveConnection.swift: ServerEvent.Envelope fleet and case inbox",
+        "apple/Shared/FleetState.swift: FleetState.Item.Kind.init(from:) try? String fallback"
+      ],
+      "derived": true,
+      "input": { "type": "inbox", "fleet": { "items": [{ "id": "machine/session", "kind": 18446744073709551616 }] } },
       "expected": { "outcome": "accepted", "event": "inbox", "fleet": { "phase": "", "needs_you": 0, "working": 0, "unread": 0, "stats": null, "look": null, "items": [{ "id": "machine/session", "kind": "screen" }] } }
     },
     {

@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use serde::Deserialize;
-use serde::de::{IgnoredAny, MapAccess, SeqAccess};
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 
@@ -18,29 +18,85 @@ use super::transport;
 use super::transport::seen::{AnyStr, KeyFault, Seen, Shape, Slot, keyed, opens_object};
 use crate::Item;
 
+/// A JSONValue number, unlike an Envelope Int: fractional and exponent spellings are Doubles too.
 #[derive(Debug)]
-struct AnyValue;
+struct JsonNumberOrOther {
+    valid: bool,
+}
+impl<'de> Deserialize<'de> for JsonNumberOrOther {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(JsonValueNumber)
+            .map(|valid| Self { valid })
+    }
+}
 
-impl<'de> Shape<'de> for AnyValue {
-    fn boolean(_: bool) -> Option<Self> {
-        Some(Self)
+#[derive(Debug)]
+struct JsonValueNumber;
+impl<'de> Visitor<'de> for JsonValueNumber {
+    type Value = bool;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSONValue-compatible value")
     }
-    fn int(_: i64) -> Option<Self> {
-        Some(Self)
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(true)
     }
-    fn borrowed(_: &'de str) -> Option<Self> {
-        Some(Self)
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(true)
     }
-    fn unescaped(_: &str) -> Option<Self> {
-        Some(Self)
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(true)
     }
-    fn seq<A: SeqAccess<'de>>(mut seq: A) -> Result<Option<Self>, A::Error> {
-        while seq.next_element::<IgnoredAny>()?.is_some() {}
-        Ok(Some(Self))
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(true)
     }
-    fn map<A: MapAccess<'de>>(mut map: A) -> Result<Option<Self>, A::Error> {
-        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
-        Ok(Some(Self))
+    fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(true)
+    }
+    fn visit_string<E>(self, _: String) -> Result<Self::Value, E> {
+        Ok(true)
+    }
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(true)
+    }
+    fn visit_some<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(true)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut valid = true;
+        while let Some(value) = seq.next_element::<JsonNumberOrOther>()? {
+            valid &= value.valid;
+        }
+        Ok(valid)
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut valid = true;
+        while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+            valid &= map.next_value::<JsonNumberOrOther>()?.valid;
+        }
+        Ok(valid)
+    }
+}
+
+#[derive(Debug, Default)]
+struct AnyValue {
+    present: bool,
+    valid: bool,
+}
+impl Slot for AnyValue {
+    fn is_unset(&self) -> bool {
+        !self.present
+    }
+}
+impl<'de> Deserialize<'de> for AnyValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let valid = deserializer.deserialize_any(JsonValueNumber)?;
+        Ok(Self { present: true, valid })
     }
 }
 
@@ -116,10 +172,10 @@ keyed! {
         name = "name": Seen<Cow<'a, str>>,
         online = "online": Seen<bool>,
         is_self = "self": Seen<bool>,
-        endpoints = "endpoints": Seen<AnyValue>,
-        tls_port = "tls_port": Seen<AnyValue>,
-        fp = "fp": Seen<AnyValue>,
-        center = "center": Seen<AnyValue>,
+        endpoints = "endpoints": AnyValue,
+        tls_port = "tls_port": AnyValue,
+        fp = "fp": AnyValue,
+        center = "center": AnyValue,
     }
 }
 
@@ -174,7 +230,7 @@ keyed! {
         tpm = "tpm": Seen<i64>,
         tokens = "tokens": Seen<i64>,
         requests = "requests": Seen<i64>,
-        loads = "loads": Seen<AnyValue>,
+        loads = "loads": AnyValue,
     }
 }
 
@@ -199,7 +255,7 @@ keyed! {
         design = "design": Seen<Cow<'a, str>>,
         light = "light": Seen<i64>,
         dark = "dark": Seen<i64>,
-        package = "package": Seen<AnyValue>,
+        package = "package": AnyValue,
     }
 }
 
@@ -228,8 +284,8 @@ keyed! {
         detail = "detail": Seen<AnyStr>,
         interaction = "interaction": Seen<AnyStr>,
         since = "since": OptionalFleetDouble,
-        background = "background": Seen<AnyValue>,
-        progress = "progress": Seen<AnyValue>,
+        background = "background": AnyValue,
+        progress = "progress": AnyValue,
     }
 }
 
@@ -317,14 +373,8 @@ fn fleet_item(raw: &RawValue) -> Option<FleetItem> {
     if body.since.present && !body.since.valid {
         return None;
     }
-    if let Some(raw) = body.kind.0.as_deref()
-        && raw.get() != "null"
-        && serde_json::from_str::<Value>(raw.get())
-            .ok()
-            .is_some_and(|value| matches!(value, Value::Number(ref number) if number.as_f64().is_none()))
-    {
-        return None;
-    }
+    // `kind` uses a tolerant String decode: every non-string JSON value, including a large integer, is `.screen`.
+
     Some(FleetItem {
         id: body.id.required("id").ok()?.into_owned(),
         kind: match body
@@ -361,8 +411,8 @@ keyed! {
         working_since = "workingSince": OptionalFleetDouble,
         details = "details": Seen<bool>,
         assistant = "assistant": Seen<bool>,
-        left = "left": Seen<AnyValue>,
-        right = "right": Seen<AnyValue>,
+        left = "left": AnyValue,
+        right = "right": AnyValue,
         stats = "stats": Raw,
         look = "look": Raw,
     }
@@ -467,7 +517,7 @@ keyed! {
         id = "id": Seen<Cow<'a, str>>,
         call_id = "call_id": Seen<Cow<'a, str>>,
         name = "name": Seen<Cow<'a, str>>,
-        args = "args": Seen<AnyValue>,
+        args = "args": AnyValue,
         event = "event": Seen<Cow<'a, str>>,
         message = "message": Seen<Cow<'a, str>>,
         last_assistant_message = "last_assistant_message": Seen<Cow<'a, str>>,
@@ -478,7 +528,7 @@ keyed! {
         ol_account = "ol_account": Seen<i64>,
         source = "source": Seen<Cow<'a, str>>,
         conversations = "conversations": Seen<Strings>,
-        account = "account": Seen<AnyValue>,
+        account = "account": AnyValue,
         session_ids = "session_ids": Seen<Strings>,
         fleet = "fleet": RawFleet,
         desktops = "desktops": Seen<AnyArray>,
@@ -490,7 +540,7 @@ keyed! {
         public_url = "public_url": Seen<Cow<'a, str>>,
         update = "update": Seen<AnyObject>,
         operation = "operation": Seen<AnyObject>,
-        auth = "auth": Seen<AnyValue>,
+        auth = "auth": Raw,
         epoch = "epoch": Seen<Cow<'a, str>>,
         seq = "seq": Seen<i64>,
         full = "full": Seen<bool>,
@@ -504,7 +554,7 @@ keyed! {
         mesh = "mesh": Raw,
         item = "item": Seen<AnyObject>,
         view = "view": Seen<AnyObject>,
-        action = "action": Seen<AnyValue>,
+        action = "action": AnyValue,
         key = "key": Seen<Cow<'a, str>>,
         conversation = "conversation": Seen<Cow<'a, str>>,
         plan = "plan": Seen<AnyObject>,
@@ -516,13 +566,13 @@ keyed! {
         cwd = "cwd": Seen<Cow<'a, str>>,
         dirs = "dirs": Seen<Strings>,
         git = "git": Seen<bool>,
-        answered_by = "answered_by": Seen<AnyValue>,
-        reason = "reason": Seen<AnyValue>,
-        answers = "answers": Seen<AnyValue>,
-        resolution = "resolution": Seen<AnyValue>,
-        manager = "manager": Seen<AnyValue>,
+        answered_by = "answered_by": AnyValue,
+        reason = "reason": AnyValue,
+        answers = "answers": AnyValue,
+        resolution = "resolution": AnyValue,
+        manager = "manager": AnyValue,
         recording_id = "recording_id": Seen<Cow<'a, str>>,
-        changed = "changed": Seen<AnyValue>,
+        changed = "changed": AnyValue,
     }
 }
 
@@ -742,20 +792,33 @@ fn check_envelope(body: &EnvelopeBody<'_>) -> Result<(), Value> {
             $(body.$field.optional_ref($key).map_err(key_error)?;)+
         };
     }
+    macro_rules! raw {
+        ($($field:ident => $key:literal),+ $(,)?) => {
+            $(
+                if body.$field.present && !body.$field.valid {
+                    return Err(dropped(Some($key)));
+                }
+            )+
+        };
+    }
     check! {
         machines => "machines", sessions => "sessions", upsert => "upsert", remove => "remove",
-        interaction => "interaction", call_id => "call_id", name => "name", args => "args",
+        interaction => "interaction", call_id => "call_id", name => "name",
         event => "event", message => "message", last_assistant_message => "last_assistant_message",
         error => "error", revs => "revs", feed_ids => "feed_ids", settings_changed => "settings_changed",
-        ol_account => "ol_account", source => "source", conversations => "conversations", account => "account",
+        ol_account => "ol_account", source => "source", conversations => "conversations",
         session_ids => "session_ids", desktops => "desktops", update => "update", operation => "operation",
-        auth => "auth", epoch => "epoch", seq => "seq", full => "full", cols => "cols", rows => "rows",
+        epoch => "epoch", seq => "seq", full => "full", cols => "cols", rows => "rows",
         data => "data", unsupported => "unsupported", state => "state", hub_id => "hub_id",
-        hub_name => "hub_name", item => "item", view => "view", action => "action", key => "key",
+        hub_name => "hub_name", item => "item", view => "view", key => "key",
         conversation => "conversation", plan => "plan", effective => "effective", plugin => "plugin",
         extension => "extension", invalidate => "invalidate", badge => "badge", cwd => "cwd",
-        dirs => "dirs", git => "git", answered_by => "answered_by", reason => "reason", answers => "answers",
-        resolution => "resolution", manager => "manager", recording_id => "recording_id", changed => "changed",
+        dirs => "dirs", git => "git", recording_id => "recording_id",
+    }
+    raw! {
+        args => "args", account => "account", action => "action", answered_by => "answered_by",
+        reason => "reason", answers => "answers", resolution => "resolution", manager => "manager",
+        changed => "changed",
     }
     Ok(())
 }
@@ -830,18 +893,19 @@ fn items_event(body: EnvelopeBody<'_>) -> Option<Value> {
         (true, None) => return Some(dropped(Some("items"))),
     };
     let mut result = accepted("items");
+    let mut projected_items = Vec::with_capacity(items.len());
+    for item in &items {
+        let Ok(value) = serde_json::from_str(item.json()) else {
+            // Item::from_wire intentionally does not inspect every nested field. A field the JSON projection
+            // cannot represent is a dropped diagnostic result, never a panic or an iOS acceptance claim.
+            return Some(dropped(Some("items")));
+        };
+        projected_items.push(value);
+    }
     result.extend([
         ("machine_id".into(), json!(machine_id)),
         ("session_id".into(), json!(session_id)),
-        (
-            "items".into(),
-            Value::Array(
-                items
-                    .iter()
-                    .map(|item| serde_json::from_str(item.json()).expect("validated item JSON"))
-                    .collect(),
-            ),
-        ),
+        ("items".into(), Value::Array(projected_items)),
     ]);
     for (seen, key) in [
         (body.backlog.optional_ref("backlog"), "backlog"),

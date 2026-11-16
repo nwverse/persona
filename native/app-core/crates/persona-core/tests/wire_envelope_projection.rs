@@ -30,7 +30,7 @@ struct Case {
     expected: Value,
 }
 
-const CASES: [&str; 51] = [
+const CASES: [&str; 55] = [
     "hello_defaults_to_empty_features",
     "hello_features_null_defaults_to_empty",
     "hello_wrong_features_type_drops_event",
@@ -40,6 +40,8 @@ const CASES: [&str; 51] = [
     "hello_wrong_build_type_drops_event",
     "hello_raw_manager_accepts_mixed_json",
     "hello_raw_account_boolean_is_not_string",
+    "inbox_raw_json_fractional_number_is_accepted",
+    "inbox_raw_json_finite_large_integer_is_accepted",
     "hello_null_optional_scalars_are_absent",
     "hello_public_url_is_not_rewritten",
     "hello_non_object_is_not_an_event",
@@ -63,6 +65,7 @@ const CASES: [&str; 51] = [
     "items_duplicate_type_keeps_first",
     "items_raw_args_accepts_object",
     "items_invalid_item_scalar_drops_event",
+    "items_unprojected_number_never_panics",
     "mesh_non_object_is_lenient",
     "mesh_bad_hubs_element_drops_only_hubs",
     "mesh_valid_hubs_keep_identity",
@@ -72,6 +75,7 @@ const CASES: [&str; 51] = [
     "inbox_fleet_missing_item_id_drops_event",
     "inbox_fleet_bad_look_drops_only_look",
     "inbox_fleet_phase_and_kind_are_lenient",
+    "inbox_fleet_non_string_kind_large_integer_defaults_to_screen",
     "inbox_fleet_fractional_since_is_a_double",
     "inbox_fleet_string_since_drops_event",
     "fleet_requires_fleet_payload",
@@ -99,6 +103,14 @@ fn all_wire_envelope_cases_match_complete_expected_objects() {
     assert_eq!(document.schema_version, 1);
     assert_eq!(document.operation, "server_event_envelope");
     assert_eq!(document.profile, "ios_current");
+    let expected = CASES.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    let actual_names = document.cases.iter().map(|case| case.name.clone()).collect::<Vec<_>>();
+    assert_eq!(actual_names, expected, "wire-envelope ordered case manifest changed");
+    assert_eq!(
+        CASES.into_iter().collect::<BTreeSet<_>>().len(),
+        CASES.len(),
+        "manifest duplicates"
+    );
     let expected = CASES.into_iter().map(str::to_owned).collect::<BTreeSet<_>>();
     let mut replayed = BTreeSet::new();
     for case in document.cases {

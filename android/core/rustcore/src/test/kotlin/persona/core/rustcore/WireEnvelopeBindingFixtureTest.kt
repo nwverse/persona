@@ -34,9 +34,9 @@ class WireEnvelopeBindingFixtureTest {
         assertEquals(1, document.getValue("schema_version").jsonPrimitive.content.toInt())
         assertEquals("server_event_envelope", document.getValue("operation").jsonPrimitive.content)
         assertEquals("ios_current", document.getValue("profile").jsonPrimitive.content)
-        assertEquals("exact case manifest", CASES, cases.map {
+        assertEquals("exact ordered case manifest", CASES, cases.map {
             it.getValue("name").jsonPrimitive.content
-        }.toSet())
+        })
         assertEquals("a raw input per parsed case", cases.size, inputs.size)
         val replayed = mutableSetOf<String>()
         for ((case, input) in cases.zip(inputs)) {
@@ -47,7 +47,7 @@ class WireEnvelopeBindingFixtureTest {
             assertExpected(name, case.getValue("expected"), actual)
             assertTrue("$name: duplicate replay", replayed.add(name))
         }
-        assertEquals(CASES, replayed)
+        assertEquals(CASES.toSet(), replayed)
         println("JNI wire-envelope host replay: ${replayed.size} complete source-derived objects")
     }
 
@@ -99,7 +99,7 @@ class WireEnvelopeBindingFixtureTest {
     }
 
     private companion object {
-        val CASES = setOf(
+        val CASES = listOf(
             "hello_defaults_to_empty_features",
             "hello_features_null_defaults_to_empty",
             "hello_wrong_features_type_drops_event",
@@ -109,6 +109,8 @@ class WireEnvelopeBindingFixtureTest {
             "hello_wrong_build_type_drops_event",
             "hello_raw_manager_accepts_mixed_json",
             "hello_raw_account_boolean_is_not_string",
+            "inbox_raw_json_fractional_number_is_accepted",
+            "inbox_raw_json_finite_large_integer_is_accepted",
             "hello_null_optional_scalars_are_absent",
             "hello_public_url_is_not_rewritten",
             "hello_non_object_is_not_an_event",
@@ -132,6 +134,7 @@ class WireEnvelopeBindingFixtureTest {
             "items_duplicate_type_keeps_first",
             "items_raw_args_accepts_object",
             "items_invalid_item_scalar_drops_event",
+            "items_unprojected_number_never_panics",
             "mesh_non_object_is_lenient",
             "mesh_bad_hubs_element_drops_only_hubs",
             "mesh_valid_hubs_keep_identity",
@@ -141,6 +144,7 @@ class WireEnvelopeBindingFixtureTest {
             "inbox_fleet_missing_item_id_drops_event",
             "inbox_fleet_bad_look_drops_only_look",
             "inbox_fleet_phase_and_kind_are_lenient",
+            "inbox_fleet_non_string_kind_large_integer_defaults_to_screen",
             "inbox_fleet_fractional_since_is_a_double",
             "inbox_fleet_string_since_drops_event",
             "fleet_requires_fleet_payload",
