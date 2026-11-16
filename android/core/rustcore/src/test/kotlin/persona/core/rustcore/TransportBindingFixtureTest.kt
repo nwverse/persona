@@ -208,6 +208,9 @@ class TransportBindingFixtureTest {
             """{"type":"items","machine_id":"m1","session_id":"s1","rows":"24"}""",
             """{"type":"inbox","items":{}}""",
             """{"type":"future_event","backlog":"yes"}""",
+            // #9187: a valid items array cannot hide another shared scalar error.
+            """{"type":"hello","items":[],"rows":"bad","history":"\ud83d"}""",
+            """{"type":"hello","items":[],"args":1e999,"rows":"bad"}""",
             "not json at all",
         )) {
             assertUnchanged("a refused frame is dropped: $body", Payload.Frame(body))

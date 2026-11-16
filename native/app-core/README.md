@@ -73,7 +73,9 @@ visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bin
 The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
 stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
 partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
-`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
+`markersOnly` cases/controls plus digit boundaries. Table repair (#9164) replays all 22 repair and 15 table/text end
+assertions from Apple's table-related tests, including half-written rows, early delimiter rows, list indentation and
+lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
