@@ -57,7 +57,7 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           const closed = collapsed.has(path);
           return (
             <div key={path}>
-              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-8 w-full items-center gap-1 rounded-control px-2 text-left text-[12px] font-medium text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * 12}px` }}>
+              <button type="button" aria-expanded={!closed} onClick={() => toggle(path)} className="flex h-8 w-full items-center gap-1 rounded-control px-2 text-left text-label font-medium text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11" style={{ paddingLeft: `${8 + depth * 12}px` }}>
                 <Icon name="chevronRight" size={12} style={{ transform: closed ? undefined : "rotate(90deg)" }} />
                 <span className="truncate">{name}</span>
               </button>
@@ -66,11 +66,11 @@ function FileTree({ root, collapsed, toggle, select, selected }: {
           );
         })}
         {[...node.files].sort((a, b) => a.shown.localeCompare(b.shown)).map((file) => (
-          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex min-h-8 w-full items-center gap-2 rounded-control px-2 py-1 text-left text-[12px] hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover text-ink")} style={{ paddingLeft: `${20 + depth * 12}px` }}>
+          <button key={file.path} type="button" title={file.path} data-change-file={file.path} aria-current={selected === file.path ? "true" : undefined} onClick={() => select(file.path)} className={cx("flex min-h-8 w-full items-center gap-2 rounded-control px-2 py-1 text-left text-label hover:bg-hover [@media(pointer:coarse)]:min-h-11", selected === file.path && "bg-hover text-ink")} style={{ paddingLeft: `${20 + depth * 12}px` }}>
             <Icon name="file" size={13} className="shrink-0 text-ink-3" />
             <span className="min-w-0 flex-1 truncate">{file.shown.split(/[\\/]/).pop()}</span>
             {file.exact && (
-              <span className="shrink-0 font-mono text-[11px] tabular-nums">
+              <span className="shrink-0 font-mono text-submeta tabular-nums">
                 <span className="text-diff-add-fg">+{file.add}</span> <span className="text-diff-del-fg">-{file.del}</span>
               </span>
             )}
@@ -298,18 +298,18 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
       <div className="flex min-h-0 flex-1 flex-col" data-changes-panel data-resolving-call>
         <PanelHeader icon="fileDiff" title={t("session-changes.title")} onClose={onClose} />
         {tr.error && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-red" role="alert">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-label text-red" role="alert">
             <span className="min-w-0 flex-1 truncate">{tr.error}</span>
             <button type="button" onClick={tr.reload} className="shrink-0 rounded-control px-2 py-1 hover:bg-hover [@media(pointer:coarse)]:min-h-11">{t("session-changes.retry")}</button>
           </div>
         )}
         {foldError && (
-          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-red" role="alert">
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-label text-red" role="alert">
             <span className="min-w-0 flex-1">{foldError}</span>
             <button type="button" onClick={retryFolds} className="shrink-0 rounded-control px-2 py-1 hover:bg-hover [@media(pointer:coarse)]:min-h-11">{t("session-changes.retry")}</button>
           </div>
         )}
-        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-5 text-center text-[12px] text-ink-3" data-change-diff>
+        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-5 text-center text-label text-ink-3" data-change-diff>
           {waiting ? <><Spinner size={16} /> {t("session-changes.loading_history")}</> : !tr.error && !foldError ? t("session-changes.empty") : null}
         </div>
       </div>
@@ -317,7 +317,7 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
   }
 
   const tree = treeOf(files);
-  const action = "touch-hit flex h-7 shrink-0 items-center gap-1 rounded-control px-2 text-[12px] font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink";
+  const action = "touch-hit flex h-7 shrink-0 items-center gap-1 rounded-control px-2 text-label font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink";
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-changes-panel>
       <PanelHeader
@@ -345,24 +345,24 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
       <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1">
         <div role="group" aria-label={t("session-changes.scope_label")} className="flex rounded-control bg-field p-0.5">
           {(["exchange", "session"] as const).map((value) => (
-            <button key={value} type="button" data-change-scope={value} aria-pressed={scope === value} onClick={() => { pendingLive.current.clear(); setPending({ count: 0, path: "" }); setScope(value); }} className={cx("min-h-7 rounded-[6px] px-2 text-[12px] whitespace-nowrap [@media(pointer:coarse)]:min-h-11", scope === value ? "bg-surface text-ink shadow-btn" : "text-ink-3 hover:text-ink")}>
+            <button key={value} type="button" data-change-scope={value} aria-pressed={scope === value} onClick={() => { pendingLive.current.clear(); setPending({ count: 0, path: "" }); setScope(value); }} className={cx("min-h-7 rounded-[6px] px-2 text-label whitespace-nowrap [@media(pointer:coarse)]:min-h-11", scope === value ? "bg-surface text-ink shadow-btn" : "text-ink-3 hover:text-ink")}>
               {t(`session-changes.${value}`)}
             </button>
           ))}
         </div>
         {pending.count > 0 && (
-          <button type="button" data-new-changes onClick={() => selectFile(pending.path)} className="ml-auto flex min-h-7 shrink-0 items-center rounded-full bg-accent-tint px-2 text-[11px] font-medium whitespace-nowrap text-accent-ink [@media(pointer:coarse)]:min-h-11">
+          <button type="button" data-new-changes onClick={() => selectFile(pending.path)} className="ml-auto flex min-h-7 shrink-0 items-center rounded-full bg-accent-tint px-2 text-submeta font-medium whitespace-nowrap text-accent-ink [@media(pointer:coarse)]:min-h-11">
             {t("session-changes.new_changes", { count: pending.count })}
           </button>
         )}
       </div>
       {scope === "session" && (tr.hasMore || tr.loadingEarlier) && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-ink-3" data-history-loading>
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-label text-ink-3" data-history-loading>
           <Spinner size={12} /> {t("session-changes.loading_history")}
         </div>
       )}
       {tr.error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-[12px] text-red" role="alert">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-label text-red" role="alert">
           <span className="min-w-0 flex-1 truncate">{tr.error}</span>
           <button type="button" onClick={tr.reload} className="shrink-0 rounded-control px-2 py-1 hover:bg-hover [@media(pointer:coarse)]:min-h-11">{t("session-changes.retry")}</button>
         </div>
@@ -372,9 +372,9 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
           <FileTree root={tree} collapsed={collapsed} selected={selectedPath} select={selectFile} toggle={(path) => setCollapsed((old) => { const next = new Set(old); if (next.has(path)) next.delete(path); else next.add(path); return next; })} />
         </nav>
         <div ref={diffBody} className="relative min-h-0 flex-1 overflow-auto p-2" data-change-diff>
-          {foldLoading && <div className="flex items-center gap-2 p-2 text-[12px] text-ink-3"><Spinner size={12} />{t("session-changes.loading_fold")}</div>}
+          {foldLoading && <div className="flex items-center gap-2 p-2 text-label text-ink-3"><Spinner size={12} />{t("session-changes.loading_fold")}</div>}
           {foldError && (
-            <div className="flex items-center gap-2 p-2 text-[12px] text-red" role="alert">
+            <div className="flex items-center gap-2 p-2 text-label text-red" role="alert">
               <span className="min-w-0 flex-1">{foldError}</span>
               <button type="button" onClick={retryFolds} className="shrink-0 rounded-control px-2 py-1 hover:bg-hover [@media(pointer:coarse)]:min-h-11">{t("session-changes.retry")}</button>
             </div>
@@ -385,7 +385,7 @@ function ChangesPanelView({ mid, sid, opened, onClose, tr }: ChangesPanelProps &
             </section>
           ))}
           {!foldLoading && !selectedEdits.length && (
-            <div className="flex h-full min-h-32 flex-col items-center justify-center gap-2 p-5 text-center text-[12px] text-ink-3">
+            <div className="flex h-full min-h-32 flex-col items-center justify-center gap-2 p-5 text-center text-label text-ink-3">
               <Icon name="fileDiff" size={22} />
               {t("session-changes.empty")}
             </div>

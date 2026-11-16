@@ -260,7 +260,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
         {p.verb && <span className="shrink-0 text-[length:var(--chat-secondary)] whitespace-nowrap text-tool-ink">{p.verb}</span>}
         {p.param &&
           (p.file ? (
-            <span className="inline-flex max-w-full min-w-0 items-center gap-[3px] rounded-[4px] border border-line bg-field px-[5px] py-[0.5px] font-mono text-[13px] leading-[1.385] whitespace-nowrap text-ink-2 transition-colors group-hover:bg-hover-2" data-file-chip>
+            <span className="inline-flex max-w-full min-w-0 items-center gap-[3px] rounded-[4px] border border-line bg-field px-[5px] py-[0.5px] font-mono text-meta leading-[1.385] whitespace-nowrap text-ink-2 transition-colors group-hover:bg-hover-2" data-file-chip>
               <Icon name="read" size={12} className="shrink-0 text-ink-3" />
               <span className="truncate">{p.param.text}</span>
             </span>
@@ -269,7 +269,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
           ))}
         <span className="flex-1" />
         {stats && (stats.add > 0 || stats.del > 0) && (
-          <span className="flex shrink-0 gap-1 font-mono text-[13px] font-medium tabular-nums">
+          <span className="flex shrink-0 gap-1 font-mono text-meta font-medium tabular-nums">
             <span className="text-diff-add-fg">+{stats.add}</span>
             <span className="text-diff-del-fg">-{stats.del}</span>
           </span>
@@ -279,13 +279,13 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
             {duration}
           </span>
         )}
-        {bg && <span className={cx("shrink-0 rounded-[4px] px-1 text-[11px] font-medium whitespace-nowrap", bg.failed ? "bg-red-tint text-red" : "bg-field text-ink-2")}>{bg.text}</span>}
+        {bg && <span className={cx("shrink-0 rounded-[4px] px-1 text-submeta font-medium whitespace-nowrap", bg.failed ? "bg-red-tint text-red" : "bg-field text-ink-2")}>{bg.text}</span>}
         <span aria-hidden className={CHEVRON_SLOT}>
           <Icon name={inPlace && open ? "chevron" : "chevronRight"} size={13} stroke={2.2} />
         </span>
       </button>
       {p.raw && !open && (
-        <div title={p.raw} className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-[12px] leading-[1.5] text-tool-ink">
+        <div title={p.raw} className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-label leading-[1.5] text-tool-ink">
           {p.raw}
         </div>
       )}
@@ -297,7 +297,7 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
         </div>
       )}
       {open && (
-        <div className="mx-2 mt-1 mb-1 cursor-text rounded-[6px] border border-line bg-neutral-bubble px-[10px] py-2 font-mono text-[12px] leading-[17px] text-ink select-text" data-inline-detail>
+        <div className="mx-2 mt-1 mb-1 cursor-text rounded-[6px] border border-line bg-neutral-bubble px-[10px] py-2 font-mono text-label leading-[17px] text-ink select-text" data-inline-detail>
           {detail && (
             <div className="font-sans">
               <StepDetail use={use} result={result} />
@@ -337,7 +337,7 @@ export function foldDiffs(diffs: Op[][], max = DIFF_FOLD_LINES): { shown: Op[][]
 
 export function DiffBlocks({ diffs }: { diffs: Op[][] }) {
   return diffs.map((d, n) => (
-    <div key={n} className="min-w-fit overflow-hidden rounded-[8px] py-1 font-mono text-[12px] leading-[1.6] shadow-hairline">
+    <div key={n} className="min-w-fit overflow-hidden rounded-[8px] py-1 font-mono text-label leading-[1.6] shadow-hairline">
       {d.map((l, i) => (
         <div key={i} className={cx("flex min-w-fit pr-3", l.kind === "add" && "bg-diff-add-bg", l.kind === "del" && "bg-diff-del-bg")} data-diff-line={l.kind}>
           <span className={cx("w-6 shrink-0 text-center select-none", l.kind === "add" ? "text-diff-add-fg" : l.kind === "del" ? "text-diff-del-fg" : "text-ink-3")}>{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>
