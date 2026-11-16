@@ -788,7 +788,9 @@ class Watcher:
             if not old.get("failure_posted"):
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
-        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing"):
+        if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing") \
+                and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
+                     or old.get("verification") in ("passed", "base_failure")):
             if old.get("outcome") == "merged":
                 return
             if self.dry_run:

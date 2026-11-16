@@ -136,6 +136,21 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(self.github.call_count, 1)
         self.assertIn("Automated independent semantic review", self.github.call_args.args[0][-1])
 
+    def test_p2_without_verification_never_merges_before_verification(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="passed_with_findings",
+                               semantic="passed", findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+
     def test_crash_after_success_publication_resumes_exact_head_merge(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
         finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
