@@ -133,6 +133,7 @@ extension ChatStore: ChatContinuityAdapting {
         }
     }
 
+    #if DEBUG
     /// An explicit native-only input for a fixture replay or a legacy call that is not part of the production adapter.
     /// It updates the snapshot exactly as apply does but does not mirror the input a second time.
     func applyNativeOnly(_ input: NativeContinuityInput) -> ChatStore.Gap? {
@@ -141,6 +142,7 @@ extension ChatStore: ChatContinuityAdapting {
         defer { continuityShadowEnabled = enabled }
         return apply(input)
     }
+    #endif
 
     func nativeResult() -> NativeContinuityResult {
         .init(items: items, covered: covered, history: history, hasMore: hasMore, loadedOnce: loadedOnce)
