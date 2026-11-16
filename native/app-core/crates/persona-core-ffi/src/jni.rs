@@ -318,7 +318,7 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTaskIndex<
     .unwrap_or_default()
 }
 
-/// Projects the viewed-image strip for the tool call in a lines input. Pure function, no runtime handle needed.
+/// Projects the viewed-image strip for the first represented work group in a lines input. Pure function.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectViewedImages<'a>(
     mut env: JNIEnv<'a>,
