@@ -493,7 +493,7 @@ func run(_ op: [String: Any], confirm: Bool) async -> [String: Any] {
   reviewSubmit()
  }
  for _ in 0..<100 where model.result == nil && sending { try! await Task.sleep(for: .milliseconds(10)) }
- var out: [String: Any] = ["allowed": allowed, "resolution": wire(model.result), "next_page": page, "picks": picks.mapValues { $0.sorted() }, "reviewing": reviewing]
+ var out: [String: Any] = ["allowed": allowed, "resolution": wire(model.result), "next_page": page, "picks": picks.mapValues { $0.sorted() }, "other": other, "reviewing": reviewing]
  if let q = questions.first, let option = q.options.first {
   let d = QuestionOption.display(option.label)
   out["display"] = ["text": d.0, "recommended": d.1]
@@ -510,6 +510,68 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
   if lhs != rhs { fatalError("\(name).\(key): expected \(String(decoding: lhs,as: UTF8.self)), got \(String(decoding: rhs,as: UTF8.self))") }
  }
 }
+
+// What one click leaves in the draft the next click starts from (#9238). Advance, Submit and a click made while an answer
+// is on its way change neither map. An accepted single choice replaces its question's picks and empties its Other entry:
+// the key stays (other[q.question] = "" in QuestionForm.pick). An accepted multiple choice only toggles its pick.
+// persona-core's answer tests assert the same rules for the same cases.
+func checkDraft(_ op: [String: Any], _ ix: Interaction, _ actual: [String: Any], _ name: String) {
+ var picks = (op["picks"] as? [String: [String]] ?? [:]).mapValues { Set($0) }
+ var other = op["other"] as? [String: String] ?? [:]
+ if op["action"] as? String == "pick_option", actual["allowed"] as? Bool == true {
+  let q = ix.questions![op["page"] as? Int ?? 0]
+  let label = q.options[op["option_index"] as! Int].label
+  if q.multiSelect {
+   var set = picks[q.question, default: []]
+   if set.contains(label) { set.remove(label) } else { set.insert(label) }
+   picks[q.question] = set
+  } else {
+   picks[q.question] = [label]
+   other[q.question] = ""
+  }
+ }
+ let gotPicks = (actual["picks"] as! [String: [String]]).mapValues { Set($0) }
+ precondition(gotPicks == picks, "\(name): the picks a click leaves are \(gotPicks), not \(picks)")
+ let gotOther = actual["other"] as! [String: String]
+ precondition(gotOther == other, "\(name): the Other entries a click leaves are \(gotOther), not \(other)")
+}
+
+// The issue's own case (#9238), clicked through iOS's own code: two single choices, a custom answer typed for the first,
+// then its option picked. Every click starts from what the one before left, as a person's taps do.
+@MainActor func draftChain() async throws {
+ func single(_ question: String, _ labels: [String]) -> [String: Any] {
+  ["question": question, "multi_select": false, "options": labels.map { ["label": $0] }]
+ }
+ let card: [String: Any] = ["id": "example_request", "machine_id": "example_machine", "session_id": "example_session", "kind": "question", "questions": [single("One", ["A", "B"]), single("Two", ["C", "D"])]]
+ let form = QuestionProbe(try JSONDecoder().decode(Interaction.self, from: JSONSerialization.data(withJSONObject: card)))
+ form.other = ["One": "custom"]
+ func click(_ action: String, _ option: Int? = nil, confirm: Bool = false) async -> [String: Any] {
+  var op: [String: Any] = ["action": action, "page": form.page, "picks": form.picks.mapValues { $0.sorted() }, "other": form.other, "sending": false, "reviewing": form.reviewing]
+  if let option { op["option_index"] = option }
+  let out = await form.run(op, confirm: confirm)
+  try? await Task.sleep(for: .milliseconds(300)) // the page turn a pick on a card of several questions schedules, 250 ms later
+  return out
+ }
+ func expect(_ step: String, _ out: [String: Any], allowed: Bool, page: Int, picks: [String: Set<String>], other: [String: String], answers: [String: String]? = nil) {
+  precondition(out["allowed"] as? Bool == allowed, "draft chain, \(step): allowed")
+  precondition(form.page == page, "draft chain, \(step): page \(form.page)")
+  precondition(form.picks == picks, "draft chain, \(step): picks \(form.picks)")
+  precondition(form.other == other, "draft chain, \(step): other \(form.other)")
+  let sent = (out["resolution"] as? [String: Any])?["answers"] as? [String: String]
+  precondition(sent == answers, "draft chain, \(step): answers \(String(describing: sent))")
+ }
+ var out = await click("pick_option", 1)
+ expect("pick One=B", out, allowed: true, page: 1, picks: ["One": ["B"]], other: ["One": ""])
+ out = await click("advance")
+ expect("Advance with Two open", out, allowed: false, page: 1, picks: ["One": ["B"]], other: ["One": ""])
+ out = await click("submit")
+ expect("Submit with Two open", out, allowed: false, page: 1, picks: ["One": ["B"]], other: ["One": ""])
+ out = await click("pick_option", 1)
+ expect("pick Two=D", out, allowed: true, page: 1, picks: ["One": ["B"], "Two": ["D"]], other: ["One": "", "Two": ""])
+ out = await click("submit", confirm: true) // the review opens, then its Submit sends
+ expect("Submit", out, allowed: true, page: 1, picks: ["One": ["B"], "Two": ["D"]], other: ["One": "", "Two": ""], answers: ["One": "B", "Two": "D"])
+}
+
 @main struct Main {
  @MainActor static func main() async throws {
   var files: [URL] = []
@@ -546,6 +608,7 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
     } else if ix.kind == .question && action != "dismiss" {
      let confirm = confirmedThroughReview.contains(name)
      actual = await QuestionProbe(ix).run(op, confirm: confirm)
+     checkDraft(op, ix, actual, name)
      // A click that opens the review sends nothing; a case that does not assert the review must not open it.
      if expected["reviewing"] == nil && actual["reviewing"] as! Bool != confirm { fatalError("\(name): the review is \(actual["reviewing"]!) here; say so in the fixture") }
      if confirm { confirmed.insert(name) }
@@ -573,6 +636,8 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
   }
   precondition(confirmed == confirmedThroughReview, "review-confirmed cases missing: \(confirmedThroughReview.subtracting(confirmed).sorted())")
   print("Verified \(count) iOS answer fixtures against source declarations and button constructors (\(confirmed.count) through the review; \(transport) transport cases left to the transport replay)")
+  try await draftChain()
+  print("Verified the draft each question click leaves, for every case above and for the two-question chain (#9238)")
   let policies = try JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))) as! [String:Any]
   var modes = 0
   for c in policies["cases"] as! [[String:Any]] {
