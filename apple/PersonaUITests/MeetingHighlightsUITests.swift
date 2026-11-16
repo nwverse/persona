@@ -418,6 +418,9 @@ final class MeetingHighlightsUITests: XCTestCase {
             _ = waitFor(4) { self.dismissIconNotice(app) }
         }
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting page:\n\(app.debugDescription)")
+        // The meeting room's Highlights page (#8731 B1): the topics and the card are there, the thread on the Live page.
+        let tab = app.buttons["meeting-room-tab-highlights"].firstMatch
+        if tab.waitForExistence(timeout: 5) { tab.tap() }
         return app
     }
 
