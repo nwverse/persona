@@ -144,6 +144,8 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
                 checked(["git", "update-ref", destination, entries[0][0]], cwd=cwd,
                         timeout=60, environ=environ)
             else:
+                if not cwd:
+                    raise WatchError("FETCH_HEAD recovery requires the actual checkout path")
                 common_text = checked(["git", "rev-parse", "--git-path", "FETCH_HEAD"], cwd=cwd).strip()
                 common = (Path(cwd).resolve() / common_text).resolve() if not Path(common_text).is_absolute() else Path(common_text).resolve()
                 destination = common
