@@ -24,10 +24,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import persona.core.contracts.Machine
 import persona.core.contracts.StandingAuthorization
 import persona.core.contracts.api.StandingAuthorizationsSource
+import persona.core.designsystem.JAction
+import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JDialog
@@ -45,6 +48,9 @@ import persona.core.designsystem.failureReasonText
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.pagePadding
 import persona.core.designsystem.text
+
+/** How long "Authorization revoked" stays when the user does not move on. A toast's length. */
+private const val REVOKED_NOTICE_MILLIS = 4_000L
 
 /**
  * Settings › Standing Authorizations (the same page as iOS). The list names the folder and the computer, what Persona
@@ -64,12 +70,22 @@ internal fun StandingAuthorizationsPage(
         }
         return
     }
-    val model = remember(source) { StandingAuthorizationsModel(source) }
+    // A new hub drops the previous hub's rows. Revoke uses the client pinned to the hub those rows came from.
+    val hubId by source.hubIdentity.collectAsState()
+    val pinned = remember(hubId) { source.pinned() }
+    val model = remember(pinned) { StandingAuthorizationsModel(pinned) }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()
-    var selectedId by remember(source) { mutableStateOf<String?>(null) }
-    var confirming by remember(source) { mutableStateOf<StandingAuthorization?>(null) }
+    var selectedId by remember(pinned) { mutableStateOf<String?>(null) }
+    var confirming by remember(pinned) { mutableStateOf<StandingAuthorization?>(null) }
+    var menu by remember(pinned) { mutableStateOf<StandingAuthorization?>(null) }
     LaunchedEffect(model) { model.load() }
+    LaunchedEffect(state.notice) {
+        if (state.notice is StandingNotice.Revoked) {
+            delay(REVOKED_NOTICE_MILLIS)
+            model.dismissRevoked()
+        }
+    }
     val selected = state.grants?.firstOrNull { it.id == selectedId }
     LaunchedEffect(state.grants, selectedId) {
         if (selectedId != null && state.grants?.any { it.id == selectedId } != true) selectedId = null
@@ -80,12 +96,21 @@ internal fun StandingAuthorizationsPage(
     val resources = LocalContext.current.resources
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= Tokens.Android.Size.assistantSplitMin
-        val open = { id: String -> selectedId = id }
-        val refresh: () -> Unit = { scope.launch { model.load() }; Unit }
+        fun open(id: String) {
+            model.dismissRevoked()
+            selectedId = id
+        }
+        fun refresh() {
+            model.dismissRevoked()
+            scope.launch { model.load() }
+        }
+        fun hold(grant: StandingAuthorization) {
+            menu = grant
+        }
         if (wide && selected != null) {
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {
-                    GrantList(state, machines, resources, selectedId, open, refresh, onBack)
+                    GrantList(state, machines, resources, selectedId, ::open, ::hold, ::refresh, onBack)
                 }
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     GrantDetail(selected, machines, resources, onBack = { selectedId = null }, onRevoke = { confirming = it })
@@ -94,8 +119,21 @@ internal fun StandingAuthorizationsPage(
         } else if (selected != null) {
             GrantDetail(selected, machines, resources, onBack = { selectedId = null }, onRevoke = { confirming = it })
         } else {
-            GrantList(state, machines, resources, selectedId, open, refresh, onBack)
+            GrantList(state, machines, resources, selectedId, ::open, ::hold, ::refresh, onBack)
         }
+    }
+    menu?.let { grant ->
+        JActionSheet(
+            listOf(
+                JAction(
+                    stringResource(R.string.settings_standing_revoke_authorization_ellipsis),
+                    PersonaIcons.delete,
+                    destructive = true,
+                ) { confirming = grant },
+            ),
+            { menu = null },
+            title = StandingAuthorizationText.actionsTitle(grant, resources),
+        )
     }
     confirming?.let { grant ->
         val machine = standingMachineName(grant.machineId, machines)
@@ -125,6 +163,7 @@ private fun GrantList(
     resources: Resources,
     selectedId: String?,
     onOpen: (String) -> Unit,
+    onLongClick: (StandingAuthorization) -> Unit,
     onRefresh: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -171,7 +210,10 @@ private fun GrantList(
                 grants.forEachIndexed { index, grant ->
                     item("grant-${grant.id}") {
                         JGroupItem(persona.core.designsystem.GroupPosition.of(index, grants.size), Modifier.padding(top = if (index == 0) Tokens.Space.m else Tokens.Space.flush)) {
-                            GrantRow(grant, machines, resources, selected = grant.id == selectedId, onClick = { onOpen(grant.id) })
+                            GrantRow(
+                                grant, machines, resources, selected = grant.id == selectedId,
+                                onClick = { onOpen(grant.id) }, onLongClick = { onLongClick(grant) },
+                            )
                         }
                     }
                 }
@@ -207,10 +249,11 @@ private fun GrantRow(
     resources: Resources,
     selected: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
     val place = stringResource(R.string.settings_standing_place, grant.folderName, standingMachineName(grant.machineId, machines))
     val more = StandingAuthorizationText.listCaption(grant, resources)
-    JRow(onClick = onClick, selected = selected, modifier = Modifier.testTag("standing-row-${grant.id}")) {
+    JRow(onClick = onClick, onLongClick = onLongClick, selected = selected, modifier = Modifier.testTag("standing-row-${grant.id}")) {
         Column(Modifier.weight(1f)) {
             Text(StandingAuthorizationText.actionsTitle(grant, resources), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
             Text(place, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
@@ -297,7 +340,11 @@ private fun GrantDetail(
         }
         meta.forEachIndexed { index, key ->
             item("meta-$key") {
-                JGroupItem(persona.core.designsystem.GroupPosition.of(index, meta.size)) {
+                // Its own group, as on iOS: a gap under "Your words" (or the conditions note) before Granted.
+                JGroupItem(
+                    persona.core.designsystem.GroupPosition.of(index, meta.size),
+                    Modifier.padding(top = if (index == 0) Tokens.Space.section else Tokens.Space.flush),
+                ) {
                     when (key) {
                         "granted" -> JRow(stringResource(R.string.settings_standing_granted), value = granted)
                         "lasts" -> JRow(stringResource(R.string.settings_standing_lasts), value = stringResource(R.string.settings_standing_until))

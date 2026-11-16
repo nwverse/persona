@@ -1,5 +1,6 @@
 package persona.core.contracts.api
 
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -69,6 +70,8 @@ private class ManagerStandingAuthorizations(
     private val source: StandingAuthorizationsSource,
     private val owner: RequestManager,
 ) : StandingAuthorizationsSource {
+    override val hubIdentity: StateFlow<String> get() = source.hubIdentity
+    override fun pinned(): StandingAuthorizationsSource = ManagerStandingAuthorizations(source.pinned(), owner)
     override suspend fun list() = withContext(owner) { source.list() }
     override suspend fun revoke(id: String) = withContext(owner) { source.revoke(id) }
 }

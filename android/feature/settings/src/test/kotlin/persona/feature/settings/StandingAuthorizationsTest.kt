@@ -16,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
+import persona.core.contracts.Machine
 import persona.core.contracts.StandingAuthorization
 import persona.core.contracts.StandingAuthorizationList
 import persona.core.contracts.api.StandingAuthorizationsSource
@@ -115,6 +116,19 @@ class StandingAuthorizationsTest {
         listed = listOf(grant)
         model.load()
         assertEquals(emptyList<String>(), model.state.value.grants?.map { it.id })
+        assertEquals(StandingNotice.Revoked, model.state.value.notice)
+        model.dismissRevoked()
+        assertNull(model.state.value.notice)
+    }
+
+    @Test fun theComputerNameIsTheOneOnThatHub() {
+        val machines = listOf(
+            Machine(id = "mac-mini", name = "First"),
+            Machine(id = "mac-mini~g0a1b2c3d", name = "Second"),
+        )
+        assertEquals("Second", standingMachineName("mac-mini~g0a1b2c3d", machines))
+        assertEquals("First", standingMachineName("mac-mini", machines))
+        assertEquals("mac-mini~g0eeeeeeee", standingMachineName("mac-mini~g0eeeeeeee", machines))
     }
 
     @Test fun wordingMatchesTheListAndTheDetailInEnglishAndChinese() {
@@ -137,7 +151,9 @@ class StandingAuthorizationsTest {
         assertTrue(StandingAuthorizationText.source(
             "Suggested rule: the same answer 4 times in 14 days, confirmed with Always.", en,
         ).contains("4"))
-        assertTrue(StandingAuthorizationText.since(grant, en)?.startsWith("Since ") == true)
+        val since = StandingAuthorizationText.since(grant, en)
+        assertTrue(since?.startsWith("Since ") == true)
+        assertTrue(since!!.contains('\u00A0'))
         val zh = resources("zh-CN")
         assertEquals("合入改动、推送改动和“custom”", StandingAuthorizationText.actionsTitle(grant, zh))
         assertEquals("仅当：所有检查通过和没有合并冲突", StandingAuthorizationText.conditionsLine(grant, zh))

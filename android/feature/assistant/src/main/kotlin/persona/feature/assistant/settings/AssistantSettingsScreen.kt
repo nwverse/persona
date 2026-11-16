@@ -139,8 +139,9 @@ private fun AssistantSettingsDetails(
         }
     }
     var standingCount by remember { mutableIntStateOf(0) }
-    LaunchedEffect(management, onStandingAuthorizations) {
-        standingCount = if (onStandingAuthorizations == null) 0 else try {
+    val showStanding = onStandingAuthorizations != null
+    LaunchedEffect(management, showStanding) {
+        standingCount = if (!showStanding) 0 else try {
             management.standingAuthorizations().authorizations.size
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled

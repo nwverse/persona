@@ -53,7 +53,12 @@ internal class StandingAuthorizationsModel(private val source: StandingAuthoriza
             val list = source.list()
             if (read != currentRead()) return
             val shown = list.authorizations.filter { !hidden(it.id) }
-            mutable.update { it.copy(grants = shown, forbidden = false, loadError = null, notice = null) }
+            // A revoke's "Revoked" stays until the next user action or its lifetime. A refresh that was already
+            // running must not wipe it when it succeeds.
+            mutable.update { state ->
+                val notice = state.notice as? StandingNotice.Revoked
+                state.copy(grants = shown, forbidden = false, loadError = null, notice = notice)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -106,15 +111,25 @@ internal class StandingAuthorizationsModel(private val source: StandingAuthoriza
         }
     }
 
+    /** The next thing the user does (refresh, open a grant). A refresh that finishes on its own does not call this. */
+    fun dismissRevoked() {
+        mutable.update { if (it.notice is StandingNotice.Revoked) it.copy(notice = null) else it }
+    }
+
     private fun currentRead(): Int = synchronized(lock) { reads }
     private fun hidden(id: String): Boolean = synchronized(lock) { id in revoking || id in revoked }
 }
 
-/** The computer's name, matching a grouped machine id to the hub's plain id. */
+/**
+ * The computer's name. An exact id wins, so two hubs that both have a machine called `mac-mini` do not share a name.
+ * A raw id matches only a machine in the same group.
+ */
 internal fun standingMachineName(id: String, machines: List<Machine>): String {
     if (id.isBlank()) return id
+    machines.firstOrNull { it.id == id }?.let { return it.displayName }
+    val namespace = GroupKeys.namespaceOf(id)
     val raw = GroupKeys.raw(id)
-    return machines.firstOrNull { it.id == id || GroupKeys.raw(it.id) == raw }?.displayName ?: id
+    return machines.firstOrNull { GroupKeys.namespaceOf(it.id) == namespace && GroupKeys.raw(it.id) == raw }?.displayName ?: id
 }
 
 /** The words a grant is shown with. The same sentences as iOS, in the page's language. */
@@ -169,7 +184,9 @@ internal object StandingAuthorizationText {
 
     fun since(grant: StandingAuthorization, resources: Resources): String? {
         val instant = parseTime(grant.grantedAt) ?: return null
+        // A normal space lets a narrow column break the date ("Nov" / "11"). Keep the day on one line.
         val day = LocalizedFormats.format(instant, LocalizedFormats.MONTH_DAY, resources.configuration.locales[0])
+            .replace(' ', '\u00A0')
         return resources.getString(R.string.settings_standing_since, day)
     }
 
