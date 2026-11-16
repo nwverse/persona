@@ -27,7 +27,7 @@ Opens the real app on an Agent's session page against a loopback web server (Vit
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
-MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 MOCK_TABLE_CHIPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
 node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
 ```
@@ -40,7 +40,9 @@ the browser, whose place and harness Settings › Assistant shows instead (item 
 a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
 your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
 no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
-covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+covers no header words of a table that fits (item 77); in a 1440 px window a table with a sentence in its second column
+takes the room it needs up to the column, wider than the old 18em cell cap, each long cell on at most two lines, and at
+both widths no short code chip in a cell is broken across lines (#9146). `--big` runs against the mock started with `MOCK_BIG=1` instead
 (item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
 drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`

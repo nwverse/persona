@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import Foundation
+import os
 import PersonaScreenCore
 @preconcurrency import ScreenCaptureKit // SCShareableContent and SCStream predate Sendable; used only on `queue`
 import VideoToolbox
@@ -195,7 +196,10 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             let before = rate.kbps
             let decision = rate.receive(report, now: Self.nowMicros, refinement: refinement)
             // A queueing link cuts the bitrate, which only VideoToolbox can follow while it runs (#8859).
-            if x264 != nil, decision.skipping || decision.kbps.map({ $0 < before }) == true { return x264Off(.congested) }
+            if x264 != nil, decision.skipping || decision.kbps.map({ $0 < before }) == true {
+                return x264Off(.congested, decision.skipping ? "frames skipped over the queue"
+                                                           : "the bitrate was cut to \(decision.kbps ?? 0) kbps")
+            }
             if let kbps = decision.kbps { setBitrate(kbps) }
             if decision.keyframe { wantKeyframe = true }
         }
@@ -258,6 +262,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
                 x264Failed = .unavailable
                 off = .unavailable
             }
+        }
+        if let off, x264Path != nil {
+            Self.x264Log.notice("x264 not used: \(off.rawValue, privacy: .public) (route \(request.path?.kind ?? "unknown", privacy: .public))")
         }
         var codec = x264 != nil ? "h264" : CapturePlan.codec(offered: request.codecs)
         var encoder: VTCompressionSession?
@@ -397,15 +404,16 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             self?.x264Event(event)
         }
         guard session.start() else {
-            warn("x264: ffmpeg did not start")
+            Self.x264Log.error("x264: ffmpeg did not start (\(x264Path, privacy: .public))")
             return nil
         }
+        Self.x264Log.notice("x264 on: \(width)x\(height) at \(fps) fps, \(X264Plan.threads(performanceCores: Self.performanceCores)) threads, \(x264Path, privacy: .public)")
         return session
     }
 
     /// x264 stops for the rest of this stream: capture starts again on VideoToolbox, `hello` saying why.
-    private func x264Off(_ reason: X264Plan.Off) {
-        warn("x264 off: \(reason.rawValue)")
+    private func x264Off(_ reason: X264Plan.Off, _ detail: String) {
+        Self.x264Log.notice("x264 off: \(reason.rawValue, privacy: .public): \(detail, privacy: .public)")
         x264?.stop()
         x264 = nil
         x264Failed = reason
@@ -423,9 +431,9 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
         case let .frame(sample, keyframe, context, encodeMicros):
             sendFrame(sample, keyframe: keyframe, captured: context.captured, captureMicros: context.captureMicros,
                       encodeMicros: encodeMicros, refinement: false)
-        case let .off(reason):
+        case let .off(reason, detail):
             x264 = nil // it has stopped itself
-            x264Off(reason)
+            x264Off(reason, detail)
         }
     }
 
@@ -451,7 +459,7 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
             guard size != (running.width, running.height) || fps != running.fps else { return }
             running.stop()
             x264 = makeX264(width: size.width, height: size.height, fps: fps)
-            guard x264 != nil else { return x264Off(.failed) }
+            guard x264 != nil else { return x264Off(.failed, "ffmpeg did not start at \(size.width)x\(size.height)") }
             encodedSize = size
             config.width = size.width
             config.height = size.height
@@ -692,6 +700,10 @@ final class ScreenCaptureSource: NSObject, ScreenSource, SCStreamOutput, SCStrea
     // MARK: Helpers
 
     private func send(_ message: ScreenVideoMessage) { onMessage?(message) }
+
+    /// x264's starts, stops and why, in the Mac's unified log (#8859): the helper's stderr goes nowhere under
+    /// LaunchServices. `log show --predicate 'subsystem == "persona-screen" AND category == "x264"'`.
+    private static let x264Log = Logger(subsystem: "persona-screen", category: "x264")
 
     private func warn(_ text: String) {
         FileHandle.standardError.write(Data("persona-screen: \(text)\n".utf8))

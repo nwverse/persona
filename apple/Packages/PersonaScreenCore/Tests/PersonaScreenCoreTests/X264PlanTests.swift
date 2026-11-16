@@ -76,30 +76,91 @@ final class X264PlanTests: XCTestCase {
     func testWatch() {
         var w = X264Watch()
         var now: UInt64 = 1_000_000
-        // A process's first frame (a keyframe, ffmpeg setting up) counts for neither bound; any other over 50 ms ends it.
-        XCTAssertFalse(w.encoded(micros: 60_000, at: now, first: true))
-        XCTAssertTrue(X264Watch().encodedOnce(micros: 50_001))
-        XCTAssertFalse(X264Watch().encodedOnce(micros: 50_000))
-        // 1 slow in 10 is 10%: fine; 2 in 11 is over.
-        for i in 0 ..< 9 {
+        // A process's first frame (a keyframe, ffmpeg setting up) counts for nothing; any other over 50 ms ends it, its
+        // warm-up included.
+        XCTAssertFalse(w.encoded(micros: 60_000, at: now, index: 0))
+        XCTAssertTrue(X264Watch().encodedOnce(micros: 50_001, index: 5))
+        XCTAssertFalse(X264Watch().encodedOnce(micros: 50_000, index: 5))
+        // The warm-up's frames count only against 50 ms: all of them at 9 ms change nothing.
+        for i in 1 ... X264Watch.warmupFrames {
             now += 16_000
-            XCTAssertFalse(w.encoded(micros: 2_000, at: now, first: false), "\(i)")
+            XCTAssertFalse(w.encoded(micros: 9_000, at: now, index: i), "\(i)")
+        }
+        // Then the share, once there are 60: 6 slow in 60 is 10%, fine; one more is over.
+        var index = X264Watch.warmupFrames
+        for k in 0 ..< X264Watch.minFrames {
+            now += 16_000
+            index += 1
+            XCTAssertFalse(w.encoded(micros: k < 6 ? 9_000 : 2_000, at: now, index: index), "\(k)")
         }
         now += 16_000
-        XCTAssertFalse(w.encoded(micros: 9_000, at: now, first: false))
-        now += 16_000
-        XCTAssertTrue(w.encoded(micros: 9_000, at: now, first: false))
+        index += 1
+        XCTAssertTrue(w.encoded(micros: 9_000, at: now, index: index))
+        XCTAssertTrue(w.why.contains("7 of the last 61 frames over 8 ms"), w.why)
 
         // Old frames leave the 2 s window, and too few frames say nothing about a share.
         var sparse = X264Watch()
         var t: UInt64 = 0
-        for _ in 0 ..< 5 {
+        for i in 40 ..< 45 {
             t += 1_000_000
-            XCTAssertFalse(sparse.encoded(micros: 9_000, at: t, first: false))
+            XCTAssertFalse(sparse.encoded(micros: 9_000, at: t, index: i))
         }
         XCTAssertFalse(X264Watch.overdue(oldest: nil, now: 5_000_000))
         XCTAssertFalse(X264Watch.overdue(oldest: 1_000_000, now: 1_200_000))
         XCTAssertTrue(X264Watch.overdue(oldest: 1_000_000, now: 1_200_001))
+    }
+
+    /// A frame's own time starts when ffmpeg could start on it: when it was given, or when the one before it came out.
+    func testOwnTime() {
+        XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 0, now: 3_000), 2_000)
+        XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 30_000, now: 32_000), 2_000) // waited behind the one before
+        XCTAssertEqual(X264Watch.ownMicros(given: 5_000, lastOut: 4_000, now: 6_500), 1_500)
+    }
+
+    /// Frames 60 fps apart, each taking `cost(i)` of its own; what the watch says, frame by frame, as X264Session feeds it.
+    private func watch(_ count: Int, cost: (Int) -> UInt64) -> (stopped: Bool, why: String) {
+        var w = X264Watch()
+        var last: UInt64 = 0
+        for i in 0 ..< count {
+            let given = 1_000_000 + UInt64(i) * 16_667
+            let out = max(given, last) + cost(i)
+            if w.encoded(micros: X264Watch.ownMicros(given: given, lastOut: last, now: out), at: out, index: i) {
+                return (true, w.why)
+            }
+            last = out
+        }
+        return (false, w.why)
+    }
+
+    /// #8859: a cold Homebrew ffmpeg's first frame takes 36 ms, the next waits behind it (21 ms in all) and the one after
+    /// a little (5 ms), then each takes 1.5 ms: on their own times that is no slow frame at all.
+    func testAColdStartIsNotSlow() {
+        XCTAssertFalse(watch(180) { $0 == 0 ? 36_000 : ($0 == 2 ? 4_500 : 1_500) }.stopped)
+    }
+
+    /// #8859, the first real session after the cold-start fix: 2 of the first 16 frames took over 8 ms of their own
+    /// (x264's threads starting, the capture's fresh buffers) and x264 stopped a third of a second in. A slow warm-up then
+    /// a steady stream keeps x264.
+    func testASlowWarmUpThenSteadyKeepsX264() {
+        let result = watch(240) { i in
+            switch i {
+            case 0: 36_000
+            case 3, 9: 11_000
+            case 1 ... 20: 4_000
+            default: 1_600
+            }
+        }
+        XCTAssertFalse(result.stopped, result.why)
+    }
+
+    /// A Mac that really can't keep up still stops x264 once the warm-up is over and a second of frames says so: every
+    /// frame 9 ms on its own.
+    func testASteadilySlowMacStopsX264() {
+        let result = watch(240) { $0 == 0 ? 36_000 : 9_000 }
+        XCTAssertTrue(result.stopped)
+        XCTAssertTrue(result.why.contains("over 8 ms") && result.why.contains("median 9.0 ms"), result.why)
+        // And not before the warm-up and a second of frames: no stop from the first 90.
+        XCTAssertFalse(watch(90) { $0 == 0 ? 36_000 : 9_000 }.stopped)
     }
 
     func testArgumentsFlag() throws {
@@ -134,9 +195,9 @@ final class X264PlanTests: XCTestCase {
 }
 
 private extension X264Watch {
-    func encodedOnce(micros: Int64) -> Bool {
+    func encodedOnce(micros: Int64, index: Int) -> Bool {
         var w = self
-        return w.encoded(micros: micros, at: 1, first: false)
+        return w.encoded(micros: micros, at: 1, index: index)
     }
 }
 
@@ -249,7 +310,7 @@ final class X264SessionTests: XCTestCase {
             case let .frame(sample, keyframe, number, micros):
                 frames.append((sample, keyframe, number, micros))
                 if frames.count == count { done.fulfill() }
-            case let .off(reason): off = reason; done.fulfill()
+            case let .off(reason, _): off = reason; done.fulfill()
             }
         }
         var started = false
@@ -281,6 +342,49 @@ final class X264SessionTests: XCTestCase {
             }
         }
         try Self.decode(frames.map(\.sample), sets: sets, width: width, height: height)
+    }
+
+    /// #8859: from a cold ffmpeg, 60 frames of 1080p at 60 fps stay on x264 (the first real session stopped it as too
+    /// slow a fraction of a second in, on frames that only waited behind the first), and come out in order.
+    func testAColdStartAt1080p60StaysOnX264() throws {
+        guard let ffmpeg = ProcessInfo.processInfo.environment["PERSONA_TEST_FFMPEG"], !ffmpeg.isEmpty else {
+            throw XCTSkip("set PERSONA_TEST_FFMPEG to an ffmpeg with libx264")
+        }
+        let (width, height, count) = (1920, 1080, 60)
+        let pictures = (0 ..< 4).map { Self.nv12(width: width, height: height, shade: UInt8(30 + $0 * 40)) }
+        let queue = DispatchQueue(label: "test.x264.1080p", qos: .userInteractive)
+        let done = expectation(description: "frames")
+        var numbers: [Int] = []
+        var off: (X264Plan.Off, String)?
+        let session = X264Session<Int>(ffmpeg: ffmpeg, width: width, height: height, fps: 60, threads: 8, capKbps: 40_000,
+                                       queue: queue, clock: { DispatchTime.now().uptimeNanoseconds / 1000 }) { event in
+            switch event {
+            case .parameterSets: break
+            case let .frame(_, _, number, _):
+                numbers.append(number)
+                if numbers.count == count { done.fulfill() }
+            case let .off(reason, detail): off = (reason, detail); done.fulfill()
+            }
+        }
+        var started = false
+        queue.sync { started = session.start() }
+        XCTAssertTrue(started)
+        let start = DispatchTime.now().uptimeNanoseconds
+        for i in 0 ..< count {
+            let due = start + UInt64(i) * 16_666_667
+            while DispatchTime.now().uptimeNanoseconds < due { usleep(200) }
+            let picture = pictures[i % pictures.count]
+            queue.sync {
+                session.encode(context: i, keyframe: i == 0) { write in
+                    picture.withUnsafeBytes { _ = write($0.baseAddress!, $0.count) }
+                }
+                session.tick()
+            }
+        }
+        wait(for: [done], timeout: 15)
+        queue.sync { session.stop() }
+        XCTAssertNil(off.map { "\($0.0.rawValue): \($0.1)" })
+        XCTAssertEqual(numbers, Array(0 ..< count))
     }
 
     /// A gray NV12 picture with a gradient, so frames differ.
