@@ -257,3 +257,59 @@ func TestTaskStateRecurringFollowupLeavesMainChat(t *testing.T) {
 	}
 	t.Fatal("the patrol was not saved")
 }
+
+// A scheduled task that keeps one conversation (not FreshEachRun) is a resumed session. Its prompts are injected, so
+// the node's one-turn page does not stop at them and reaches back into the previous run's prompt, which carries the
+// previous run's key. The key of the current turn must still be accepted, and the previous one still refused.
+func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
+	ctx := context.Background()
+	node := newFakeHub().withMachine()
+	s := newStorelessService(t, node)
+	task := Task{ID: "patrol", Repeat: repeatInterval, EveryMinutes: 30}
+	task.stateRunKey = s.openTaskStateDraft()
+	previous := task
+	previous.stateRunKey = s.openTaskStateDraft() // the previous run's draft is still open: only the prompt check can refuse it
+	prompt := func(task Task) proto.Item {
+		return proto.Item{Role: "user", Kind: proto.KindText, Text: "⏰ 定时任务，每 30 分钟：patrol" + taskStatePrompt(task)}
+	}
+	node.setItems(prompt(previous), proto.Item{Role: "assistant", Kind: proto.KindText, Text: "done"}, prompt(task))
+
+	stale, _ := json.Marshal(map[string]string{"run_key": previous.stateRunKey, "text": "stale"})
+	if _, err := s.toolScheduleStateSet(ctx, "server", "scheduled", stale); err == nil || !strings.Contains(err.Error(), "current scheduled turn") {
+		t.Fatalf("the previous turn's key was accepted: %v", err)
+	}
+	current, _ := json.Marshal(map[string]string{"run_key": task.stateRunKey, "text": "new cursor"})
+	if result, err := s.toolScheduleStateSet(ctx, "server", "scheduled", current); err != nil || !strings.Contains(result, "not yet saved") {
+		t.Fatalf("the current turn's key was refused: %q, %v", result, err)
+	}
+	other, _ := json.Marshal(map[string]string{"run_key": "0123456789abcdef0123456789abcdef", "text": "x"})
+	if _, err := s.toolScheduleStateSet(ctx, "server", "scheduled", other); err == nil {
+		t.Fatal("a key from no turn was accepted")
+	}
+}
+
+func TestCurrentTurnTaskStateRun(t *testing.T) {
+	user := func(text string) proto.Item { return proto.Item{Role: "user", Kind: proto.KindText, Text: text} }
+	marker := func(key string) string {
+		return "call schedule_state_set with run_key " + key + " and the updated state text"
+	}
+	queued := user("another message")
+	queued.Queued = true
+	for name, tc := range map[string]struct {
+		items []proto.Item
+		key   string
+		want  bool
+	}{
+		"only turn":          {[]proto.Item{user(marker("aaa"))}, "aaa", true},
+		"paged back a turn":  {[]proto.Item{user(marker("old")), user(marker("aaa"))}, "aaa", true},
+		"previous key":       {[]proto.Item{user(marker("old")), {Role: "assistant", Kind: proto.KindText, Text: "ok"}, user(marker("aaa"))}, "old", false},
+		"queued is no turn":  {[]proto.Item{user(marker("old")), user(marker("aaa")), queued}, "aaa", true},
+		"later plain prompt": {[]proto.Item{user(marker("aaa")), user("do something else")}, "aaa", false},
+		"no items":           {nil, "aaa", false},
+		"prefix of the key":  {[]proto.Item{user(marker("aaab"))}, "aaa", false},
+	} {
+		if got := currentTurnHasTaskStateRun(tc.items, tc.key); got != tc.want {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
+		}
+	}
+}
