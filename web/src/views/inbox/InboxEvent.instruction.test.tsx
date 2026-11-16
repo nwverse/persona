@@ -146,7 +146,7 @@ describe("收件箱事件：说一句与再试一次", () => {
     await flush();
     expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["建议已更新", "info"]);
     // with the item in the body the list is not read again
-    expect(calls.list.some((c) => c.path === "/inbox?sources=all")).toBe(false);
+    expect(calls.list.some((c) => c.path.startsWith("/inbox?sources=all"))).toBe(false);
   });
 
   it("shows neither button with a suggestion card, nor on a done item", async () => {
