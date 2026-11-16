@@ -49,7 +49,8 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
     val drafts = remember { mutableStateMapOf<String, String>() }
     LaunchedEffect(online.map { it.id }) { model.follow(online) }
     LaunchedEffect(state.machineId) { drafts.clear(); model.load() }
-    // "Blocked config directories" is Claude Code's alone.
+    // "Live Replies" and "Blocked config directories" are Claude Code's alone.
+    val (liveReplies, liveRepliesState) = rememberLiveReplies(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     val (dirs, dirsState) = rememberClaudeDirs(management, if (kind == AgentSettingsKind.Claude) state.machineId else "")
     var dirInput by remember { mutableStateOf("") }
     val saveDirs = claudeDirsSaver(dirs) { dirInput = "" }
@@ -57,7 +58,15 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
         scope.launch { model.set(key, value, online)?.let { feedback?.notice(it.resolve(res)) } }
     }
     JListPage(title = stringResource(kind.title), onBack = onBack, actions = {
-        JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), { scope.launch { model.load(); if (kind == AgentSettingsKind.Claude) dirs.load(state.machineId) } }, enabled = !state.loading && state.machineId.isNotBlank())
+        JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), {
+            scope.launch {
+                model.load()
+                if (kind == AgentSettingsKind.Claude) {
+                    liveReplies.load(state.machineId)
+                    dirs.load(state.machineId)
+                }
+            }
+        }, enabled = !state.loading && state.machineId.isNotBlank())
     }) {
         item("target") {
             JGroupItem(GroupPosition.of(0, 2), Modifier.padding(top = Tokens.Space.s)) {
@@ -102,6 +111,14 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
                     }
                 }
             }
+        }
+        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !liveRepliesState.unsupported) {
+            val others = if (state.applyAll) online.filter { it.id != state.machineId } else emptyList()
+            liveRepliesSection(
+                liveRepliesState,
+                onToggle = { next -> scope.launch { liveReplies.set(next, others)?.let { feedback?.notice(it.resolve(res)) } } },
+                onRetry = { scope.launch { liveReplies.load(state.machineId) } },
+            )
         }
         if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !dirsState.unsupported) claudeDirsSection(dirsState, dirInput, { dirInput = it },
             onRetry = { scope.launch { dirs.load(state.machineId) } }, onSave = { blocked, key, done -> saveDirs(blocked, key, done) })

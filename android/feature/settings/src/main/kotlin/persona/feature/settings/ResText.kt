@@ -17,8 +17,14 @@ import persona.core.designsystem.UiText
  * language the page is drawn in, so models stay free of `Resources` (docs/protocol/i18n.md). [count] picks the form of a
  * `<plurals>` [id]. An argument that is itself a [ResText] or a [UiText] is put into words first; a list of them is one per line.
  */
-internal data class ResText(val id: Int, val args: List<Any> = emptyList(), val count: Int? = null) {
+internal data class ResText(
+    val id: Int,
+    val args: List<Any> = emptyList(),
+    val count: Int? = null,
+    val lines: List<ResText>? = null,
+) {
     fun resolve(res: Resources): String {
+        lines?.let { items -> return items.joinToString("\n") { it.resolve(res) } }
         val words = args.map { arg -> words(res, arg) }.toTypedArray()
         return if (count != null) res.getQuantityString(id, count, *words) else res.getString(id, *words)
     }
@@ -26,6 +32,7 @@ internal data class ResText(val id: Int, val args: List<Any> = emptyList(), val 
     companion object {
         fun of(@StringRes id: Int, vararg args: Any) = ResText(id, args.toList())
         fun plural(@PluralsRes id: Int, count: Int, vararg args: Any) = ResText(id, args.toList(), count)
+        fun lines(items: List<ResText>) = ResText(0, lines = items)
 
         private fun words(res: Resources, arg: Any): Any = when (arg) {
             is ResText -> arg.resolve(res)

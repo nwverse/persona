@@ -78,6 +78,20 @@ interface MachineManagement {
     /** `PUT /api/v1/machines/{id}/claude-dirs/blocked`: the whole list of patterns; the hub answers the new state. */
     suspend fun setBlockedClaudeDirs(machineId: String, blocked: List<String>): ClaudeDirsState = throw UnsupportedOperationException()
 
+    /**
+     * `GET /api/v1/machines/{id}/claude-live-replies`: whether the Claude Code sessions Persona starts on this
+     * computer send their replies while Claude writes them (#1309, #9178). Null when the hub has no such route
+     * (404, an older hub): the switch is hidden.
+     */
+    suspend fun claudeLiveReplies(machineId: String): Boolean? = null
+
+    /**
+     * `PUT /api/v1/machines/{id}/claude-live-replies {"on"}`: saved at once, and the hub tells the node; returns the
+     * setting in force.
+     */
+    suspend fun setClaudeLiveReplies(machineId: String, on: Boolean): Boolean =
+        throw UnsupportedOperationException("claude live replies")
+
     /** `GET /api/v1/machines/{id}/doctor`: what `personad node doctor` finds there (full devices only). */
     suspend fun doctor(machineId: String): DoctorReport = throw UnsupportedOperationException("doctor")
 

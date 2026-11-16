@@ -67,18 +67,27 @@ class HttpMachineManagement internal constructor(
         return machine
     }
 
-    override suspend fun botmux(machineId: String): Boolean? = try {
-        botmuxOn(call(api("machines", machineId, "botmux"), "GET"))
+    override suspend fun botmux(machineId: String): Boolean? = boolSwitch(machineId, "botmux")
+
+    override suspend fun setBotmux(machineId: String, on: Boolean): Boolean = setBoolSwitch(machineId, "botmux", on)
+
+    override suspend fun claudeLiveReplies(machineId: String): Boolean? = boolSwitch(machineId, "claude-live-replies")
+
+    override suspend fun setClaudeLiveReplies(machineId: String, on: Boolean): Boolean =
+        setBoolSwitch(machineId, "claude-live-replies", on)
+
+    private suspend fun boolSwitch(machineId: String, route: String): Boolean? = try {
+        boolOn(call(api("machines", machineId, route), "GET"), route)
     } catch (failure: HubFailure) {
-        // An older hub has no such route: the page shows no switch rather than an error.
+        // An older hub has no such route: the page hides the switch rather than showing an error.
         if (failure.status == 404) null else throw failure
     }
 
-    override suspend fun setBotmux(machineId: String, on: Boolean): Boolean =
-        botmuxOn(call(api("machines", machineId, "botmux"), "PUT", buildJsonObject { put("on", on) }))
+    private suspend fun setBoolSwitch(machineId: String, route: String, on: Boolean): Boolean =
+        boolOn(call(api("machines", machineId, route), "PUT", buildJsonObject { put("on", on) }), route)
 
-    private fun botmuxOn(body: JsonObject): Boolean = (body["on"] as? JsonPrimitive)?.booleanOrNull
-        ?: throw HubFailure(HubError.Protocol, "hub answered botmux without on", retryable = false)
+    private fun boolOn(body: JsonObject, what: String): Boolean = (body["on"] as? JsonPrimitive)?.booleanOrNull
+        ?: throw HubFailure(HubError.Protocol, "hub answered $what without on", retryable = false)
 
     override suspend fun claudeSettings(machineId: String): List<ClaudeSetting> =
         settings(call(api("machines", machineId, "claude-settings"), "GET"))
