@@ -429,8 +429,12 @@ func TestCacheAndFailedAddresses(t *testing.T) {
 }
 
 func TestConcurrentAsksShareOneFetch(t *testing.T) {
-	release := make(chan struct{})
+	release, started := make(chan struct{}), make(chan struct{}, 1)
 	r := newRig(t, map[string]string{"img.test": publicIP}, func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		<-release
 		_, _ = w.Write(pngBytes(t, 600, 400, false))
 	})
@@ -444,7 +448,8 @@ func TestConcurrentAsksShareOneFetch(t *testing.T) {
 			errs <- err
 		}()
 	}
-	time.Sleep(100 * time.Millisecond)
+	// Asks that come while the fetch runs join it; any after it finds the cache: either way, one fetch.
+	<-started
 	close(release)
 	wg.Wait()
 	close(errs)
