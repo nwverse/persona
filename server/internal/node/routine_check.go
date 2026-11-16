@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"os"
@@ -27,10 +28,14 @@ func routineCheck(ctx context.Context, raw json.RawMessage) (proto.RoutineCheckR
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(p.Timeout)*time.Second)
 	defer cancel()
 
-	cmd := loginShell(ctx, p.Command)
+	// Keep rc functions, aliases and PATH, but separate shell initialization from the check's output (#8876).
+	// The subshell preserves the command's status without interactive bash printing its own "exit" afterward.
+	// This unattended check needs no job control: keep its children in the group cancellation owns.
+	marker := "\x1epersona-routine-" + rand.Text() + "\x1f"
+	cmd := loginShell(ctx, "set +m; builtin printf '%s' "+shellQuote(marker)+"; ( builtin eval "+shellQuote(p.Command)+" )")
 	cmd.Dir, _ = os.UserHomeDir()
 	killGroupOnCancel(cmd)
-	var output routineCheckLine
+	output := routineCheckOutput{marker: []byte(marker)}
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
 		return proto.RoutineCheckResult{}, err
@@ -59,8 +64,40 @@ func routineCheck(ctx context.Context, raw json.RawMessage) (proto.RoutineCheckR
 	}
 	return proto.RoutineCheckResult{
 		ExitCode: cmd.ProcessState.ExitCode(),
-		Reason:   strings.TrimSpace(strings.ToValidUTF8(string(output.line), "")),
+		Reason:   strings.TrimSpace(strings.ToValidUTF8(string(output.reason()), "")),
 	}, nil
+}
+
+// Both streams share one pipe, so the shell's marker precedes all command output, including stderr.
+// Retain only enough startup bytes to recognize a split marker and the first line if startup fails before it.
+type routineCheckOutput struct {
+	marker, pending  []byte
+	startup, command routineCheckLine
+	started          bool
+}
+
+func (w *routineCheckOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if w.started {
+		return w.command.Write(p)
+	}
+	_, _ = w.startup.Write(p)
+	data := append(w.pending, p...)
+	if i := bytes.Index(data, w.marker); i >= 0 {
+		w.started = true
+		_, _ = w.command.Write(data[i+len(w.marker):])
+		w.pending = nil
+	} else {
+		w.pending = append(w.pending[:0], data[max(0, len(data)-len(w.marker)+1):]...)
+	}
+	return n, nil
+}
+
+func (w *routineCheckOutput) reason() []byte {
+	if w.started {
+		return w.command.line
+	}
+	return w.startup.line
 }
 
 type routineCheckLine struct {
