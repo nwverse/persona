@@ -422,6 +422,18 @@ Phase 2 lands in several PRs.
 
 Phase 3 lands in several PRs.
 
+- **Source-derived WebSocket envelope tolerance (#8955).**
+  - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
+    wrong-typed known keys, extra and duplicate keys, raw JSON fields, `mesh` / `fleet` leniency and the routing
+    requirements of six event types. Every case cites its Swift source; none was generated from Rust or run on iOS.
+  - `persona_core::wire_envelope` is a separate pure diagnostic projection, not the continuity `decode_frame` path:
+    it returns accepted / ignored / dropped (or out-of-scope for unprojected event payloads) without routing an event.
+    The existing continuity behavior and 17 wire cases remain unchanged.
+  - Rust and real host Kotlin/JNI replay compare every complete expected object against the same fixture, preserving
+    duplicate-key input bytes and checking malformed input and wrong expectations. This is host evidence only; no
+    Swift, production adapter, simulator or physical-device claim is made. Full nested models, numeric literal
+    compatibility, subscription pre-routing and C/NAPI/Swift bindings stay out of this slice.
+
 - **Agents list sort, recents and state decoding (#7579).**
   - `persona_core::sort` projects the Agents list from a JSON input: rank, grouping (state / machine / space),
     quick filters (all, needsYou, unread, working, backgroundWaiting), search with caller-supplied `now` for
@@ -476,9 +488,16 @@ Phase 3 lands in several PRs.
     item id. Folded-work replay follows `ViewedImagesTests.aFoldGivesTheSameStripAsItsWork` with complete
     source-derived expected lines: path/size/`i:` identity, order and deduplication across ordinary and folded steps.
     The first segment stops at the next queued user; the last agent result independently owns running/error status.
-    Inline data with width/height and no explicit size uses its extended-grapheme-count-derived size. `FoldImage.ref`
+    Optional fold payloads do not reject ordinary or queued text+image items (#9024); real fold counts/through fields
+    retain their existing semantics. Inline data with width/height and no explicit size uses its
+    extended-grapheme-count-derived size. `FoldImage.ref`
     synthesis is outside the pure leaf. This is not full `ChatLine`, multiple viewed lines, UI loading, actual tool
     execution or performance evidence.
+  - The C ABI `persona_core_project_viewed_images` follows the same JSON/buffer ownership contract (#9017). The
+    independently compiled C11 client compares the complete post-overlay ordinary viewed object and a complete
+    source-derived folded object, including path/size identities and array order. It rejects malformed input, no-image
+    no-line and deliberately wrong expected objects, and the header/export check covers the new function. This is
+    Linux C ABI evidence, not Swift, Apple ABI, NAPI or device acceptance.
   - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
     boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
     and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
@@ -536,8 +555,26 @@ Phase 3 lands in several PRs.
     object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
     client source or release library fails rather than skips.
   - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
-    performance claim. The Swift adapters and the real-C XCTest still need macOS and remain with #6793 / #7401; the
+    performance claim. The Swift adapters and their real-C replay are covered by #8952; the
     turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
+
+- **The six pure projections reach the Swift C binding (#8952).**
+  - `PersonaCoreProjections` calls `persona_core_project_sort`, `persona_core_project_answer`,
+    `persona_core_display_answer`, `persona_core_project_stream_chunks`, `persona_core_project_turns` and
+    `persona_core_project_task_index`. Each wrapper takes and returns UTF-8 JSON, copies the returned bytes and frees
+    every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
+    production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
+  - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
+    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
+    applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
+    complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact
+    scalar types; exact-name manifests, malformed inputs and deliberately wrong expectations are checked per domain.
+  - Fixture reads and the overlay live in `PersonaCoreTestSupport`, not the shipped library. This is **macOS-host
+    SwiftPM evidence, not iOS simulator or physical-device evidence**. It does not establish production adapters,
+    rendered lines, incremental rebuilds, StreamRepair, transport, timing or the separate `session_state` / `hub_state`
+    projections (which have no C entry point in this six-function slice). Local verification used Xcode 27.1, so
+    **26.0 not verified**.
 
 ### Migration rules (each domain)
 

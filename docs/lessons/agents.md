@@ -1197,3 +1197,13 @@ argue the model round in the inbox prompt (#5965). Things that cost time while m
 - `$.ui.log(text)` writes a dim row into the transcript by default; a plugin that must stay quiet passes `{ to: 'debug' }`.
 - The plugin API types are written per Claude Code build (`plugin-authoring` skill, `types/claude-code.d.ts`); read the
   build you test against, not an older copy.
+
+## A check before every message must not start a login shell (2026-11-16, #8947)
+
+The assistant's profile check (#4310) ran the launcher probe before every message. That probe is an interactive login
+shell sourcing the user's startup files, and some resume paths ran it twice. On one install every message to a running
+conversation waited about a second per probe, and in three days none reached it within a second. A check on the send
+path reuses its probe the way `launcherProbeCached` and `modelProbeCache` do: kept for a bounded time, and taken again at
+once when the files it depends on change (`shellStamp` in `server/internal/node/assistant_profile_probe.go`). A change the
+stamp cannot see waits out the bound. In a test, count the shells a send starts with a launcher that appends to a file
+each time it runs, not only the send's result.
