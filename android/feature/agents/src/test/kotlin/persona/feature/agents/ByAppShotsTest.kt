@@ -7,8 +7,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -55,6 +57,18 @@ class ByAppShotsTest {
     )
     private val machines = listOf(Machine("mac", "MacBook Pro", online = true, icon = "laptop"))
 
+    /** Long project name + two machines: title ellipsizes; machine caption shows; badge/chevron stay trailing. */
+    private val longProjectSessions = listOf(
+        Session("mac", "long-a", title = "Ship on Mac", cwd = "/Users/me/code/persona-android-groupings-acceptance-suite",
+            state = "working", agent = "claude", agentSurface = "desktop", lastText = "On the Mac checkout.", updatedAt = at(50)),
+        Session("box", "long-b", title = "Ship on Box", cwd = "/Users/me/code/persona-android-groupings-acceptance-suite",
+            state = "idle", agent = "claude", agentSurface = "desktop", lastText = "On the Box checkout.", updatedAt = at(40)),
+    )
+    private val twoMachines = listOf(
+        Machine("mac", "MacBook Pro", online = true, icon = "laptop"),
+        Machine("box", "Example computer", online = true, icon = "desktop"),
+    )
+
     @Test fun everyStyle() {
         val model = agentsModel(sessions, machines)
         var style by mutableStateOf(AppStyle.Glass)
@@ -84,5 +98,30 @@ class ByAppShotsTest {
             rule.onNodeWithText("herdr").assertIsDisplayed()
             rule.onNodeWithText("Other").assertIsDisplayed()
         }
+    }
+
+    @Test fun longProjectTwoMachinesGlassLight() {
+        val model = agentsModel(longProjectSessions, twoMachines)
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalHomeChrome provides HomeChrome(emptyList(), "Agents", onSelect = {}, leading = {})) {
+                    AgentsScreen(model, NoNavigation, AgentsMetadata())
+                }
+            }
+        }
+        rule.waitUntil(5_000) { model.page.value.loaded }
+        rule.runOnIdle { model.grouping(AgentGrouping.App) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Claude desktop app").assertIsDisplayed()
+        // Project rows merge semantics (RepoTreeLine); machine captions live in contentDescription.
+        // Two machines → two project rows with the same long folder name.
+        rule.onNode(hasContentDescription("MacBook Pro", substring = true)).assertIsDisplayed()
+        rule.onNode(hasContentDescription("Example computer", substring = true)).assertIsDisplayed()
+        rule.onAllNodes(hasContentDescription("persona-android-groupings-acceptance-suite", substring = true))
+            .assertCountEquals(2)
+        val out = File(System.getProperty("persona.shots") ?: "build/by-app-shots").also { it.mkdirs() }
+        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
+        File(out, "by-app-long-project-glass-light.png").outputStream()
+            .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 }
