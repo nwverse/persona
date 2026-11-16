@@ -122,3 +122,26 @@ func TestFrozenPlanVerificationDoesNotUseManagerPathFlavor(t *testing.T) {
 		t.Fatal("tampered snapshot accepted")
 	}
 }
+
+func TestWorkspaceNamingContextUsesTargetPlatform(t *testing.T) {
+	if runtimeFlavor() != "posix" {
+		t.Skip("POSIX host control for the Windows path tests")
+	}
+	s := source()
+	s.Rules.BaseDirectory = "C:/work"
+	if err := Validate(s.Rules); err != nil {
+		t.Fatal("settings must permit a Windows target", err)
+	}
+	for _, tc := range []struct {
+		node NodeContext
+		code string
+	}{
+		{NodeContext{Home: "C:/Users/example", PathFlavor: "windows"}, "context_invalid"},
+		{NodeContext{Home: "/home/example"}, "base_scope_denied"},
+	} {
+		p := Resolve(s, tc.node)
+		if p.Plan != nil || len(p.Diagnostics) != 1 || p.Diagnostics[0].Code != tc.code {
+			t.Fatal("host path handling was mistaken for Windows resolution", p)
+		}
+	}
+}
