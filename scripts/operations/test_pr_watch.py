@@ -112,6 +112,36 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("Automated independent semantic review", api.call_args_list[1].args[0][-1])
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
 
+    def test_mixed_findings_keep_p2_evidence_in_review_only_mode(self):
+        self.watcher.config["repositories"][0]["merge"] = False
+        findings = [
+            {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"},
+            {"path": "x.py", "line": 4, "severity": "P2", "summary": "note", "suggestion": "consider it"},
+        ]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=findings), \
+                patch.object(pr_watch_repair, "repair_with_model") as worker:
+            self.watcher.process("example/one", 7)
+        worker.assert_not_called()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["findings"], findings)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "findings")
+
+    def test_p0_and_p1_findings_enter_the_authorized_repair_flow(self):
+        for severity in ("P0", "P1"):
+            with self.subTest(severity=severity):
+                self.watcher.state.data["prs"].clear()
+                findings = [{"path": "x.py", "line": 2, "severity": severity, "summary": "wrong", "suggestion": "fix it"}]
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                        patch.object(pr_watch, "semantic_review", return_value=findings), \
+                        patch.object(self.watcher, "repair_findings", return_value=False) as repair, \
+                        patch.object(pr_watch, "verify") as verify, \
+                        patch.object(self.watcher, "merge") as merge:
+                    self.watcher.process("example/one", 7)
+                repair.assert_called_once()
+                self.assertEqual(repair.call_args.args[3], findings)
+                verify.assert_not_called()
+                merge.assert_not_called()
+
     def test_p2_findings_are_published_and_do_not_block_verification_or_merge(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "possible edge case", "suggestion": "handle it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
@@ -140,21 +170,6 @@ class WatcherTests(unittest.TestCase):
             self.watcher.success_review("example/one", 7, pr(), [{"name": commands[-1][0], "ok": True}])
         self.assertIn("Screenshot acceptance was not performed", execute.call_args.args[0][-1])
         self.assertNotIn("completed successfully", execute.call_args.args[0][-1])
-
-        for severity in ("P0", "P1"):
-            with self.subTest(severity=severity):
-                self.watcher.state.data["prs"].clear()
-                findings = [{"path": "x.py", "line": 2, "severity": severity, "summary": "wrong", "suggestion": "fix it"}]
-                with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
-                        patch.object(pr_watch, "semantic_review", return_value=findings), \
-                        patch.object(self.watcher, "repair_findings", return_value=False) as repair, \
-                        patch.object(pr_watch, "verify") as verify, \
-                        patch.object(self.watcher, "merge") as merge:
-                    self.watcher.process("example/one", 7)
-                repair.assert_called_once()
-                self.assertEqual(repair.call_args.args[3], findings)
-                verify.assert_not_called()
-                merge.assert_not_called()
 
     def test_blocking_findings_repair_consumes_one_round_and_reviews_new_head(self):
         self.watcher.state.put("example/one", 7, SHA_A, evidence_key="one", repair_rounds=1)
@@ -277,6 +292,7 @@ class WatcherTests(unittest.TestCase):
         self.watcher = pr_watch.Watcher(self.config, verbose=False)
         self.watcher.worktree = lambda *args: self.root / "checkout"
         self.watcher.remove_worktree = lambda *args: None
+        self.watcher.comment = lambda repo, number, body: self.comments.append(body)
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=findings), \

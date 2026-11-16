@@ -813,7 +813,8 @@ class Watcher:
                     self.log("%s#%s has blocking semantic findings; repair is not enabled" % (repo, number))
                     return False
                 phase = "semantic_repair"
-                return self.repair_findings(config, pr, worktree, findings)
+                return self.repair_findings(config, pr, worktree, [finding for finding in findings
+                                                            if finding["severity"] in ("P0", "P1")])
             if current.get("findings") and not current.get("outcome") == "findings":
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          outcome="passed_with_findings")
