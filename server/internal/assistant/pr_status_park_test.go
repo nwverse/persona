@@ -175,13 +175,74 @@ func TestPRStatusRecordedEarlierSourceWaitsForAllPRs(t *testing.T) {
 	f := &prsForge{byNumber: map[int]TodoPRStatus{11: {State: "merged"}, 12: {State: "open"}}}
 	s.deploy.forge = f
 	s.sweepPRStatuses(ctx, now)
-	if got := todoNow(s, task.ID); got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+	got := todoNow(s, task.ID)
+	if got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
 		t.Fatalf("a bound PR merging bypassed another open PR: %+v", got.Supervision)
+	}
+	if f := prFacts(got, first); f == nil || f.CheckedAt.Before(got.Supervision.parking().At) {
+		t.Fatal("a source read for the captured wait was timestamped before that wait")
 	}
 	f.byNumber[12] = TodoPRStatus{State: "merged"}
 	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
 	if got := todoNow(s, task.ID); got.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) || f.calls[11] != 1 {
 		t.Fatalf("the last PR did not reconcile the already terminal recorded source: %+v, calls %v", got.Supervision, f.calls)
+	}
+}
+
+func TestPRStatusRecordedWaitRechecksAPreParkTerminalSource(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	holdDigest(s)
+	ctx := context.Background()
+	const first, last = "https://github.com/example/app/pull/11", "https://github.com/example/app/pull/12"
+	s.setTaskStage(ctx, task.ID, "review", first)
+	s.setTaskStage(ctx, task.ID, "review", last)
+	old := time.Now().Add(-time.Hour)
+	for _, status := range []TodoPRStatus{
+		{URL: first, State: "merged", CheckedAt: old},
+		{URL: last, State: "open", CheckedAt: old},
+	} {
+		if err := s.applyPRStatus(ctx, todoNow(s, task.ID), status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := mergePark(first)
+	a["reason"] = "Waiting for the recorded review"
+	if _, err := reviewErr(s, task.ID, a); err != nil {
+		t.Fatal(err)
+	}
+	// The recorded source reopened after its old terminal observation. The other PR's merge is not its event.
+	f := &prsForge{byNumber: map[int]TodoPRStatus{11: {State: "open"}, 12: {State: "merged"}}}
+	s.deploy.forge = f
+	now := time.Now()
+	s.sweepPRStatuses(ctx, now)
+	got := todoNow(s, task.ID)
+	if f.calls[11] != 1 || got.Supervision.State != reviewParked || pendingReviewSignal(s, task.ID) {
+		t.Fatalf("a pre-park terminal fact resolved a reopened bound source: state %q, calls %v", got.Supervision.State, f.calls)
+	}
+	f.byNumber[11] = TodoPRStatus{State: "merged"}
+	s.sweepPRStatuses(ctx, now.Add(deployRecheck))
+	if got := todoNow(s, task.ID); got.Supervision.State != reviewPending || !pendingReviewSignal(s, task.ID) {
+		t.Fatalf("the rechecked bound source did not resolve on its own terminal event: %+v", got.Supervision)
+	}
+}
+
+func TestPRStatusRecordedSourceDoesNotDisplaceOtherPolledPRs(t *testing.T) {
+	const prefix = "https://github.com/example/app/pull/"
+	now := time.Now()
+	task := Todo{
+		PRURL: prefix + "17",
+		PRs:   []string{prefix + "11", prefix + "12", prefix + "13", prefix + "14", prefix + "15", prefix + "16", prefix + "17"},
+		OtherPRs: []TodoPRStatus{
+			{URL: prefix + "11", State: "merged", CheckedAt: now.Add(-time.Hour)},
+		},
+		Supervision: &Supervision{State: reviewParked, Reviews: []TaskReview{{
+			At: now, Verdict: reviewParked, WaitingOn: parkSomeoneElse,
+			Evidence: &ParkEvidence{Kind: "merge_review", URL: prefix + "11", Ready: true},
+		}}},
+	}
+	want := []string{prefix + "17", prefix + "16", prefix + "15", prefix + "14", prefix + "13", prefix + "11"}
+	if got := polledPRs(task); !slices.Equal(got, want) {
+		t.Fatalf("the bound source displaced an ordinary open/unknown PR: %v, want %v", got, want)
 	}
 }
 

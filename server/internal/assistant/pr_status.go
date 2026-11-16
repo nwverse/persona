@@ -157,8 +157,8 @@ func joinCheckState(a, b string) string {
 // prsPolled bounds how many of a task's earlier PRs the poll reads besides its current one, newest first.
 const prsPolled = 4
 
-// polledPRs are the PRs of t the poll reads: its current PR, then its earlier ones newest first, skipping an earlier
-// one already known merged or closed (#7935).
+// polledPRs retains the current PR and bounded earlier sample (#7935), then includes a typed wait's source if needed.
+// A bound source outside that sample adds at most one read, never displacing another open or unknown PR.
 func polledPRs(t Todo) []string {
 	out := []string{t.PRURL}
 	known := map[string]TodoPRStatus{}
@@ -174,6 +174,18 @@ func polledPRs(t Todo) []string {
 			continue
 		}
 		out = append(out, u)
+	}
+	if r := t.Supervision.parking(); r != nil && r.Evidence != nil {
+		for i := len(t.PRs) - 1; i >= 0; i-- {
+			u := t.PRs[i]
+			if slices.Contains(out, u) || !parkWaitsOnPR(r, u) {
+				continue
+			}
+			if f, ok := known[u]; !ok || f.State != "merged" && f.State != "closed" || f.CheckedAt.Before(r.At) {
+				out = append(out, u)
+			}
+			break
+		}
 	}
 	return out
 }
@@ -250,7 +262,12 @@ func (s *Service) sweepPRStatuses(ctx context.Context, now time.Time) {
 				s.logf("task %s: PR status: %v", t.ID, err)
 				continue
 			}
-			status.URL, status.CheckedAt = url, now.UTC()
+			observedAt := now.UTC()
+			// The pass may have started before this captured wait. Its source request cannot predate that wait.
+			if held := t.Supervision.parking(); held != nil && held.Evidence != nil && parkWaitsOnPR(held, url) && observedAt.Before(held.At) {
+				observedAt = held.At
+			}
+			status.URL, status.CheckedAt = url, observedAt
 			if err := s.applyPRStatus(ctx, t, status); err != nil {
 				s.logf("task %s: keep PR status: %v", t.ID, err)
 			}
@@ -353,7 +370,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			if !ok || now.DoneAt != nil || now.PRURL != status.URL && !slices.Contains(now.PRs, status.URL) || !s.stageFollows(t.ID, status.URL) {
 				return false
 			}
-			if f := prFacts(now, status.URL); f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) || !parkPRsResolved(now, p) {
+			if f := prFacts(now, status.URL); f == nil || f.State != status.State || !f.CheckedAt.Equal(status.CheckedAt) || !parkPRsResolved(now, p, status.URL) {
 				return false
 			}
 			v.State = reviewPending
@@ -391,7 +408,7 @@ func (s *Service) stageFollows(id, url string) bool {
 
 // parkPRsResolved retains the multi-PR gate, using current facts under the supervision write lock. A bound earlier
 // PR may already be terminal and no longer polled: keep its source available when the last other PR resolves.
-func parkPRsResolved(t Todo, r *TaskReview) bool {
+func parkPRsResolved(t Todo, r *TaskReview, observed string) bool {
 	for _, u := range polledPRs(t) {
 		if f := prFacts(t, u); f == nil || f.State != "merged" && f.State != "closed" {
 			return false
@@ -399,7 +416,9 @@ func parkPRsResolved(t Todo, r *TaskReview) bool {
 	}
 	var terminal []string
 	for _, u := range append([]string{t.PRURL}, t.PRs...) {
-		if f := prFacts(t, u); f != nil && (f.State == "merged" || f.State == "closed") {
+		// An old terminal receipt is not evidence that this wait's source has stayed resolved.
+		if f := prFacts(t, u); f != nil && (f.State == "merged" || f.State == "closed") &&
+			(r.Evidence == nil || u == observed || !f.CheckedAt.Before(r.At)) {
 			terminal = append(terminal, u)
 		}
 	}
