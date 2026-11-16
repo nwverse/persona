@@ -125,6 +125,30 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 1)
         self.assertNotIn("stale_closed_at", self.watcher.state.get("example/one", 7))
 
+    def test_same_head_replacement_push_refreshes_stale_activity(self):
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
+        with patch.object(pr_watch, "gh_json", side_effect=[[], []]):
+            progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
+                                                         {"stale_head": SHA_A, "stale_updated_at": pr_watch_common.github_time("2026-11-15T00:00:00Z")})
+        self.assertEqual(progress, pr_watch_common.github_time("2026-11-16T00:00:00Z"))
+
+    def test_migrated_failed_record_requires_verification_repair(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.data["prs"]["example/one#7"] = {
+            "head": SHA_A, "base": SHA_BASE, "evidence_key": evidence_key, "format": 1,
+            "outcome": "failed", "semantic": "passed", "verification": "passed",
+            "failure": "PR-owned verification failure", "review_policy": 1,
+        }
+        self.watcher.migrate_policy("new")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(self.watcher, "merge", return_value=False) as merge, \
+                patch.object(self.watcher, "repair_verification", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+        merge.assert_not_called()
+        review.assert_not_called()
+
     def test_review_only_published_p2_still_verifies(self):
         self.watcher.repositories["example/one"]["merge"] = False
         finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
@@ -238,7 +262,7 @@ class WatcherTests(unittest.TestCase):
         with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], []]):
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A}, ignore_notice=notice)
-        self.assertEqual(activity, old)
+        self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
 
     def test_recent_pr_activity_prevents_stale_close(self):
         self.github_pr = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-14T00:00:00Z")
@@ -270,14 +294,14 @@ class WatcherTests(unittest.TestCase):
         self.assertLess(time.time() - progress, 60)
 
     def test_stale_marker_does_not_count_as_new_progress(self):
-        old = time.time() - 8 * 86400
-        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-08T00:00:00Z")
         notice = "watcher's own stale notice"
-        old_state = {"stale_head": snapshot["headRefOid"], "stale_notice": notice}
+        old_state = {"stale_head": snapshot["headRefOid"], "stale_notice": notice,
+                     "last_progress_at": pr_watch_common.github_time("2026-11-08T00:00:00Z")}
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice}]
         with patch.object(pr_watch, "gh_json", side_effect=[comments, []]):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, old_state)
-        self.assertEqual(progress, pr_watch_common.github_time(snapshot["createdAt"]))
+        self.assertEqual(progress, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
 
     def test_reopened_stale_pr_requires_fresh_semantic_review(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A

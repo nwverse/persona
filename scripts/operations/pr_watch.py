@@ -263,6 +263,7 @@ class Watcher:
                 if item.get("outcome") == "failed" and item.get("semantic") == "passed":
                     item["outcome"] = "retry"
                     item["retry_after"] = 0
+                    item["retry_reason"] = "failed_verification"
                     item["review_attempts"] = 0
                     item["repair_attempts"] = 0
                 if item.get("outcome") in ("reviewing", "repairing", "base_updated", "repair_published"):
@@ -818,11 +819,25 @@ class Watcher:
             # other new contributor comments still keep the PR open.
             comments = [item for item in comments if item.get("body") != ignore_notice]
         progress = pr_watch_common.progress_timestamp(pr, comments, reviews, [])
+        if old.get("stale_updated_at"):
+            # Once a stale check has run, the previous substantive activity is
+            # the baseline. The watcher's own labels/comments cannot replace it.
+            progress = max(progress, float(old["stale_updated_at"]))
+        if old.get("last_progress_at"):
+            progress = max(progress, float(old["last_progress_at"]))
         # GitHub's PR timestamp advances on a push, including an old commit,
         # not just on commit creation. A marker alone never changes head, so
         # the watcher's own stale bookkeeping cannot extend the interval.
-        if old.get("stale_head") != pr["headRefOid"]:
-            progress = max(progress, pr_watch_common.github_time(pr["updatedAt"]))
+        # A replacement push may keep the same SHA. Compare the observed
+        # GitHub update timestamp, not a remembered head marker, so force-push
+        # and new head activity still reset the inactivity interval.
+        updated_at = pr_watch_common.github_time(pr["updatedAt"])
+        previous_update = float(old.get("stale_updated_at", old.get("last_progress_at", 0)))
+        if updated_at > previous_update:
+            # updatedAt also advances when a replacement push keeps the same
+            # SHA. Our remembered baseline is the previous observation, not a
+            # commit creation date.
+            progress = max(progress, updated_at)
         return progress
 
     def mark_and_close_stale(self, config, pr, old):
@@ -846,7 +861,8 @@ class Watcher:
             # missing label is a failed marker, not permission to close silently.
             raise WatchError("could not mark the long-inactive PR: " + bounded(result.stderr, 1000))
         self.state.annotate(repo, number, last_progress_at=last_progress,
-                            stale_marked_at=int(time.time()), stale_head=pr["headRefOid"])
+                            stale_marked_at=int(time.time()), stale_head=pr["headRefOid"],
+                            stale_updated_at=pr_watch_common.github_time(pr["updatedAt"]))
         if old.get("stale_notice") != reason:
             self.comment(repo, number, reason)
             self.state.annotate(repo, number, stale_notice=reason)
@@ -857,6 +873,7 @@ class Watcher:
             self.state.annotate(repo, number, stale_head=pr["headRefOid"])
             return False
         marked = self.state.get(repo, number)
+        marked["stale_updated_at"] = last_progress
         progress = self.stale_progress_at(repo, number, latest, marked, ignore_notice=reason)
         # Only this exact notice is excluded; other comments, reviews and
         # commits still reset the interval. `old` is the pre-mark snapshot, so
@@ -963,6 +980,16 @@ class Watcher:
         if old.get("outcome") == "continuation":
             return
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
+                and old.get("outcome") == "retry" and old.get("retry_reason") == "failed_verification"):
+            # The migration record is a failed verification, not a success to
+            # publish. Reuse the bounded repair path with its saved diagnostic.
+            worktree = self.worktree(repo, number, pr)
+            try:
+                return self.repair_verification(config, pr, worktree,
+                                                pr_watch_common.VerificationError(old.get("failure") or "recorded verification failure"))
+            finally:
+                self.remove_worktree(repo, worktree)
+        if (old.get("head") == head and old.get("evidence_key") == evidence_key
                 and old.get("outcome") == "findings" and old.get("semantic") == "findings" and old.get("review_posted")
                 and any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", []))
                 and not config["merge"]):
@@ -1035,7 +1062,7 @@ class Watcher:
                                      outcome="findings")
         if (old.get("head") == head and old.get("evidence_key") == evidence_key
                 and old.get("format") == FORMAT_VERSION and old.get("outcome") == "retry"
-                and old.get("semantic") == "passed"
+                and old.get("semantic") == "passed" and old.get("retry_reason") != "verification_repair"
                 and old.get("verification") in ("passed", "base_failure")
                 and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", []))):
             # A completed retry retains valid exact-head evidence. Normalize
@@ -1049,7 +1076,7 @@ class Watcher:
                                  outcome=outcome, retry_reason=None, retry_after=0)
         if old.get("head") == head and old.get("evidence_key") == evidence_key and old.get("format") == FORMAT_VERSION \
                 and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing", "retry", "reviewed") \
-                and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure")) \
+                and (old.get("outcome") != "retry" or old.get("semantic") == "passed" and old.get("verification") in ("passed", "base_failure") and old.get("retry_reason") != "verification_repair") \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
                      or old.get("verification") in ("passed", "base_failure")) \
                 and not any(finding.get("severity") in ("P0", "P1") for finding in old.get("findings", [])):
