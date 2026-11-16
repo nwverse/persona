@@ -166,6 +166,9 @@ final class PhoneScreenSession {
             if r.minimized { AX.setMinimized(e, true) }
         } else if NSRunningApplication(processIdentifier: key.pid) != nil, AX.windows(pid: key.pid) == nil {
             return // its app does not answer: keep the record for the next try
+        } else if let z = r.zoom, z > 0, let app = NSRunningApplication(processIdentifier: key.pid),
+                  PhoneScreenZoom.appWide.contains(app.bundleIdentifier ?? "") {
+            AX.zoom(pid: key.pid, steps: -z) // the window is gone, but the app's text size is the app's: back too
         }
         restore.remove(pid: key.pid, window: key.id)
         _ = save()
@@ -173,6 +176,15 @@ final class PhoneScreenSession {
 
     private func putBackLeftovers() {
         for r in restore.records { putBack(WindowKey(pid: r.pid, id: r.window)) }
+    }
+
+    /// `--phone-screen-restore` (#9500): what a helper that died left on its display, put back without a session (the
+    /// node runs it when it starts, and after a session ended with records still there). How many records it handled
+    /// and how many it kept (an app that didn't answer).
+    func restoreOnly() -> (done: Int, kept: Int) {
+        let had = restore.records.count
+        putBackLeftovers()
+        return (had - restore.records.count, restore.records.count)
     }
 
     // MARK: end
@@ -233,6 +245,35 @@ nonisolated enum RestoreFile {
         } catch {
             return false
         }
+    }
+}
+
+/// `--phone-screen-restore`: put back what the records say, then exit (0, or 1 without Accessibility). The records are
+/// read off the main thread, the windows moved on it.
+enum PhoneScreenRestoreRun {
+    static func run() -> Never {
+        DispatchQueue.global().async {
+            let left = RestoreFile.load()
+            DispatchQueue.main.async {
+                guard !left.records.isEmpty else {
+                    print("phone_screen_restore: nothing")
+                    exit(0)
+                }
+                guard AX.trusted else {
+                    print("phone_screen_restore: no accessibility")
+                    exit(1)
+                }
+                let r = MainActor.assumeIsolated { () -> (done: Int, kept: Int) in
+                    let s = PhoneScreenSession()
+                    s.adopt(left)
+                    return s.restoreOnly()
+                }
+                print("phone_screen_restore: put back \(r.done), kept \(r.kept)")
+                exit(0)
+            }
+        }
+        RunLoop.main.run()
+        exit(0)
     }
 }
 

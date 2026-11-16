@@ -258,6 +258,10 @@ public enum PhoneScreenZoom {
         "dev.zed.Zed", "dev.zed.Zed-Preview",
     ]
 
+    /// Apps whose zoom is one for the whole app, not the window's: when the window went away while zoomed, the app
+    /// still gets its ⌘− (Zed keeps the size for all its windows).
+    public static let appWide: Set<String> = ["dev.zed.Zed", "dev.zed.Zed-Preview"]
+
     /// How many steps of ⌘+ a window of this app gets: `steps` for the apps above, else 0.
     public static func steps(for bundle: String?) -> Int {
         bundle.map { apps.contains($0) } == true ? steps : 0

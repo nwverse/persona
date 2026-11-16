@@ -1228,7 +1228,15 @@ keeps its notice, `THIRD_PARTY_NOTICES.md`).
   `PhoneScreenZoom`) get ⌘+ twice when placed, posted to their process alone, and ⌘− twice when they go back; the steps
   are kept in the restore record first, so a crash still undoes them. Browsers are left alone: their zoom is per site and
   would follow the user's other tabs, and a page at 540 pt is already laid out narrow. Measured: Ghostty's text about
-  15 pt instead of 13 on the display, and its window back at 13 afterwards.
+  15 pt instead of 13 on the display, and its window back at 13 afterwards. It goes back on every way a session ends: `stop` (another mode, the
+  page closed), the socket closing without `stop` (the connection lost, the app killed, the node or Link restarting:
+  the helper sees the socket end and puts everything back), and SIGTERM. A helper that died first (a crash, `kill -9`)
+  leaves its records: the node runs `--phone-screen-restore`, which replays them, 5 s after any session ends and when it
+  starts, only while no session runs, a new session waiting for it, so a window's text is never made smaller twice. For
+  an app whose zoom is the whole app's (Zed), ⌘− goes to the app even when the window went away. Measured on this Mac:
+  Ghostty raised, its helper killed with `kill -9`, then `--phone-screen-restore` ("put back 1, kept 0"): records gone,
+  window and text size as before; the socket closed without `stop`: the same. Left: VS Code and Cursor keep a zoom per
+  workspace, so one of their windows closed on the phone keeps it when reopened (as Snug notes).
 - **Ending**: when the node closes the socket (the phone sent `stop`, its RFB stream ended, or the node went away) or the
   helper gets SIGTERM, it puts every window back, lets the display go, waits until it is offline and sets back what moved.
   A display let go while the Mac's monitor sleeps goes offline only when it wakes (Snug).

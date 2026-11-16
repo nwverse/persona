@@ -100,6 +100,9 @@ final class PhoneScreenTests: XCTestCase {
         XCTAssertEqual(PhoneScreenZoom.steps(for: "com.google.Chrome"), 0)
         XCTAssertEqual(PhoneScreenZoom.steps(for: "com.apple.Safari"), 0)
         XCTAssertEqual(PhoneScreenZoom.steps(for: nil), 0)
+        // An app-wide zoom is undone on the app even when its window went away; every one of them gets the zoom.
+        XCTAssertTrue(PhoneScreenZoom.appWide.isSubset(of: PhoneScreenZoom.apps))
+        XCTAssertFalse(PhoneScreenZoom.appWide.contains("com.mitchellh.ghostty"))
     }
 
     func testTheZoomGoesInTheRecordAndAnOldRecordStillReads() throws {
