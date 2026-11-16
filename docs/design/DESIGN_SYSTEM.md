@@ -2397,6 +2397,13 @@ screen's menu, the Control and Siri / Shortcuts, and on the watch its recording 
 Reason: two large buttons, **Meeting Recording** and **Start Recording**, looked alike and owners couldn't tell which
 to press; impromptu talks are meetings too (principles 1 and 4).
 
+- **Meetings, not Recordings, on the iPhone** (#8731, D5): the place is **Meetings** (会议 / 会議, the meeting icon) and
+  every start says **Start Meeting** (开始会议 / 会議を始める): the page's button (**Start Note** once Note is picked), the +
+  list, the home screen's menu, the Control and Siri / Shortcuts, whose Record phrases keep working beside the new ones.
+  While something records, the drawer's row and the + list say **In a Meeting… Open** for a meeting and **Recording…
+  Open** for a note (`MeetingWords`). An unnamed note is **Note · date**. The watch keeps Record for now. Reason: a page of
+  meetings named Recordings read as a tape recorder with settings, not a meeting (the owner, #8731).
+
 - **The drawer's row is a place, not a start** (#5517): **Recordings** (录音 / 録音), first among the drawer's places,
   opens the Recordings page, as each row under it opens its page; Record there starts. While a recording runs the row
   reads **Recording… Open** and opens it. Reason: the row said Record and started at a tap, while in zh-Hans and ja it

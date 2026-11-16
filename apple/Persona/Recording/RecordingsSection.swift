@@ -475,7 +475,7 @@ struct RecordingCaptureControls: View {
             Button { record() } label: {
                 HStack(spacing: Theme.Space.s) {
                     // White like the title: the symbol took the tint, drew in the button's own blue and pushed the title off-center.
-                    Label("Record [Recordings Section ef2821]", systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
+                    Label(MeetingWords.start(form.pickedKind), systemImage: Theme.Icon.recording).foregroundStyle(Theme.onSolid)
                     if busy { ProgressView() }
                 }
                 .font(Theme.Font.bodyStrong)
@@ -814,7 +814,7 @@ struct RecordingsPage: View {
     var body: some View {
         page
             .themedPage()
-            .navigationTitle(String(localized: "Recordings"))
+            .navigationTitle(MeetingWords.place)
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             .recordingLiveSheet()
