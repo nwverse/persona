@@ -1,7 +1,8 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, lineSummary, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { lineSummary, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
 import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
@@ -703,7 +704,8 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   const first = rows[0];
   const translated = hubTranslation(it, useTranslatePrefs());
   // Translated mail keeps the old optional-preview path exactly; mail has no `where`.
-  const from = translated ? fromLine(it, translated.preview) : rowMeta(it);
+  const meta = translated ? fromLine(it, translated.preview) : rowMeta(it);
+  const from = markdownInSummary(it) ? withoutMarks(meta) : meta; // an older assistant row's line is its Markdown (#9041)
   // a right click: "Done" / "Move back", then what it can be muted by (iOS: the row's long press)
   // (the menu key / Shift+F10 open it next to the row, see ui/context-menu.ts)
   const [menu, setMenu] = useState<MenuAt | null>(null);

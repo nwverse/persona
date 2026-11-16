@@ -40,7 +40,7 @@ extension InboxItem {
     nonisolated private static let marksMemo = TextMemo<String>(limit: 64)
 
     /// Markdown run into one line, as words: emphasis, code and heading marks go (`Fmt.plain`), and so do the list
-    /// markers the lost line breaks left between words and a mark the cut left alone (`本周要交*…`). Only for an older
+    /// markers the lost line breaks left between words and a mark the cut left alone (`Due*…`). Only for an older
     /// assistant row's text (`markdownInSummary`): a plain line's own dashes are not touched anywhere else.
     nonisolated static func withoutMarks(_ text: String) -> String {
         marksMemo(text) { text in

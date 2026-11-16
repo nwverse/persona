@@ -9,7 +9,8 @@
 import { useEffect, useState } from "react";
 import { ItemManager, useKnownDefault } from "../../lib/manager-choice";
 import { hasEvent, itemAtUid } from "../../lib/inbox-events";
-import { agentDraft, agentWorking, isDone, itemKey, kindLabel, labelIsUrgent, lineSummary, muteItem, openTitle, openURL, setDone, shortTime, useInbox, type InboxItem } from "../../lib/inbox";
+import { agentDraft, agentWorking, isDone, itemKey, kindLabel, labelIsUrgent, muteItem, openTitle, openURL, setDone, shortTime, useInbox, type InboxItem } from "../../lib/inbox";
+import { lineSummary } from "../../lib/inbox-markdown";
 import { canDraft, muteShortName, muteTitle, policyMenuTitle, sourceLine } from "../../lib/inbox-page";
 import { rowMeta } from "../../lib/inbox-now";
 import { openTodoDialog } from "./InboxTodoDialog";

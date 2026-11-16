@@ -7,7 +7,8 @@ import {
   actOnSuggestion, canExpand, chainRows, chainTap, chainTime, firstLine, handlingFailed, handlingWord, preparing, suggestionButtons, suggestionTitle,
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
-import { conversationRoute, isDone, itemKey, itemPath, itemRoute, markdownBody, markdownInSummary, reloadInbox, replaceItem, suggestionAct, useInbox, withoutMarks, type InboxItem } from "../../lib/inbox";
+import { conversationRoute, isDone, itemKey, itemPath, itemRoute, reloadInbox, replaceItem, suggestionAct, useInbox, type InboxItem } from "../../lib/inbox";
+import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { docChangeLine } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
