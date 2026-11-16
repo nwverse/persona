@@ -213,26 +213,28 @@ describe("PendingCards", () => {
   });
   it("says what an answered card was about when its answer is one word (允许 / 批准)", () => {
     const perm = ix("p", "permission", { tool_input: { command: "swift test" } });
-    const html = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { allow: true } }] });
+    const html = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { allow: true }, at: Date.now() }] });
     expect(html).toContain("data-answered-about");
     expect(html).toContain("swift test");
     expect(html).toContain("允许");
-    // a question's lines already carry what was asked
     const q = ix("q", "question", { questions: [{ question: "用哪个框架？", options: [{ label: "A" }] }] as Interaction["questions"] });
-    expect(cards({ narrow: false, interactions: [], answered: [{ ix: q, resolution: { answers: { "用哪个框架？": "A" } } }] })).not.toContain("data-answered-about");
+    // a question's about line is the question itself (the answer is the pick)
+    const qHtml = cards({ narrow: false, interactions: [], answered: [{ ix: q, resolution: { answers: { "用哪个框架？": "A" } }, at: Date.now() }] });
+    expect(qHtml).toContain("data-answered-about");
+    expect(qHtml).toContain("用哪个框架？");
     // a plan says its first line, not "Plan awaiting approval"; a bare one says nothing extra
     const plan = ix("l", "plan", { plan: "\n## 改用 **vitest**\n1. 换配置" });
-    const planHtml = cards({ narrow: false, interactions: [], answered: [{ ix: plan, resolution: { approve: true } }] });
+    const planHtml = cards({ narrow: false, interactions: [], answered: [{ ix: plan, resolution: { approve: true }, at: Date.now() }] });
     expect(planHtml).toContain("改用 vitest");
     expect(planHtml).not.toContain("计划等你审批");
-    expect(cards({ narrow: false, interactions: [], answered: [{ ix: ix("l2", "plan"), resolution: { approve: true } }] })).not.toContain("data-answered-about");
+    expect(cards({ narrow: false, interactions: [], answered: [{ ix: ix("l2", "plan"), resolution: { approve: true }, at: Date.now() }] })).not.toContain("data-answered-about");
     // a terminal dialog with nothing to say: no "Terminal needs you" above its Yes
     const dialog = ix("d", "screen", { dialog: { options: [{ key: "1", label: "Yes" }] } as Interaction["dialog"] });
-    const dialogHtml = cards({ narrow: false, interactions: [], answered: [{ ix: dialog, resolution: { option: "1" } }] });
+    const dialogHtml = cards({ narrow: false, interactions: [], answered: [{ ix: dialog, resolution: { option: "1" }, at: Date.now() }] });
     expect(dialogHtml).not.toContain("data-answered-about");
     expect(dialogHtml).not.toContain("终端等你处理");
     // handed back (#2450): nothing was decided, so no answer line repeats the head; the line says which request went back
-    const handed = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { dismiss: true } }] });
+    const handed = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { dismiss: true }, at: Date.now() }] });
     expect(handed).toContain("data-answered-about");
     expect(handed).not.toContain("交回电脑处理");
   });
@@ -284,19 +286,22 @@ describe("PendingCards", () => {
     }
   });
 
-  it("shows every card on a wide screen, in no box of their own", () => {
+  it("shows only the first card on a wide screen, in no box of their own, with its position", () => {
     const html = cards({ narrow: false });
-    expect(html).not.toContain("data-chat-cards");
+    expect(html).not.toContain("data-chat-cards=");
     expect(html).not.toContain("还有");
     expect(html).toContain("计划等你审批");
-    expect(html).toContain("用哪个框架？");
-    expect(html).toContain("允许使用 Bash？");
+    expect(html).not.toContain("用哪个框架？");
+    expect(html).not.toContain("允许使用 Bash？");
+    expect(html).toContain("data-chat-cards-position");
+    expect(html).toContain("1 / 3");
   });
 
-  it("scrolls them in a box of their own on a narrow one, the first open and 还有 N 件 for the rest", () => {
+  it("scrolls them in a box of their own on a narrow one, the first open and its position chip for the rest", () => {
     const html = cards({ narrow: true });
     expect(html).toMatch(/data-chat-cards[^>]*overflow-y-auto/);
-    expect(html).toContain("还有 2 件");
+    expect(html).not.toContain("还有");
+    expect(html).toContain("1 / 3");
     // the first card's fold is open, the others' closed (inert)
     const folds = [...html.matchAll(/<div class="grid [^"]*"([^>]*)>/g)].map((m) => m[1]);
     expect(folds).toHaveLength(2);
@@ -342,7 +347,7 @@ describe("PendingCards", () => {
 });
 
 describe("PendingCards, the next card waiting elsewhere (#4091)", () => {
-  const answered: AnsweredCard[] = [{ ix: ix("done", "question"), resolution: { answers: { q: "A" } } }];
+  const answered: AnsweredCard[] = [{ ix: ix("done", "question"), resolution: { answers: { q: "A" } }, at: Date.now() }];
   const other = ix("other", "question", { machine_id: "n", session_id: "t", session_title: "照片同步脚本支持 HEIC", questions: [{ question: "保存为哪种格式？", options: [] }] as Interaction["questions"] });
   // the store's cards: two of other chats, one of this chat (left out of the count)
   const seed = (list: Interaction[]) => Object.assign(getState(), { interactions: list, sessions: {} });
@@ -388,7 +393,7 @@ describe("tap areas", () => {
   });
 
   it("covers a card's hand back, a question's options and its arrows", () => {
-    const html = cards({ narrow: false });
+    const html = cards({ narrow: false, interactions: [three[1]] });
     expect(hit(html, "交给电脑处理")).toBe(true);
     expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*class="touch-hit /);
     expect(hit(html, "下一题") || hit(html, "发送回答")).toBe(true);

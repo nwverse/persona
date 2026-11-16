@@ -201,9 +201,11 @@ func TestReusedChatEveryRunSavesItsOwnState(t *testing.T) {
 	}
 }
 
-// The watcher saves a staged draft only when the latest turn of the conversation is the run's own. Here the page's
-// latest turn is not (another prompt followed, or what the run's key stands in is not a prompt): the draft is staged
-// (the key was right when the model called the tool) and then not saved.
+// The watcher saves a staged draft only when the latest scheduled prompt in the conversation's last turns is the run's
+// own (currentTaskStateRun, #8913): what the user or anything else wrote after it, before the next scheduled prompt,
+// goes on with the run. Here the draft is staged (the key was right when the model called the tool) and not saved when
+// another run's prompt came after the run's, or what carries the run's key is not a prompt (a tool result, the
+// assistant's words).
 func TestWatcherDoesNotSaveStateWhenTheLatestTurnIsNotTheRuns(t *testing.T) {
 	scheduled := scheduledPrompt
 	type scenario struct {
@@ -234,11 +236,19 @@ func TestWatcherDoesNotSaveStateWhenTheLatestTurnIsNotTheRuns(t *testing.T) {
 			c.user(scheduled(Task{stateRunKey: other}))
 			c.assistant("done again")
 		}, false},
-		{"the user wrote after the run", func(c *transcriptChat, own, other string) {
+		{"the user wrote after the run, before the next scheduled prompt", func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.assistant("done")
 			c.user("and another thing")
 			c.assistant("sure")
+		}, true}, // #8913: the run goes on in a later turn until the next scheduled prompt
+		{"the next scheduled prompt came after the user's message", func(c *transcriptChat, own, other string) {
+			c.user(scheduled(Task{stateRunKey: own}))
+			c.assistant("done")
+			c.user("and another thing")
+			c.assistant("sure")
+			c.user(scheduled(Task{stateRunKey: other}))
+			c.assistant("done again")
 		}, false},
 		{"a tool result carrying the key is not the run's prompt", func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: other}))
@@ -300,9 +310,9 @@ func TestWatcherDoesNotSaveStateWhenTheLatestTurnIsNotTheRuns(t *testing.T) {
 	}
 }
 
-// What schedule_state_set accepts, on the real page: only a prompt that opened the latest turn. A queued message (the
-// user wrote while the run worked) is no turn of its own, and text the run read or wrote itself (a tool result, the
-// assistant's own words) is no prompt.
+// What schedule_state_set accepts, on the real page (#8913's rule): the key of the latest scheduled prompt in the last
+// turns, which what the user wrote after it, in its turn or a later one, does not end; the next scheduled prompt does.
+// Text the run read or wrote itself (a tool result, the assistant's own words) is no prompt.
 func TestScheduleStateSetOnTheRealPage(t *testing.T) {
 	scheduled := scheduledPrompt
 	for _, sc := range []struct {
@@ -310,48 +320,65 @@ func TestScheduleStateSetOnTheRealPage(t *testing.T) {
 		claude bool // only Claude's transcript has it
 		build  func(c *transcriptChat, own, other string)
 		own    bool // the run's own key is accepted
+		next   bool // the other key is the current run's (a later scheduled prompt): accepted, and the run's own is not
 	}{
 		{"fresh chat, the first run", false, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: own}))
-		}, true},
+		}, true, false},
 		{"a queued message in the run's turn", true, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.assistant("working")
 			c.queued("one more thing while you work")
-		}, true},
+		}, true, false},
 		{"a queued message after an earlier run", true, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: other}))
 			c.assistant("done")
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.queued("one more thing while you work")
-		}, true},
+		}, true, false},
 		{"tool results in the run's turn", true, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: other}))
 			c.assistant("done")
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.toolCall("output")
 			c.toolCall("more output")
-		}, true},
+		}, true, false},
 		{"a manual message between the runs", false, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: other}))
 			c.assistant("done")
 			c.user("how is it going?")
 			c.assistant("fine")
 			c.user(scheduled(Task{stateRunKey: own}))
-		}, true},
+		}, true, false},
 		{"the user wrote in the run's turn", false, func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.assistant("working")
 			c.user("stop, do this instead")
-		}, false},
+		}, true, false},
+		{"the user wrote in a later turn, before the next scheduled prompt", false, func(c *transcriptChat, own, other string) {
+			c.user(scheduled(Task{stateRunKey: other}))
+			c.assistant("done")
+			c.user(scheduled(Task{stateRunKey: own}))
+			c.assistant("done")
+			c.user("and another thing")
+			c.assistant("sure")
+			c.user("one more")
+		}, true, false},
+		{"the next scheduled prompt came after the user's message", false, func(c *transcriptChat, own, other string) {
+			c.user(scheduled(Task{stateRunKey: own}))
+			c.assistant("done")
+			c.user("and another thing")
+			c.assistant("sure")
+			c.user(scheduled(Task{stateRunKey: other}))
+		}, false, true},
 		{"the key only in a tool result", true, func(c *transcriptChat, own, other string) {
 			c.user("what was the key?")
 			c.toolCall(scheduled(Task{stateRunKey: own}))
-		}, false},
+		}, false, false},
 		{"the key only in the assistant's words", false, func(c *transcriptChat, own, other string) {
 			c.user("what was the key?")
 			c.assistant(scheduled(Task{stateRunKey: own}))
-		}, false},
+		}, false, false},
 	} {
 		for format, codex := range chatFormats() {
 			if sc.claude && codex {
@@ -370,7 +397,14 @@ func TestScheduleStateSetOnTheRealPage(t *testing.T) {
 				if sc.own != (err == nil) {
 					t.Fatalf("the run's own key: accepted = %v, want %v (%v)", err == nil, sc.own, err)
 				}
-				if _, err := s.toolScheduleStateSet(t.Context(), "server", "scheduled", stateSetArgs(other, "stale")); err == nil || !strings.Contains(err.Error(), "current scheduled turn") {
+				if _, err := s.toolScheduleStateSet(t.Context(), "server", "scheduled", stateSetArgs(task.stateRunKey[:8], "prefix")); err == nil || !strings.Contains(err.Error(), "current scheduled turn") {
+					t.Fatalf("a prefix of the run's key was not refused as no run's: %v", err)
+				}
+				_, err = s.toolScheduleStateSet(t.Context(), "server", "scheduled", stateSetArgs(other, "other"))
+				if sc.next != (err == nil) {
+					t.Fatalf("the other run's key: accepted = %v, want %v (%v)", err == nil, sc.next, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), "current scheduled turn") {
 					t.Fatalf("the other run's key was not refused as another turn's: %v", err)
 				}
 			})
