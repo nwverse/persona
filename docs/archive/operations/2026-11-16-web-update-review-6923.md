@@ -16,6 +16,17 @@ combined update paths and the complete feature delta were then reviewed, includi
 the upstream stopped-release-source warning and the Hub administration route contract.
 No history was rewritten. This remains author review, not independent approval.
 
+At the final pre-delivery read, upstream had advanced to
+`39ef1e79639759925e52eae51f152c26666a44a7`; the original fork branch still matched
+`dbd9809511e8a59e2e42f06a46ad83cd77166c64`. A second ordinary merge retained the
+new upstream work. Its sole textual conflict was two independent additions at the
+start of `docs/lessons/server.md`; both recovery and loopback-CLI lessons were kept.
+The automatic `hub/config.go` merge preserves development settings and upstream
+CLI endpoint/dial behavior. No feature budget/guard changes were introduced: the
+upstream table-rendering change owns its existing 480,735 B startup limit. Fresh
+build/browser and affected regression evidence after this merge is bound separately
+in the PR; the first synchronized run and gallery remain historical evidence.
+
 | Finding | Evidence and correction |
 | --- | --- |
 | Late install-script release refresh changes a newer operation | A deterministic publisher callback switches to development through the real settings route before returning the old release response. The response replaced the selected development candidate. A second case reserves an install before the response and loses its progress/detail. Refresh now loads persisted source settings, checks the channel again under the write lock and changes availability only while no install/confirmation is active. `TestInstallScriptRefreshPreservesNewerOperation` failed in both cases before repair; `TestInstallScriptRefreshLoadsSelectedChannel` covers stored development selection and unreadable settings before the first refresh. |
