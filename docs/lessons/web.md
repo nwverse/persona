@@ -12,6 +12,12 @@ not only `MessageActions` around already complete text; assert the exact full pa
 Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
 owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
 
+Measure the normalized first-screen chunks, not a helper's standalone compressed size: a small lazy state wrapper
+can cost more than it removes. Menu-only actions and text selection can share the existing reply-controls chunk
+through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
+remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
+Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
+
 ## A refused credential-mirror write must not erase the readable legacy login (#9023)
 
 Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.

@@ -146,6 +146,7 @@ describe("message context interaction paths", () => {
     ));
     const item = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((el) => el.textContent?.trim() === label)!;
     act(() => host.querySelector<HTMLButtonElement>('button[aria-label="更多"]')!.click());
+    await settle();
     act(() => item("回退到这里").click());
     await act(async () => item("只回退对话").click());
     expect(run).toHaveBeenCalledExactlyOnceWith("u1#0", selected, "conversation");
@@ -166,6 +167,7 @@ describe("message context interaction paths", () => {
       await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="改后重发"]')!.click());
       expect(received).toHaveBeenCalledWith({ type: "replace", text: selected });
       open();
+      await settle();
       await act(async () => item("转发").click());
       expect(forward).toHaveBeenCalledWith(expect.objectContaining({ text: "Original message" }));
     } finally {

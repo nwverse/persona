@@ -10,18 +10,127 @@
 // tokens, with cindy's usage card (TurnUsage, #5426): it comes with the pointer like the buttons (cindy shows it on hover),
 // and an open card keeps the bar. All of it watches the pointer itself, so the reply around it draws nothing again, and
 // none of it is on the first screen (MessageActions loads it lazily).
-import { useEffect, useRef, useState } from "react";
+// MessageActions' menus and text selection share this chunk when opened.
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { exactTime, relativeTime } from "../../lib/relative-time";
-import { copyText, cx, Menu } from "../../ui/atoms";
+import { Button, copyText, cx, Dialog, Menu, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import type { Action } from "./MessageActions";
 import { TurnUsage } from "./TurnUsage";
 import type { ReplyTranslation } from "../../lib/reply-translation";
 import { ReplyTranslationButton } from "./ReplyTranslationButton";
+import type { ChatActions } from "./chat-actions";
+import type { RewindRestore } from "../../lib/rewind";
 
 export { TurnUsage };
+
+/** Selection is opened from a message action, never drawn on the first screen. */
+export function SelectMessageText({ open, onClose, text }: { open: boolean; onClose: () => void; text: string }) {
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t("chat-messageactions.select_text")}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onClose}>{t("chat-messageactions.done")}</Button>
+          <Button tone="primary" onClick={() => { void copyText(text); onClose(); }}>{t("chat-messageactions.copy_all")}</Button>
+        </>
+      }
+    >
+      <div className="max-h-[50vh] overflow-y-auto text-[14px] leading-relaxed whitespace-pre-wrap text-ink select-text [overflow-wrap:anywhere]">{text}</div>
+    </Dialog>
+  );
+}
+
+/** "Save as Prompt…" on a message of yours (#7329): the saved prompt editor over the page, filled with its words (a chunk of
+ *  its own, settings/SavedPromptDialog). */
+export function savePromptActions(text: string): Action[] {
+  if (!text.trim()) return [];
+  return [{
+    key: "save-prompt", label: t("chat-messageactions.save_as_prompt"), icon: "book",
+    onSelect: () => import("../settings/SavedPromptDialog").then(
+      (m) => m.openSavedPromptDialog(text),
+      (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"), // the chunk would not load
+    ),
+  }];
+}
+
+/** "Delete", last and in red, on a message only on this device (#4626, the apps' long press): in the right-click / long-press
+ *  menu, and for your own bubbles in ⋯. */
+export function deleteActions(onDelete: (() => void) | undefined): Action[] {
+  return onDelete ? [{ key: "delete", label: t("chat-outboxbubbles.delete"), icon: "trash", danger: true, onSelect: onDelete }] : [];
+}
+
+type Rewind = NonNullable<ChatActions["rewind"]>;
+
+/** "Rewind to here" (#2436) on a message of yours: "Conversation only" / "Code and conversation", the second asking again (it puts files back too). Off
+ *  with the reason as its hint while the session cannot ("Claude only", "Working"…). Each choice waits for the node inside the
+ *  menu (it drives Claude's own /rewind, up to a minute) and shows the failure there. */
+export function rewindActions(messageId: string | undefined, text: string, rewind: { block: string; code?: boolean; run: Rewind["run"] } | undefined): Action[] {
+  if (!messageId || !rewind || !text.trim()) return [];
+  const go = (restore: RewindRestore) => () => rewind.run(messageId, text, restore);
+  return [
+    {
+      key: "rewind",
+      label: t("rewind.menu"),
+      icon: "undo",
+      hint: rewind.block || undefined,
+      disabled: Boolean(rewind.block),
+      onSelect: () => {},
+      children: [
+        { key: "rewind-conversation", label: t("rewind.conversation"), inline: true, onSelect: go("conversation") },
+        ...(rewind.code === false ? [] : [{ key: "rewind-code", label: t("rewind.code_and_conversation"), danger: true, confirm: t("rewind.confirm_code"), inline: true, onSelect: go("code_and_conversation") }]),
+      ],
+    },
+  ];
+}
+
+const NO_STORE = () => () => {};
+
+/** `live`'s value while `open` (a menu that shows it), `closed` otherwise: a closed menu does not render again when it
+ *  changes (why "Rewind to here" is off changes each time the session starts or stops working). */
+function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: string): string {
+  const on = open ? live : undefined;
+  const get = on ? on.get : () => closed;
+  return useSyncExternalStore(on ? on.subscribe : NO_STORE, get, get);
+}
+
+/** Menu-only actions and their live disabled reasons load with the existing reply controls, not the transcript. */
+export function MessageMenu({ anchor, onClose, primary, forks, text, rewindText, messageId, rewind, save, onDelete, side }: {
+  anchor: HTMLElement | { x: number; y: number };
+  onClose: () => void;
+  primary: Action[];
+  forks: Action[];
+  text: string;
+  rewindText: string;
+  messageId?: string;
+  rewind?: ChatActions["rewind"];
+  save: boolean;
+  onDelete?: () => void;
+  side?: "top";
+}) {
+  const block = useWhileOpen(rewind?.block, true, "");
+  const extras = [
+    ...forks,
+    ...rewindActions(messageId, rewindText, rewind && { block, code: rewind.code, run: rewind.run }),
+    ...(save ? savePromptActions(text) : []),
+    ...deleteActions(onDelete),
+  ];
+  const items = [...primary, ...extras].map((a, i) => ({ ...a, divider: i === primary.length && i > 0 }));
+  return (
+    <Menu
+      anchor={anchor instanceof HTMLElement ? anchor : null}
+      point={anchor instanceof HTMLElement ? undefined : anchor}
+      onClose={onClose}
+      items={items}
+      side={side}
+      width={items.some((i) => i.hint) ? 200 : 168}
+    />
+  );
+}
 
 /** How often the time is worked out again while the pointer is over the reply (cindy's 30 s): only then, so a long chat
  *  holds no timer per reply. */
