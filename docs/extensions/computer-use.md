@@ -1218,8 +1218,17 @@ keeps its notice, `THIRD_PARTY_NOTICES.md`).
   Dock, sets size, position, size and checks (up to 10 tries; the same frame twice means the app or the menu bar holds it
   there), takes a wider mode when the app's minimum size is larger, and brings it to the front through Accessibility's
   `AXFrontmost` (macOS 14 and later ignore `activate()` from a helper in the background). Placing another window puts the
-  previous one back. Every Accessibility call waits at most 1 s for an app that hangs. A session that died leaves records,
+  previous one back. Every placement starts again from the base width (#9500): before, one window with a large minimum
+  size (800 pt) left the display at 800 pt for every window after it. The `place` answer carries `displays`, the whole
+  arrangement after the change, since the phone finds the display on the picture by all of them. Every Accessibility call waits at most 1 s for an app that hangs. A session that died leaves records,
   and the next one puts those windows back before anything else.
+- **Text size** (#9500): 540 pt on a phone about 400 pt wide is about three quarters of the Mac's size, and a narrower
+  display can't help: macOS marks every 2× mode under 540 pt wide not usable for the desktop (measured 402, 420, 430,
+  480 and 500 pt on macOS 26.6). So terminals and editors (Ghostty, Terminal, iTerm2, VS Code, Cursor, Zed;
+  `PhoneScreenZoom`) get ⌘+ twice when placed, posted to their process alone, and ⌘− twice when they go back; the steps
+  are kept in the restore record first, so a crash still undoes them. Browsers are left alone: their zoom is per site and
+  would follow the user's other tabs, and a page at 540 pt is already laid out narrow. Measured: Ghostty's text about
+  15 pt instead of 13 on the display, and its window back at 13 afterwards.
 - **Ending**: when the node closes the socket (the phone sent `stop`, its RFB stream ended, or the node went away) or the
   helper gets SIGTERM, it puts every window back, lets the display go, waits until it is offline and sets back what moved.
   A display let go while the Mac's monitor sleeps goes offline only when it wakes (Snug).
@@ -1232,12 +1241,19 @@ keeps its notice, `THIRD_PARTY_NOTICES.md`).
   are never logged.
 - **iPhone** (`VNCPage`, `PhoneScreenLink`, `PhoneScreenWindows`): ⋯ › Mode lists Phone Screen when the Mac's status has
   `phone_screen` (a kept choice on a Mac that no longer offers it acts as Mouse Mode). While the mode is on and the screen
-  is live, the page starts the session for its RFB connection's `pair` with the picture's size in points (read while the
-  keyboard is down), and a new connection starts it again. A line over the top of the picture (not above it, so the
-  picture keeps its shape) says "Setting up the phone screen…" meanwhile, or why it couldn't (Accessibility not allowed,
-  another device has it, Persona Link too old). The page then
-  shows only the new display: RFB crops to it with the mixed-scale rule (`VNCDisplays.anchored`; Screen Sharing sends
-  DesktopSize when the display comes and goes, measured), and the video channel captures it by its id. The first time it is
+  is live, the page starts the session for its RFB connection's `pair` with the picture's size in points, and a new
+  connection starts it again. The shape is read with the keyboard down, followed until the display is up and then kept
+  (#9500): only the phone turning reads it again. The keyboard, the shortcut row and the lines over the picture change
+  its height for a while and never send `start`; before, a size read with the keyboard up made the Mac rebuild the
+  display nearly square. A line over the top of the picture says "Setting up the phone screen…" meanwhile, or why it
+  couldn't (Accessibility not allowed, another device has it, Persona Link too old). Upright, the picture always fills
+  the view's width (`VNCZoom.phoneFit`): with the keyboard up it keeps its size and the keyboard covers its bottom, moved
+  up just enough to keep the pointer (where the user tapped, usually the text field) above the keyboard, and two fingers
+  move it to show the rest. The page shows only the new display: RFB crops to it with the mixed-scale rule
+  (`VNCDisplays.anchored`; Screen Sharing sends DesktopSize when the display comes and goes, measured), and the video
+  channel captures it by its id. Each `place` answer's `displays` replaces the arrangement, so a display that widened
+  (Screen Sharing's picture grew from 3000 × 2042 to 3520 × 3024) is found again; before #9500 the page kept the
+  arrangement from `start` and lost the display after such a window. The first time it is
   up with nothing on it, and from the bottom bar's Windows button, a sheet lists the Mac's windows by app (the one on the
   display checked, minimized ones marked); a tap puts one there and closes it. Leaving the mode or closing the page sends
   `stop`. Touches: a tap clicks there; one finger scrolls (by the point through Persona Input where it may, with a coast);

@@ -117,6 +117,8 @@ final class PhoneScreenSession {
         }
         AX.setFullScreen(e, false)
         AX.setMinimized(e, false)
+        // Every window starts from the base width: one that needed a wider mode must not leave the next one small.
+        if d.width != d.fit.baseWidth { _ = d.set(width: d.fit.baseWidth, place: false) }
         var got = fill(e, d)
         // An app with a minimum size stays larger: a wider mode of the same shape holds it, and the picture scales.
         if let g = got {
@@ -130,9 +132,18 @@ final class PhoneScreenSession {
         AX.focus(e, pid: key.pid)
         placed = key
         let app = NSRunningApplication(processIdentifier: key.pid)
+        // Terminals and editors: bigger text while on the phone (PhoneScreenZoom), noted before the keys go so a crash
+        // still undoes it.
+        let steps = PhoneScreenZoom.steps(for: app?.bundleIdentifier)
+        if steps > 0, restore.record(pid: key.pid, window: key.id)?.zoom == nil {
+            restore.setZoom(steps, pid: key.pid, window: key.id)
+            _ = save()
+            AX.zoom(pid: key.pid, steps: steps)
+        }
         let w = PhoneScreenWindow(pid: key.pid, window: key.id, app: app?.localizedName ?? "", bundle: app?.bundleIdentifier,
                                   title: AX.string(e, kAXTitleAttribute) ?? "", placed: true, frame: got?.phoneRect)
-        return PhoneScreenReply(ok: true, display: d.rect, placed: w)
+        // The arrangement too: the display may have changed width, and the phone finds it on the picture by all of them.
+        return PhoneScreenReply(ok: true, display: d.rect, displays: Displays.arrangement(known: [d.id: 2]), placed: w)
     }
 
     /// The window over the display's area (a fitted window first goes back to the base width).
@@ -145,6 +156,11 @@ final class PhoneScreenSession {
         defer { if placed == key { placed = nil } }
         guard let r = restore.record(pid: key.pid, window: key.id) else { return }
         if let e = AX.element(key) {
+            if let z = r.zoom, z > 0 { // the text size back first: the keys go to the app's front window
+                AXUIElementPerformAction(e, kAXRaiseAction as CFString)
+                AX.set(e, kAXMainAttribute, kCFBooleanTrue)
+                AX.zoom(pid: key.pid, steps: -z)
+            }
             AX.move(e, to: CGRect(r.frame))
             if r.fullScreen { AX.setFullScreen(e, true) }
             if r.minimized { AX.setMinimized(e, true) }
