@@ -22,7 +22,7 @@ What people do on an iPhone they can also do on Android, most-used first. Whatev
 
 **F6. To-dos.** iOS edits the due date, the reminder and the priority in the detail, shows the stage bar, and dictates notes. Android edits the title and notes only. Requirement: as on iOS.
 
-**F7. Agents list.** iOS groups By Repository, By Project, By To-do, By Status, By Machine, By App and Recently Used; Android has By repository, By computer and space, By status and By to-do; its By computer and space has iOS's By Project shape, so the [Agents page](agents-page.md) (A5) renames it. iOS also has git and worktree actions (pull, push, fetch, new worktree, rename, cleanup when an Agent closes) and Orca workspaces. Requirement: the missing groupings (By Machine, By App, Recently Used), the actions and workspaces. How the shared groupings look is the Agents page's.
+**F7. Agents list.** iOS groups By Repository, By Project, By To-do, By Status, By Machine, By App and Recently Used; Android has By repository, By project, By status, By to-do, By App and Recently Used (#9199); its By computer and space has iOS's By Project shape, so the [Agents page](agents-page.md) (A5) renames it. iOS also has git and worktree actions (pull, push, fetch, new worktree, rename, cleanup when an Agent closes) and Orca workspaces. Requirement: the missing flat By Machine, the actions and workspaces. How the shared groupings look is the Agents page's.
 
 **F8. Voice.** On iOS the composer turns into a voice bar tied to the current chat. Android opens a separate page whose work always goes to the main chat. Requirement: the voice bar; the page stays for captions.
 
@@ -104,7 +104,7 @@ Each gets an iOS issue: answering questions and terminal choices from notificati
 
 ### F7. Agents list (M to L)
 
-- Groupings (S each): By App (from `agent_surface` and `agent_name`, which Android already parses), Recently Used and the flat By Machine, in `android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentList.kt`.
+- Groupings (S each): By App and Recently Used done (#9199: `AgentAppGroups`, `AgentGrouping.App` / `Recent`). Still missing: the flat By Machine, in `android/core/domain/src/main/kotlin/persona/core/domain/sort/AgentList.kt`.
 - Node actions (M): git pull, push and fetch, split pane, close tab, run an Agent in a pane, new and renamed worktrees, and cleanup when an Agent closes, as a service plus dialogs next to the existing Agent operation dialogs.
 - Workspaces (M): the same catalog as F2.
 

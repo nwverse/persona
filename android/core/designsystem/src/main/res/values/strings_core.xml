@@ -243,6 +243,9 @@
     <string name="designsystem_core_source_identity_conflict">Identity conflict</string>
     <string name="designsystem_core_source_claude_background">Claude background</string>
     <string name="designsystem_core_source_claude_desktop">Claude desktop app</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$s desktop app</string>
+    <string name="designsystem_core_agents_recently_used">Recently Used</string>
     <string name="designsystem_core_source_claude_terminal">Claude in a terminal</string>
     <string name="designsystem_core_source_no_send">This source can’t send yet</string>
     <string name="designsystem_core_read_only_because">View only: %1$s</string>

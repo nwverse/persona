@@ -216,6 +216,9 @@
     <string name="designsystem_core_source_identity_conflict">身份冲突</string>
     <string name="designsystem_core_source_claude_background">Claude 后台</string>
     <string name="designsystem_core_source_claude_desktop">Claude 桌面版</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$s 桌面版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用</string>
     <string name="designsystem_core_source_claude_terminal">终端里的 Claude</string>
     <string name="designsystem_core_source_no_send">此来源尚未允许发送</string>
     <string name="designsystem_core_read_only_because">仅查看：%1$s</string>
