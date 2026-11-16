@@ -329,7 +329,7 @@ func chatNoEffortValueMessage(message, param string) bool {
 		return false
 	}
 	for _, valueError := range []string{"unsupported value", "invalid value", "supported values", "unsupported reasoning_effort", "invalid reasoning_effort",
-		"input should be", "not one of", "not a valid enum", "not a valid enumeration"} {
+		"input should be", "not one of", "must be one of", "not a valid enum", "not a valid enumeration"} {
 		if strings.Contains(message, valueError) {
 			return param == "reasoning_effort" || strings.Contains(message, "reasoning_effort") && strings.Contains(message, "none")
 		}
