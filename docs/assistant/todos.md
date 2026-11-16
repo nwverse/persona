@@ -989,7 +989,9 @@ shows a localized type and number until a title is available; it never guesses
 titles or performs a remote metadata request when opening a to-do.
 It preserves source snapshots, aliases and requested refs. Assistant conversations
 can manage their manager's to-dos; task Agents can read or edit only their actively
-linked open to-do, with its ID available through `todo_decisions`. Empty ordinary
+linked open to-do, with its ID available through `todo_decisions`; the node names
+the calling Agent's session for them from its pane, as for the decision tools
+(`callerTools`, #9089). Empty ordinary
 to-dos need no catalog read. `todo_create` accepts the optional creation object; a matching
 existing Todo with supplied bindings is explicitly refused so callers can read
 and edit that Todo without silently discarding associations. Writes retain the

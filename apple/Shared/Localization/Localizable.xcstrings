@@ -81373,6 +81373,28 @@
       },
       "extractionState" : "manual"
     },
+    "Let “%@” Start These by Itself" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let “%1$@” start these by itself"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%1$@」が次回からこの種類を自動で開始する"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让「%1$@」以后自己开始这类任务"
+          }
+        }
+      }
+    },
     "Let's wrap this up: write the final summary and reply back to this Inbox item." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -107135,6 +107157,28 @@
         }
       }
     },
+    "Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only in this scheduled task's own runs, never after it read mail, Inbox or web pages. You can remove this on its page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスク自身の実行でのみ有効で、メール・受信箱・Web ページを読んだ回は自動で開始しません。タスクのページで取り消せます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只在这个定时任务自己的运行里生效；读过邮件、收件箱或网页的那次不会自动开始。可以在它的页面上取消。"
+          }
+        }
+      }
+    },
     "Only its file mode changed" : {
       "localizations" : {
         "en" : {
@@ -121337,6 +121381,28 @@
       },
       "extractionState" : "manual"
     },
+    "Read-only [Start Grant]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read-only"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み取り専用"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读"
+          }
+        }
+      }
+    },
     "Readable" : {
       "localizations" : {
         "en" : {
@@ -125172,6 +125238,28 @@
     },
     "Remove [Handoff Rule]" : {
       "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
+    "Remove [Start Grant]" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -145257,6 +145345,28 @@
         }
       }
     },
+    "Starts without asking" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starts Without Asking"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認なしで開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无需确认即可开始"
+          }
+        }
+      }
+    },
     "Starts without ultracode. With it, every task runs as a multi-agent workflow, which uses a lot of quota" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -151367,6 +151477,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスクが出すこれらの種類のタスクは確認なしで開始します。ただし、その回でメール・受信箱・Web ページを読んだ場合は除きます。指示や実行場所を変更するとこの一覧はクリアされます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个定时任务派出的这几类任务会直接开始，不再等你确认；但那次运行读过邮件、收件箱或网页时除外。修改它的指令或运行位置会清空这个列表。"
+          }
+        }
+      }
     },
     "Tasks started from the main chat stay out of the Dynamic Island, notifications, and badges. Persona tells you in the main chat when they finish, need your answer, or fail. Only affects tasks started from now on." : {
       "localizations" : {
@@ -162710,6 +162842,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Scheduled Task" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "this scheduled task"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この定期タスク"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个定时任务"
+          }
+        }
+      }
     },
     "This Week" : {
       "extractionState" : "manual",

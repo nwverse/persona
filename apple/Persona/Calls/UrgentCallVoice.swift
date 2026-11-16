@@ -9,7 +9,18 @@ import Speech
 /// else in the phone's own voice; it listens with the phone's own recognizer, on the device when it can, so the
 /// owner's words leave the phone only as the text of their answer. It plays and records on the call's audio session,
 /// which LiveCommunicationKit activated (`.playAndRecord`, `.voiceChat`): it never sets a category of its own.
-@MainActor final class UrgentCallVoice {
+/// What the call's turns speak and hear with: `UrgentCallVoice` on a call, a written-out one in the tests.
+@MainActor protocol UrgentCallSpeech: AnyObject {
+    /// Says `text` and returns once it was said.
+    func say(_ text: String) async
+    /// What the owner said once they stopped for a moment; nil when nothing was heard.
+    func listen() async -> String?
+    func stop()
+    /// Whether it can hear at all (the microphone and speech recognition allowed); false: the call works by taps.
+    var canHear: Bool { get }
+}
+
+@MainActor final class UrgentCallVoice: UrgentCallSpeech {
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
     private let device = MeetingDeviceVoice()
     private var player: MeetingVoicePlayer?
@@ -74,8 +85,12 @@ import Speech
         }
     }
 
-    /// What the owner said, once they stopped for a moment; nil when nothing was heard (or listening is not allowed).
-    func listen(quiet: TimeInterval = 1.6, longest: TimeInterval = 20) async -> String? {
+    func listen() async -> String? { await hear(quiet: 1.6, longest: 20) }
+
+    var canHear: Bool { Self.allowed }
+
+    /// What the owner said, once they stopped for `quiet` seconds; nil when nothing was heard (or listening is not allowed).
+    func hear(quiet: TimeInterval, longest: TimeInterval) async -> String? {
         guard Self.allowed, let recognizer = SFSpeechRecognizer(locale: Locale(identifier: Self.speechLanguage(language))),
               recognizer.isAvailable else { return nil }
         let hearing = Hearing()

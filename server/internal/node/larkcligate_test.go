@@ -75,6 +75,20 @@ func TestLarkCLIGate(t *testing.T) {
 		{`lark-cli --profile other im +chat-list`, "deny"},
 		{`lark-cli im +chat-list --profile=other`, "deny"},
 		{`cat ~/.lark-cli/config.json`, "deny"},
+		// A read's argument from a file: $(cat file) and $(< file), as $(head file) (#9101).
+		{`lark-cli im +chat-messages-list --chat-id "$(cat ids.txt)"`, "allow"},
+		{`lark-cli im +chat-messages-list --chat-id "$(< ids.txt)"`, "allow"},
+		{`timeout 90 lark-cli im +chat-messages-list --chat-id "$(cat a.txt b.txt)" | jq -r .data`, "allow"},
+		{`lark-cli im +chat-messages-list --chat-id "$(head -c 9999 ids.txt)"`, "allow"},
+		// …and nothing more: a write with it is still confirmed whole, as with head; writing, running what is read or
+		// a cat flag is no file read; a variable set from a file earlier stays unsure.
+		{`lark-cli im +messages-send --chat-id "$(cat c.txt)" --text hi`, "other"},
+		{`lark-cli im +messages-send --chat-id "$(head -1 c.txt)" --text hi`, "other"},
+		{`lark-cli im +chat-messages-list --chat-id "$(< a.txt > b.txt)"`, "other"},
+		{`lark-cli im +chat-messages-list --chat-id "$(<ids.txt 2>&1)"`, "other"},
+		{`lark-cli im +chat-messages-list --chat-id "$(cat ids.txt | sh)"`, "other"},
+		{`lark-cli im +chat-messages-list --chat-id "$(cat -v ids.txt)"`, "other"},
+		{`ids=$(cat ids.txt); lark-cli im +chat-messages-list --chat-id "$ids"`, "other"},
 		// Other commands and unresolved calls.
 		{`lark-cli im +chat-list | python3 -c 'import sys'`, "other"},
 		{`lark-cli im +chat-list > ~/chats.json`, "allow"},

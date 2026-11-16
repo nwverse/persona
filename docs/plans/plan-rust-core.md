@@ -360,7 +360,7 @@ Phase 1 (#6871) lands in several PRs.
     All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
     `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
     reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
-    x86_64 emulator A/B data was not collected on this run (no KVM on the devbox; the owned software-emulator boot
+    x86_64 emulator A/B data was not collected on this run (no KVM on the build machine; the owned software-emulator boot
     stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.

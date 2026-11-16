@@ -127,7 +127,7 @@ func TestNotifyUserCopyNotConfirmedInTime(t *testing.T) {
 		defer landed() // a failure below must not leave the card's post hanging in the bubble
 		zero := 0
 		s.hub.(*fakeHub).notifyResult = NotifyResult{OK: true, Devices: &zero, Reason: "no_device"}
-		l := s.lang(t.Context()) // now: the fake hub answers nothing else while the card's post hangs
+		l := s.lang(t.Context())
 		start := time.Now()
 		out, err := runToolOn(s, "server", "main-conv", "notify_user", map[string]any{"title": "Reminder", "body": "Details"})
 		if err != nil {
