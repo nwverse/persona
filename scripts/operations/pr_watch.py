@@ -657,7 +657,9 @@ class Watcher:
                 updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
                 self.state.put(repo, number, updated_head, evidence_key=updated_key,
                                repair_rounds=rounds + 1, outcome="retry", retry_after=0,
-                               failure=None, base=base)
+                               failure=None, base=base,
+                               retry_reason=None, failure_posted=False,
+                               review_attempts=0, repair_attempts=0)
                 self.publication_comment(repo, number, updated_head, updated_key,
                                          "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
@@ -918,7 +920,9 @@ class Watcher:
                             updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
                             self.state.put(repo, number, updated_head, evidence_key=updated_key,
                                            repair_rounds=rounds + 1, outcome="retry", retry_after=0,
-                                           failure=None, base=base)
+                                           failure=None, base=base,
+                               retry_reason=None, failure_posted=False,
+                               review_attempts=0, repair_attempts=0)
                             self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
                     self.recover_infrastructure(repo, worktree, error)
@@ -972,7 +976,7 @@ class Watcher:
                                          verification_policy=VERIFICATION_POLICY_VERSION,
                                          review_policy=REVIEW_POLICY_VERSION,
                                          repair_rounds=rounds)
-            if current.get("semantic") != "passed" and current.get("semantic") != "findings" or current.get("retry_reason") == "semantic_review":
+            if current.get("semantic") != "passed" and current.get("semantic") != "findings" or current.get("retry_reason") in ("semantic_review", "base_update"):
                 self.phase(key, "independent semantic review")
                 review_attempts = int(current.get("review_attempts", 0))
                 if review_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
@@ -1011,6 +1015,7 @@ class Watcher:
                                          review_fingerprint=review_fingerprint,
                                          outcome="reviewed",
                                          review_attempts=0,
+                                         retry_reason=None,
                                          review_posted=bool(current.get("review_posted") and
                                                             published_fingerprint == review_fingerprint))
             findings = current.get("findings", [])
