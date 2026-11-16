@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const taskStateMaxBytes = 4096
@@ -152,8 +153,8 @@ func (s *Service) toolScheduleStateSet(ctx context.Context, machine, session str
 	if err := validateTaskState(*input.Text); err != nil {
 		return "", err
 	}
-	items, ok := s.lastTurnItems(ctx, machine, session)
-	if !ok || !currentTurnHasTaskStateRun(items, input.RunKey) {
+	items, ok := s.taskStateItems(ctx, machine, session)
+	if !ok || !currentTaskStateRun(items, input.RunKey) {
 		return "", fmt.Errorf("the run key must come from the current scheduled turn")
 	}
 	s.sched.mu.Lock()
@@ -165,18 +166,176 @@ func (s *Service) toolScheduleStateSet(ctx context.Context, machine, session str
 	return "State staged, but not yet saved. The hub attempts to save it after confirming that this run succeeded.", nil
 }
 
+// taskStateRunMarker starts the words of a recurring task's prompt that hand the run its key (taskStatePrompt).
+const taskStateRunMarker = "call schedule_state_set with run_key "
+
 func matchesTaskStateRun(prompt, key string) bool {
-	return strings.Contains(prompt, "call schedule_state_set with run_key "+key+" and the updated state text")
+	return strings.Contains(prompt, taskStateRunMarker+key+" and the updated state text")
 }
 
-// currentTurnHasTaskStateRun reports whether the prompt that started the latest turn in items carries key. The node's
-// one-turn page starts at the last prompt it counts as a user's, and a scheduled prompt is an injected one it does not
-// count, so in a conversation a task reuses the page reaches back into the previous run: the first user message there
-// belongs to an earlier turn, with that run's key. The turn's own prompt is the last user message that is not queued.
-func currentTurnHasTaskStateRun(items []proto.Item, key string) bool {
-	_, turn := splitLastTurn(items)
-	prompt, _ := turnExchange(turn)
-	return matchesTaskStateRun(prompt, key)
+// taskStateTurns is how many of a conversation's latest turns the run key is looked for in, as the node pages turns:
+// from a prompt it counts as a user's. A scheduled prompt is not one (it is injected), nor a supervision message, so a
+// page reaches back past them; the owner's or another conversation's message is, and a few of them may come while a run
+// waits for its background work (finishTaskStateRun). A run's prompt further back is not found: its key is refused.
+const taskStateTurns = 4
+
+// taskStateItems are the conversation's latest taskStateTurns turns, as the node pages them; ok is false when the node
+// could not be asked.
+func (s *Service) taskStateItems(ctx context.Context, machine, sid string) (items []proto.Item, ok bool) {
+	var res struct {
+		Items []proto.Item `json:"items"`
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": taskStateTurns, "lazy_images": true}, &res); err != nil {
+		return nil, false
+	}
+	return res.Items, true
+}
+
+// currentTaskStateRun reports whether key belongs to the conversation's current scheduled run: the latest user message
+// in items that hands out a run key (a recurring task's prompt, queued into a busy turn or not) carries it. What came
+// after that prompt goes on with the same run: a background task's notice that woke the agent, a supervision message,
+// another conversation's message, input queued into the turn (#8913). The next run's prompt ends it, so an earlier run's
+// key is refused once a later prompt carries another, as is a key no prompt here carries (another conversation's, a
+// prefix). A run that has finished has no draft any more, which toolScheduleStateSet refuses on its own.
+//
+// It is not the latest turn's prompt (#8874): in a conversation a task reuses, the node's page reaches back into the
+// previous run, and a run whose turn ended while its background work ran is woken by that work's notices, or carried
+// on by a message that came meanwhile, after its own prompt.
+func currentTaskStateRun(items []proto.Item, key string) bool {
+	for i := len(items) - 1; i >= 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && strings.Contains(it.Text, taskStateRunMarker) {
+			return matchesTaskStateRun(it.Text, key)
+		}
+	}
+	return false
+}
+
+// finishTaskStateRun saves the state a run staged, once the run is over and went well. A run's turn can end while work
+// it sent to the background still runs (background subagents and commands, workflows): their notices wake the
+// conversation and the run carries on there, staging its state only then (#8913). waitTurnEnd ends the run at its first
+// stop (an assistant conversation does not read as working for its background work, backgroundState, and its row does
+// not list its subagents), and the draft was gone by the time it was staged. So when nothing is staged yet and the run
+// has background work that has not reported back, the draft stays open until it has and the conversation is idle, or
+// the run's watch (ctx) ends. A run that staged its state already, or sent nothing to the background, is saved at its
+// first stop as before. sess is the conversation as its turn ended.
+func (s *Service) finishTaskStateRun(ctx context.Context, t Task, run ScheduleRun, machine string, sess proto.Session) {
+	if sess.State == proto.StateNeedsYou || sess.Starting {
+		return
+	}
+	items, ok := s.taskStateItems(ctx, machine, run.SessionID)
+	if !ok {
+		return
+	}
+	if !s.taskStateStaged(t.stateRunKey) && runBackground(items, t.stateRunKey) > 0 {
+		if items, ok = s.waitRunBackground(ctx, machine, run.SessionID, t.stateRunKey); !ok {
+			return
+		}
+	}
+	if s.stillEnded(ctx, machine, run.SessionID, items) && currentTaskStateRun(items, t.stateRunKey) {
+		s.finishTaskState(ctx, t, run)
+	}
+}
+
+// waitRunBackground waits, after the run's first stop, until the conversation is idle (read so twice in a row, as
+// waitTurnEnd) and the run has staged its state or has no background work left; items are the conversation's latest
+// turns then. ok is false when the run is not to be saved: the watch ended first, the conversation waits on the user,
+// the next run's prompt came, or the turn that carried the run on failed.
+func (s *Service) waitRunBackground(ctx context.Context, machine, sid, key string) (items []proto.Item, ok bool) {
+	poll := turnPollInterval
+	if s.turnPoll > 0 {
+		poll = s.turnPoll
+	}
+	quiet, looked := 0, ""
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(poll):
+		}
+		c, read := s.session(ctx, machine, sid)
+		if !read {
+			continue
+		}
+		if c.State == proto.StateNeedsYou {
+			return nil, false
+		}
+		if c.Status == proto.StatusWorking || c.State == proto.StateWorking || c.Starting {
+			quiet = 0
+			continue
+		}
+		if quiet++; quiet < 2 {
+			continue
+		}
+		last, read := s.lastItemID(ctx, machine, sid)
+		if !read || last == looked {
+			continue // nothing new since the last look: its background work has not reported back
+		}
+		if items, read = s.taskStateItems(ctx, machine, sid); !read {
+			continue
+		}
+		looked = last
+		if !currentTaskStateRun(items, key) {
+			return nil, false
+		}
+		if s.taskStateStaged(key) || runBackground(items, key) == 0 {
+			if c.TurnError != "" || s.lastTurnAPIError(ctx, machine, sid) != "" {
+				return nil, false
+			}
+			return items, true
+		}
+	}
+}
+
+// taskStateStaged: the run holding key has staged its state.
+func (s *Service) taskStateStaged(key string) bool {
+	s.sched.mu.Lock()
+	defer s.sched.mu.Unlock()
+	return s.sched.stateDrafts[key].session != ""
+}
+
+// runBackground is how much of the work the run holding key sent to the background has not reported back yet: the
+// calls after its prompt whose result says they went on in the background (startsBackground: a subagent launched async
+// needs no run_in_background) without a notice of theirs that they ended. Claude Code's notice names the call it reports
+// on (<tool-use-id>, TaskNote.ToolUseID).
+func runBackground(items []proto.Item, key string) int {
+	start := -1
+	for i := len(items) - 1; i >= 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && strings.Contains(it.Text, taskStateRunMarker) {
+			start = i
+			break
+		}
+	}
+	if start < 0 || !matchesTaskStateRun(items[start].Text, key) {
+		return 0
+	}
+	waiting := map[string]bool{}
+	for _, it := range items[start+1:] {
+		switch {
+		case it.Kind == proto.KindToolResult && it.ToolUseID != "" && startsBackground(it.Text):
+			waiting[it.ToolUseID] = true
+		case it.Task != nil && it.Task.ToolUseID != "" && taskEnded(it.Task.Status):
+			delete(waiting, it.Task.ToolUseID)
+		}
+	}
+	return len(waiting)
+}
+
+// startsBackground: a call's result says the call goes on in the background and reports back with a notice when it
+// ends (transcript.LaunchedBackgroundID: a background command, one moved there, an async subagent, a workflow). A
+// Monitor's start is not one: it reports events, not an end.
+func startsBackground(result string) bool {
+	return transcript.LaunchedBackgroundID(result) != "" && !strings.HasPrefix(strings.TrimSpace(result), "Monitor started")
+}
+
+// taskEnded: a background task's notice says it is over (proto.TaskNote.Status).
+func taskEnded(status string) bool {
+	switch status {
+	case "completed", "failed", "killed", "stopped", "ended":
+		return true
+	}
+	return false
 }
 
 func (s *Service) finishTaskState(ctx context.Context, task Task, run ScheduleRun) {

@@ -141,6 +141,23 @@ type KBRecordingInput struct {
 
 func RenderKBRecordingInput(in KBRecordingInput) string { return render("kb/recording_input", in) }
 
+// RenderKBRecordingTitle is the system prompt naming a recording while it records (kb/recording_title, #8873).
+func RenderKBRecordingTitle(o KBOwner) string { return render("kb/recording_title", o) }
+
+// KBRecordingTitleInput is a recording still recording, to name (kb/recording_title_input): a meeting or a note, its
+// start in the user's zone, the minutes recorded so far, the phone's language, the title the last call gave ("" none)
+// and the transcript so far, its start and its latest part when it is long.
+type KBRecordingTitleInput struct {
+	Meeting                       bool
+	Start                         time.Time
+	Minutes                       int
+	Language, Current, Transcript string
+}
+
+func RenderKBRecordingTitleInput(in KBRecordingTitleInput) string {
+	return render("kb/recording_title_input", in)
+}
+
 // RenderKBMinutes is the system prompt for a meeting recording's minutes, or a part's notes (kb/minutes).
 func RenderKBMinutes(o KBOwner) string { return render("kb/minutes", o) }
 
