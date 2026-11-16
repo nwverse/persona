@@ -2,7 +2,7 @@
 // agents' sessions (alive, running, asking), its PR / delivery state, the latest task_review verdict and when it last moved —
 // never from what an agent says about itself. The rules are the SOP's table, in its order; the first that holds wins.
 
-import { acceptanceStands, latestReview, reviewState } from "./supervision";
+import { acceptanceStands, decisionDismissed, latestReview, reviewState } from "./supervision";
 import { openAsk, todoDueBy, todoStatus, type PRFacts, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 /** Where a to-do shows. */
@@ -44,7 +44,7 @@ export function waitingForMerge(todo: Todo, lookup: SessionLookup | undefined, n
   if (todo.done_at || !openMergePRs(todo, now).length) return false;
   const status = todoStatus(todo, lookup);
   if (status === "failed" || status === "needs_you" || status === "interrupted" || status === "working" || status === "waiting") return false;
-  if (reviewState(todo) === "needs_user" || openAsk(todo)?.outcome === "decide" || openAsk(todo)?.outcome === "cannot") return false;
+  if (!decisionDismissed(todo) && (reviewState(todo) === "needs_user" || openAsk(todo)?.outcome === "decide" || openAsk(todo)?.outcome === "cannot")) return false;
   return true;
 }
 
@@ -165,7 +165,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     return at("done", "failed_start");
   }
   if (status === "needs_you" || status === "interrupted") return at("waiting", "agent_asks");
-  if (!todo.done_at && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
+  // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
+  if (!todo.done_at && !decisionDismissed(todo) && (reviewState(todo) === "needs_user" || ask?.outcome === "decide" || ask?.outcome === "cannot")) return at("waiting", "owner_decides");
   // rule 8's signals, read here so rule 9 yields to them: a turn or review nobody has looked at stays Just finished
   const finished = status === "unread" || reviewState(todo) === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR
