@@ -2014,15 +2014,11 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		}
 	}
 	if text == "" {
-		if t.stateRunKey != "" && hasSession && failedSession.State != proto.StateNeedsYou && !failedSession.Starting {
-			if items, ok := s.lastTurnItems(ctx, m.ID, run.SessionID); ok && s.stillEnded(ctx, m.ID, run.SessionID, items) {
-				if currentTurnHasTaskStateRun(items, t.stateRunKey) {
-					s.finishTaskState(ctx, t, run)
-				}
-			}
-		}
 		if t.Facts {
 			s.briefReached(run.SessionID) // the briefing is in its conversation, whether or not a push follows
+		}
+		if t.stateRunKey != "" && hasSession {
+			s.finishTaskStateRun(ctx, t, run, m.ID, failedSession) // may wait for the run's background work
 		}
 		return
 	}
@@ -2191,7 +2187,12 @@ func retryCancelled(cur Task, found bool, failed ScheduleRun, runs []ScheduleRun
 //   - it is known to have ended: the watcher saw it working before it went idle (ran), or the turn has its end
 //     marker (turn_duration). A changed last item alone may be the prompt landing while the session's state still
 //     lags, and an assistant item may be thinking while the model goes on (#3777 review).
+//
+// All of it is judged on the latest turn alone, from the prompt that started it: the node's one-turn page starts at
+// the last prompt it counts as a user's, and a run's prompt is an injected one it does not count, so in a chat the task
+// reuses the page also holds the previous run, whose reply would hide this run's silence (#8901).
 func silentRun(items []proto.Item, t Task, ran bool) bool {
+	_, items = splitLastTurn(items)
 	if !silentTurn(items) {
 		return false
 	}

@@ -809,6 +809,10 @@ struct RecordingsPage: View {
                 } else if defaults.string(forKey: "showMeetingSample") == "overview" {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.overviewMeeting)
+                } else if defaults.string(forKey: "showMeetingSample") == "untitled-page" {
+                    // The unnamed meeting's page (#8873): its name from the hub, Rename under the transcript.
+                    Self.sampleOpened = true
+                    debugPage = .recording(RecordingSamples.untitledMeeting)
                 }
                 #if os(iOS)
                 // `-openDayRecap YES` with `-showDaySample …`: the made-up past day's page, once it is in place.
@@ -849,6 +853,8 @@ struct RecordingDetailView: View {
     @State private var keeper = RecordingRollingKeeper.shared
     @State private var deleting = false
     @State private var erasing = false
+    /// This recording while Rename is open (#8873).
+    @State private var renaming: UUID?
     @State private var failure: String?
     /// The transcript line a timestamp jumped to, lit for a moment.
     @State private var lit: Int?
@@ -904,6 +910,7 @@ struct RecordingDetailView: View {
         .alert("Couldn't Finish", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK [Recordings Section de32e2]") { failure = nil }.lineLimit(1)
         } message: { Text(failure ?? "") }
+        .recordingRename($renaming)
     }
 
     private func content(_ entry: RecordingEntry, proxy: ScrollViewProxy) -> some View {
@@ -964,6 +971,10 @@ struct RecordingDetailView: View {
             }
             if !entry.active {
                 Section {
+                    if !entry.isDay {
+                        Button("Rename") { renaming = id }.lineLimit(1)
+                            .accessibilityIdentifier("recording-rename")
+                    }
                     if !entry.isRolling {
                         Picker("Transcription Language", selection: Binding(get: { entry.locale }, set: { transcription.setLocale(id, $0) })) {
                             Text("Chinese").tag("zh-CN"); Text("English").tag("en-US"); Text("Japanese").tag("ja-JP")
