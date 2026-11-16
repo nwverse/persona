@@ -199,6 +199,8 @@ internal fun ChatComposerService.inGroup(names: GroupNames, scope: CoroutineScop
     return object : ChatComposerService {
         override val deliveries = source.deliveries.mapIn(scope) { map -> map.mapValues { delivery(it.value) } }
         override suspend fun upload(session: SessionKey, name: String, file: File) = source.upload(names.raw(session), name, file)
+        override suspend fun upload(session: SessionKey, name: String, file: File, destination: String) =
+            source.upload(names.raw(session), name, file, destination)
         override suspend fun interrupt(session: SessionKey) = source.interrupt(names.raw(session))
         override suspend fun retryRefused(clientMessageId: String, clearDraft: Boolean) =
             delivery(source.retryRefused(clientMessageId, clearDraft))

@@ -626,7 +626,7 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
 	}
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
 	}
 	if p == nil {
 		return fmt.Errorf("%s: %w", m.name(), errOffline)

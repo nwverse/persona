@@ -14,6 +14,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/nwverse/persona/server/internal/supervise"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/voice"
+	"github.com/nwverse/persona/server/internal/volc"
 )
 
 // What the build wrote in (-X): the version for people, and for updates (docs/operations/hub-update.md) the channel
@@ -72,6 +74,7 @@ const usage = `usage:
                            the hub and the built-in manager side by side in one container, each started again when it
                            stops (the hub image runs it; docs/operations/docker.md)
   personad voice            the built-in voice extension: the hub runs it (hub.json extensions, docs/extensions/extensions.md "Built-in voice extension")
+  personad volc             the built-in Volcengine speech extension: the hub runs it (docs/extensions/volcengine-speech.md)
   personad extension …      extensions on the hub's machine: list, install, upgrade, rollback, enable, disable, config,
                            secret, uninstall, markets (docs/extensions/extensions.md "Command line"; personad extension for the details;
                            also personad ext …, and personad plugin … as before)
@@ -83,6 +86,7 @@ const usage = `usage:
   personad version [-v]     the version; -v adds the channel and build number`
 
 func main() {
+	modelhttp.SetVersion(version)
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, named(usage))
 		os.Exit(2)
@@ -147,6 +151,8 @@ func main() {
 		}
 	case "voice":
 		err = voice.Run(ctx)
+	case "volc": // the built-in Volcengine speech extension's program (docs/extensions/volcengine-speech.md)
+		err = volc.Run(ctx, version)
 	case "extension", "ext", "plugin": // plugin: its name before #1844
 		err = extmgr.ExtensionCommand(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 	default:

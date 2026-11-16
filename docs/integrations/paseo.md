@@ -508,6 +508,15 @@ launcher ran on another account, and a provider added in Persona never applied i
     once, and refuses the next import of it). Should the bridge leave node meanwhile, the session is kept as not running, as Paseo's
     other Claude conversations are, not as starting. Before, a 25-second limit failed the takeover while Paseo went on, and the message was lost.
 
+- **Rich answers** (#8855): Paseo tells the agents it runs to draw tables, charts, stats, progress, checklists, steps
+  and choices as ```` ```paseo-ui ```` blocks of one JSON object. The hub writes each complete, readable block as a
+  ```` ```persona-view ```` of the same parts on its way out (`server/internal/hub/card_paseo_ui.go`, beside the ring
+  downgrade in `cardCompatItems`), so every app draws it in any chat with no release; the transcript keeps the block.
+  Past the apps' three cards a reply, or before one of the reply's own `persona-view` blocks, a block becomes its
+  plain-text fallback; an unreadable or unclosed one stays code, as Paseo shows it. Buttons are drawn as the choices to
+  reply with: card actions answer only in the assistant chat. While a reply streams, its block shows as code until the
+  finished item arrives.
+
 ## Out of scope and known limitations
 
 - No terminal: no keystrokes, screen reading, live terminal view, or phone takeover. The App hides these entry points based on session capabilities.

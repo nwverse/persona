@@ -130,6 +130,7 @@
   "room_ready_listener": "Persona is in the meeting as a listener · answers show on screen only",
   "room_ready_participant": "Persona is in the meeting as a participant · answers can be said aloud",
   "room_ready_off": "Persona is in the meeting but isn’t listening right now.",
+  "room_ready_notes": "Persona isn’t in this meeting: it keeps the topics and highlights and answers nothing.",
   "room_problem_runtime_unsupported": "The assistant’s computer can’t run a meeting conversation. Questions are answered from the meeting’s material.",
   "room_problem_node_too_old": "The assistant’s computer needs a newer Persona to take part. Questions are answered from the meeting’s material.",
   "room_problem_machine_offline": "The assistant’s computer is offline. Persona tries again every minute; until then, questions are answered from the meeting’s material.",
