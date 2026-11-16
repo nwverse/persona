@@ -116,16 +116,25 @@ test('debug receiver reports only shape and counts and never loads Rust during s
 
 test('frozen reading uses the projected membership and a real core input, not an undefined helper', () => {
   const list = input([row('removed', 'offline'), row('kept', 'working', {machine_id: 'machine-b'})]);
-  const groups = new NativeAgentListAdapter().project(list);
-  const frozen = {...list, reading: true, kept: ['machine-a/removed', 'machine-b/kept'],
+  const groups = new NativeAgentListAdapter().project(list).map((group) => ({...group, id: `machine/${group.machineId}`}));
+  const frozen = {...list, reading: true, grouping: 'machine', kept: ['machine-a/removed', 'machine-b/kept'],
     machineFilter: 'machine-b', frozen: groups};
   const core = coreAgentSortInput(frozen);
   assert.ok(core);
-  assert.deepEqual(core.sessions.map((s) => s.session_id), ['removed', 'kept']);
-  assert.deepEqual(core.settings.kept, ['machine-a/removed', 'machine-b/kept']);
+  assert.deepEqual(core.sessions.map((s) => s.session_id), ['kept'], 'core receives exactly the native-visible frozen rows');
+  assert.deepEqual(core.settings.kept, ['machine-b/kept'], 'only visible frozen members are kept for core');
   assert.equal(core.settings.machine_filter, 'machine-b');
+  const reports = [];
+  assert.equal(shadowAgentList(frozen, nativeCoreProjection(frozen), () => JSON.stringify({
+    counts: {needsYou: 0, unread: 0, working: 1, backgroundWaiting: 0},
+    groups: [{id: 'machine/machine-b', title: 'Example computer', rows: ['machine-b/kept'], visible_rows: [], folded: true}],
+    unread_shown: [],
+  }), (report) => reports.push(report)), false, 'native group naming remains a genuine tracked difference');
+  assert.deepEqual(reports.map((report) => report.rule), ['visible-rows', 'group-metadata'],
+    'the frozen other machine adds no missing-group or row-order mismatch');
   const native = nativeCoreProjection(frozen);
-  assert.deepEqual(native.groups[0].rows, ['machine-b/kept']);
+  assert.deepEqual(native.groups.map((group) => group.rows), [['machine-b/kept']]);
+  assert.deepEqual(native.groups.map((group) => group.rows), [['machine-b/kept']]);
   const snapshot = new DebugAgentListShadow().snapshot(frozen);
   assert.ok(snapshot, 'snapshot must be a plain object');
   assert.equal(Object.getPrototypeOf(snapshot.input), Object.prototype);

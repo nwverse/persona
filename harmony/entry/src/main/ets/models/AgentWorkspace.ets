@@ -650,10 +650,11 @@ export class AgentWorkspace {
   }
 
   private rebuild(): void {
-    const input = this.makeListInput();
-    this.listInput = input;
-    if (this.listShadow) this.listShadow(input);
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
+      if (this.listShadow) {
+        const input = this.makeListInput();
+        this.listInput = input; this.listShadow(input);
+      }
       const latest = new Map<string, ResourceRow>();
       this.sourceRows.forEach((row: ResourceRow) => latest.set(rowKey(row), row));
       this.groups = this.frozenGroups.map((group: AgentWorkspaceGroup) => {
@@ -664,10 +665,10 @@ export class AgentWorkspace {
       this.frozenGroups = this.copyGroups(this.groups);
       return;
     }
-    const listInput = this.makeListInput();
-    this.listInput = listInput;
-    if (this.listShadow) this.listShadow(listInput);
-    const groups = this.adapter.project(listInput);
+    const input = this.makeListInput();
+    this.listInput = input;
+    if (this.listShadow) this.listShadow(input);
+    const groups = this.adapter.project(input);
     this.groups = groups.map((group) => new AgentWorkspaceGroup(group.id, group.machineId,
       group.machineName, group.repositoryPath, group.repositoryName, group.worktreePath, group.worktreeName,
       group.branch, group.rows.map((row: AgentListRow) => row.source as ResourceRow)));

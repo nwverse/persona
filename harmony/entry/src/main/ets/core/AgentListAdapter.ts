@@ -62,15 +62,17 @@ export function coreAgentSortInput(input: AgentListInput): CoreSortInput | undef
     current.mutesAllowed.forEach((value: string) => { if (!mutesAllowed.includes(value)) mutesAllowed.push(value); });
     return current;
   };
-  const sessions = input.rows.filter((row: AgentListRow) => !input.reading ||
-    input.kept.includes(coreRowId(row)) || matchesNativeAgentListRow(input, row)).map((row: AgentListRow) => {
+  const sessions = (input.reading && input.frozen ? input.frozen.flatMap((group) => group.rows) :
+    input.rows.filter((row: AgentListRow) => !input.reading ||
+      matchesNativeAgentListRow(input, row))).map((row: AgentListRow) => {
     preferences(row);
     return row.raw;
   });
   return {sessions, machines: input.machines, pins: {spaces: pinsSpaces, sessions: pinsSessions},
     mutes: {spaces: mutesSpaces, sessions: mutesSessions, allowed: mutesAllowed},
     settings: {...input.coreSettings, grouping, quick, query: input.query, machine_filter: machineFilter,
-      kept: input.kept}};
+      kept: input.reading ? input.kept.filter((id: string) => sessions.some((row: Record<string, Object>) =>
+        (Wire.text(row, 'app_hub_group') ? Wire.text(row, 'app_hub_group') + '|' : '') + Wire.text(row, 'machine_id') + '/' + Wire.text(row, 'session_id') === id)) : input.kept}};
 }
 
 export function nativeCoreProjection(input: AgentListInput): CoreAgentListProjection | undefined {
