@@ -3672,6 +3672,12 @@ MINUTES_SHAPE_START = os.environ.get("MOCK_RECORDING_MINUTES_SHAPE", "legacy")
 if MINUTES_SHAPE_START not in MINUTES_SHAPES:
     sys.exit("mock hub: MOCK_RECORDING_MINUTES_SHAPE must be one of %s" % ", ".join(MINUTES_SHAPES))
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+# Titles (#8873, docs/assistant/meeting-minutes.md "Titles (#8873)"): MOCK_RECORDING_TITLES=1, or POST /mock/recording_titles
+# {"on": true}, names a recording nobody named (no title, no calendar title) once it has 40 characters of text, as the hub's
+# live title does: the subject before a colon in its first line with one (导出：… → 导出), else its first line, at most 15
+# characters. The answer to its uploads, GET /api/v1/recordings and its detail then carry name and name_source. Off by
+# default, so recordings keep the names other tests expect.
+RECORDING_TITLES = [os.environ.get("MOCK_RECORDING_TITLES") == "1"]
 RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
@@ -4657,6 +4663,28 @@ def features():
 def meeting_live(rid):
     return MEETING_LIVE.setdefault(rid, {"id": rid, "role": "off", "session": None, "segments": [], "bytes": 0, "fed": 0, "full": False,
                                          "asks": [], "sent": {}, "due": {}, "asks_rev": 0})
+
+
+def recording_title(body):
+    """What the hub calls an upload (its title, its calendar's, a made-up live title) and where that comes from (#8873);
+    (None, None) while it is named only by when it started."""
+    title = (body.get("title") or "").strip()
+    cal = ((body.get("calendar") or {}).get("title") or "").strip()
+    if title: return title, ("calendar" if title == cal else "title")
+    if cal: return cal, "calendar"
+    if not RECORDING_TITLES[0] or body.get("kind") == "day": return None, None
+    lines = [(x.get("text") or "").strip() for x in body.get("segments", []) if not x.get("echo")]
+    if sum(len(x) for x in lines) < 40: return None, None
+    for line in lines:
+        if m := re.match(r"([^：:]{1,15})[：:]", line): return m.group(1).strip(), "model"
+    return next((x for x in lines if x), "")[:15], "model"
+
+
+def recording_named(out, body):
+    """out with the name and name_source of upload body, when it has a name."""
+    name, source = recording_title(body)
+    if name: out.update(name=name, name_source=source)
+    return out
 
 
 def recording_kind(body):
@@ -7186,6 +7214,12 @@ def recordings_route_locked(h, method, p):
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
         return h.send_json({"mode": RECORDING_MINUTES[0], "shape": RECORDING_MINUTES_SHAPE[0]}) or True
+    if p == "/mock/recording_titles":
+        if method == "POST":
+            body = json.loads(h.last_body or b"{}")
+            if type(body.get("on")) is not bool: return h.send_json({"error": "on must be true or false"}, 400) or True
+            RECORDING_TITLES[0] = body["on"]
+        return h.send_json({"on": RECORDING_TITLES[0]}) or True
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
@@ -7230,7 +7264,8 @@ def recordings_route_locked(h, method, p):
                                             "started_at": v["started_at"],
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
                                                if v.get("kind") == "day" else {}),
-                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {})}
+                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {}),
+                                            **recording_named({}, v)}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
     if p.endswith("/segments"):
@@ -7309,7 +7344,7 @@ def recordings_route_locked(h, method, p):
     if have and have["revision"] > body["revision"]:
         # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
         # stored one) and what was wrong with this upload's attendance fields, whatever the status.
-        out = {"id": rid, "revision": body["revision"], "status": "stale"}
+        out = recording_named({"id": rid, "revision": body["revision"], "status": "stale"}, have)
         if MEETING_ATTENDANCE:
             out["attendance"] = meeting_live(rid)["role"]
             if room_of(rid) is None and (problem := meeting_attendance(body)[2]): out["attendance_problem"] = problem
@@ -7320,13 +7355,16 @@ def recordings_route_locked(h, method, p):
     RECORDINGS[rid] = {k: v for k, v in body.items() if k not in ("transcription", "timeline")}
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
-    entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
+    name, name_source = recording_title(body)
+    entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
              "recording_kind": kind}  # #8870
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo"))},
+                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo")),
+                       **({"name": name, "name_source": name_source} if name else {}),
+                       **({"ai_title": name, "ai_title_from": "summary" if body.get("complete") else "live"} if name_source == "model" else {})},
               "summary": text, "segments": body.get("segments", [])}
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
@@ -7334,7 +7372,7 @@ def recordings_route_locked(h, method, p):
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = None  # made from the photos as they are when the detail is stored, below
-    out = {"id": rid, "revision": body["revision"], "status": "stored"}
+    out = recording_named({"id": rid, "revision": body["revision"], "status": "stored"}, body)
     room = None
     if MEETING_ATTENDANCE:
         role, session, problem = meeting_attendance(body)
