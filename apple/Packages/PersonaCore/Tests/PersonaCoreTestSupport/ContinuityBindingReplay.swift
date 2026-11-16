@@ -32,8 +32,8 @@ public struct ContinuityBindingReplay: Sendable {
         var patches = 0
         let initialPatch = try step(client, chat: chat, list: &list, label: "\(name) initial")
         patches += 1
-        // A snapshot whose items do not cover its watermark legitimately opens a gap. Verify the initial state's
-        // observable result, including its first fetch, rather than incorrectly demanding an unchanged first patch.
+        // A snapshot can have a coverage gap without restore itself issuing a fetch. Verify the restored items and
+        // metadata plus the initial effects, which are empty until a subsequent event starts a fill.
         var initialRequests: [ContinuityJSON] = []
         for effect in recorder.effects.withLock({ recorded in
             defer { recorded.removeAll() }
@@ -132,18 +132,9 @@ public struct ContinuityBindingReplay: Sendable {
     private static func expectedInitial(_ initial: ContinuityJSON) throws -> ContinuityJSON {
         guard let object = initial.object else { return initial }
         var expected = object
-        let watermark = initial.number("covered") ?? 0
-        let firstSequence = initial["items"]?.array?.first?.number("seq") ?? 0
-        if firstSequence != watermark {
-            // The fixture's cache watermark, not the recorded request, determines the opening catch-up. An empty
-            // snapshot at zero has no fetch. A snapshot that starts away from its watermark requests that exact point.
-            expected["covered"] = .number(String(max(watermark, firstSequence)))
-            expected["actions"] = .array([.object([
-                "kind": .string("fetch_after"), "after_seq": .number(String(watermark)),
-            ])])
-        } else {
-            expected["actions"] = .array([])
-        }
+        // OpenChat restores this exact snapshot and publishes no fetch of its own. The existing fixture's first
+        // continue_fill / push event owns the subsequent request. Only derive the IDs absent from the initial object.
+        expected["actions"] = .array([])
         expected["item_ids"] = .array(initial["items"]?.array?.map { $0["id"] ?? .null } ?? [])
         return .object(expected)
     }
