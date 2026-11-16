@@ -359,6 +359,7 @@ dependencies = [
  "persona-core",
  "persona-core-ffi",
  "persona-core-runtime",
+ "serde",
  "serde_json",
 ]
 
