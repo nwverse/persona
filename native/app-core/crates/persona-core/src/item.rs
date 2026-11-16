@@ -3,12 +3,14 @@
 //! The core reads only the fields its rules use and keeps the item's JSON exactly as received, so the clients render
 //! what the hub sent and nothing is lost in a round trip through the core.
 
+mod head;
+
 use std::borrow::Cow;
 
-use serde::Deserialize;
 use serde_json::value::RawValue;
 
-use crate::transport::seen::{AnyStr, KeyFault, Seen, Slot, keyed, opens_object};
+use self::head::{CacheHead, CacheItemHead, CacheSeen, FoldValue, ItemFold, ItemHead, fold_value};
+use crate::transport::seen::{KeyFault, opens_object};
 
 /// The closed range of work a fold item stands for, from the fold's own position through `through_seq` /
 /// `through_id`.
@@ -32,74 +34,6 @@ pub struct Item {
     fold_supervision_user: bool,
     /// The item's JSON as the hub sent it.
     raw: Box<RawValue>,
-}
-
-#[derive(Deserialize)]
-struct Head<'a> {
-    #[serde(borrow)]
-    id: std::borrow::Cow<'a, str>,
-    #[serde(default)]
-    seq: i64,
-    #[serde(default, borrow)]
-    kind: Option<std::borrow::Cow<'a, str>>,
-    #[serde(default, borrow)]
-    role: Option<std::borrow::Cow<'a, str>>,
-    #[serde(default, borrow)]
-    tool_use_id: Option<std::borrow::Cow<'a, str>>,
-    #[serde(default)]
-    fold: Option<serde_json::Value>,
-    #[serde(default)]
-    supervision_user: bool,
-}
-
-/// A key's value as its bytes in the input, read later.
-#[derive(Default)]
-struct Raw<'a>(Option<&'a RawValue>);
-
-impl<'de: 'a, 'a> Deserialize<'de> for Raw<'a> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        <&'de RawValue>::deserialize(deserializer).map(|raw| Raw(Some(raw)))
-    }
-}
-
-impl Slot for Raw<'_> {
-    fn is_unset(&self) -> bool {
-        self.0.is_none()
-    }
-}
-
-keyed! {
-    /// The keys iOS's `Item` declares with a plain type (`apple/Shared/Models.swift`, `Item`), read without failing
-    /// on their type so a fault names its key.
-    struct WireHead<'a> {
-        id = "id": Seen<Cow<'a, str>>,
-        seq = "seq": Seen<i64>,
-        role = "role": Seen<Cow<'a, str>>,
-        kind = "kind": Seen<Cow<'a, str>>,
-        tool_use_id = "tool_use_id": Seen<Cow<'a, str>>,
-        text = "text": Seen<AnyStr>,
-        tool_name = "tool_name": Seen<AnyStr>,
-        from = "from": Seen<AnyStr>,
-        client_msg_id = "client_msg_id": Seen<AnyStr>,
-        is_error = "is_error": Seen<bool>,
-        queued = "queued": Seen<bool>,
-        wake = "wake": Seen<bool>,
-        supervision_user = "supervision_user": Seen<bool>,
-        full_size = "full_size": Seen<i64>,
-        fold = "fold": Raw<'a>,
-    }
-}
-
-keyed! {
-    /// The keys of iOS's `Fold` with a plain type (`apple/Shared/Models.swift`, `Fold`).
-    struct WireFold<'a> {
-        items = "items": Seen<i64>,
-        tools = "tools": Seen<i64>,
-        thoughts = "thoughts": Seen<i64>,
-        through_seq = "through_seq": Seen<i64>,
-        through_id = "through_id": Seen<Cow<'a, str>>,
-        supervision_user = "supervision_user": Seen<bool>,
-    }
 }
 
 /// Why an item of a hub payload was refused. It names keys of the protocol only, never the item's content.
@@ -141,36 +75,52 @@ impl std::fmt::Display for ItemError {
 impl std::error::Error for ItemError {}
 
 impl Item {
-    /// Reads one item from its JSON object.
+    /// Reads a cached item. The object form and serde's historical positional form share the same head/fold slots;
+    /// only id is required. Other fields retain their legacy defaults and type/null behavior.
     pub fn from_raw(raw: Box<RawValue>) -> Result<Item, ItemError> {
-        let head: Head<'_> = serde_json::from_str(raw.get()).map_err(|e| ItemError::at("item", &e))?;
-        let fold_supervision_user = head
-            .fold
-            .as_ref()
-            .is_some_and(|value| value.get("supervision_user").and_then(serde_json::Value::as_bool) == Some(true));
-        let fold = match head.fold {
-            Some(serde_json::Value::Null) | None => None,
-            Some(value) => Some(FoldRange {
-                through_seq: value
-                    .get("through_seq")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0),
-                through_id: value
-                    .get("through_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .to_owned(),
-                value,
-            }),
+        let CacheItemHead(CacheHead {
+            id,
+            seq,
+            kind,
+            role,
+            tool_use_id,
+            fold,
+            supervision_user,
+            ..
+        }) = serde_json::from_str(raw.get()).map_err(|e| ItemError::at("item", &e))?;
+        let id = match id {
+            CacheSeen::Value(id) => id,
+            CacheSeen::Missing => unreachable!("the cache reader requires id"),
+        };
+        let (fold, fold_supervision_user) = match fold.into_option().unwrap_or(FoldValue::Absent) {
+            FoldValue::Absent => (None, false),
+            FoldValue::Value(value) => {
+                let supervision = value.get("supervision_user").and_then(serde_json::Value::as_bool) == Some(true);
+                (
+                    Some(FoldRange {
+                        through_seq: value
+                            .get("through_seq")
+                            .and_then(serde_json::Value::as_i64)
+                            .unwrap_or(0),
+                        through_id: value
+                            .get("through_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                        value,
+                    }),
+                    supervision,
+                )
+            }
         };
         Ok(Item {
-            id: head.id.into_owned(),
-            seq: head.seq,
-            kind: head.kind.map_or_else(|| "unknown".to_owned(), |k| k.into_owned()),
-            role: head.role.map(|r| r.into_owned()).unwrap_or_default(),
-            tool_use_id: head.tool_use_id.map(|t| t.into_owned()),
+            id,
+            seq: seq.into_option().unwrap_or_default(),
+            kind: kind.into_option().flatten().unwrap_or_else(|| "unknown".to_owned()),
+            role: role.into_option().flatten().unwrap_or_default(),
+            tool_use_id: tool_use_id.into_option().flatten(),
             fold,
-            supervision_user: head.supervision_user,
+            supervision_user: supervision_user.into_option().unwrap_or_default(),
             fold_supervision_user,
             raw,
         })
@@ -201,7 +151,7 @@ impl Item {
         if !opens_object(json) {
             return Err(ItemFault::NotObject);
         }
-        let head: WireHead<'_> = serde_json::from_str(json).map_err(|_| ItemFault::Unreadable)?;
+        let head: ItemHead<'_> = serde_json::from_str(json).map_err(|_| ItemFault::Unreadable)?;
         let id = head.id.required("id")?;
         let seq = head.seq.required("seq")?;
         let role = head.role.required("role")?;
@@ -223,7 +173,7 @@ impl Item {
                 if !opens_object(json) {
                     return Err(KeyFault::WrongType("fold").into());
                 }
-                let fold: WireFold<'_> = serde_json::from_str(json).map_err(|_| ItemFault::Unreadable)?;
+                let fold: ItemFold<'_> = serde_json::from_str(json).map_err(|_| ItemFault::Unreadable)?;
                 fold.items.required("fold.items")?;
                 fold.tools.required("fold.tools")?;
                 fold.thoughts.required("fold.thoughts")?;
@@ -233,7 +183,9 @@ impl Item {
                 Some(FoldRange {
                     through_seq,
                     through_id,
-                    value: serde_json::from_str(json).map_err(|_| ItemFault::Unreadable)?,
+                    value: fold_value(json)
+                        .map_err(|_| ItemFault::Unreadable)?
+                        .expect("a fold object is a value"),
                 })
             }
         };
@@ -357,5 +309,115 @@ mod tests {
         let item = Item::list_from_json(r#"[{"id":"a"}]"#).unwrap().remove(0);
         assert_eq!((item.seq, item.kind.as_str(), item.role.as_str()), (0, "unknown", ""));
         assert_eq!(item.json(), r#"{"id":"a"}"#);
+    }
+
+    #[test]
+    fn cache_repeated_keys_follow_the_wire_without_losing_legacy_forms() {
+        let json = r#"{"id":"a#1","id":"b#2","seq":1,"seq":"wrong","role":"assistant","kind":"fold","kind":"text","tool_use_id":null,"tool_use_id":"later","supervision_user":true,"supervision_user":false,"fold":{"items":1,"tools":0,"thoughts":0,"through_seq":2,"through_seq":9,"through_id":"x#1","through_id":"y#2","supervision_user":null,"supervision_user":true},"fold":null}"#;
+        let cached = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
+        let wire = Item::from_wire(&RawValue::from_string(json.to_owned()).unwrap()).unwrap();
+        for item in [&cached, &wire] {
+            assert_eq!((item.id.as_str(), item.seq, item.kind.as_str()), ("a#1", 1, "fold"));
+            assert_eq!(item.tool_use_id, None);
+            assert!(item.supervision_user);
+            assert!(!item.fold_supervision_user, "the first null does not fall through");
+            let fold = item.fold.as_ref().expect("the first fold");
+            assert_eq!((fold.through_seq, fold.through_id.as_str()), (2, "x#1"));
+            assert_eq!(item.json(), json, "the original bytes are never normalized");
+        }
+        assert!(cached.same_fold(&wire), "both paths normalize the same fold tree");
+        let expected = serde_json::json!({
+            "items": 1, "tools": 0, "thoughts": 0,
+            "through_seq": 2, "through_id": "x#1", "supervision_user": null,
+        });
+        assert_eq!(cached.fold.as_ref().unwrap().value, expected);
+        assert_eq!(wire.fold.as_ref().unwrap().value, expected);
+
+        // An unrelated repeated head key cannot change which fold is selected or any of its normalized evidence.
+        for prefix in [
+            r#""id":"a#1","id":"other","#,
+            r#""id":"a#1","unknown":{"nested":true},"unknown":null,"#,
+        ] {
+            let item = Item::list_from_json(&format!(
+                "[{{{prefix}\"seq\":1,\"kind\":\"fold\",\"fold\":{{\"through_seq\":2,\"through_seq\":9,\"through_id\":\"x#1\",\"through_id\":\"y#2\",\"supervision_user\":true,\"supervision_user\":false}}}}]"
+            ))
+            .unwrap()
+            .remove(0);
+            let fold = item.fold.as_ref().unwrap();
+            assert_eq!((fold.through_seq, fold.through_id.as_str()), (2, "x#1"));
+            assert!(item.fold_supervision_user);
+            assert!(item.has_supervision_evidence());
+        }
+
+        let null_fold = r#"{"id":"a","fold":null,"fold":{"through_seq":8,"through_id":"b"}}"#;
+        assert!(
+            Item::list_from_json(&format!("[{null_fold}]")).unwrap()[0]
+                .fold
+                .is_none()
+        );
+        // Legacy positional cache entries retain their field order, defaults and byte-for-byte source.
+        let positional =
+            r#"["a",2,"kind","role","tool",{"through_seq":1,"through_seq":9,"through_id":"a","through_id":"b"},true]"#;
+        let item = Item::list_from_json(&format!("[{positional}]")).unwrap().remove(0);
+        assert_eq!((item.id.as_str(), item.seq, item.kind.as_str()), ("a", 2, "kind"));
+        assert_eq!(
+            (item.role.as_str(), item.tool_use_id.as_deref()),
+            ("role", Some("tool"))
+        );
+        assert_eq!(
+            item.fold.as_ref().map(|f| (f.through_seq, f.through_id.as_str())),
+            Some((1, "a"))
+        );
+        assert!(item.supervision_user);
+        assert_eq!(item.json(), positional);
+        let minimal = Item::list_from_json(r#"[["a"]]"#).unwrap().remove(0);
+        assert_eq!(
+            (minimal.id.as_str(), minimal.seq, minimal.kind.as_str()),
+            ("a", 0, "unknown")
+        );
+    }
+
+    #[test]
+    fn cache_legacy_errors_keep_their_positions() {
+        for (json, expected) in [
+            (r#"[]"#, "item: line 1 column 2"),
+            (r#"{"seq":1}"#, "item: line 1 column 9"),
+            (r#"{"id":null}"#, "item: line 1 column 10"),
+            (r#"{"id":1}"#, "item: line 1 column 7"),
+            (r#"{"id":"a","seq":null}"#, "item: line 1 column 20"),
+            (r#"{"id":"a","seq":1.0}"#, "item: line 1 column 19"),
+            (r#"{"id":"a","kind":1}"#, "item: line 1 column 18"),
+            (r#"{"id":"a","supervision_user":null}"#, "item: line 1 column 33"),
+            (r#"{"id":"a","supervision_user":1}"#, "item: line 1 column 30"),
+            (r#"["a",null]"#, "item: line 1 column 9"),
+            (
+                r#"["a",2,"kind","role","tool",null,false,"extra"]"#,
+                "item: line 1 column 40",
+            ),
+        ] {
+            let error = Item::list_from_json(&format!("[{json}]")).expect_err(json);
+            assert_eq!(error.to_string(), expected, "{json}");
+        }
+        // Errors inside a snapshot array keep the `items` context, not the wire's protocol-key error vocabulary.
+        let error = Item::list_from_json(r#"[{"id":"a"},{"id":1}]"#).unwrap_err();
+        assert_eq!(error.to_string(), "item: line 1 column 7");
+        let error = Item::list_from_json("[").unwrap_err();
+        assert_eq!(error.to_string(), "items: line 1 column 1");
+    }
+
+    #[test]
+    fn cache_repeated_and_unknown_values_retain_the_recursion_boundary() {
+        let deep = format!("{}{}", "[".repeat(200_000), "]".repeat(200_000));
+        let json = format!(r#"{{"id":"a","unknown":{deep},"unknown":1,"seq":0,"seq":{deep}}}"#);
+        let item = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
+        assert_eq!(item.json(), json, "deep ignored values are skipped without recursion");
+        // The selected fold is the one bounded tree, as it was before this shared reader.
+        let deep = format!("{}{}", "[".repeat(128), "]".repeat(128));
+        let json = format!(r#"{{"id":"a","fold":{{"x":{deep}}}}}"#);
+        let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
+        assert_eq!(error.to_string(), "item: line 1 column 148");
+        let json = format!(r#"{{"id":"a","fold":{deep}}}"#);
+        let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
+        assert_eq!(error.to_string(), "item: line 1 column 144");
     }
 }

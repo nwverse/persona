@@ -211,13 +211,22 @@ impl<'de> Deserialize<'de> for Key<'de> {
 /// that appears again is skipped too, so its first value stays (a derived reader would refuse the object). The
 /// caller checks beforehand that the value opens an object. `KEYS` lists the keys in declaration order.
 macro_rules! keyed {
-    ($(#[$meta:meta])* struct $name:ident<$lt:lifetime> {
+    ($(#[$meta:meta])* $vis:vis struct $name:ident<$lt:lifetime> {
         $($(#[$note:meta])* $field:ident = $key:literal: $slot:ty,)+
     }) => {
         $(#[$meta])*
-        struct $name<$lt> {
-            $($(#[$note])* $field: $slot,)+
+        $vis struct $name<$lt> {
+            $($(#[$note])* $vis $field: $slot,)+
             borrows: std::marker::PhantomData<&$lt ()>,
+        }
+
+        impl<$lt> Default for $name<$lt> {
+            fn default() -> Self {
+                Self {
+                    $($field: Default::default(),)+
+                    borrows: std::marker::PhantomData,
+                }
+            }
         }
 
         impl<$lt> $name<$lt> {
