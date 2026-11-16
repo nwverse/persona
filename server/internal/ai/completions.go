@@ -214,9 +214,7 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
-		if chatReasoningValueCode(decodeErrorCode(envelope.Code)) {
-			return false
-		}
+		topCode := decodeErrorCode(envelope.Code)
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
 				Message json.RawMessage `json:"message"`
@@ -224,13 +222,20 @@ func ChatRejectsReasoningEffort(raw []byte) bool {
 				Code    json.RawMessage `json:"code"`
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
-				if chatReasoningValueCode(decodeErrorCode(object.Code)) {
+				code := decodeErrorCode(object.Code)
+				if code == "" {
+					code = topCode
+				}
+				if chatReasoningValueCode(code) {
 					return false
 				}
 				return chatReasoningFieldError(decodeErrorString(object.Message), decodeErrorString(object.Param))
 			}
 			var message string
-			return json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+			return !chatReasoningValueCode(topCode) && json.Unmarshal(envelope.Error, &message) == nil && chatReasoningFieldError(message, "")
+		}
+		if chatReasoningValueCode(topCode) {
+			return false
 		}
 		if envelope.Message != "" {
 			return chatReasoningFieldError(envelope.Message, "")
@@ -276,9 +281,7 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 		} `json:"detail"`
 	}
 	if json.Unmarshal(raw, &envelope) == nil {
-		if chatReasoningCeilingCode(decodeErrorCode(envelope.Code)) {
-			return false
-		}
+		topCode := decodeErrorCode(envelope.Code)
 		if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 			var object struct {
 				Message json.RawMessage `json:"message"`
@@ -287,6 +290,9 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 			}
 			if json.Unmarshal(envelope.Error, &object) == nil {
 				code, message, param := decodeErrorCode(object.Code), decodeErrorString(object.Message), decodeErrorString(object.Param)
+				if code == "" {
+					code = topCode
+				}
 				if chatReasoningCeilingCode(code) || strings.Contains(strings.ToLower(message), "reasoning_effort_above_ceiling") {
 					return false
 				}
@@ -296,7 +302,10 @@ func ChatRejectsNoEffortValue(raw []byte) bool {
 				return chatNoEffortValueMessage(message, param)
 			}
 			var message string
-			return json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
+			return !chatReasoningCeilingCode(topCode) && json.Unmarshal(envelope.Error, &message) == nil && chatNoEffortValueMessage(message, "")
+		}
+		if chatReasoningCeilingCode(topCode) {
+			return false
 		}
 		if envelope.Message != "" {
 			return chatNoEffortValueMessage(envelope.Message, "")

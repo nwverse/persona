@@ -144,6 +144,7 @@ func TestChatRejectsReasoningEffort(t *testing.T) {
 		{"malformed code preserves field rejection", `{"error":{"code":{"bad":true},"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
 		{"top-level unknown field code allows fallback", `{"code":"unknown_parameter","error":{"message":"Unsupported parameter: 'reasoning_effort'"}}`, true},
 		{"top-level ceiling code vetoes fallback", `{"code":"reasoning_effort_above_ceiling","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
+		{"nested field code beats top-level ceiling", `{"code":"reasoning_effort_above_ceiling","error":{"code":"unsupported_parameter","message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
 		{"top-level unsupported value code vetoes fallback", `{"code":"unsupported_value","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"top-level invalid value code vetoes fallback", `{"code":"invalid_value","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"parameter named by param", `{"error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, true},
@@ -181,6 +182,7 @@ func TestChatRejectsNoEffortValue(t *testing.T) {
 		{"malformed code preserves off fallback", `{"error":{"code":{"bad":true},"message":"unsupported reasoning_effort \"none\""}}`, true},
 		{"policy code vetoes off fallback", `{"error":{"code":"reasoning_effort_above_ceiling","message":"unsupported reasoning_effort \"none\""}}`, false},
 		{"top-level policy code vetoes off fallback", `{"code":"reasoning_effort_above_ceiling","error":{"message":"unsupported reasoning_effort \"none\""}}`, false},
+		{"nested off-value code beats top-level policy", `{"code":"reasoning_effort_above_ceiling","error":{"code":"unsupported_value","message":"unsupported reasoning_effort \"none\""}}`, true},
 		{"different named level without field association", `{"error":{"message":"unsupported reasoning_effort \"high\""}}`, false},
 		{"ceiling still wins", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, false},
 		{"ceiling message wins over a value code", `{"error":{"code":"unsupported_value","message":"reasoning_effort_above_ceiling","param":"reasoning_effort"}}`, false},
@@ -243,6 +245,7 @@ func TestChatCompletionsReasoningEffortRetry(t *testing.T) {
 		{"ceiling rejected", `{"error":{"code":"reasoning_effort_above_ceiling","message":"reasoning_effort high exceeds the ceiling"}}`, 1, 1, false, 0},
 		{"ceiling code with generic message", `{"error":{"code":"reasoning_effort_above_ceiling","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
 		{"top-level ceiling code with generic message", `{"code":"reasoning_effort_above_ceiling","error":{"message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 1, false, 0},
+		{"nested field code overrides top-level ceiling", `{"code":"reasoning_effort_above_ceiling","error":{"code":"unsupported_parameter","message":"Unsupported parameter","param":"reasoning_effort"}}`, 1, 2, true, 1},
 		{"another parameter rejected", `{"error":{"message":"Unsupported parameter: max_tokens","param":"max_tokens","details":{"reasoning_effort":"high"}}}`, 1, 1, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

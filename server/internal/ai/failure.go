@@ -71,7 +71,8 @@ func streamFailureError(event, code, msg string) error {
 
 var (
 	modelFailureWords       = lazyre.New(`(?i)model[^\n]{0,80}(not.{0,4}(found|exist)|does not exist|invalid|unknown|unsupported)|model_not_found|invalid model|unknown model|knows no model`)
-	modelAccessFailureWords = lazyre.New(`(?i)(?:selected )?model is (?:unavailable|not available) to this API key`)
+	modelAccessFailureWords = lazyre.New(`(?i)model(?: [a-z0-9_.:/-]+)? is (?:unavailable|not available) to this (?:api )?key`)
+	modelOverloadWords      = lazyre.New(`(?i)model service (?:is )?unavailable`)
 	contextFailureWords     = lazyre.New(`(?i)prompt is too long|maximum (?:context|prompt) length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded`)
 )
 
@@ -113,7 +114,7 @@ func failureKindFor(status int, code, message, typ string) FailureKind {
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return FailureOther
 	}
-	if modelFailureWords.MatchString(message) || modelAccessFailureWords.MatchString(message) {
+	if modelFailureWords.MatchString(message) || modelAccessFailureWords.MatchString(message) && !modelOverloadWords.MatchString(message) {
 		return FailureModelUnavailable
 	}
 	if contextFailureWords.MatchString(message) {
