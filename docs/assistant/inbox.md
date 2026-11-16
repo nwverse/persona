@@ -813,7 +813,8 @@ Who it serves: everyone using the Inbox on the Assistant side; it adds no settin
 - **Inside a choice** the section's title stays as a heading with its actions (FYI's Mark All Seen, Done's Jump To and Fold All /
   Unfold All) and does not fold, as Working's title already behaves. Done reads its history (day counts, groups, Show Older) while
   Done is shown.
-- **Grouping**: By source / By time is the bar's trailing grouping menu, as on the Agents list (#7033), not a row of its own.
+- **Grouping**: By source / By time is the bar's trailing grouping menu, as on the Agents list (#7033), not a row of its own. It is
+  hidden while In progress or Done is chosen: neither is grouped by source or time.
 - **Search** looks through the whole Inbox: text in the field shows All, the counts say where the matches are, a choice narrows them,
   and clearing the field returns to the choice you had. Source and kind filters narrow whatever is shown, and the counts follow them.
 - **Empty**: All caught up only when nothing is open anywhere. A chosen section with nothing in it says so in its own words
