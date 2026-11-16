@@ -50,6 +50,7 @@ nonisolated struct NativeContinuitySnapshot: Sendable {
 nonisolated struct NativeContinuityObservation: Sendable {
     let snapshot: NativeContinuitySnapshot
     let native: NativeContinuityResult
+    let gap: ChatStore.Gap?
 }
 
 /// This is deliberately the native method boundary, not a second reducer. The same input reaches the current
@@ -77,12 +78,18 @@ extension ChatStore: ChatContinuityAdapting {
     }
     #endif
 
-    private func shadow(_ input: NativeContinuityInput) {
+    private func shadow(_ input: NativeContinuityInput, gap: ChatStore.Gap? = nil) {
         guard continuityShadowEnabled else { return }
         let snapshot = initialContinuitySnapshot
         let result = nativeResult()
         initialContinuitySnapshot = nativeSnapshot()
-        Self.shadowHook?(self, input, .init(snapshot: snapshot, native: result))
+        Self.shadowHook?(self, input, .init(snapshot: snapshot, native: result, gap: gap))
+    }
+
+    private func mergeForAdapter(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
+        initialContinuitySnapshot = nativeSnapshot()
+        merge(new, backlog: backlog, hasMore: hasMore)
+        initialContinuitySnapshot = nativeSnapshot()
     }
 
     func apply(_ input: NativeContinuityInput) -> ChatStore.Gap? {
@@ -90,11 +97,11 @@ extension ChatStore: ChatContinuityAdapting {
         case .latest, .pushed:
             let gap = applyNative(input.items, span: input.span, backlog: input.backlog,
                                   hasMore: input.hasMore, moreAfter: input.moreAfter)
-            shadow(input)
+            shadow(input, gap: gap)
             return gap
         case .after:
             let gap = applyNative(input.items, span: input.span, moreAfter: input.moreAfter)
-            shadow(input)
+            shadow(input, gap: gap)
             return gap
         case .reloaded:
             replaceNative(with: input.items, hasMore: input.hasMore ?? false, span: input.span)

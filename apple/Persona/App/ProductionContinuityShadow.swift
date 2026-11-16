@@ -52,6 +52,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private let effects = Effects()
     private var client: PersonaCoreClient?
     private var chats: [UInt: Chat] = [:]
+    private var requestLog: [UInt: [String]] = [:]
+    private var generations: [UInt: UInt] = [:]
+    private var nextGeneration: UInt = 1
     private var reportSink: @Sendable (Report) -> Void
     private var mismatches = 0
 
@@ -64,7 +67,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         guard UserDefaults.standard.object(forKey: "showContinuityShadow") as? Bool ?? true else { return }
         #endif
         ChatStore.installContinuityShadowForTests { [weak self] store, input, observation in
-            self?.accept(input, into: store, snapshot: observation.snapshot, native: observation.native, gap: nil)
+            self?.accept(input, into: store, snapshot: observation.snapshot, native: observation.native, gap: observation.gap)
         }
     }
 
@@ -75,20 +78,38 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     @MainActor func accept(_ input: NativeContinuityInput, into store: ChatStore, snapshot: NativeContinuitySnapshot,
                 native: NativeContinuityResult, gap: ChatStore.Gap?) {
-        let id = UInt(bitPattern: ObjectIdentifier(store))
+        let id = generation(for: store)
         let value = Input(snapshot: snapshot, value: input, native: native, gap: gap, fold: input.fold)
         // Encoding copies the immutable items before the next native mutation, but never runs on the caller.
         enqueue { [weak self] in self?.process(id, input: value) }
+    }
+
+    private func generation(for store: ChatStore) -> UInt {
+        let pointer = UInt(bitPattern: ObjectIdentifier(store))
+        if let existing = generations[pointer] { return existing }
+        let id = nextGeneration
+        nextGeneration += 1
+        generations[pointer] = id
+        return id
     }
 
     private func start(_ id: UInt, snapshot: NativeContinuitySnapshot) throws {
         guard chats[id] == nil else { return }
         chats[id] = Chat()
         try core().dispatch(.openChat(chat: chatID(id), snapshot: Self.snapshot(snapshot)))
+        try core().flush()
+        try applyInitialSnapshot(id, input: Input(snapshot: snapshot, value: .event(.reconnected), native: .init(
+            items: snapshot.items, covered: snapshot.covered, history: snapshot.history,
+            hasMore: snapshot.hasMore, loadedOnce: snapshot.loadedOnce), gap: nil, fold: nil))
+    }
+
+    @MainActor func noteNativeRequest(_ kind: String, store: ChatStore) {
+        let id = generation(for: store)
+        requestLog[id, default: []].append(kind)
     }
 
     @MainActor func loadOlder(_ store: ChatStore) {
-        let id = UInt(bitPattern: ObjectIdentifier(store))
+        let id = generation(for: store)
         let snapshot = store.nativeSnapshot()
         enqueue { [weak self] in
             guard let self else { return }
@@ -98,13 +119,12 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
                     try self.core().dispatch(.openChat(chat: self.chatID(id), snapshot: Self.snapshot(snapshot)))
                 }
                 try self.core().dispatch(.chat(chat: self.chatID(id), event: .loadOlder))
-                try self.core().flush()
             } catch { self.fail(id, rule: "older-request", shape: "kind=loadOlder items=0") }
         }
     }
 
     @MainActor func failed(_ kind: NativeContinuityInput.Kind, in store: ChatStore, fold: Item? = nil) {
-        let id = UInt(bitPattern: ObjectIdentifier(store))
+        let id = generation(for: store)
         let snapshot = store.nativeSnapshot()
         let event: ChatEvent = switch kind {
         case .fillFailed: .fillFailed
@@ -116,22 +136,22 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             do {
                 try self.start(id, snapshot: snapshot)
                 try self.core().dispatch(.chat(chat: self.chatID(id), event: event))
-                try self.core().flush()
             } catch { self.fail(id, rule: "failed-input", shape: "kind=\(kind.rawValue) items=0") }
         }
     }
     @MainActor func close(_ store: ChatStore) {
-        let id = UInt(bitPattern: ObjectIdentifier(store))
+        let id = generation(for: store)
         enqueue { [weak self] in self?.removeChat(id) }
     }
 
     func compare(_ store: ChatStore) async throws -> (compared: Int, mismatches: Int) {
-        let id = UInt(bitPattern: ObjectIdentifier(store))
+        let id = generation(for: store)
         return try await withCheckedThrowingContinuation { resume in
             enqueue { [weak self] in
                 guard let self else { resume.resume(throwing: PersonaCoreError.closed); return }
                 do {
                     try self.core().flush()
+                    self.drainChanged(id)
                     resume.resume(returning: (self.chats[id]?.compared ?? 0, self.chats[id]?.mismatches ?? 0))
                 } catch {
                     self.fail(id, rule: "core-flush", shape: "kind=test-barrier items=0")
@@ -146,27 +166,36 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private func process(_ id: UInt, input: Input) {
         do {
             if chats[id] == nil {
-                chats[id] = Chat()
-                try core().dispatch(.openChat(chat: chatID(id), snapshot: Self.snapshot(input.snapshot)))
+                try start(id, snapshot: input.snapshot)
             }
-            if input.value.kind == .openFold, let fold = input.fold {
-                try core().dispatch(.chat(chat: chatID(id), event: .openFold(fold_id: fold.id)))
-            } else if input.value.kind != .loadOlder {
-                try core().dispatch(try Self.action(id, input: input))
-            }
-            // Tests must never do this on the main actor. The private background queue preserves the exact input /
-            // patch pairing without letting the native UI wait for Rust; production calls return before this work.
-            try core().flush()
-            // One input has exactly one drain. Scheduling-only inputs must not erase a pending patch's state.
+            // Dispatch is cheap on the caller. This queue waits only for the current input's core action, never
+            // the main actor. A stalled core disables this chat's shadow rather than holding five seconds of work.
+            try core().dispatch(try Self.action(id, input: input))
+            try core().flush(timeoutMilliseconds: 16)
             try compareQueued(id, input: input, shape: Self.shape(input.value))
         } catch {
             fail(id, rule: "core-input", shape: Self.shape(input.value))
         }
     }
 
+    private func applyInitialSnapshot(_ id: UInt, input: Input) throws {
+        let patch = try core().drain(chat: chatID(id))
+        guard var chat = chats[id] else { return }
+        try Self.apply(patch, to: &chat)
+        chats[id] = chat
+        if chat.items != input.snapshot.items || patch.covered != input.snapshot.covered
+            || patch.history != input.snapshot.history || (patch.hasMore ?? false) != input.snapshot.hasMore
+            || patch.loadedOnce != input.snapshot.loadedOnce {
+            report(id, rule: "initial-snapshot", shape: "kind=snapshot items=\(input.snapshot.items.count)")
+        }
+    }
+
     private func core() throws -> PersonaCoreClient {
         if let client { return client }
-        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(run: { [effects] effect in
+        let client = try PersonaCoreClient(config: Config(), callbacks: PersonaCoreCallbacks(changedChat: { [weak self] chat, _ in
+            guard let id = Self.identifier(chat) else { return }
+            self?.enqueue { [weak self] in self?.drainChanged(id) }
+        }, run: { [effects] effect in
             guard case .fetch(let chat, _) = effect, let id = Self.identifier(chat) else {
                 effects.values.withLock { $0.append(.init(id: nil, effect: effect)) }
                 return
@@ -177,8 +206,15 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         return client
     }
 
+    private func drainChanged(_ id: UInt) {
+        // A changed wake is informative only: process already applies each input's patch in order on this queue.
+    }
+
     private func compareQueued(_ id: UInt, input: Input? = nil, shape: String) throws {
         guard var chat = chats[id], !chat.failed else { return }
+        if let kind = input?.value.kind, kind == .older || kind == .openFold || kind == .reconnected {
+            requestLog[id] = []
+        }
         let patch = try core().drain(chat: chatID(id))
         if input != nil, patch.version == 0, !patch.ops.isEmpty {
             report(id, rule: "patch-state", shape: shape)
@@ -204,6 +240,21 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
                     report(id, rule: "reload-request", shape: shape)
                 }
             default: break
+            }
+            if input.value.kind == .older,
+               !requestLog[id, default: []].contains("older"),
+               !effects.values.withLock({ $0.contains { $0.id == id && Self.isOlder($0.effect) } }) {
+                report(id, rule: "older-request", shape: shape)
+            }
+            if input.value.kind == .reconnected,
+               !requestLog[id, default: []].contains("reconnected"),
+               !effects.values.withLock({ $0.contains { $0.id == id && Self.isSubscribe($0.effect) } }) {
+                report(id, rule: "reconnect-request", shape: shape)
+            }
+            if input.value.kind == .openFold,
+               !requestLog[id, default: []].contains("fold"),
+               !effects.values.withLock({ $0.contains { $0.id == id && Self.isRange($0.effect) } }) {
+                report(id, rule: "fold-request", shape: shape)
             }
         }
         let pending = effects.values.withLock { current in
@@ -240,6 +291,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     }
 
     private func removeChat(_ id: UInt) {
+        generations = generations.filter { $0.value != id }
         guard chats.removeValue(forKey: id) != nil else { return }
         do { try core().dispatch(.closeChat(chat: chatID(id))) }
         catch { fail(id, rule: "core-close", shape: "kind=close items=0") }
@@ -271,6 +323,21 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private static func isLatest(_ effect: Effect) -> Bool {
         if case .fetch(_, .fetchLatest) = effect { return true }
+        return false
+    }
+
+    private static func isOlder(_ effect: Effect) -> Bool {
+        if case .fetch(_, .fetchOlder) = effect { return true }
+        return false
+    }
+
+    private static func isSubscribe(_ effect: Effect) -> Bool {
+        if case .fetch(_, .subscribe) = effect { return true }
+        return false
+    }
+
+    private static func isRange(_ effect: Effect) -> Bool {
+        if case .fetch(_, .fetchRange) = effect { return true }
         return false
     }
 
@@ -306,9 +373,10 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         case .range:
             event = .range(fold_id: input.fold?.id, items_json: try encode(input.value.items), more: input.value.rangeMore)
         case .reconnected: event = .reconnected
-        case .openFold, .loadOlder:
-            // These two cases never reach action(): process dispatches only their scheduling request.
-            return .ack(chat: String(id, radix: 16), seq: 1)
+        case .openFold:
+            event = .openFold(fold_id: input.fold?.id ?? "")
+        case .loadOlder:
+            event = .loadOlder
         case .fillFailed: event = .fillFailed
         case .olderFailed: event = .olderFailed
         case .rangeFailed: event = .rangeFailed(fold_id: input.fold?.id)

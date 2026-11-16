@@ -445,6 +445,7 @@ impl Worker {
                 let mut patches = lock(&self.shared.patches);
                 patches.chats.remove(&chat);
                 patches.woken.remove(&chat);
+                patches.drained.remove(&chat);
             }
             Action::Chat { chat, event } => {
                 let Some(state) = self.chats.get_mut(&chat) else {

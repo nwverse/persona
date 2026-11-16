@@ -59,7 +59,7 @@ class PerfTestCase: XCTestCase {
         }
         app = XCUIApplication()
         let shadow = ProcessInfo.processInfo.environment["PERSONA_CONTINUITY_SHADOW"] == "1"
-        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES"] + (shadow ? ["-showContinuityShadow", "YES"] : []) + args
+        app.launchArguments = ["-pairURL", pair, "-showFrameProbe", "YES", "-showContinuityShadow", shadow ? "YES" : "NO"] + args
         app.launchPinned()
         allowNotifications()
         acceptIconAlert()

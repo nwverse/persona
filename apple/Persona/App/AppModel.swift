@@ -2092,16 +2092,7 @@ final class AppModel {
     /// Applies a background catch-up through the same production adapter as a push; this is an after page, not a
     /// duplicate core fill (the core already requested that page when the push exposed its gap).
     func applyPrefetch(_ store: ChatStore, items: [Item], span: ItemSpan, moreAfter: Bool) -> ChatStore.Gap {
-        #if DEBUG
-        let retained = store.items.filter { item in
-            let to = span.to ?? Int.max
-            return item.seq > to && (span.history == nil || span.history == store.history)
-        }
-        _ = store.apply(.batch(.reloaded, items: items + retained, span: span, hasMore: store.hasMore))
-        return applyBatch(store, kind: .after, items: items, span: span, moreAfter: moreAfter)
-        #else
-        return store.apply(items, span: span, moreAfter: moreAfter)
-        #endif
+        applyBatch(store, kind: .after, items: items, span: span, moreAfter: moreAfter)
     }
 
     func loadInitial(_ key: SessionKey) async {
@@ -2131,11 +2122,11 @@ final class AppModel {
 
     /// Fetches what comes after the chat's `covered`, page by page, until it is whole; past 8 pages it starts over from
     /// the latest page instead.
-    func fill(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil, isPrefetch: Bool = false) async {
+    func fill(_ key: SessionKey, shouldApply: (@MainActor () -> Bool)? = nil) async {
         guard shouldApply?() ?? true, let api = api(key.group), !filling.contains(key) else { return }
         filling.insert(key)
         let store = chat(key)
-        var received = isPrefetch
+        var received = false
         defer {
             filling.remove(key)
             #if DEBUG
@@ -2144,8 +2135,12 @@ final class AppModel {
         }
         for _ in 0..<8 {
             guard shouldApply?() ?? true else { return }
-            guard let r = try? await api.items(key, afterSeq: store.covered) else { return }
-            received = true
+            let response = try? await api.items(key, afterSeq: store.covered)
+            guard shouldApply?() ?? true else { return }
+            guard let r = response else {
+                received = true
+                return
+            }
             guard shouldApply?() ?? true else { return }
             switch applyBatch(store, kind: .after, items: r.items, span: r.span, moreAfter: r.moreAfter == true) {
             case .none: return
@@ -2181,6 +2176,9 @@ final class AppModel {
             return
         }
         let task = Task { try await api.foldedWork(key, fold) }
+        #if DEBUG
+        ProductionContinuityShadow.shared.noteNativeRequest("fold", store: chat(key))
+        #endif
         // The transport helper returns the concatenated pages. One range event applies the same complete work to
         // both implementations, so a final empty page cannot erase the previous page in the mirror.
         #if DEBUG
@@ -2207,6 +2205,7 @@ final class AppModel {
         guard let api = api(key.group), store.hasMore, !store.isLoadingOlder, let first = store.items.first else { return false }
         store.isLoadingOlder = true
         #if DEBUG
+        ProductionContinuityShadow.shared.noteNativeRequest("older", store: store)
         ProductionContinuityShadow.shared.loadOlder(store)
         #endif
         defer { store.isLoadingOlder = false }
@@ -2263,6 +2262,10 @@ final class AppModel {
         // resumed (an empty catch-up only lets the outbox go).
         connection.startCatchUp(group, plan.refetch ? [Self.interactionsPart(group)] + mine.map(Self.catchUpPart) : [])
         for key in mine {
+            #if DEBUG
+            ProductionContinuityShadow.shared.noteNativeRequest("reconnected", store: chat(key))
+            _ = chat(key).apply(.event(.reconnected))
+            #endif
             deltas.drop(key)
             // A delta that cleared it may have been lost with the old socket. A resumed hub sends the current one
             // right after the catch-up, so the answer goes on being written instead of blanking for a moment.

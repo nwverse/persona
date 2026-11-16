@@ -43,7 +43,7 @@ struct ProductionContinuityShadowTests {
                        history: "h", covered: 3, in: folder)
         let store = ChatStore(key: key, cacheFolder: folder)
         let folds = store.items.filter { $0.kind == .fold }
-        _ = store.apply(.batch(.latest, items: [], span: ItemSpan(history: "h", to: 3), backlog: true, hasMore: true))
+        _ = store.apply(.batch(.latest, items: store.items, span: ItemSpan(history: "h", to: 3), backlog: true, hasMore: true))
         _ = store.apply(.event(.openFold, fold: folds[0]))
         _ = store.apply(.event(.openFold, fold: folds[1]))
         _ = store.apply(.range([item(5, kind: .toolUse), item(6, kind: .toolResult)], fold: folds[1], more: false))

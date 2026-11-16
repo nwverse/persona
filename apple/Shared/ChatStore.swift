@@ -607,12 +607,12 @@ final class ChatStore {
         }
         if let h = span.history { history = h }
         guard let to = span.to else {
-            merge(new, backlog: backlog, hasMore: hasMore)
+            mergeNative(new, backlog: backlog, hasMore: hasMore)
             covered = max(covered, lastSeq)
             return moreAfter ? .reload : .none
         }
         if let from = span.from {
-            merge(new, backlog: backlog, hasMore: hasMore)
+            mergeNative(new, backlog: backlog, hasMore: hasMore)
             // No baseline yet: the backlog from the end sets one. A batch from line 0 (a new session watched from its
             // first line) is its own baseline: without it, holes after it went unnoticed. If the backlog already came
             // and set none (the transcript did not exist yet) and the first lines' push was lost, only the latest
@@ -649,6 +649,14 @@ final class ChatStore {
     }
 
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
+        // Legacy merges keep the native reducer and the shadow's previous snapshot in lockstep. Production adapter
+        // inputs arrive through applyNative; this path only prevents direct native callers from creating a stale base.
+        initialContinuitySnapshot = nativeSnapshot()
+        mergeNative(new, backlog: backlog, hasMore: hasMore)
+        initialContinuitySnapshot = nativeSnapshot()
+    }
+
+    private func mergeNative(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         let new = new.publicRefusals()
         if backlog || !new.isEmpty { error = nil } // data arrived: a stale "machine is offline" no longer applies
         // A replayed disk cache can hold an id twice. Keep the newest copy before indexing, but only after collecting
@@ -794,7 +802,7 @@ final class ChatStore {
         ids.remove(fold.id)
         opened[fold.id] = retained // the caller may hold an older copy without the latest promotion
         settled = nil
-        merge(work.filter { $0.kind != .fold })
+        mergeNative(work.filter { $0.kind != .fold })
         scheduleRebuild()
     }
 
@@ -1103,8 +1111,8 @@ final class ChatStore {
         newestFrom = latest.first.map { ($0.seq, $0.part) }
         self.hasMore = hasMore
         if let h = span.history { history = h }
-        merge(latest)
-        merge(keep)
+        mergeNative(latest)
+        mergeNative(keep)
         covered = span.to ?? lastSeq
         scheduleRebuild() // also when the page is empty
     }
@@ -1137,7 +1145,7 @@ final class ChatStore {
 
     func prependNative(_ older: [Item], hasMore: Bool) {
         self.hasMore = hasMore
-        merge(older)
+        mergeNative(older)
     }
 
     /// Live preview: the lines Claude is currently printing, cut above the input box.
