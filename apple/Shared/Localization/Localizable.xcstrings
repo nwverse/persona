@@ -3999,7 +3999,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$@ 的设置"
+            "value" : "%1$@的设置"
           }
         },
         "ja" : {
