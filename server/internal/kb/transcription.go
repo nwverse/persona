@@ -217,6 +217,9 @@ type MeetingTranscription struct {
 	// FinalAt is when the state became final or failed (set then when the manager did not).
 	FinalAt    time.Time `json:"final_at,omitzero"`
 	FinalTries int       `json:"final_tries,omitempty"`
+	// FinalUnreachable counts the final pass's tries that never reached the upstream (upstream_unavailable, nothing
+	// billed): they are tried again on their own, longer schedule (the manager's finalUnreachableRetries).
+	FinalUnreachable int `json:"final_unreachable,omitempty"`
 	// Gaps are the spans of the recording the hub holds no audio for (GapsIn), kept up to date by the audio writes
 	// until the final pass starts and frozen from then on: the final pass's, which stay once the audio is gone.
 	Gaps         [][2]float64 `json:"gaps,omitempty"`

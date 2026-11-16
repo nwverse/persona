@@ -633,15 +633,19 @@ Phase 3 lands in several PRs.
     recognition prevents inline repair there. Math end (#9395) independently replays all six explicit Apple math
     assertions and 57 source-derived display/inline/math-boundary controls through real Kotlin/JNI, including
     `MathMarkdown.display`'s extended-grapheme predicate, open/closed blocks, code spans, money, CJK prose and
-    trailing indentation. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
+    trailing indentation. Plain-open-fence projection (#9515) adds all five explicit Apple assertions and 31
+    source-derived scanner, indentation, whitespace, Unicode, drawn-predicate and closed/open-fence controls through a
+    separate real Kotlin/JNI entry point. Its caller supplies the complete drawn-info-string list as input, replacing
+    Apple's `drawn` closure; no renderer is called. Existing repaired/end behavior and the C ABI/ArkTS repair corpus are
+    unchanged. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
     projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus
     the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 39
     table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
     `repaired` and extra-field expectations; they do not replay the complete inline, math or mixed-reply corpora. The
     NAPI export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift
-    check. `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and the #4044
-    performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host evidence; real
-    NAPI / SwiftPM projection is not yet covered.
+    check. `MathMarkdown.rewrite`, visual gaps, timing, rendering, the plain-fence C ABI/ArkTS/SwiftPM projections,
+    production adapters and the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI
+    and ArkTS host evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
