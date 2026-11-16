@@ -141,8 +141,21 @@ final class MeetingLiveViewUITests: XCTestCase {
         app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant", "-openShellPage", "recordings", "-openChatsFresh", "YES",
                                "-showMeetingSample", "room-taking-part"]
         app.launchPinned()
+        clearLaunchAlerts()
         XCTAssertTrue(element(app, "meeting-thread-header").waitForExistence(timeout: 20), "no meeting page:\n\(app.debugDescription)")
         return app
+    }
+
+    /// A new install's launch alerts (#9348): notifications are allowed, and the icon-change alert's only button closes it.
+    /// Left up, either one eats the Home press, and no Live Activity reaches the Lock Screen. Up to two, whichever first.
+    @MainActor private func clearLaunchAlerts() {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        for _ in 0..<2 {
+            guard alert.waitForExistence(timeout: 3) else { return }
+            let allow = alert.buttons.matching(NSPredicate(format: "label IN %@", ["Allow", "允许"])).firstMatch
+            if allow.exists { allow.tap() } else { alert.buttons.firstMatch.tap() }
+            sleep(1)
+        }
     }
 
     /// One of the meeting room's pages, by its tab (#8731 B1: live, highlights, map).
