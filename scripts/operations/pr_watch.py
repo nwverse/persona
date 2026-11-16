@@ -108,6 +108,16 @@ class State:
             item = self.data["prs"].get(repo + "#" + str(number), {})
             return json.loads(json.dumps(item))
 
+    def annotate(self, repo, number, **fields):
+        """Persist lifecycle metadata without invalidating exact-head evidence."""
+        key = repo + "#" + str(number)
+        with self.lock:
+            item = self.data["prs"].setdefault(key, {})
+            item.update(fields)
+            item["updated_at"] = int(time.time())
+            atomic_json(self.path, self.data)
+            return dict(item)
+
     def put(self, repo, number, head, **fields):
         key = repo + "#" + str(number)
         with self.lock:
@@ -803,8 +813,8 @@ class Watcher:
             # GitHub has no built-in `stale` label in every repository. A
             # missing label is a failed marker, not permission to close silently.
             raise WatchError("could not mark the long-inactive PR: " + bounded(result.stderr, 1000))
-        self.state.put(repo, number, pr["headRefOid"], last_progress_at=last_progress,
-                       stale_marked_at=int(time.time()))
+        self.state.annotate(repo, number, last_progress_at=last_progress,
+                            stale_marked_at=int(time.time()))
         self.comment(repo, number, reason)
         latest = pr_snapshot(repo, number)
         if latest["state"] != "OPEN" or latest["isDraft"]:
@@ -814,9 +824,9 @@ class Watcher:
         # commits still reset the interval. `old` is the pre-mark snapshot, so
         # the marker write cannot make its own timestamp look like new work.
         if progress > last_progress + 1:
-            self.state.put(repo, number, pr["headRefOid"], outcome="stale_close_pending",
-                           last_progress_at=last_progress, stale_activity_at=progress,
-                           failure="New substantive activity arrived while the stale notice was published; the PR stays open.")
+            self.state.annotate(repo, number, outcome="stale_close_pending",
+                                last_progress_at=last_progress, stale_activity_at=progress,
+                                failure="New substantive activity arrived while the stale notice was published; the PR stays open.")
             return False
         result = run(["gh", "pr", "close", str(number), "--repo", repo,
                       "--comment", "Closing after the stale notice above: no substantive progress for more than seven days."],
@@ -826,9 +836,9 @@ class Watcher:
         closed = pr_snapshot(repo, number)
         if closed["state"] != "CLOSED":
             raise WatchError("stale-PR close did not reach CLOSED; no stale terminal state was saved")
-        self.state.put(repo, number, pr["headRefOid"], outcome="stale_closed",
-                       last_progress_at=last_progress, stale_closed_at=int(time.time()),
-                       failure=None)
+        self.state.annotate(repo, number, outcome="stale_closed",
+                            last_progress_at=last_progress, stale_closed_at=int(time.time()),
+                            failure=None)
         self.log("%s#%s closed after %d days without substantive progress" % (repo, number, age))
         self.notify(config, number, pr["headRefOid"], "stale_closed")
         return True
@@ -852,8 +862,8 @@ class Watcher:
         except WatchError as error:
             # Marking, commenting and closing are independent GitHub writes.
             # A partial notice never proves that the PR was actually closed.
-            self.state.put(repo, number, head, outcome="stale_close_pending",
-                           failure=str(error), stale_close_attempts=int(old.get("stale_close_attempts", 0)) + 1)
+            self.state.annotate(repo, number, outcome="stale_close_pending",
+                                failure=str(error), stale_close_attempts=int(old.get("stale_close_attempts", 0)) + 1)
             self.log("%s#%s stale-PR cleanup failed; no merge was attempted: %s" % (
                 repo, number, bounded(error, 500)))
             return

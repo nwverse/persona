@@ -75,6 +75,33 @@ class WatcherTests(unittest.TestCase):
         self.activity.start()
         self.addCleanup(self.activity.stop)
 
+    def test_stale_metadata_does_not_erase_completed_exact_head_evidence(self):
+        old_base = "d" * 40
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + old_base + ".." + SHA_A,
+                               base=old_base, format=1, outcome="passed_with_findings",
+                               semantic="passed", verification="passed", findings=[finding],
+                               repair_rounds=2, review_posted=True, success_posted=True)
+        before = self.watcher.state.get("example/one", 7)
+        self.watcher.state.annotate("example/one", 7, stale_marked_at=123, outcome="stale_close_pending")
+        self.watcher.state.annotate("example/one", 7, outcome="stale_closed")
+        after = self.watcher.state.get("example/one", 7)
+        self.assertEqual(after["evidence_key"], before["evidence_key"])
+        self.assertEqual(after["verification"], "passed")
+        self.assertEqual(after["findings"], [finding])
+        self.assertEqual(after["repair_rounds"], 2)
+
+    def test_snapshot_falls_back_to_current_base_when_gh_omits_base_oid(self):
+        fields = pr()
+        fields.pop("baseRefOid")
+        with patch.object(pr_watch_common, "gh_json", return_value=fields) as snapshot, \
+                patch.object(pr_watch_common, "checked", return_value=SHA_BASE + "\n") as base:
+            result = pr_watch_common.pr_snapshot("example/one", 7)
+        self.assertEqual(result["baseRefOid"], SHA_BASE)
+        self.assertIn("baseRefOid", snapshot.call_args.args[0][-1])
+        self.assertIn("commits/main", base.call_args.args[0][2])
+
     def test_stale_pr_is_marked_explained_then_closed_without_merging(self):
         self.watcher.config["repositories"][0]["close_stale"] = True
         self.watcher.repositories["example/one"]["close_stale"] = True
@@ -151,17 +178,24 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(activity, old)
 
     def test_recent_pr_activity_prevents_stale_close(self):
-        self.github_pr = pr()
-        with patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(self.github_pr)), \
-                patch.object(pr_watch.time, "time", return_value=time.mktime(time.strptime("2026-11-15T00:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))), \
+        self.github_pr = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-14T00:00:00Z")
+        self.watcher.repositories["example/one"]["close_stale"] = True
+        recent = pr_watch_common.github_time("2026-11-14T00:00:00Z")
+        snapshot = dict(self.github_pr)
+        with patch.object(pr_watch, "pr_snapshot", return_value=snapshot), \
+                patch.object(pr_watch.time, "time", return_value=pr_watch_common.github_time("2026-11-15T00:00:00Z")), \
+                patch.object(self.watcher, "stale_progress_at", return_value=recent) as activity, \
+                patch.object(pr_watch, "run") as mutations, \
+                patch.object(self.watcher, "success_review", return_value=None), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
                 patch.object(pr_watch, "verify", return_value=[]), \
-                patch.object(self.watcher, "merge", return_value=False) as merge, \
                 patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
             self.watcher.process("example/one", 7)
         self.assertFalse(any("seven days" in body for body in self.comments))
         self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
-        merge.assert_called_once()
+        activity.assert_called_once()
+        self.assertFalse(any(call.args[0][1:3] in (["pr", "close"], ["pr", "edit"])
+                             for call in mutations.call_args_list))
 
     def test_failed_stale_comment_never_closes(self):
         old = time.time() - 8 * 86400
@@ -918,7 +952,11 @@ class WatcherTests(unittest.TestCase):
         merge.assert_called_once()
 
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
-        with self.assertRaises(pr_watch_common.WatchError):
+        (self.root / "config.json").write_text(json.dumps({
+            "repositories": [{"name": "example/one", "checkout": str(self.root / "checkout"),
+                              "verify": {"commands": [["true"]]}}],
+            "state": str(self.root / "state.json")}))
+        with self.assertRaisesRegex(pr_watch_common.WatchError, "exclusive offline"):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])
 
     def test_migration_publishes_an_old_exhaustion_reason_before_allowing_another_round(self):

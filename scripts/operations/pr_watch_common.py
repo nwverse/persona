@@ -18,7 +18,7 @@ PR_FIELDS = (
     "number,title,body,state,isDraft,headRefOid,headRefName,baseRefName,"
     "baseRefOid,isCrossRepository,mergeable,mergeStateStatus,reviewDecision,url,"
     "createdAt,updatedAt"
-).replace("baseRefOid,", "")
+)
 STALE_LABEL = "stale"
 STALE_SECONDS = 7 * 86400
 
