@@ -73,6 +73,8 @@ carries one neutral **Concern** tag next to its title, using the client's existi
 A client whose older hub does not send `kind` keeps its previous behavior.
 
 On the web, the header's Parked count is the number of to-dos in the Parked section (included in open). It contains both explicit holds and ready merge waits (#9325). The `pr_open` rule and PR freshness/precedence are unchanged; only its web display section changes from `pr` to `parked`. Shared fixture expectations retain the legacy `pr` name for the hub and native clients; the web fixture reader maps that label explicitly, preserving the same rules and open total. The conversation tray and All board use this same web classification. A fallback date alone does not move a hold to Other open; an actual wake/review does.
+A pending supervisor review is internal work, not a maintainer wait. If it has been seen but still has a qualifying
+open PR, it stays open under Other open (and Persona reviewing in the tray), not Parked or Done.
 Inactive counts only automatic 48-hour shelving. The Parked section and review badge use the same localized name.
 Apple (`apple/Shared/TodoTriage.swift`) and Android (`TodoTriage.kt` in `android/core/domain`) still need this
 parked rule and naming alignment; #5929 records the parity gap. This web fix does not claim native-client delivery.

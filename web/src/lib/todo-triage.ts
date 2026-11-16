@@ -171,7 +171,10 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   // a parked hold is its supervisor's reading of the latest turn: an agent session left unread does not hide its PR
   // accepted or deployed work is finished whatever its PR facts say: rule 9 never outranks those rules (#7614 review)
   const settled = !concern && (acceptanceStands(todo) || todo.delivery?.state === "live");
-  if (!settled && reviewState(todo) !== "pending_review" && !(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) return at("parked", "pr_open");
+  if (!settled && !(finished && !seen(last) && reviewState(todo) !== "parked") && waitingForMerge(todo, lookup, now)) {
+    // Seeing a supervisor's review does not finish its open PR or turn that internal review into an external wait.
+    return reviewState(todo) === "pending_review" ? at("other", "rest") : at("parked", "pr_open");
+  }
   if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
   // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.

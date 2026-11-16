@@ -83,4 +83,14 @@ describe("Parked grouping", () => {
     expect(entries.running.map((item) => item.key)).toEqual(["task:active"]);
     expect(entries.needsYou.map((item) => item.key)).toEqual(["task:decision"]);
   });
+
+  it("keeps a seen supervisor review open without calling it an external wait", () => {
+    const todo = task("review", { pr_url: url, pr_status: facts, seen_at: "2026-11-16T12:00:00Z",
+      supervision: { supervisor: "main", state: "pending_review" } });
+    expect(triage(todo, lookup, now)).toMatchObject({ section: "other", rule: "rest" });
+    expect(triageTodos([todo], lookup, now).open).toBe(1);
+    const entries = assistantEntries({ conversation: "main", main: "main", todos: [todo], sessions: [worker], interactions: [], plans: {}, feed: [], now });
+    expect(entries.parked).toEqual([]);
+    expect(entries.review).toMatchObject([{ key: "task:review", countsOpen: true }]);
+  });
 });
