@@ -32,7 +32,7 @@ public struct ProjectionFixture {
         var result: [ProjectionFixture] = []
         for document in try fixtures(in: domain) {
             if let operation, document.text("operation") != operation { continue }
-            for item in try required(document["cases"]?.array, "cases") {
+            for item in try require(document["cases"]?.array, "cases") {
                 guard let name = item.text("name"), let input = item["input"], let expected = item["expected"] else {
                     throw ProjectionFixtureError.invalidFixture("name/input/expected in \(domain)")
                 }
