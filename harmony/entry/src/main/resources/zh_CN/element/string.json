@@ -1738,7 +1738,7 @@
     },
     {
       "name": "agent_filter_repository",
-      "value": "仓库"
+      "value": "项目"
     },
     {
       "name": "agent_filter_worktree",
@@ -4611,6 +4611,58 @@
     {
       "name": "interaction_question_cancel",
       "value": "取消问题"
+    },
+    {
+      "name": "agent_group_state",
+      "value": "按状态"
+    },
+    {
+      "name": "agent_group_space",
+      "value": "按项目"
+    },
+    {
+      "name": "agent_group_pinned",
+      "value": "置顶"
+    },
+    {
+      "name": "agent_group_unread",
+      "value": "完成未看"
+    },
+    {
+      "name": "agent_group_awaiting",
+      "value": "待你回复"
+    },
+    {
+      "name": "agent_group_background",
+      "value": "后台等待中"
+    },
+    {
+      "name": "agent_group_waiting",
+      "value": "待唤醒"
+    },
+    {
+      "name": "agent_group_muted",
+      "value": "已屏蔽"
+    },
+    {
+      "name": "agent_group_idle",
+      "value": "已看"
+    },
+    {
+      "name": "agent_group_more_idle",
+      "value": "个空闲"
+    },
+    {
+      "name": "agent_group_quiet_spaces",
+      "value": "空闲的项目"
+    },
+    {
+      "name": "agent_expand",
+      "value": "展开"
+    },
+    {
+      "name": "agent_collapse",
+      "value": "收起"
     }
   ]
 }
