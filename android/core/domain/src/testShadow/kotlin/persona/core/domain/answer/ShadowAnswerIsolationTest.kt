@@ -25,7 +25,7 @@ class ShadowAnswerIsolationTest {
             release.await(30, TimeUnit.SECONDS)
             ""
         }, sink = reports::add)
-        val before = ShadowAnswerDiagnostics.droppedCount
+        val before = shadow.droppedCount
         val accepted = CountDownLatch(1)
         try {
             val expected = KotlinAnswerAdapter().build(twoQuestions, AnswerAction.Advance,
@@ -37,17 +37,16 @@ class ShadowAnswerIsolationTest {
                 shadow.build(twoQuestions, AnswerAction.Advance, AnswerDraft(picks = mapOf("One" to setOf("A"))))
                 shadow.display("A")
             }
-            assertTrue("At most the running job plus 32 queued inputs may be retained", ShadowAnswerDiagnostics.queuedCount <= 32)
-            assertTrue(ShadowAnswerDiagnostics.droppedCount > before)
-            ShadowAnswerDiagnostics.testDrained = { accepted.countDown() }
+            assertTrue("At most the running job plus 32 queued inputs may be retained", shadow.queuedCount <= 32)
+            assertTrue(shadow.droppedCount > before)
+            shadow.testDrained = { accepted.countDown() }
         } finally {
             // A failed assertion must not strand a native test job and poison the shared test worker for later classes.
             release.countDown()
         }
-        ShadowAnswerDiagnostics.awaitIdle()
         assertTrue(accepted.await(30, TimeUnit.SECONDS))
-        ShadowAnswerDiagnostics.testDrained = null
-        assertTrue(ShadowAnswerDiagnostics.queuedCount <= 32)
+        shadow.testDrained = null
+        assertTrue(shadow.queuedCount <= 32)
     }
 
     @Test fun advanceAndSubmitComparePicksAndOtherValuesExactlyWithoutLoggingThem() {
@@ -58,7 +57,7 @@ class ShadowAnswerIsolationTest {
         }, sink = reports::add)
         val result = shadow.build(twoQuestions, AnswerAction.Advance, original)
         assertEquals(KotlinAnswerAdapter().build(twoQuestions, AnswerAction.Advance, original), result)
-        ShadowAnswerDiagnostics.awaitIdle()
+        shadow.awaitIdle()
         assertEquals(setOf("picks", "other-state"), reports.map { it.rule }.toSet())
         reports.forEach {
             val json = JsonCodec.encodeToString(it)
@@ -68,12 +67,21 @@ class ShadowAnswerIsolationTest {
         }
     }
 
-    @Test fun defaultSinkCountsEachMismatchOnce() {
-        val before = ShadowAnswerDiagnostics.mismatchCount
-        val shadow = ShadowAnswerAdapter(displayRust = { """{"text":"different","recommended":false}""" })
+    @Test fun aFailedDisplayCanBeRetriedAndThenDeduplicatedAfterCompletion() {
+        val calls = AtomicInteger()
+        val reports = mutableListOf<AnswerMismatch>()
+        val shadow = ShadowAnswerAdapter(displayRust = {
+            if (calls.incrementAndGet() == 1) "" else """{"text":"different","recommended":false}"""
+        }, sink = reports::add)
         shadow.display("A")
-        ShadowAnswerDiagnostics.awaitIdle()
-        assertEquals(before + 1, ShadowAnswerDiagnostics.mismatchCount)
+        shadow.awaitIdle()
+        assertEquals(listOf("rust-output"), reports.map { it.rule })
+        shadow.display("A")
+        shadow.awaitIdle()
+        assertEquals(2, calls.get())
+        shadow.display("A")
+        shadow.awaitIdle()
+        assertEquals(2, calls.get())
     }
 
     @Test fun repeatedDisplayIsComparedOnceAndStillReturnsKotlin() {
@@ -83,7 +91,7 @@ class ShadowAnswerIsolationTest {
             """{"text":"different","recommended":false}"""
         })
         repeat(100) { assertEquals(OptionDisplay("A", false), shadow.display("A")) }
-        ShadowAnswerDiagnostics.awaitIdle()
+        shadow.awaitIdle()
         assertEquals(1, calls.get())
     }
 }

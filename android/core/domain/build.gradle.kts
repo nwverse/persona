@@ -58,11 +58,18 @@ val shadowTest = tasks.register<Test>("shadowTest") {
     testClassesDirs = shadowTestSource.output.classesDirs
     classpath = shadowTestSource.runtimeClasspath
     useJUnit()
+    maxParallelForks = 1
+    forkEvery = 1
     val repositoryRoot = providers.gradleProperty("personaRepoRoot")        .getOrElse(rootProject.layout.projectDirectory.dir("..").asFile.absolutePath)
     systemProperty("persona.repo.root", repositoryRoot)
-    systemProperty("persona.core.library", System.getenv("CARGO_TARGET_DIR")?.let {
-        File(it, "debug/libpersona_core.so").absolutePath
-    } ?: rootProject.file("../native/app-core/target/debug/libpersona_core.so").absolutePath)
+    val hostLibrary = rootProject.layout.projectDirectory.dir("../native/app-core").file(
+        "target/debug/" + when {
+            org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "libpersona_core.dylib"
+            org.gradle.internal.os.OperatingSystem.current().isWindows -> "persona_core.dll"
+            else -> "libpersona_core.so"
+        },
+    )
+    systemProperty("persona.core.library", hostLibrary.asFile.absolutePath)
     dependsOn(":core:rustcore:buildHostCore")
     inputs.files(fileTree(File(repositoryRoot, "spec/fixtures/answer")) { include("*.json") })
         .withPropertyName("answerFixtures").withPathSensitivity(PathSensitivity.RELATIVE)
@@ -70,7 +77,24 @@ val shadowTest = tasks.register<Test>("shadowTest") {
         events("failed", "skipped", "passed")
         showStandardStreams = true
     }
+    filter { excludeTestsMatching("persona.core.domain.answer.ShadowAnswerGlobalCounterTest") }
 }
+val shadowCounterTest = tasks.register<Test>("shadowCounterTest") {
+    description = "Checks the default global answer mismatch counter in a fresh JVM."
+    testClassesDirs = shadowTestSource.output.classesDirs
+    classpath = shadowTestSource.runtimeClasspath
+    useJUnit()
+    maxParallelForks = 1
+    forkEvery = 1
+    dependsOn(":core:rustcore:buildHostCore")
+    systemProperty("persona.repo.root", providers.gradleProperty("personaRepoRoot")
+        .getOrElse(rootProject.layout.projectDirectory.dir("..").asFile.absolutePath))
+    systemProperty("persona.core.library", rootProject.layout.projectDirectory.dir("../native/app-core")
+        .file("target/debug/libpersona_core.so").asFile.absolutePath)
+    filter { includeTestsMatching("persona.core.domain.answer.ShadowAnswerGlobalCounterTest") }
+    testLogging { events("failed", "skipped", "passed") }
+}
+tasks.named("test") { dependsOn(shadowCounterTest) }
 tasks.named("check") { dependsOn(shadowTest) }
 // The repository's standard root `test` and Android CI must run the observer and its real-JNI fixture replay too.
 tasks.named("test") { dependsOn(shadowTest) }

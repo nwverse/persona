@@ -1,8 +1,7 @@
 //! DEBUG-only answer projections with a bounded native wait.
 //!
-//! One detached Rust worker owns at most the job it is currently evaluating. The JNI caller waits at most one second;
-//! a busy worker rejects a new job instead of retaining another question or custom answer in an unbounded queue.
-//! No job, result or error is logged. The worker never calls back into Java.
+//! One detached Rust worker owns at most the job it is currently evaluating. The JNI caller waits at most one second.
+//! At most one additional job can wait in the channel; no job, result or error is logged and Java is never called back.
 
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Mutex, OnceLock};
@@ -56,26 +55,28 @@ fn display(input: &str) -> Option<String> {
     serde_json::to_string(&display).ok()
 }
 
-/// A full worker or a slow native projection is a diagnostic failure, not a reason to retain another input.
+/// A full queue or a slow native projection is a diagnostic failure, not a reason to retain unbounded input.
 pub(crate) fn call(operation: Operation, input: String) -> Option<String> {
-    let (sender, receiver) = sync_channel(0);
+    let (sender, receiver) = sync_channel(1);
     let job = Job {
         operation,
         input,
         result: sender,
     };
-    // `try_send` never queues behind an already busy native projection.
-    worker().lock().ok()?.try_send(job).ok()?;
+    // This call is already on the client's background shadow worker. Waiting for one slot retains at most one job;
+    // the main thread never enters this function. The result wait below is bounded independently.
+    worker().lock().ok()?.send(job).ok()?;
     receiver.recv_timeout(Duration::from_secs(1)).ok().flatten()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     #[test]
     fn real_worker_projects_and_displays_without_retaining_an_input_queue() {
-        let input = r#"{"interaction":{"kind":"question","questions":[{"question":"One","options":[{"label":"A"}]}]},"operation":{"action":"pick_option","page":0,"picks":{},"other":{},"sending":false,"option_index":0}}"#.to_owned();
+        let input = r#"{"interaction":{"kind":"question","questions":[{"question":"One","multi_select":false,"options":[{"label":"A"},{"label":"B"}]},{"question":"Two","multi_select":false,"options":[{"label":"C"},{"label":"D"}]}]},"operation":{"action":"pick_option","page":0,"picks":{},"other":{"One":"custom"},"sending":false,"option_index":1}}"#.to_owned();
         assert!(
             project(&input).is_some(),
             "the direct projection must return before testing its worker"
@@ -85,5 +86,58 @@ mod tests {
         let shown = call(Operation::Display, "A (Recommended)".to_owned()).expect("display must return");
         assert_eq!(shown, r#"{"text":"A","recommended":true}"#);
         assert!(call(Operation::Project, "not JSON".to_owned()).is_none());
+    }
+
+    #[test]
+    fn a_full_worker_rejects_new_input_instead_of_queuing_beyond_one() {
+        let (sender, receiver) = mpsc::sync_channel::<Job>(1);
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel(0);
+        let worker = std::thread::spawn(move || {
+            let job = receiver.recv().expect("the first job must arrive");
+            started_sender.send(()).expect("the test must observe the busy job");
+            release_receiver.recv().expect("the test must release the busy job");
+            let _ = job.result.send(Some("done".to_owned()));
+        });
+        let (result_sender, result_receiver) = mpsc::sync_channel(1);
+        sender
+            .send(Job {
+                operation: Operation::Display,
+                input: "first".to_owned(),
+                result: result_sender,
+            })
+            .expect("the test must start its controlled worker");
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the worker must be busy");
+        let (other_sender, other_receiver) = mpsc::sync_channel(1);
+        sender
+            .try_send(Job {
+                operation: Operation::Display,
+                input: "second".to_owned(),
+                result: other_sender,
+            })
+            .expect("at most one additional input may wait");
+        let (third_sender, _) = mpsc::sync_channel(1);
+        assert!(
+            sender
+                .try_send(Job {
+                    operation: Operation::Display,
+                    input: "third".to_owned(),
+                    result: third_sender
+                })
+                .is_err(),
+            "the queue must reject another input once its one slot is full"
+        );
+        release_sender.send(()).expect("the controlled worker must finish");
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("done")
+        );
+        worker.join().expect("the controlled worker must finish without a panic");
     }
 }

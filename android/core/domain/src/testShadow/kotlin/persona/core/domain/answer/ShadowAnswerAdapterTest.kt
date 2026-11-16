@@ -43,7 +43,7 @@ class ShadowAnswerAdapterTest {
         assertEquals(OptionDisplay("Yes", true), display)
         assertTrue(nativeStarted.await(30, java.util.concurrent.TimeUnit.SECONDS))
         releaseNative.countDown()
-        ShadowAnswerDiagnostics.awaitIdle()
+        shadow.awaitIdle()
         assertNotNull(nativeThread.get())
         assertFalse(caller == nativeThread.get())
         assertEquals("PersonaAnswerShadow", nativeThread.get().name)
@@ -68,8 +68,8 @@ class ShadowAnswerAdapterTest {
             val shadow = ShadowAnswerAdapter(projectRust = { native() }, sink = reports::add)
             val actual = shadow.build(one, AnswerAction.PickOption, AnswerDraft(page = 99))
             assertEquals(expected, actual)
+            shadow.awaitIdle()
         }
-        ShadowAnswerDiagnostics.awaitIdle()
         assertEquals(3, reports.size)
         reports.forEach { assertFalse(JsonCodec.encodeToString(it).contains("private native text")) }
     }
@@ -79,7 +79,7 @@ class ShadowAnswerAdapterTest {
         val shadow = ShadowAnswerAdapter(projectRust = { error("must not call Rust") }, sink = reports::add)
         shadow.build(one.copy(kind = "permission"), AnswerAction.Allow)
         shadow.build(one, AnswerAction.PickOption, context = AnswerContext(entry = AnswerEntry.Notification))
-        ShadowAnswerDiagnostics.awaitIdle()
+        shadow.awaitIdle()
         assertEquals(listOf("unsupported-operation", "unsupported-entry"), reports.map { it.rule })
     }
 

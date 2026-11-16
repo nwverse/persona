@@ -31,7 +31,7 @@ class ShadowAnswerCodecTest {
         val reports = mutableListOf<AnswerMismatch>()
         val shadow = ShadowAnswerAdapter(sink = reports::add)
         val kotlin = shadow.display("​ A\n (Recommended)")
-        ShadowAnswerDiagnostics.awaitIdle()
+        shadow.awaitIdle()
         assertTrue(kotlin.recommended)
         assertEquals("​ A", kotlin.text)
         assertEquals(reports.map { it.rule }.toString(), true, reports.any { it.rule == "display" })
@@ -46,23 +46,17 @@ class ShadowAnswerCodecTest {
             Question(question = "Two", options = listOf(QuestionOption("C"), QuestionOption("D"))),
         ))
         val picked = shadow.build(interaction, AnswerAction.PickOption, AnswerDraft(optionIndex = 1, other = mapOf("One" to "custom")))
-        val corePick = RustCoreAnswer.project(encodeBuild(interaction, AnswerAction.PickOption,
-            AnswerDraft(optionIndex = 1, other = mapOf("One" to "custom")), AnswerContext()).toString())
+        shadow.awaitIdle()
+        val encodedPick = encodeBuild(interaction, AnswerAction.PickOption,
+            AnswerDraft(optionIndex = 1, other = mapOf("One" to "custom")), AnswerContext()).toString()
+        val direct = RustCoreAnswer.project(encodedPick)
+        assertTrue("the direct real JNI pick must return before the queued comparison: $encodedPick", direct.isNotEmpty())
+        val corePick = direct
         val decodedPick = JsonCodec.decodeFromString<CoreTransition>(corePick)
         assertEquals("core pick's other key count", 1, decodedPick.other.size)
         assertEquals("core pick's empty value", true, decodedPick.other.values.single().isEmpty())
-        shadow.build(interaction, AnswerAction.Advance, AnswerDraft(page = 0, picks = mapOf("One" to setOf("B"))))
-        shadow.build(interaction, AnswerAction.Submit, picked.draft)
-        ShadowAnswerDiagnostics.awaitIdle()
         assertTrue(picked.allowed)
         assertTrue(picked.draft.other.isEmpty())
-        assertEquals(reports.map { it.rule }.toString(), true, reports.any { it.rule == "other-state" })
-        val onlyReports = mutableListOf<AnswerMismatch>()
-        ShadowAnswerAdapter(sink = onlyReports::add).build(interaction, AnswerAction.PickOption,
-            AnswerDraft(optionIndex = 1, other = mapOf("One" to "custom")))
-        ShadowAnswerDiagnostics.awaitIdle()
-        assertEquals(onlyReports.map { it.rule }.toString(), true, onlyReports.isNotEmpty())
-        assertEquals(onlyReports.map { it.rule }.toString(), true, onlyReports.any { it.rule == "other-state" })
         assertEquals(reports.map { it.rule }.toString(), true, reports.any { it.rule == "other-state" })
         assertTrue(reports.all { JsonCodec.encodeToString(it).let { json ->
             !json.contains("custom") && !json.contains("One") && !json.contains("Two") && !json.contains("example")

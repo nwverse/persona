@@ -25,29 +25,40 @@ data class AnswerMismatch(
     val inputShape: String,
 )
 
-/** A bounded FIFO worker. A full queue drops only diagnostics, never blocks or replaces the Kotlin answer. */
+/** Process-wide counters are read-only diagnostics. Each adapter owns its own bounded queue, not a shared content queue. */
 object ShadowAnswerDiagnostics {
-    private const val CAPACITY = 32
-    private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(CAPACITY)) { runnable ->
-        Thread(runnable, "PersonaAnswerShadow").apply { isDaemon = true }
-    }.apply {
-        rejectedExecutionHandler = ThreadPoolExecutor.DiscardPolicy()
-    }
     private val compared = AtomicInteger()
     private val mismatches = AtomicInteger()
-    private val dropped = AtomicLong()
     val comparedCount: Int get() = compared.get()
     val mismatchCount: Int get() = mismatches.get()
-    val droppedCount: Long get() = dropped.get()
-    val queuedCount: Int get() = worker.queue.size
-    @Volatile internal var testDrained: (() -> Unit)? = null
 
     fun report(mismatch: AnswerMismatch) {
         mismatches.incrementAndGet()
     }
 
-    internal fun enqueue(work: () -> Unit): Boolean {
-        if (worker.queue.size >= CAPACITY) {
+    internal fun compared() { compared.incrementAndGet() }
+
+    /** Test-only counter reset; production diagnostics never call this. */
+    internal fun resetForTest() {
+        compared.set(0)
+        mismatches.set(0)
+    }
+}
+
+internal class BoundedAnswerWorker {
+    private val capacity = 32
+    private val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue(capacity)) { runnable ->
+        Thread(runnable, "PersonaAnswerShadow").apply { isDaemon = true }
+    }.apply {
+        rejectedExecutionHandler = ThreadPoolExecutor.DiscardPolicy()
+    }
+    private val dropped = AtomicLong()
+    val droppedCount: Long get() = dropped.get()
+    val queuedCount: Int get() = worker.queue.size
+    @Volatile var testDrained: (() -> Unit)? = null
+
+    fun enqueue(work: () -> Unit): Boolean {
+        if (worker.queue.size >= capacity) {
             dropped.incrementAndGet()
             return false
         }
@@ -62,10 +73,12 @@ object ShadowAnswerDiagnostics {
             false
         }
     }
-    internal fun compared() { compared.incrementAndGet() }
 
-    /** Test barrier only; a timeout is a failure, never evidence of parity. */
-    fun awaitIdle() { worker.submit {}.get(30, TimeUnit.SECONDS) }
+    /** Test barrier only; it waits for this adapter, never for an unrelated instance's content. */
+    fun awaitIdle() {
+        val completed = worker.submit(java.util.concurrent.Callable { true })
+        check(completed.get(30, TimeUnit.SECONDS)) { "The answer shadow barrier was rejected" }
+    }
 }
 
 /**
@@ -79,15 +92,24 @@ class ShadowAnswerAdapter(
     private val sink: ((AnswerMismatch) -> Unit)? = null,
     private val progress: (compared: Int, mismatches: Int) -> Unit = { _, _ -> },
 ) : AnswerAdapter {
+    private val worker = BoundedAnswerWorker()
     private val compared = AtomicInteger()
     private val mismatches = AtomicInteger()
     private val seenDisplays = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     val mismatchCount: Int get() = mismatches.get()
+    val droppedCount: Long get() = worker.droppedCount
+    val queuedCount: Int get() = worker.queuedCount
+    internal var testDrained: (() -> Unit)?
+        get() = worker.testDrained
+        set(value) { worker.testDrained = value }
+
+    /** Test-only barrier for this adapter's own queue. */
+    fun awaitIdle() { worker.awaitIdle() }
 
     override fun build(interaction: Interaction, action: AnswerAction, draft: AnswerDraft, context: AnswerContext): AnswerResult {
         val result = kotlin.build(interaction, action, draft, context)
         val shape = shape(interaction, action, draft, context)
-        ShadowAnswerDiagnostics.enqueue {
+        worker.enqueue {
             try { compareBuild(interaction, action, draft, context, result, shape) }
             catch (_: Throwable) { report("shadow-failure", shape) }
         }
@@ -99,10 +121,14 @@ class ShadowAnswerAdapter(
         // Recomposition repeats the same labels. Compare each label once per adapter instead of retaining duplicates.
         if (!seenDisplays.add(label)) return result
         val shape = "labelChars=${label.length}"
-        ShadowAnswerDiagnostics.enqueue {
+        val queued = worker.enqueue {
             try { compareDisplay(label, result, shape) }
-            catch (_: Throwable) { report("shadow-failure", shape) }
+            catch (_: Throwable) {
+                seenDisplays.remove(label)
+                report("shadow-failure", shape)
+            }
         }
+        if (!queued) seenDisplays.remove(label)
         return result
     }
 
@@ -147,12 +173,14 @@ class ShadowAnswerAdapter(
 
     private fun compareDisplay(label: String, expected: OptionDisplay, shape: String) {
         val raw = try { displayRust(label) } catch (_: Throwable) {
+            seenDisplays.remove(label)
             report("rust-failure", shape); return
         }
         val actual = try {
             if (raw.isEmpty()) throw IllegalArgumentException("empty native output")
             JsonCodec.decodeFromString<OptionDisplay>(raw)
         } catch (_: Throwable) {
+            seenDisplays.remove(label)
             report("rust-output", shape); return
         }
         if (expected != actual) report("display", shape)
