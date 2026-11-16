@@ -282,10 +282,13 @@ time.sleep(30)
         try { process.kill(-group, signal); } catch (error) { if (error.code !== "ESRCH") throw error; }
         for (let attempt = 0; attempt < 100; attempt++) {
           await new Promise(done => setTimeout(done, 10));
-          if (!await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "")) return;
+          if (!await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "")) break;
         }
+        if (!await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "")) break;
       }
-      throw new Error("the owned descendant fixture did not close");
+      if (await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "")) {
+        throw new Error("the owned descendant fixture did not close");
+      }
     }
   }
   succeed();
