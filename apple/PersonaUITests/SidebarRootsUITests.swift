@@ -341,7 +341,9 @@ final class SidebarRootsUITests: XCTestCase {
         app.launchArguments = ["-demo.on", "YES", "-newAssistant", "YES", "-tab", "assistant", "-dev.openChat", "",
                                "-app.navigation", "separate", "-probes", "YES"]
         app.launchPinned(navigation: false)
-        let persona = app.buttons["Persona"].firstMatch, agents = app.buttons["Agents"].firstMatch
+        // The iPad's tab bar, or the open Duo's upright switch in its place (#4231).
+        let persona = app.buttons.matching(NSPredicate(format: "identifier == 'shell-assistant' OR label == 'Persona'")).firstMatch
+        let agents = app.buttons.matching(NSPredicate(format: "identifier == 'shell-agents' OR label == 'Agents'")).firstMatch
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("the Separate layout's tabs at regular width") }
         XCTAssertTrue(persona.waitForExistence(timeout: 20) && agents.exists, "no Persona | Agents tabs:\n\(app.debugDescription)")
@@ -488,7 +490,8 @@ final class SidebarRootsUITests: XCTestCase {
         app.launchPinned(navigation: false)
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         guard app.windows.firstMatch.frame.width > 600 else { throw XCTSkip("the Separate layout's tabs at regular width") }
-        let agentsTab = app.buttons["Agents"].firstMatch
+        // The iPad's tab bar, or the open Duo's upright switch in its place (#4231).
+        let agentsTab = app.buttons.matching(NSPredicate(format: "identifier == 'shell-agents' OR label == 'Agents'")).firstMatch
         if agentsTab.waitForExistence(timeout: 10), !agentsTab.isSelected { agentsTab.tap() }
         probeName = "sidebar-page-agents"
         let empty = settled("conversation", "the Agents tab with nothing picked")

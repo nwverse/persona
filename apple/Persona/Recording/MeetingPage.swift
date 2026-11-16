@@ -541,6 +541,7 @@ struct MeetingPage: View {
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
                     .frame(maxWidth: .infinity)
+                    .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
                     .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
                     .transition(.opacity)
             } else {
