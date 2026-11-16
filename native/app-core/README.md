@@ -104,8 +104,13 @@ belong to the maintainer's environment if it later becomes available; none is si
 a release upload.
 
 The ArkTS host tests live outside the portable `harmony/tests/*.test.mjs` glob, because the replay needs the helper
-binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/rustcore-wire.test.mjs`
-round-trips the generated codec against itself, which cannot catch a symmetric mistake, so it is not a substitute.
+binary; a missing helper or too-old Node fails the test rather than skipping it. `harmony/tests/core-host/sort.test.mjs`
+replays every Agents-list sort projection and all 13 existing `session_state` / `hub_state` cases against the real core.
+The state command calls `persona_core::state::session_state` and `AgentState::from_hub` directly; expectations come only
+from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong-expectation checks.
+`harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
+mistake, so it is not a substitute. These host projections do not exercise an ArkTS state codec, a loaded NAPI module,
+NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical device.
 
 ## Host-only boundary diagnostics
 

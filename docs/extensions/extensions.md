@@ -108,6 +108,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `connectors` (version 2) | `connector.` | The manifest fields of the connector protocol: `id` (`^[a-z][a-z0-9]*$`), `name`, `capabilities`, `hosts`, `agent_tools`, `unlisted`, `confirm_always?` (globs of write-operation names; `connector_gate`'s `allow` is also always clamped to confirm-on-phone, `deny` unchanged), `poll_seconds`, `kinds`, plus `kind_descriptions?` (kind → one line "Type: …" shown to the model, used by Inbox triage, drafting and the AI twin), `archive_sources?` (other names the archive may also go under), `cli?` (a command line on the assistant's PATH, see `docs/protocol/connector-protocol.md` ("Command line")), `sends_as_user?` (the connector sends messages in the user's name by itself, outside the write gate; see "Sent as the user: `sent.record`" below) | Process speaks the protocol | The connector registry (**Settings › Connectors**, Inbox, knowledge base, the assistant's tools); methods in `docs/protocol/connector-protocol.md`, including optional `catalog` source discovery/read calls and recipes (`docs/extensions/subscriptions.md`) |
 | `voice` (version 1) | — | `id`, `name?` | `runtime.http` | The App's voice chat; contract under "Voice" below |
 | `transcription` (version 1) | — | `id`, `name?` | `runtime.http` | Meeting transcription on the hub, for the manager only (#3862 phase 5); contract under "Transcription" below |
+| `speech` (version 1) | — | `id`, `name?` | `runtime.http` | A text read aloud for the apps (#8712): a meeting answer the iPhone says when Persona takes part; contract under "Speech" below |
 | `computer` (version 1) | — | `id`, `name?` | — | The assistant's computer-control tools and the toggle on the machine page (only the built-in `cua`), see [computer-use.md](computer-use.md) |
 | `browser` (version 1) | — | `id`, `name?` | — | The assistant's browser tools (`browser_run` / `browser_look`) and **Browser** on the machine page (only the built-in `ego`), see [plan-ego-browser.md](../plans/plan-ego-browser.md) |
 | `iphone` (version 1) | — | `id`, `name?` | — | The assistant's phone-control tools (`iphone_status` / `iphone_look` / `iphone_do`), **Phone Control** on a computer's page and **Control of This iPhone** on the iPhone (only the built-in `iphone`), see [iphone.md](iphone.md) |
@@ -234,8 +235,10 @@ would make the extension uninstallable on older hubs, while files they do not re
 - **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
   marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
   description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
-  permission digest and the official-provenance check do not change with the language. Contribution titles (pages, navigation entries,
-  shortcuts, themes) and built-in extensions have one language for now.
+  permission digest and the official-provenance check do not change with the language. `ui.<contribution id>` (#8712) translates a page's
+  title (and the extension's name beside it) in `GET /api/v1/extensions/-/ui` and the details' `ui`; other contribution titles (navigation
+  entries' badges, shortcuts, themes) have one language for now. A built-in extension written in English carries its translations itself
+  (`Registry.AddBuiltinTranslated`: the iPhone and Volcengine speech extensions).
 - **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
   wrong type, too long, a link) is left out with a warning on the preview and on the installed extension; it never blocks an install. Files
   of languages the hub does not have are not read.
@@ -3642,10 +3645,34 @@ the program stores nothing. The contract (the job's frames both ways, which cont
 - **Which one transcribes**: the built-in voice extension's `gpt-live`, unless the owner names another in the assistant's `meeting_transcription_extension`
   (`"<extension id>/<contribution id>"`): installing an extension never sends it meeting audio. A contribution is used only while its extension is enabled and running and
   the contribution is not switched off ("Turning contributions on and off"); an extension started by requests is started for `/info`, as for any relayed request.
+  The built-in Volcengine speech extension's **Use for Meeting Transcription** names its `volc/volc` in one step, with the owner's confirmation
+  ([volcengine-speech.md](volcengine-speech.md) "One switch").
 - **Extensions' own audio**: besides meetings, the manager runs jobs for extensions granted `transcription` on the same chosen contribution, in `replay`
   mode ("Transcription for extensions"); the contribution sees a job like any other, and gets no meeting audio through it.
 - **A job is a request**: it holds the program's open request (`host.Proc.BeginHTTP`) until it ends, so an extension started by requests is not stopped mid-meeting.
   The phone's audio socket to the manager, by contrast, does not count in the manager's open requests (`Manager.Serving`): a meeting never holds a redeploy, and the phone sends again from where the hub's audio ends.
+
+## Speech
+
+The `speech` point (#8712) reads a text aloud for the apps, one way: no conversation, no model. Its first user is the iPhone saying a
+meeting answer when Persona takes part in a meeting ([meeting-minutes.md](../assistant/meeting-minutes.md) "What the phone does (#3375)"),
+in place of the voice extension's realtime voice or the phone's own. The built-in Volcengine speech extension contributes one
+([volcengine-speech.md](volcengine-speech.md)).
+
+- **Endpoints**, on the program's own socket under the contribution's id, reached through the apps' forward to the extension
+  (`/api/v1/extensions/<id>/speech/<cid>/…`); only a full device (or a caller with no `X-Persona-Role`) gets past them, else `403 forbidden`.
+  A `cid` the program does not contribute, or one switched off ("Turning contributions on and off"), is `404 not_found`.
+  - `GET /speech/{cid}/info` → `{"protocol": 1, "rate": 24000, "setup"?: …}`: `rate` is the audio's sample rate; `setup` says why it reads
+    nothing now (the built-in's `key` before a key is saved, `off` while its settings turn reading answers off). An app uses the contribution
+    only with protocol 1 and no `setup`.
+  - `POST /speech/{cid}/speak` takes and answers what the voice extension's read-aloud does (`docs/assistant/voice.md` "4.15 Reading a text
+    aloud (#5004)"): `{"text", "voice"?, "lang"?}` (1 to 1000 characters); nothing is written before the first audio, then `200` with
+    `Content-Type: audio/pcm`, `X-Persona-Audio-Rate` and `Cache-Control: no-store`, the audio (mono PCM16, little-endian) flushed as it
+    comes. Errors before any audio, as `{"error", "code"}`: `400 bad_request`, `403 forbidden`, `503 no_upstream` (not set up), `503 off`,
+    `502 upstream_forbidden`, `503 upstream_unavailable`, `502 upstream_failed`, `504 no_audio`. A `voice` that is not one of the
+    contribution's own is ignored (the device's pick for another extension's voice).
+- **Which one**: an app reads the extensions list's `contributes.speech` and uses a running extension's contribution while its `/info` allows,
+  before anything else; any failure falls back to what the app did before.
 
 ## Built-in voice extension (`personad voice`)
 

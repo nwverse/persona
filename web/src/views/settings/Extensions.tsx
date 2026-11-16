@@ -491,8 +491,10 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
   };
   // a reconnect the hub could not resume: an extension_auth push missed meanwhile is not replayed (#4954); only the
-  // sign-in is read again, so what is being typed into the settings stays
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && authChanged()), [id]);
+  // sign-in is read again, so what is being typed into the settings stays. Only an extension one signs in to has a
+  // sign-in to read: the hub answers the others 404 (#8854)
+  const signsIn = !!detail?.auth;
+  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn]);
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
   const dirty = !!detail && (isDirty(draft, detail.config) || Object.keys(problems).length > 0);
