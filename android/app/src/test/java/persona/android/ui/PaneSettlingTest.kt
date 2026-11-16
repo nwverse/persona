@@ -39,11 +39,11 @@ class PaneSettlingTest {
     @get:Rule val rule = createEmptyComposeRule()
 
     @Test fun leftFlingKeepsANoncollapsibleListVisible() = fling(false, -2000f, -20000f, 280f)
-    @Test fun rightFlingKeepsRoomForTheDetail() = fling(false, 2000f, 20000f, 880f)
+    @Test fun rightFlingKeepsRoomForTheDetail() = fling(false, 2000f, 20000f, 800f)
     @Test fun leftFlingOfACollapsibleListNeverWritesANegativeWidth() = fling(true, -190f, -20000f, 280f)
 
     @Test fun resizeDuringSettlingKeepsBothPanesWithinTheNewWindow() =
-        fling(false, 2000f, 20000f, 480f, shrink = true)
+        fling(false, 2000f, 20000f, 400f, shrink = true)
     @Test fun aListThatBecomesNoncollapsibleWhileSettlingStaysVisible() =
         fling(true, -190f, -20000f, 280f, keepList = true)
     @Test fun aNewGesturePreventsTheOldSettleFromWritingAgain() =
@@ -107,7 +107,7 @@ class PaneSettlingTest {
                     val range = dragRange(splitter.width, splitter.canCollapse)
                     println("PANE_SETTLE collapse=$collapsible velocity=$velocity frame=$frame at=${splitter.at} list=$listWidth detail=$detailWidth")
                     assertTrue("Settling stays inside $range: ${splitter.at}", splitter.at in range)
-                    assertTrue("The detail retains its minimum width", detailWidth >= 320)
+                    assertTrue("The detail retains its minimum width", detailWidth >= Tokens.Size.splitPageMin.value)
                     if (!splitter.canCollapse) assertTrue("The list retains its minimum width", listWidth >= 280)
                     if (shrink && frame >= 8) assertEquals(800, listWidth + detailWidth)
                     if (interrupt && frame >= 8) assertEquals(600f, splitter.at, 0.01f)

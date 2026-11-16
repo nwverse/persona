@@ -10,18 +10,32 @@ import org.junit.Test
 class PaneSplitTest {
     private fun flat(at: Float) = PaneHinge(at, at)
 
+    @Test fun regularColumnsOverlayUntilThePageKeepsItsMinimumWidth() {
+        for (width in listOf(600f, 673f, 720f, 840f, 1000f)) {
+            val expected = if (width < 720f) ColumnPlacement.Over else ColumnPlacement.Beside
+            assertEquals("no fold at $width dp", expected, columnPlacement(width, emptyList()))
+            assertEquals("flat fold at $width dp", expected, columnPlacement(width, listOf(flat(width / 2))))
+            // The existing hinge rule requires 280dp left and 320dp right. A separating fold at that position
+            // keeps both panes safe even when the right half is below the ordinary 400dp page minimum.
+            val separating = PaneHinge(280f, 280f, separating = true)
+            assertEquals("separating fold at $width dp", ColumnPlacement.Beside, columnPlacement(width, listOf(separating)))
+        }
+        assertEquals(ColumnPlacement.Over, columnPlacement(719f, emptyList()))
+        assertEquals(ColumnPlacement.Over, columnPlacement(673f, listOf(PaneHinge(150f, 160f, separating = true))))
+    }
+
     @Test fun theDetailGetsMostOfAnInnerScreen() {
         // A book-style foldable's inner screen, 770.67 dp, the fold flat down the middle: not halves any more.
         val s = paneSplit(770.67f, listOf(flat(385.33f)), null)
         assertEquals(320f, s.left, 0.01f)
         assertFalse(s.fixed)
-        assertEquals(listOf(385.33f), s.snaps)
+        assertTrue(s.snaps.isEmpty()) // snapping here would leave the page narrower than 400dp
     }
 
     @Test fun aFlatFoldIsWhereALetGoDividerSnaps() {
         val snaps = listOf(385f)
-        assertEquals(385f, settleDivider(360f, 770f, snaps)!!, 0.01f)
-        assertEquals(350f, settleDivider(350f, 770f, snaps)!!, 0.01f) // too far from it
+        assertEquals(385f, settleDivider(360f, 800f, snaps)!!, 0.01f)
+        assertEquals(350f, settleDivider(350f, 800f, snaps)!!, 0.01f) // too far from it
     }
 
     @Test fun aSeparatingFoldFixesTheSplit() {
@@ -55,7 +69,7 @@ class PaneSplitTest {
         assertEquals(420f, paneSplit(1280f, emptyList(), null).left, 0.01f) // a tablet: capped
         assertEquals(300f, paneSplit(700f, emptyList(), null).left, 0.01f) // a narrower inner screen: the detail keeps 400
         assertEquals(280f, paneSplit(600f, emptyList(), null).left, 0.01f) // the narrowest wide area
-        assertEquals(280f, maxLeft(600f), 0.01f) // the detail keeps 320
+        assertEquals(280f, maxLeft(600f), 0.01f) // too narrow for both: the column overlays instead
         assertEquals(320f, defaultLeft(771f), 0.01f)
         assertEquals(403f, defaultLeft(1061f), 0.5f) // a tri-fold opened
         assertEquals(320f, defaultLeft(800f), 0.01f) // a phone on its side
@@ -63,7 +77,7 @@ class PaneSplitTest {
 
     @Test fun theUsersShareIsKeptWithinTheLeastWidths() {
         assertEquals(640f, paneSplit(1280f, emptyList(), 0.5f).left, 0.01f) // wider than the default cap
-        assertEquals(480f, paneSplit(800f, emptyList(), 0.9f).left, 0.01f)
+        assertEquals(400f, paneSplit(800f, emptyList(), 0.9f).left, 0.01f)
         assertEquals(280f, paneSplit(800f, emptyList(), 0.1f).left, 0.01f)
         assertEquals(0.5f, shareOf(640f, 1280f), 0.0001f)
     }
@@ -71,12 +85,12 @@ class PaneSplitTest {
     @Test fun draggedFarLeftTheListCloses() {
         assertNull(settleDivider(200f, 800f, emptyList()))
         assertEquals(280f, settleDivider(230f, 800f, emptyList())!!, 0.01f) // not far enough: back to its least width
-        assertEquals(480f, settleDivider(700f, 800f, emptyList())!!, 0.01f)
+        assertEquals(400f, settleDivider(700f, 800f, emptyList())!!, 0.01f)
         // Where the tab keeps its list, the same drag only stops at the least width.
         assertEquals(280f, settleDivider(200f, 800f, emptyList(), canCollapse = false)!!, 0.01f)
         assertEquals(0f, dragRange(800f, canCollapse = true).start, 0.01f)
         assertEquals(280f, dragRange(800f, canCollapse = false).start, 0.01f)
-        assertEquals(480f, dragRange(800f, canCollapse = false).endInclusive, 0.01f)
+        assertEquals(400f, dragRange(800f, canCollapse = false).endInclusive, 0.01f)
     }
 
     @Test fun aDragTicksOnceAtAFoldAndAtTheClosingPoint() {

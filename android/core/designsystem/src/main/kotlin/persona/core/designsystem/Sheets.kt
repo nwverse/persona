@@ -94,7 +94,8 @@ fun JSheet(
         dragHandle = if (!showDragHandle) null else ({ Box(Modifier.padding(top = 10.dp.dense, bottom = 6.dp.dense).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) }),
     ) {
         // Opaque over a scrim: glass inside the sheet must not sample (and show through) the page behind it.
-        androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null,
+            LocalPaneListToggle provides null) {
         Column(Modifier.fillMaxWidth().dismissKeyboardOnBlankTap()
             // Content that grows once the sheet is open ("Session info" after it loads) would stay where the opening left the
             // sheet, its rest below the screen and out of reach: settle the sheet again at its new height.

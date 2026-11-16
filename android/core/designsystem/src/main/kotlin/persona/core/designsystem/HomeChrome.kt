@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -31,6 +32,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 
 class HomeChrome(
     val items: List<NavItem>,
@@ -43,6 +45,8 @@ class HomeChrome(
 
 val LocalHomeChrome = staticCompositionLocalOf<HomeChrome?> { null }
 val LocalHomeDrawer = staticCompositionLocalOf { false }
+/** Only a list-picked root under an overlaid column replaces Back with the existing sidebar control. */
+val LocalPaneListToggle = staticCompositionLocalOf<(() -> Unit)?> { null }
 
 @Composable
 private fun drawerSpec(): FiniteAnimationSpec<Float> = drawerSpec(PersonaTheme.style, PersonaTheme.reduceMotion)
@@ -93,8 +97,8 @@ fun JShellDrawer(
 
 /**
  * The same sidebar as a column beside the page, the way an open iPhone Duo and an iPad show it (a regular window):
- * [width] wide, the page from [pageStart] on (past a separating fold). [shown] slides it out and back; nothing about it
- * is modal. Without [sidebar] (a phone, a folded foldable) the page fills the box exactly as before, and it stays the
+ * [width] wide, the page from [pageStart] on (past a separating fold). [overlay] keeps the page full width and dims it
+ * while [shown]; a tap beside the column calls [onDismiss]. Without [sidebar] the page fills the box, and stays the
  * same composition either way, so folding or unfolding keeps everything the page holds.
  */
 @Composable
@@ -104,22 +108,38 @@ fun JSidebarColumn(
     pageStart: Dp,
     shown: Boolean,
     modifier: Modifier = Modifier,
+    overlay: Boolean = false,
+    onDismiss: () -> Unit = {},
+    insetSidebar: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val progress by animateFloatAsState(if (shown) 1f else 0f,
         drawerSpec(), label = "sidebar-column")
     val palette = PersonaTheme.palette
     val visible = sidebar != null && progress > 0f
+    val modal = sidebar != null && overlay && shown
+    val close = stringResource(R.string.designsystem_close)
     Box(modifier.fillMaxSize()) {
         if (visible) Box(Modifier.width(width).fillMaxHeight()
+            .zIndex(if (overlay) 1f else 0f)
+            .then(if (overlay) Modifier.pointerInput(Unit) {
+                // Blank column space belongs to the column too, never to the page underneath it.
+                awaitPointerEventScope { while (true) awaitPointerEvent() }
+            } else Modifier)
             .graphicsLayer { translationX = -(1f - progress) * width.toPx() }
             .background(sidebarBackground())) {
-            Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Box(Modifier.fillMaxSize().then(if (insetSidebar) Modifier.statusBarsPadding().navigationBarsPadding() else Modifier)) {
                 androidx.compose.runtime.CompositionLocalProvider(LocalHomeDrawer provides (PersonaTheme.style == AppStyle.Glass)) { sidebar?.invoke() }
             }
             Box(Modifier.align(Alignment.TopEnd).width(Tokens.Space.xxs / 2).fillMaxHeight().background(palette.line))
         }
-        Box(Modifier.fillMaxSize().padding(start = if (sidebar != null) pageStart * progress else 0.dp)) { content() }
+        Box(Modifier.fillMaxSize().padding(start = if (sidebar != null && !overlay) pageStart * progress else 0.dp)) {
+            Box(Modifier.fillMaxSize().focusProperties { canFocus = !modal }
+                .then(if (modal) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
+            if (overlay && visible) Box(Modifier.fillMaxSize().padding(start = width * progress)
+                .background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
+                .clickable(enabled = shown, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+        }
     }
 }
 

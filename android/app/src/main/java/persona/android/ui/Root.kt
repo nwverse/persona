@@ -252,13 +252,20 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
     val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
+    // Transient overlays never overwrite the column's beside-the-page visibility choice.
+    val sidebarOverlayShown = rememberSaveable { mutableStateOf(false) }
+    val agentsOverlayShown = rememberSaveable { mutableStateOf(false) }
+    fun dismissSidebar() {
+        sidebar.opened.value = false
+        sidebarOverlayShown.value = false
+    }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
     fun showAssistantHome() {
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
         selected = AppTab.Persona
     }
     fun sidebarDestination(key: NavKey) {
-        sidebar.opened.value = false
+        dismissSidebar()
         showAssistantHome()
         if (assistantStack.last() != key) assistantStack.add(key)
     }
@@ -549,6 +556,19 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val paneHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
             PaneHinge((hinge.bounds.left - paneAreaLeft) / paneDensity, (hinge.bounds.right - paneAreaLeft) / paneDensity, hinge.isSeparating)
         }
+        val columnsOver = regular && columnPlacement(windowWidth.value, paneHinges) == ColumnPlacement.Over
+        val currentColumnsOver = rememberUpdatedState(columnsOver)
+        LaunchedEffect(columnsOver) {
+            sidebarOverlayShown.value = false
+            agentsOverlayShown.value = false
+        }
+        val agentsListNavigator = remember(navigator) {
+            object : Navigator by navigator {
+                override fun navigate(key: NavKey) {
+                    pickAgentsList(navigator, agentsStack, agentsOverlayShown, key)
+                }
+            }
+        }
         val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
         val assistantRootKey: Any = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
         // The one shared sidebar, as the drawer or as the column beside the Assistant page. The two never share a key:
@@ -557,12 +577,12 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             sidebarState.SaveableStateProvider(stateKey) {
                 AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                     onOpen = { key ->
-                        sidebar.opened.value = false
+                        dismissSidebar()
                         selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
                     },
-                    onAction = { action -> sidebar.opened.value = false; showAssistantHome(); sidebar.action = action },
+                    onAction = { action -> dismissSidebar(); showAssistantHome(); sidebar.action = action },
                     onSettings = {
-                        sidebar.opened.value = false
+                        dismissSidebar()
                         settingsSheetStack.clear()
                         settingsSheetStack.add(SettingsRoute)
                         settingsOpened = true
@@ -581,7 +601,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                     onRetired = { key -> sidebar.retired = sidebar.retired + key },
                     onOpenTodo = { id -> sidebarDestination(TodoDetailRoute(id)) },
                     onOpenAgent = { key ->
-                        sidebar.opened.value = false
+                        dismissSidebar()
                         selected = openResolved(ResolvedRoute(AppTab.Agents, ChatRoute(key.machineId, key.sessionId, ConversationKind.Agent)))
                     },
                     // The current assistant at the sidebar's head; its roster opens under it.
@@ -589,7 +609,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
                             hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating,
                             onManage = {
-                                sidebar.opened.value = false
+                                dismissSidebar()
                                 settingsSheetStack.clear()
                                 settingsSheetStack.add(SettingsRoute)
                                 settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
@@ -610,8 +630,12 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val besideAssistant: @Composable (@Composable () -> Unit) -> Unit = { page ->
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val split = sidebarSplit(maxWidth.value, currentHinges.value)
+                val over = currentRegular.value && columnPlacement(maxWidth.value, currentHinges.value) == ColumnPlacement.Over
+                val shown = if (over) sidebarOverlayShown else sidebarColumnShown
                 JSidebarColumn(if (currentRegular.value) ({ currentSidebar.value("shared-sidebar-column") }) else null,
-                    width = split.sidebar.dp, pageStart = split.page.dp, shown = sidebarColumnShown.value) { page() }
+                    width = (if (over) PaneSplits.DefaultLeft else split.sidebar).dp, pageStart = split.page.dp,
+                    shown = shown.value, overlay = over, onDismiss = { sidebarOverlayShown.value = false }) { page() }
+                BackHandler(selected == AppTab.Persona && over && sidebarOverlayShown.value) { sidebarOverlayShown.value = false }
             }
         }
         // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
@@ -637,7 +661,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                                             stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
                                     }
                                     JPersonaButton(sidebar.personaState, sidebarLabel, {
-                                        if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
+                                        if (assistantRoot && currentRegular.value) {
+                                            val shown = if (currentColumnsOver.value) sidebarOverlayShown else sidebarColumnShown
+                                            shown.value = !shown.value
+                                        }
                                         else sidebar.opened.value = true
                                     })
                                     // Something waits at another assistant: the switcher's badges say where. Still, as iOS's `AssistantWaitingDot`.
@@ -678,7 +705,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         hubGroup = hubGroups.takeIf { it.size > 1 }?.firstOrNull { it.selected }?.name)
                 }
             }
-            agentsEntries(navigator, agents, machine, { machine = it },
+            agentsEntries(agentsListNavigator, agents, machine, { machine = it },
                 terminalPanes = if (session.demo == null) shell.terminalPanes.available else kotlinx.coroutines.flow.flowOf(false))
             spaceEntries(navigator, agents)
             machineSpacesEntries(navigator, agents)
@@ -741,6 +768,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // The tab left behind stays composed: it must not keep the field's focus, the keyboard or a paste menu (#894).
         ReleaseTextInputOnChange(selected)
         ReleaseTextInputOnChange(sidebar.opened.value)
+        ReleaseTextInputOnChange(sidebarOverlayShown.value)
+        ReleaseTextInputOnChange(agentsOverlayShown.value)
         ReleaseTextInputOnChange(settingsOpened)
         // Back on the first page of Agents, Inbox or Settings goes to Persona; back on the Persona home leaves the app
         // (2026-11-01, the user's call; it used to go back through the tabs shown before).
@@ -770,12 +799,15 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                         // Agents may close its list beside an open conversation; Inbox and Settings keep theirs (as the old app did).
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
+                        val agentsOverlay = rememberAgentsOverlayStrategy(regular && tab == AppTab.Agents &&
+                            columnPlacement(maxWidth.value, paneHinges) == ColumnPlacement.Over &&
+                            stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown)
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
                                 NavDisplay(backStack = stacks.getValue(tab), modifier = Modifier.fillMaxSize().then(if (shown) Modifier else Modifier.unplaced()),
                                     onBack = navigator::back, entryDecorators = decorators.getValue(tab) + chrome,
-                                    sceneStrategies = listOf(listDetail),
+                                    sceneStrategies = listOf(agentsOverlay, listDetail),
                                     // A pushed page slides in over the page it came from, which stays drawn underneath; going
                                     // back, it slides away over the page below. Pages stay opaque the whole way (fading them
                                     // showed both pages' text on top of each other) and nothing in between shows the background.
@@ -800,7 +832,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
           LaunchedEffect(regular) {
               if (regular && selected == AppTab.Persona && sidebar.opened.value) {
                   sidebar.opened.value = false
-                  sidebarColumnShown.value = true
+                  if (columnsOver) sidebarOverlayShown.value = true else sidebarColumnShown.value = true
               }
           }
           // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md

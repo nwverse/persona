@@ -1,6 +1,7 @@
 package persona.android.navigation
 
 import kotlin.math.abs
+import persona.core.designsystem.Tokens
 
 /**
  * Where a wide window's two panes meet (the list beside its detail), in dp from the panes' left edge. Ported from the
@@ -10,15 +11,14 @@ import kotlin.math.abs
 internal object PaneSplits {
     /** The narrowest the list may be: still a readable list. */
     const val MinLeft = 280f
-    /** The narrowest the detail may be: a phone's width for a conversation. */
-    const val MinRight = 320f
+    /** The ordinary page minimum; separating folds retain their existing two-pane fit rule. */
+    val MinRight = Tokens.Size.splitPageMin.value
+    const val HingeMinRight = 320f
     /** Without a dragged split the list takes about this share of the width… */
     const val DefaultShare = 0.38f
     /** …held between these widths… */
     const val DefaultLeft = 320f
     const val DefaultMax = 420f
-    /** …and the detail keeps this much when it can. */
-    const val DefaultRight = 400f
     /** A divider let go this close to a flat fold settles on it. */
     const val Snap = 28f
     /** Dragged this far past [MinLeft], letting go closes the list (where the tab allows it). */
@@ -46,10 +46,10 @@ internal data class PaneSplit(val left: Float, val fixed: Boolean, val snaps: Li
 
 internal fun maxLeft(width: Float): Float = (width - PaneSplits.MinRight).coerceAtLeast(PaneSplits.MinLeft)
 
-/** The list's width before the user drags: about [PaneSplits.DefaultShare], the detail at least [PaneSplits.DefaultRight] when it can be. */
+/** The list's width before the user drags: about [PaneSplits.DefaultShare], the detail at least [PaneSplits.MinRight] when it can be. */
 internal fun defaultLeft(width: Float): Float = (width * PaneSplits.DefaultShare)
     .coerceIn(PaneSplits.DefaultLeft, PaneSplits.DefaultMax)
-    .coerceAtMost(width - PaneSplits.DefaultRight)
+    .coerceAtMost(width - PaneSplits.MinRight)
     .coerceIn(PaneSplits.MinLeft, maxLeft(width))
 
 /**
@@ -67,7 +67,7 @@ internal fun paneSplit(width: Float, hinges: List<PaneHinge>, share: Float?): Pa
 
 /** Folds with room for a pane on each side. */
 private fun fittingFolds(width: Float, hinges: List<PaneHinge>): List<PaneHinge> =
-    hinges.filter { it.left >= PaneSplits.MinLeft && width - it.right >= PaneSplits.MinRight }
+    hinges.filter { it.left >= PaneSplits.MinLeft && width - it.right >= if (it.separating) PaneSplits.HingeMinRight else PaneSplits.MinRight }
 
 /** The separating fold that fixes the split, the one nearest [usual] when there are two. */
 private fun separatingFold(width: Float, hinges: List<PaneHinge>, usual: Float): PaneHinge? =
@@ -75,6 +75,18 @@ private fun separatingFold(width: Float, hinges: List<PaneHinge>, usual: Float):
 
 /** The shared sidebar's column in a regular window: [sidebar] dp wide, the page beside it from [page] on. */
 internal data class SidebarSplit(val sidebar: Float, val page: Float)
+
+internal enum class ColumnPlacement { Beside, Over }
+
+/**
+ * A regular window keeps a readable page beside the usual column, just as iOS's SplitColumns.fitsBeside does.
+ * Do not squeeze the column to force a fit. A separating fold that can hold today's two panes keeps them apart,
+ * even when either half is narrower than the ordinary page minimum; a flat fold does not change the decision.
+ */
+internal fun columnPlacement(width: Float, hinges: List<PaneHinge>): ColumnPlacement =
+    if (separatingFold(width, hinges, defaultLeft(width)) != null ||
+        width - maxOf(defaultLeft(width), PaneSplits.DefaultLeft) >= Tokens.Size.splitPageMin.value
+    ) ColumnPlacement.Beside else ColumnPlacement.Over
 
 /**
  * Where the sidebar's column ends beside the Assistant page: as wide as a list beside its detail, at most
