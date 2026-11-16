@@ -984,7 +984,7 @@ private fun ChatPage(
                                 // listed model needs the computer's launcher lists), or the modes a provider lists (#8261).
                                 val modeSheet = session != null && (session.canChangeModes || session.canChangeEffortOnly ||
                                     session.canSwitchListedModes || (chrome.worktrees != null && SessionModes.listsModels(session)))
-                                ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
+                                LargeWindowComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, uploadDestination = if (healthChat || session?.isHealth == true) "health" else null,
