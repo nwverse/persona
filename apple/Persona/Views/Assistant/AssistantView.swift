@@ -622,7 +622,7 @@ struct AssistantView: View {
     private func forgetPlaces() {
         places.forget()
         #if os(iOS)
-        if embedded, let unified { unified.forget(path: navPath) }
+        if embedded, let unified { unified.forget(path: navPath, keepingAsked: true) }
         #endif
         backToRoot()
     }

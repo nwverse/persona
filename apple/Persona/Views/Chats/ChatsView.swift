@@ -618,7 +618,7 @@ struct ChatsView: View {
                 // unless it is one of this assistant's: a chat asked for at launch is opened before the demo or the paired
                 // assistant is set, and the first switch took it away again.
                 if rootsMode, unified?.part == .agents, let unified {
-                    if !rootIsCurrentAssistants(unified.root) { unified.forget(path: $path) }
+                    if !rootIsCurrentAssistants(unified.root) { unified.forget(path: $path, keepingAsked: true) }
                 } else if !path.isEmpty { path = NavigationPath() }
             }
     }
@@ -657,7 +657,12 @@ struct ChatsView: View {
     private func pushOpenChat() {
         guard let key = model.openChat, !leaving else { return }
         spaceAt = [:] // the chat is the first page now, no space page under anything (as `openFromList`)
-        if rootsMode, let unified { unified.select(.page(AnyHashable(key)), path: $path) } else { path = NavigationPath([key]) }
+        if rootsMode, let unified {
+            unified.select(.page(AnyHashable(key)), path: $path)
+            unified.askedFromOutside = .page(AnyHashable(key)) // what the app came up for: kept through an assistant switch
+        } else {
+            path = NavigationPath([key])
+        }
         #if DEBUG
         // `-openOverSpace YES` with `-openSession`: the chat on its space's page, a page under it (its ‹, #1337).
         if UserDefaults.standard.bool(forKey: "openOverSpace") {

@@ -46,11 +46,20 @@ import PersonaWire
     /// or the root in front back at its root (`SidebarPageRoots.select`). Only the pop of a re-pick animates.
     @discardableResult
     func select(_ root: SidebarPageRoot, path: Binding<NavigationPath>, contentChanged: Bool = false) -> SidebarPageRoots.Step {
-        apply(path: path) { roots.select(root, path: path.wrappedValue, contentChanged: contentChanged) }
+        if root != askedFromOutside { askedFromOutside = nil }
+        return apply(path: path) { roots.select(root, path: path.wrappedValue, contentChanged: contentChanged) }
     }
 
-    /// Another assistant or hub: every root was the one before's (`SidebarPageRoots.forget`).
-    func forget(path: Binding<NavigationPath>) {
+    /// An Agent's chat asked for from outside (a notification, `-openSession`) and put in front as the root (#8603):
+    /// what the app came up for. Cleared once anything else is picked.
+    @ObservationIgnored var askedFromOutside: SidebarPageRoot?
+
+    /// Another assistant or hub: every root was the one before's (`SidebarPageRoots.forget`). `keepingAsked`: a chat
+    /// asked for from outside stays in front (the assistant read at launch, after the chat was opened, counts as a
+    /// switch; a notification's chat of another assistant stays, as `AppModel.assistantManagerChanged` keeps it).
+    func forget(path: Binding<NavigationPath>, keepingAsked: Bool = false) {
+        if keepingAsked, let asked = askedFromOutside, roots.current == asked { return }
+        askedFromOutside = nil
         apply(path: path) { roots.forget() }
     }
 
