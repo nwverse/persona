@@ -495,6 +495,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		}()
 	}
 	go n.meterUsage(ctx, n.stateReady)
+	go n.backfillUsage(ctx, n.stateReady) // the days before the hub's history, once (usage_backfill.go)
 	go n.runUsageWindows(ctx.Done())
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
