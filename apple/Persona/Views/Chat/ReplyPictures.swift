@@ -164,16 +164,17 @@ private struct ReplyPictureTile: View {
                 open()
             }
         } label: {
-            ZStack {
-                Theme.Fill.well
-                if let shown {
-                    Image(uiImage: shown).resizable().scaledToFill()
-                } else if failed {
-                    ImageNotLoaded(canRetry: true)
+            // The well's color takes the frame it is given; the picture fills it from an overlay and is cut to it (in a
+            // ZStack a filled picture is as large as it fills, and a square was as tall as a portrait picture).
+            Theme.Fill.well
+                .overlay {
+                    if let shown {
+                        Image(uiImage: shown).resizable().scaledToFill()
+                    } else if failed {
+                        ImageNotLoaded(canRetry: true)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(shape)
+                .clipShape(shape)
             .overlay(shape.stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
             .contentShape(shape)
         }

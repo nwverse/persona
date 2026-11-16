@@ -1401,7 +1401,11 @@ nonisolated struct AssistantRowText {
         self.files = files
         asked = PathRefs.unique(paths.paths + files, limit: 40)
         let inline = Set(paths.paths)
-        chips = files.filter { !FileThumbnails.isDocument($0) && (!inline.contains($0) || FilePaths.isMedia($0)) }
+        // A picture the reply draws (`ReplyImages`, #9474) is not a chip too: a path found inside its address is its.
+        let pictures = ReplyImages.all(in: text).map(\.url)
+        chips = files.filter { file in
+            !FileThumbnails.isDocument(file) && (!inline.contains(file) || FilePaths.isMedia(file)) && !pictures.contains { $0.contains(file) }
+        }
     }
 }
 
