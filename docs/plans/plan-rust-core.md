@@ -486,8 +486,12 @@ Phase 3 lands in several PRs.
     (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
-  - Not done: no production client calls these functions yet; Swift codec generation is typegen-only; device-side
-    NAPI linking and ArkTS runtime behavior remain blocked: no physical device.
+  - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966), with iOS
+    state/machine/space groups, pinned/quiet/folded rows, filters and ranks. The temporary native sorter and debug
+    shadow are deleted after the unchanged fixture corpus matches 30/30. `spec/README.md` names the core as this
+    domain's reference. A native failure retains the last usable projection and exposes failure; there is no second
+    release sorter. Device-side NAPI linking, HAP and physical-device execution remain blocked: no physical device.
+  - Swift codec generation is typegen-only; other clients have not switched this domain to core production.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
   - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
@@ -559,8 +563,10 @@ Phase 3 lands in several PRs.
     opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
-    are rejected. Tables, inline markup, math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift
-    bindings, production adapters and the #4044 performance goal remain open.
+    are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
+    math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the
+    #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and

@@ -123,7 +123,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		v.deny = "不要读取进程的环境变量（/proc/*/environ）：里面有凭据。"
 		return v
 	}
-	if larkProfileEnv.MatchString(cmd) && larkCLIRe.MatchString(cmd) {
+	if larkProfileEnv.MatchString(larkProfileRead.ReplaceAllString(cmd, "")) && larkCLIRe.MatchString(cmd) {
 		v.deny = "lark-cli 的配置档由管理者定（manager.json 的 lark.cli.profile），不要自己设或清 LARKSUITE_CLI_PROFILE。"
 		return v
 	}
