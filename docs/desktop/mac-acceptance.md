@@ -13,13 +13,20 @@ acceptance criterion it serves.
   notarized verdict, a published auto-update) stays unverified — record it, do not work around it.
 - Windows is deferred. Do not infer Windows results from this manual.
 - Use placeholders everywhere in your notes: `<hub address>`, `me@example.com`. Never paste real tokens, pairing
-  links, or personal messages into an issue or PR.
+  links, or personal messages into an issue or PR. Use a test hub with **synthetic content only**: no real
+  conversations, real machine names, internal addresses, real Inbox items or real approval details. **Review and
+  redact every screenshot before uploading** — the privacy scan cannot read text inside images.
 - If a step fails, capture the failure exactly as it appears (screenshot + what you did), and keep going to the
   next section if the app still runs. A failed step is evidence, not something to hide.
-- Known blocker to watch for: on an **unsigned/ad-hoc-signed** build the hub window may never finish loading,
-  because Electron's cookie encryption (like `safeStorage`) needs a consistent valid signature on macOS
-  (draft PR #7561, "macOS root cause narrowed"). If you hit this, record it as the **signing blocker** — do not
-  disable fuses, do not strip signatures, do not switch to a different app ID to make it "pass".
+- Two known blockers to watch for, both to **record**, never to route around:
+  1. **Packaged first-run setup** (draft PR #7561): the clean-profile `setup.html` may fail to load from the asar
+     (`ERR_FILE_NOT_FOUND`). If the very first window is an error page instead of "Welcome to Persona", that is
+     this blocker — screenshot it and stop the install part there.
+  2. **Unsigned full-hub load**: on an unsigned/ad-hoc-signed build the hub window may never finish loading,
+     because Electron's cookie encryption (like `safeStorage`) needs a consistent valid signature on macOS
+     (draft PR #7561, "macOS root cause narrowed"). If sign-in reaches a window that never loads, that is this
+     **signing blocker**. Do not disable fuses, strip signatures, or switch to a different app ID to make it
+     "pass".
 
 Suggested evidence layout, one folder per run:
 
@@ -59,7 +66,13 @@ it silently.
 | --- | --- | --- | --- | --- |
 | 2.1 | On the setup page, enter `<hub address>` (root path) and **Continue**. | The hub's own sign-in page loads in the window — the same page a browser shows, no Electron-specific login. | Screenshot of the sign-in page. | Sign in to a root-path hub |
 | 2.2 | Sign in as you would in a browser. | You land on the main chat. No blank window, no endless spinner. If the window never loads on this unsigned build, that is the known signing blocker above: screenshot it, note "unsigned full-hub blocked (#7561)", and continue with what still works. | Screenshot of the main chat after sign-in. | Sign in; main flows |
-| 2.3 | Sign out or use the local options window (Settings › General › **This computer**) to enter a different hub: `<hub address>/persona` (the sub-path one). **Continue** there. | The old hub's window closes, a new window opens on the sub-path hub, and its sign-in page loads. Links and API calls stay under `/persona`. | Screenshots before and after the switch; the sub-path hub's main chat after signing in. | Sign in to a sub-path hub |
+| 2.3 | Use the local options window (Settings › General › **This computer**) to enter a different hub: `<hub address>/persona` (the sub-path one), and **Continue**. This is the required hub-change flow — do not just sign out, which does not exercise it. | The old hub's window closes, a new window opens on the sub-path hub with its own persisted session, and its sign-in page loads. Links and API calls stay under `/persona`. | Screenshots before and after the switch; the sub-path hub's main chat after signing in. | Sign in to a sub-path hub |
+
+**Before sections 4–5, on each hub you sign in to** (and again after the hub switch in 2.3): in the app go to
+**Settings › Notifications** and turn on **Show system notifications** and **When something needs you**. Both are
+off by default; without them no system notification is sent and no `register_desktop` happens, so the next two
+sections would test nothing. The Electron permission prompt is owned by the shell; you may still need to allow
+Persona in System Settings › Notifications.
 
 ## 3. Main flows
 
@@ -78,17 +91,19 @@ the web app itself.
 | Step | Do | Expected | Capture | #6770 item |
 | --- | --- | --- | --- | --- |
 | 4.1 | Close the window (Cmd-W or the red light). The app keeps running in the menu bar / Dock. | The app does not quit; the tray icon stays. | — | Close-to-background |
-| 4.2 | From another device, make a session need you (an approval card or a question). | A **macOS system notification** appears with the session's title. The Dock icon shows a badge with the same Needs-you count the web shows. | Screenshot of the notification as delivered by macOS, and of the Dock badge. | Closed-window notification + badge |
+| 4.2 | From another device, make a **new** session need you (a fresh approval card or question — not one you already used). | A **macOS system notification** appears with the session's title. The Dock icon shows a badge with the same Needs-you count the web shows. | Screenshot of the notification as delivered by macOS, and of the Dock badge. | Closed-window notification + badge |
 | 4.3 | Click the system notification. | The Persona window comes forward **on that session**, not on a home page. | Screenshot of the window it opened. | Click opens the session |
-| 4.4 | If macOS never shows notifications: open System Settings › Notifications › Persona and allow them, then repeat 4.2. | The permission prompt or setting is honored; no duplicate notifications for one item. | Note whether you had to grant permission manually. | Notification permission |
+| 4.4 | If macOS never shows notifications: open System Settings › Notifications › Persona and allow them, then repeat 4.2 **with a fresh, distinct item**. | The permission prompt or setting is honored. Exactly **one** notification per item, and its click opens the session in Persona. If a native display failed, the web falls back to a browser notification: a duplicate notice, or a click that opens a browser instead of the app, is a **failure to record**, not a pass. | Note whether you had to grant permission manually, and whether any duplicate or browser-fallback notice appeared. | Notification permission |
 
 What this proves that CI cannot: the OS notification center actually displays and delivers a click, and the Dock
 badge is really drawn. The smoke only reads the count the shell received.
 
 ## 5. Lock / unlock, `register_desktop`, and Phone Muted
 
-You need your iPhone with the Persona app, signed in to the same hub, and **Phone Muted** turned on
-(Settings on the phone; it suppresses "Needs you" pushes while a desktop is active).
+You need your iPhone with the Persona app, signed in to the same hub. Turn on **Phone Muted**: with the desktop
+app active, the phone shows a **"Persona is signed in on your Mac"** banner over the chat list — tap it and enable
+**Phone Muted** in that sheet. (It is not in the phone's general Settings.) It suppresses "Needs you" pushes while
+a desktop is active. Confirm section 2's notification switches are on, or no desktop registration happens.
 
 | Step | Do | Expected | Capture | #6770 item |
 | --- | --- | --- | --- | --- |
@@ -102,7 +117,7 @@ You need your iPhone with the Persona app, signed in to the same hub, and **Phon
 | --- | --- | --- | --- | --- |
 | 6.1 | In the local options window (first-run page, or Settings › General › **This computer** after sign-in), turn on **Open Persona when you sign in to this computer**. Log out of macOS and back in. | Persona starts at login. If macOS asks for approval in System Settings › General › Login Items, the setting must say so rather than claim success; approve it there and log out/in once more. | Screenshot of the setting, and of the app running after login. | Launch at login |
 | 6.2 | Click the menu-bar tray icon. | A menu with **Open Persona**, **Check for updates**, **Quit Persona**. Open brings the window back; Quit really exits (no icon left). | Screenshot of the menu. | Tray |
-| 6.3 | Choose **Check for updates**. | It turns into "Checking for updates…", then either "Persona is up to date" or a failure line, then back to **Check for updates**. An unsigned build has no published feed yet, so record exactly what it says; a download here is not expected. | Screenshot of the menu after the check. | Update UI (not a published update) |
+| 6.3 | Choose **Check for updates**. | It turns into "Checking for updates…", then either "Persona is up to date" or a failure line, then back to **Check for updates**. Record exactly what it says. Today there is no published desktop release, so a download is not expected **yet**; the feed is baked into the package, so once a signed release exists an unsigned build can find and download an update (Squirrel.Mac then refuses the install) — that later behavior is not a pass either. | Screenshot of the menu after the check. | Update UI (not a published update) |
 
 A real published auto-update (old signed version → new version after restart) is **not testable** until signed
 releases exist. Leave that row open in #6770.
@@ -113,13 +128,18 @@ Link is a separate install for a Mac whose Agents the hub should reach. If this 
 otherwise install it first with the [independent Link install guide](../operations/persona-link-install.md) (source build; ad-hoc signed). Do not
 expect the desktop app to install Link for you.
 
+**Prerequisites for 7.2** (the desktop artifact alone is not enough): macOS 15 or later, the **full Xcode app**
+(not just command-line tools), Go, and a repository checkout on this Mac. `mac-link.sh` also needs a bundle-id
+prefix: set `mac.link_bundle_id` (or `app.bundle_id`) in `~/.config/persona/config.json`, or export
+`PERSONA_LINK_BUNDLE_ID`. Without these the install stops and says what to set.
+
 | Step | Do | Expected | Capture | #6770 item |
 | --- | --- | --- | --- | --- |
 | 7.1 | With Link **not installed** (or before installing): open the local options window. | The Persona Link section says Link is not installed and points to the separate guide; pairing/reconnect buttons are disabled. Chat works without it. | Screenshot of that section. | Independent installs |
 | 7.2 | Install Link (`./scripts/app/mac-link.sh install`). Reopen the local options window or **Refresh**. | Its redacted status appears: connection state and names only — no `link.json`, no token, no internal addresses. | Screenshot. | Link status in the app |
 | 7.3 | In the signed-in web app, **Machines › Add computer**, copy the pairing link, then in the desktop's Link section choose **Pair this computer** and paste it. Confirm on the web screen. | Pairing succeeds; the computer shows up on the hub's Machines page. | Screenshots of the pairing flow and the Machines entry. | Pairing from the app |
 | 7.4 | Disconnect the connector from the hub side (stop the hub's connection, or briefly turn off this Mac's network), then use **Reconnect** in the app once the network is back. | The connector reconnects immediately on your request, without you editing `link.json` or running `persona-link reconnect` in a shell. | Before/after status screenshots. | Reconnect from the app |
-| 7.5 | Check the background service: quit the desktop app entirely, then on the hub look at this Mac's node. | Link and the resident node keep running with the desktop app closed. `persona-link status` shows the launchd agents `com.persona.link` and `com.persona.node`. | Screenshot of `persona-link status` output (redact any real names). | Service independent of the app |
+| 7.5 | Check the background service: quit the desktop app entirely, then on the hub look at this Mac's node. | Link and the resident node keep running with the desktop app closed. Verify **both** services: `persona-link status` reports the connector's `com.persona.link` agent, and `persona-link node status` reports the resident node's `com.persona.node` agent (one command does not show both). | Screenshots of both status outputs, with any real names redacted. | Service independent of the app |
 
 ## 8. Screen Recording permission
 
@@ -127,7 +147,7 @@ Persona Screen (part of the Link package, not of the Electron app) owns this per
 
 | Step | Do | Expected | Capture | #6770 item |
 | --- | --- | --- | --- | --- |
-| 8.1 | Start a live-screen session for this Mac from the hub (Persona Screen). | macOS asks for **Screen Recording** for Persona Screen; after you allow it in System Settings › Privacy & Security › Screen Recording and restart the helper, the live screen works. | Screenshot of the permission prompt and of the working live screen (with synthetic content only). | Screen Recording permission |
+| 8.1 | In the web app open **Machines › this Mac**, and click **View screen** at the top of the page. The live screen uses macOS **Screen Sharing** (VNC): if asked, enter this Mac's own screen-sharing account/password (the Mac's login). Once the video-capable client signs in, macOS asks for **Screen Recording** for Persona Screen. Allow it in System Settings › Privacy & Security › Screen Recording, then stop and reopen the live-screen session. | The permission prompt names Persona Screen; after allowing it and reconnecting, the live screen works. | Screenshot of the permission prompt and of the working live screen (synthetic content only). | Screen Recording permission |
 | 8.2 | Rebuild/reinstall Link without changing Persona Screen's sources, and start the live screen again. | The grant survives (the helper is reused byte-identically). If you did change its sources or signing, macOS asks once more — that is expected, note it. | Note whether you were asked again. | Permission persistence |
 
 ## 9. What stays open after this manual
@@ -136,8 +156,9 @@ Persona Screen (part of the Link package, not of the Electron app) owns this per
 - **A published auto-update** from a real GitHub Release, including macOS's Squirrel.Mac accepting the new
   signature.
 - **Windows**: every equivalent step, on a real Windows PC.
-- The packaged **first-run** gate is covered by draft PR #7561 and its owner; if your 1.3/2.2 hit the unsigned
-  full-hub signing blocker, that is the same boundary, not a new bug to route around.
+- The packaged **first-run** gate is covered by draft PR #7561 and its owner. The two blockers named at the top
+  (clean-profile setup not loading; the unsigned full-hub cookie/signing block) are that same boundary, not new
+  bugs to route around.
 
 Report results on #6770 with the evidence folder's screenshots, naming the exact package artifact and run you
 tested. Mark each criterion you verified; leave the rest explicitly unverified.
