@@ -60,7 +60,8 @@ class AgentsReadingRestoreTest {
         state = rememberLazyListState()
         uiScope = rememberCoroutineScope()
         DisposableEffect(Unit) { onDispose { whileAway?.invoke(); whileAway = null } }
-        RestoreAgentReadingPosition(state, rows, paginationFooter = false, loaded = loaded)
+        val restoring = RestoreAgentReadingPosition(state, rows, paginationFooter = false, loaded = loaded)
+        KeepAgentReadingPosition(state, rows, paginationFooter = false, scope = emptyList(), restoring = restoring)
         // A heading above the tree, as the page has, so the tree does not start at the list's first item.
         LazyColumn(Modifier.height(300.dp), state = state, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item("search") { Box(Modifier.fillMaxWidth().height(40.dp)) }

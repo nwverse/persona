@@ -49,9 +49,10 @@ internal fun readingRestore(saved: SavedReadingAnchor, keys: List<String>, loade
 /**
  * Remembers where the list rested, across a rebuilt screen, and puts it back when the tree has the row. A touch before
  * that wins: the user's own scroll is never undone. At the top nothing is kept, so a rebuilt list opens at the latest.
+ * The return is true while such a restore owns the list, so live-read anchoring leaves it alone until the row is back.
  */
 @Composable
-internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentTreeEntry>, paginationFooter: Boolean, loaded: Boolean) {
+internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentTreeEntry>, paginationFooter: Boolean, loaded: Boolean): Boolean {
     var savedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var savedOffset by rememberSaveable { mutableIntStateOf(0) }
     // Read once: what this screen saves from now on is not what it starts from.
@@ -91,4 +92,5 @@ internal fun RestoreAgentReadingPosition(state: LazyListState, tree: List<AgentT
             savedOffset = anchor.offset
         }
     }
+    return pending != null
 }

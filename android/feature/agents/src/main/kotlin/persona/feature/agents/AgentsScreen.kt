@@ -321,12 +321,13 @@ internal fun AgentsScreen(
     val controls = page.settings
     // Use the effective sort and the user's fold choices, which are kept separately from the live list projection.
     // Display includes the Compact/Detailed preference in every style.
+    val restoring = RestoreAgentReadingPosition(listState, tree, paginationFooter, page.loaded)
     KeepAgentReadingPosition(listState, tree, paginationFooter,
         scope = listOf(group?.namespace, assistant.id, assistant.group, controls.grouping, controls.sort,
             controls.quick, controls.machineFilter, controls.query, controls.hideBotmux,
             controls.folded, controls.expandedIdle, controls.expandedQuiet, page.preferences.foldedTabs, expandedTasks,
-            page.preferences.range, page.preferences.display, PersonaTheme.style))
-    RestoreAgentReadingPosition(listState, tree, paginationFooter, page.loaded)
+            page.preferences.range, page.preferences.display, PersonaTheme.style),
+        restoring = restoring)
     // Rows outside the tree name their computer while the list mixes computers, By To-do's their host while it mixes
     // hosts (iOS `rowMachine`, `mixedHosts`; #4338 A9).
     val mixesComputers = remember(page.list, page.settings.machineFilter) { page.list.mixesComputers(page.settings.machineFilter) }

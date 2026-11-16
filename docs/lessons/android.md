@@ -808,6 +808,17 @@ so only the last one restores user-scroll handling. With a frozen Compose test c
 to invalidate and another to apply composition and side effects; advance both before asserting. For a restoration test,
 hold a real `state.scroll` open until the snapshot observer sees it instead of using an instantaneous `scrollToItem`.
 
+Process restoration and live-read anchoring are two owners of the same list and must be tested together. The lazy list first
+restores its own index; the live observer can take a reading anchor there and then undo the subsequent key-based restore with
+a well-intentioned offset correction. `RestoreAgentReadingPosition` reports while its restore is pending, and
+`KeepAgentReadingPosition` clears its anchor and issues no correction during that interval. Testing `RestoreAgentReadingPosition`
+alone passes while the production composition still returns to another row; composing both makes the old failure reproducible.
+
+`am kill` stops background processes, not an app held important by a foreground service: check the PID instead of assuming the
+command created process death. On a rooted test emulator, a direct signal after state saving can exercise retained-task
+restoration without `force-stop` clearing the task; record that distinction and keep the same-PID `am kill` attempt as a
+no-op, not as restoration evidence.
+
 ## Cleanup warnings are acknowledged per operation, not consumed on arrival
 
 A hub retry of an extension uninstall creates a new operation id, so it needs the same in-flight pairing phase as the first

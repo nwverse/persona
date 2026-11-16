@@ -56,7 +56,7 @@ class AgentsReadingResizeTest {
     private fun show() = rule.setContent {
         val state = rememberLazyListState()
         // The window's size is part of the reading position's scope, as the screen passes it.
-        KeepAgentReadingPosition(state, rows, paginationFooter = false, scope = listOf(height))
+        KeepAgentReadingPosition(state, rows, paginationFooter = false, scope = listOf(height), restoring = false)
         LazyColumn(Modifier.height(height), state = state, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(rows, key = { it.key }) { row -> Box(Modifier.fillMaxWidth().height(52.dp).testTag(row.key)) }
         }
