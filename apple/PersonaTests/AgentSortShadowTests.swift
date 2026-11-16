@@ -57,7 +57,8 @@ import PersonaWire
 
     @Test func swiftProjectionReplaysAllThirtyAgentsListFixtures() throws {
         let fixtures = try ProjectionFixture.cases(in: "sort", operation: "agents_list")
-        #expect(fixtures.count == 30)
+        // The original #9058 corpus has 30 cases; later additions stay in this same comparison.
+        #expect(fixtures.count >= 30)
         for fixture in fixtures {
             do {
                 let snapshot = try nativeSnapshot(fixture)
