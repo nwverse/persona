@@ -567,16 +567,17 @@ func (s *Service) supervisedTurn(machine, session string, start time.Time) bool 
 	return false
 }
 
-// chatBridgeFinish: sess is hosted in a Lark chat bridge (sessionorigin "feishu", the Agents rows' "Lark group"),
-// which answers in the topic the turn was asked in, and its turn ended normally (assistantwire.NormalFinish, the host
-// reporting no failure of its own). Only on Claude Code and Codex, which tell a failed turn on the session; another
-// agent's is pushed as ever.
+// chatBridgeFinish: sess runs in a Lark chat bridge (sessionorigin.ChatBridge: its own pane, the Agents rows' "Lark
+// group", or a pane of the herdr session it runs its agents in, #8845), which answers in the topic the turn was asked
+// in, and its turn ended normally (assistantwire.NormalFinish, the host reporting no failure of its own). Only on
+// Claude Code, Codex and TRAEX, which tell a failed turn on the session (TRAEX's conversation is a Codex rollout, read
+// as Codex's: task_complete's error is TurnError); another agent's is pushed as ever.
 func chatBridgeFinish(sess proto.Session) bool {
-	if sessionorigin.Of(sess) != "feishu" || strings.TrimSpace(sess.FailureReason) != "" {
+	if !sessionorigin.ChatBridge(sess) || strings.TrimSpace(sess.FailureReason) != "" {
 		return false
 	}
 	switch sess.Agent {
-	case "", "claude", "codex":
+	case "", "claude", "codex", "traex":
 		return assistantwire.NormalFinish(sess)
 	}
 	return false

@@ -694,6 +694,7 @@ sending identity or confirmation behavior.
 - Tiles (an extension's `grid` and `carousel`, `ExtensionTiles.swift`, #827): `Theme.Radius.card` on the chip fill, `Theme.Size.tileMin` / `tileHeight` / `tileNarrow` / `tileRegular`; one that is on takes its named color's tint and a ring of it, the words never take the color.
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.
+- A row without a background that reaches the edges of an inset-grouped cell (`listRowInsets` leading 0 and `listRowBackground(Color.clear)`, such as the Knowledge kind bar) adds `.unclippedListRow()` (`apple/Persona/DesignSystem/UnclippedListRow.swift`): the cell's 26 pt rounded corners clip it otherwise, and its first chips lose a corner (#7735). A row with a background keeps the clipping, or its square corners show.
 - Row height at least 44. Sidebar rows use `Theme.Sidebar`. The iOS Agents list (#3753): `Theme.Size.tapTarget` is its least row height in every grouping and display; a row that is one plain button takes taps on its label alone, so the row gives its room above and below to the label (`ButtonRowInsets`, `ButtonRowLabel` in `apple/Persona/Views/Chats/RepoTreeRows.swift`) and the label is the whole row; folding headings are `TouchHeight` tall and fold chevrons `tapTargetFrame` squares. The Mac keeps its sizes.
 - Chip family: `Chip` (label), `FilterChip` (toggle), `LinkBadge`, `CountBadge`, plus 50+ lookalikes in feature code (DS-21).
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
@@ -710,7 +711,7 @@ sending identity or confirmation behavior.
 - A long list of records on a detail page (a to-do's Decisions, web and iOS, #6447): the first five show, with **Show all N** under them and **Show the first 5** to go back. The header carries the fold-all button with the Agents title row's meaning (the web's chevron icon, corners in to collapse and out to expand, and its name as the tooltip; iOS's Collapse All / Expand All symbols, `Theme.Icon.collapseAll` / `expandAll`): Collapse all while any record is shown folds the list away, Expand all shows it whole. The header's count is unchanged by what is shown. Nothing is stored: each to-do opens at the first five, and recording or revising one shows the whole list so the new one is in view. No button while the list is empty.
 - **Inbox matter detail** (#6611; web `InboxDetail.tsx` and `InboxEvent.tsx`): the title's small line says where and who, then the current state, any suggestion, the background and the timeline. The state sentence keeps the processing-conversation link and offers **Say something** when no suggestion is waiting, or **Try again** after a failure; the instruction field reuses the suggestion editor's input and standard small buttons. The timeline starts with the three newest steps and expands on request. A `reported` step always uses the reported icon and is distinguished from program-confirmed steps by the existing neutral **Tag** ("Assistant says") and secondary text, not a new surface, tint or token. Source and Agent states reuse the existing brand marks and shared state words; missing fields keep the old presentation.
   - On iOS (`InboxEventViews.swift`), the header uses `InboxNow.meta` when `where` exists and the old source line otherwise. `InboxNow.text(for:)` supplies the current sentence for every known state, including done states and states with a suggestion; a state key alone opens the event detail. Row and detail both render `InboxNow.symbol(for:)` through `InboxNowSymbol`: waiting has a still clock, only queued / looking / agent_working spin, Needs-you states use the existing mark (failed is red), and done / FYI / folded have no mark. The same state row carries the instruction action; the input uses the suggestion editor's well and `InboxSuggestionButton`, and a stale answer or error uses `InboxSuggestionModel`'s existing notice and error. The timeline's three-step projection and `via` icon meaning are shared, fixture-checked logic. A source id draws its `BrandMark` when one exists, otherwise its generic `ThemedIcon`; `reported` uses `Theme.Icon.reported`, a neutral compact `Chip` ("Assistant says") and secondary text; the row shows `detail` when present, otherwise `text`, so the server's older-app prefix is not repeated; inline detail is not repeated in an expansion, and detail alone offers no expander. Agent and Agent-stopped rows with a session link read that one session's `AgentState.label` and `tone`; an unlisted session shows no state. Three or fewer entries have no expander.
-- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Waiting for merge is a separate open section backed only by fresh matching PR facts; it keeps the linked PR and concise review/check/conflict blockers visible. The conversation tray gives that section its own matching count and rows, outside In progress. A row that is only worth a look (Just finished) has a one-tap **Got it** at the end of its status line, under the time (#6578; Android: the end of its last line; iOS: still under its words, the same secondary button as Restore, and a leading swipe action after the full swipe's own, until #7148), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. On the web it is a small capsule, never a line of its own: the row is exactly as tall as without it and the title keeps its room. It is drawn 20 px tall with the check and the word in `--ink-2` on `bg-surface` with `shadow-btn` (hover `bg-hover`), hanging over the 18 px line by negative margins, a 44 px finger target through `touch-hit`. Its press stays its own: it never opens the item. Why not under the words: a button line made these rows taller than every other and left the room under the time empty. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (what the user has to act on, then the unfinished work, then what just finished; only Shelved and Done start folded, Done last, #5707), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Waiting for merge is a separate open section backed only by fresh matching PR facts; it keeps the linked PR and concise review/check/conflict blockers visible. The conversation tray gives that section its own matching count and rows, outside In progress. A task waiting for its supervisor's review has an entry of its own there too, **Persona reviewing** (#8678), shown only while one waits and drawn neutral (grey `ink-3` dot, `ink-2` label, no attention or working colour), because nothing in it is the user's to do; Needs you keeps only what is. A row that is only worth a look (Just finished) has a one-tap **Got it** at the end of its status line, under the time (#6578; Android: the end of its last line; iOS: still under its words, the same secondary button as Restore, and a leading swipe action after the full swipe's own, until #7148), which files it under Done at once with an Undo toast (4.4, reversible rung); opening the item counts as seeing it, without a word. On the web it is a small capsule, never a line of its own: the row is exactly as tall as without it and the title keeps its room. It is drawn 20 px tall with the check and the word in `--ink-2` on `bg-surface` with `shadow-btn` (hover `bg-hover`), hanging over the 18 px line by negative margins, a 44 px finger target through `touch-hit`. Its press stays its own: it never opens the item. Why not under the words: a button line made these rows taller than every other and left the room under the time empty. Rules in `docs/assistant/todo-status-sop.md` ("Seen"). Why not the folder groups: they say where work lives, not who has to act. Why unfinished work above Just finished: what still has to be done should not take a scroll and a tap while finished work sits above it.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740).
@@ -893,6 +894,12 @@ Model configuration reuses settings `Group` / `Row` and neutral `Pill` component
 pills keep their existing single-line layout. A separate, labelled 44 px **?** control expands help inline on
 hover, focus or click, with Escape/outside-click dismissal. Why inline: explanations include environment and configuration
 details that must remain readable on phones and at larger text sizes; a short tooltip or a nested button would not fit.
+
+The Main-chat agent-kind notice (#4662, `MainChatAgentNotice`) reuses the compaction strip's neutral surface, spacing,
+caption text and info icon; its explanation wraps, and the quiet **New main chat…** button stays on one line, opens
+the existing dialog and has the existing `touch-hit` 44 px coarse-pointer target without changing its drawn height. It appears only when the loaded launcher list confirms that the current main chat and its configured
+default use different agent kinds, with no conversation pick. The Models editor uses the same rule in an inset explanation
+that follows the provider draft. Same-kind, unknown and unloaded states add no warning or new action.
 
 Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
 Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
@@ -1299,7 +1306,7 @@ Severity ladder to adopt:
 
 In-meeting typed questions (#4486) are the exception to rung 4: they use an inline input row in the live recording sheet's bottom bar (`apple/Persona/Recording/RecordingLiveBar.swift`), not a system text-entry alert. The question usually refers to what was just said, and a modal alert hid the live lines and the earlier answers while the user typed. It also allowed only one line and no reference back. The keyboard button beside Ask Persona opens the row (at accessibility sizes, More › Type a Question opens it). The row shows a hint, then a field and send button that reuse the composer's `ComposerSurface` and `ComposerRoundButton` (3.1); the two are one view, `MeetingQuestionField` (`apple/Persona/Recording/MeetingQuestionField.swift`), which the meeting page's composer reuses ("Meeting page (#3862)" below), so the two stay alike. The field grows to `Theme.Recording.askLines` lines (`askLinesLargeType` at accessibility sizes, where the hint also steps aside while the keyboard is up and the field's spoken hint carries it). Send stays in place but is dimmed and disabled until there is non-whitespace text, and Return sends too. While the row is open, the keyboard button becomes Cancel, which drops the draft as the alert's Cancel did. While the field has the keyboard, Pause, Stop and Bookmark step aside so the timeline keeps the room. Sending goes through the same `MeetingAsk.ask(_:text:)`, then clears the field and closes the row. It is not a fifth composer (DS-19): it has no attachments, dictation (the microphone is recording), model menu or full-page editor.
 
-**Send now** on the web's queued messages acts at one press, with no confirmation (#7155; it used to open a `Dialog`, and an in-place second press was tried and dropped). On this ladder it is not destructive: nothing is lost, since the messages go now rather than at the Agent's next step, and only the step under way is cut short. Next to it, Delete (which does lose the message) and the composer's Stop and Esc (which cut the whole turn) act at one press, and Claude Code's own send-now key asks nothing, so a confirmation here was the odd one out. What the dialog said (what the step under way does) is the button's tooltip and its accessible description; the toast that follows names who got them.
+**Send now** on the web's queued messages acts at one press, with no confirmation (#7155; it used to open a `Dialog`, and an in-place second press was tried and dropped), and so does Send Now on the iOS queue strip (#7169; it used to open a `confirmationDialog`). On this ladder it is not destructive: nothing is lost, since the messages go now rather than at the Agent's next step, and only the step under way is cut short. Next to it, Delete (which does lose the message) and the composer's Stop and Esc (which cut the whole turn) act at one press, and Claude Code's own send-now key asks nothing, so a confirmation here was the odd one out. What the dialog said (what the step under way does) is the button's tooltip and its accessible description on the web, and its VoiceOver hint on iOS; the toast that follows says they went (on the web, to whom).
 
 The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
@@ -1513,7 +1520,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 
 - **Home**: the bottom of the session page, a stack of cards above the composer, which stays usable (iOS `PendingCards`;
   Android `DecisionStack` and `DecisionDock`, #4210 T6). A request that blocks the Agent stays visible there until it is
-  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). The cards stack as they come
+  answered or folded, and says why the Agent waits ("Answer this so Claude can continue"). A card its session does not
+  let the app answer (no `capabilities.approve`) is greyed with one line under it in `cautionText` saying why: where the
+  session can be attached live (a Codex thread on a shared app-server not joined yet), that attaching answers it here,
+  with the ⋯ menu's **Attach Live** beside it; otherwise, to answer it on the computer (iOS and iPadOS, #6868; Android
+  says the same inside the card; the web still greys it without a word). The cards stack as they come
   while they fit in half the page; past it they scroll on their own under "N pending", permissions first and then the
   newest, and a new card brings the stack back to its top. "N pending" counts the cards in the stack. With the keyboard
   up the cards take the conversation's room above the rest of the footer, the composer staying over the keyboard, and
@@ -1878,33 +1889,66 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 
 ## HarmonyOS native structure
 
-HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, floating Tabs, lists, menus, sheets and
-confirmation dialogs. The window breakpoint selects stack (XS/SM/MD) or native split (LG/XL); device names do not.
-The master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. Its bottom tabs are 56 vp with a
-12 vp system-component margin; the system safe area is not added a second time.
+HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, lists, menus, sheets, selection controls and
+confirmation dialogs. Persona and Agents are peer conversation views in the native title control. Inbox, Todos,
+Knowledge, Health, Apps, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
+views. Use native `CapsuleSegmentButtonV2` for the peer switch at ordinary font scales and native `Select` at 1.5× or
+larger. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
+device name. The expanded master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. It has no
+permanent third pane or replacement navigation rail.
 
-An Agent's detail title is omitted only while its identifying selected row is fully visible in the expanded master.
-Compact, collapsed, filtered-out, offscreen or different-owner contexts restore the native title. Child pages keep
-their own title and back action. A title already provided by the destination is not repeated in the body. Avoid
-explanatory subtitles, explanatory child controls and duplicate actions; native control placement, names and state
-must explain their purpose. Explicit target and consequence text remains necessary for a consequential decision.
+Navigation owns system avoidance on main pages. Main content adds only its 4 vp business footer; do not copy the gesture
+area height into padding. A bottom sheet measures the actual content host against the current system avoidance
+boundary after layout and adds only the remaining overlap. Recompute when the host or avoid area changes; an already
+avoided host or centered sheet needs zero extra system inset. Never hard-code an inset or repeat it on inner rows. Preserve the system
+gesture region and keep the last row and primary action above it.
 
-Glass, Brief and Board preserve this structure and the same fields/actions, using semantic own-message colors with
-light/dark resources. Device-wide Avatar and Accent preferences are independent of the Hub and style. Native
-`WithTheme` supplies both light and dark system tokens; an own-message subtree supplies readable bubble tokens.
+The 4 vp footer is application spacing, not a fixed HarmonyOS safe-area measurement. Native Navigation paints the primary pane's grouped/canvas background through the gesture area while leaving scrolling controls in the safe layout region; a short list's remaining height is not extra inset. Question, plan-editor, context-selection and Spaces sheet content uses 16 vp internal edges plus only the outstanding measured system overlap. The intrinsic-height Agent filter sheet keeps its 12 vp internal inset and measures its own outstanding overlap; centered sheets add no system inset. Chat siblings and wrapped GridRow rows use 8 vp gaps, and same-level feed cards use 16 vp content edges. The compact composer reserves fixed action targets and 8 vp gaps, giving its remaining width to the same editor instead of rounding button slots to coarse columns. Do not merge the jump-to-latest button into the composer surface. Appearance labels and Select controls wrap as whole items. At enlarged text sizes Inbox status uses the Agents native Select pattern. Native Back visibility also determines whether a custom title needs its own leading 16 vp inset.
+
+Conversation detail hides its title only while the matching selected row is fully visible in the expanded master
+and identifies the conversation for the same owner. Compact, collapsed, filtered-out, offscreen or different-owner
+contexts restore the native title. Child pages keep their own title and back action. A title already provided by the
+destination is not repeated in the body. Avoid explanatory subtitles, child controls and duplicate actions; native
+control placement, names and state must explain their purpose. Explicit target and consequence text remains
+necessary for consequential decisions.
+
+Use the shared native roles and `Tokens`, not screen-specific literals. The System style's light palette uses the
+emphasized action blue (`#0071E3`) with white on-action text, text-link blue (`#0064C8`) and a light
+own-message bubble (`#DCEAFF`; dark `#233B57`). The emphasized control uses the system's paired light/dark resources.
+Status roles stay distinct: needs-you is `#0064C8` / `#86B6FF`, working is `#9B5500` / `#FFB224`, unread is
+`#1D7A4C` / `#4CC38A`, and positive is `#237337` / `#30D158` in light / dark appearance. Visible state words or
+symbols accompany color. Destructive/error colors are not substitutes for working or positive states.
+The standard system typography is 20 fp title, 17 fp body, 14 fp secondary and 13 fp caption, with 24 fp body line
+height. Follow the application system font scale up to 3.2×; use 16 vp page edges, 12 vp insets, 8 vp gaps, 24 vp
+section spacing, 20 vp business-surface corners and a 48 vp minimum response region. System controls own their
+internal dimensions and material. Fixed icon slots use 22 vp symbols, independently of the text scale.
+The compact Persona/Agents Select caps only its displayed value at 2× so both title actions remain reachable;
+its native option menu and content continue to follow the system text scale. Native Radio and Checkbox outlines
+use the secondary foreground when unselected; the control background is not an outline color.
+
+System is the default style for a fresh or unset preference. Existing explicit Glass, Brief and Board selections stay
+selected and remain available after update. Avatar, Accent, color mode and style are separate. Standard is the
+default row density when an older device-appearance record has no density value; saving density preserves the
+existing Avatar and Accent fields. Agent grouping (flat, computer, repository or worktree) is a separate owner- and
+view-scoped workspace preference, not a device appearance field. Preference restoration finishes before selection
+is enabled, failed writes keep the last confirmed value, and changing one option does not reset the others.
+
+Native `WithTheme` supplies light and dark system tokens; an own-message subtree supplies readable bubble tokens.
 Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
-captions. Preference restoration completes before selection is enabled, and a failed write retains the previous
-selection. Native system materials belong to supported controls; the client does not simulate them with
-another navigation shell. Horizontal half-fold uses `FoldSplitContainer`: reading above, the current decision or
-composer below, with native crease avoidance and a scrollable interaction area. The view samples native crease capability at creation; an image that omits fold geometry retains ordinary native Column/Scroll layout, without fabricated hover regions. Configuration updates do not replace that view’s input or transcript subtree. Ordinary posture uses measured
-interaction height rather than a fixed 50/50 split. A system photo editor returns a separate selected copy; system preview owns supported
-image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
-verification contract. This is a new platform implementation and does not alter another client's default style.
+captions. Package images remain bounded, decoded natively and installed atomically. Native system materials belong
+to supported controls; the client does not simulate them with another navigation shell. Horizontal half-fold uses
+`FoldSplitContainer`: reading above, the current decision or composer below, with native crease avoidance and a
+scrollable interaction area. The view samples crease capability at creation; an image without fold geometry uses an
+ordinary native Column/Scroll layout, without fabricated hover regions. Configuration changes do not replace the
+view's input or transcript subtree. Ordinary posture uses measured interaction height, not a fixed 50/50 split.
+A system photo editor returns a separate selected copy; system preview owns supported image zoom and document
+viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and verification contract.
 
-The composer uses native GridRow/GridCol spans and order. At an effective application font scale of 2 or higher, or when the pane width
-leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
-keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
-callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
+The composer uses native GridRow/GridCol spans and order. Focus, draft, attachments, the actual composer width and
+system font scale rearrange one TextArea in place; they do not replace its node or draft owner. At 1.5× or in a narrow
+pane, actions can stack with complete single-line labels. A local font multiplier is not a substitute for the
+native system scale. Verify focus and IME composition on device when width, keyboard or posture changes; static
+layout and portable tests do not prove native composition continuity.
 
 A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
 that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
@@ -1917,9 +1961,20 @@ Open editable questions begin with their prompt, without a generic answer subtit
 states stay explicit. Chat has no permanent Hub/computer/path subtitle. Agent permissions and plans keep their
 existing approval gates.
 
+Plan and receipt summaries open a native detail destination bound to the source conversation and item identity.
+The detail locates that exact item from the feed head through successive cursors; a first-page miss is not evidence
+that the item disappeared. Failed lookup can be retried. An inline cached plan summary may remain readable, but
+plan writes need a fresh authoritative read and the existing owner/admission checks. Receipt detail distinguishes the Hub's `done`,
+`failed` and `interrupted` states; `stopped` is derived only from a successful read showing the associated Todo is
+still open, and a failed Todo read leaves the outcome unknown. Only `met` criteria count as passed; `criteria_more`
+does not imply a result. Done/stopped receipts do not offer continue. Retry requires an eligible failed-start Todo
+and current write capability; Continue requires an incomplete Todo, eligible lead Agent and current write capability.
+Suppress a duplicate Continue while automatic recovery is active, and recheck recovery/reset state before admitting
+an action.
+
 Extension applications open from a root Navigation menu into a native destination and complete List, without adding
-a primary tab. Session actions share one native Menu with MenuItem rows of at least 48vp from the title's More item or the hidden-title pane's
-More button. These are the same captured actions, not two parallel toolbars.
+a peer view. Session actions share one native Menu with MenuItem rows of at least 48 vp from the title's More item or
+the main Persona or hidden-title pane's More button. Read-only details and blocking decisions retain one fallback More button. These are the same captured actions, not parallel toolbars.
 
 The file workspace uses native composed list items, three labeled system-icon controls and scrollable, automatically
 sized local tabs. Computer transfer uses the system sheet, named computer switches, a native Radio list and Progress.
@@ -1929,6 +1984,8 @@ and minimum touch heights, with no second bottom inset. The composer and transcr
 text sizes; verification must reach each complete action within its own viewport. Theme primary fills include matching
 readable foreground tokens in both modes. Reopening an active transfer retains its captured receiving computer and
 folder; pending or unknown outcomes never silently resend.
+
+Large system text never clips decision metadata: plan machine, path and permission wrap in native Flex. Inbox search moves above its native actions from 1.5×, with intrinsic button height. Preference labels and Select controls wrap when their combined intrinsic widths exceed the row. The native peer Select uses the available title slot; only the normal-size segmented control keeps its maximum width.
 
 ## 8. Inconsistencies and duplicate definitions
 
