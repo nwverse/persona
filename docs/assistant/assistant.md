@@ -973,7 +973,7 @@ Tasks continuing original chats (`session_id`) also switch those chats to these 
 
 In the Web Scheduled tasks editor, expand **Run continuity** to edit a recurring task's state note or select **Start a new chat for each run**.
 The hub includes the last saved note in each run. Keep cursors and a short record of what has already been reported, up to 4,096 UTF-8 bytes.
-A run can stage a replacement with `schedule_state_set`. Staging is temporary. The hub saves the replacement only if it can track the run through a successful turn and write the note.
+A run can stage a replacement with `schedule_state_set`, passing the run key from its own turn's prompt; the hub checks it against the prompt of the conversation's latest turn, so a run in a reused chat cannot use an earlier run's key. Staging is temporary. The hub saves the replacement only if it can track the run through a successful turn and write the note.
 If the hub cannot register the dispatched run or monitor its conversation, it discards the draft and the next run reads the last saved note.
 A user edit takes precedence over updates from a run that started before that edit. The editor sends the note's
 revision when changing its text. If a run already saved a newer note, the hub rejects the stale edit so the user can
