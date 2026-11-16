@@ -41,15 +41,22 @@ import os
     private(set) var tapOnly = false
     private(set) var outcome: String?
 
-    @ObservationIgnored private let voice: UrgentCallVoice
+    @ObservationIgnored private let voice: any UrgentCallSpeech
+    /// Answers a card: `AppModel.resolve`, exactly as a tap on the card does, so the card is answered everywhere.
+    @ObservationIgnored private let resolve: @MainActor (Interaction, Resolution) async -> Void
     @ObservationIgnored private var run: Task<Void, Never>?
     @ObservationIgnored private var nextLine = 0
     @ObservationIgnored private let ended: @MainActor (UrgentCallSession) -> Void
     private static let log = Logger(subsystem: "persona", category: "urgent-call")
 
-    init(ring: UrgentCallRing, voice: UrgentCallVoice = UrgentCallVoice(), ended: @escaping @MainActor (UrgentCallSession) -> Void) {
+    /// `card`: the call's card when it is known already (the tests); else `prepare` finds it among the pending ones.
+    init(ring: UrgentCallRing, voice: any UrgentCallSpeech = UrgentCallVoice(), card: Interaction? = nil,
+         resolve: @escaping @MainActor (Interaction, Resolution) async -> Void = { await AppModel.shared.resolve($0, $1) },
+         ended: @escaping @MainActor (UrgentCallSession) -> Void) {
         self.ring = ring
         self.voice = voice
+        self.card = card
+        self.resolve = resolve
         self.ended = ended
     }
 
@@ -73,7 +80,7 @@ import os
     func start() {
         guard run == nil else { return }
         answeredAt = .now
-        tapOnly = !UrgentCallVoice.allowed
+        tapOnly = !voice.canHear
         run = Task { await talk() }
     }
 
@@ -197,7 +204,7 @@ import os
             await say(String(localized: "Okay, I didn't do it. What would you like instead?"))
             return
         }
-        await AppModel.shared.resolve(card, pending.resolution)
+        await resolve(card, pending.resolution)
         outcome = pending.said
         self.card = nil
         await say(String(localized: "Done. Anything else?"))

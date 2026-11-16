@@ -76,3 +76,55 @@ struct UrgentCallTests {
         #expect(encoded.contains(#""daily_cap":3"#) && encoded.contains(#""retry_minutes":3"#))
     }
 }
+
+/// A call confirmed by voice answers its card through the same resolve a tap on the card uses (#8734): the card is then
+/// answered everywhere, as if tapped. A read-back the owner turns down answers nothing.
+@MainActor
+struct UrgentCallCardTests {
+    /// A voice that says nothing and hears the owner's lines in turn, then silence.
+    final class Owner: UrgentCallSpeech {
+        var lines: [String]
+        var said: [String] = []
+        init(_ lines: [String]) { self.lines = lines }
+        func say(_ text: String) async { said.append(text) }
+        func listen() async -> String? { lines.isEmpty ? nil : lines.removeFirst() }
+        func stop() {}
+        var canHear: Bool { true }
+    }
+
+    private let ring = UrgentCallRing(id: "call_1", title: "云账单扣费失控", manager: "", conversationID: "conv", attempt: 1, group: "urgent-test")
+
+    /// Runs a call with `card` until it hangs up; returns what was answered.
+    private func call(_ card: Interaction, owner: [String]) async -> [(id: String, resolution: Resolution)] {
+        var answered: [(id: String, resolution: Resolution)] = []
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            let session = UrgentCallSession(ring: ring, voice: Owner(owner), card: card,
+                                            resolve: { ix, r in answered.append((ix.id, r)) }, ended: { _ in done.resume() })
+            session.start()
+        }
+        return answered
+    }
+
+    @Test func aConfirmedOptionAnswersTheQuestionCard() async {
+        var card = Interaction(id: "ix_1", machineID: "server", sessionID: "conv", kind: .question)
+        card.questions = [Question(question: "要不要现在停掉？", header: nil, multiSelect: false,
+                                   options: [QuestionOption(label: "现在停掉 (Recommended)"), QuestionOption(label: "再等 10 分钟")])]
+        let answered = await call(card, owner: ["现在停掉", "确认"])
+        #expect(answered.count == 1)
+        #expect(answered.first?.id == "ix_1")
+        #expect(answered.first?.resolution == Resolution(answers: ["要不要现在停掉？": "现在停掉 (Recommended)"]))
+    }
+
+    @Test func aConfirmedApprovalAllowsThePermissionCard() async {
+        let card = Interaction(id: "ix_2", machineID: "server", sessionID: "conv", kind: .permission)
+        let answered = await call(card, owner: ["批准", "确认"])
+        #expect(answered.map(\.resolution) == [Resolution(allow: true)])
+    }
+
+    @Test func aReadBackTurnedDownAnswersNothing() async {
+        var card = Interaction(id: "ix_3", machineID: "server", sessionID: "conv", kind: .question)
+        card.questions = [Question(question: "要不要现在停掉？", header: nil, multiSelect: false, options: [QuestionOption(label: "现在停掉")])]
+        let answered = await call(card, owner: ["现在停掉", "不对"])
+        #expect(answered.isEmpty)
+    }
+}
