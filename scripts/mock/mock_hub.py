@@ -14549,6 +14549,10 @@ if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
     # A critical weekly bar beside cc_main's / cc_team's ordinary ones (#5056); all values are synthetic.
     LAUNCHER_QUOTAS["claude"] = {"gateway": "example-subscription", "pools": [
         {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.95, resets=later(hours=36))]}]}
+    # a provider whose long name wraps to two lines in the rail (anthropic_main, with MOCK_PROVIDERS) gets a half-used
+    # weekly bar too, to check a two-line caption and the bar don't touch
+    LAUNCHER_QUOTAS["anthropic_main"] = {"gateway": "example-subscription", "pools": [
+        {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.5, resets=later(hours=36))]}]}
 # "Add provider" › "Add from plugin" (docs/extensions/extensions.md "Model providers"): the providers made-up plugins offer (GET /api/v1/launchers/presets).
 LAUNCHER_PRESETS = [
     {"id": "example-gateway/team", "plugin": "example-gateway", "name": "示例网关 · 团队", "description": "团队共用的 Claude Code 网关，按 Key 计费",
@@ -30703,7 +30707,8 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
 # default and pushes a main-chat revision for the notice's live positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
-MODEL_PICK_DEFAULT = "claude"
+MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
+MODEL_PICK_DEFAULT = MODEL_PICK_HOME
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -30724,11 +30729,23 @@ MODEL_PICK_REASONS = {
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+# MOCK_MODEL_PICK_GROUPS=1: several Claude launchers whose names share their first word, as an owner with a few gateways
+# has them, for the model panel rail's captions ("claude-aster" reads "aster" beside "claude-max")
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "claude-aster", "model": "opus", "source": "persona"},
+        {"name": "claude-max", "model": "opus", "source": "persona"},
+        {"name": "claude-desktop", "model": "opus", "source": "persona"},
+        {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "claude-max"
+    for _name in ("claude-aster", "claude-max", "claude-desktop"):
+        LAUNCHER_MODELS[_name] = dict(LAUNCHER_MODELS["claude"])
 
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
-    MODEL_PICK_DEFAULT = "claude"
+    MODEL_PICK_DEFAULT = MODEL_PICK_HOME
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -30813,6 +30830,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

@@ -1057,12 +1057,19 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
-  300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
+  300–460 px wide, a 428 px body (a 68 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
   runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
+  icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
+  growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in
+  brackets drops while the names stay distinct, and a first word shared with another provider drops ("claude-aster",
+  "claude-max", "codex" read "aster", "max", "codex") unless that would make two captions the same or leave only a note.
+  The full name stays the cell's accessible name and tooltip, and the list's group header. Why: providers often share a
+  letter tile, and a phone has no hover, so marks alone could not be told apart before opening one (2026-11-16).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
