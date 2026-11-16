@@ -73,7 +73,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private var mismatches = 0
     private var reports: [Report: Int] = [:]
 
-    init(reportSink: @escaping @Sendable (Report) -> Void = { _ in }) {
+    init() { reportSink = { _ in } }
+
+    init(reportSink: @escaping @Sendable (Report) -> Void) {
         self.reportSink = reportSink
     }
 
@@ -88,7 +90,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     /// Production adapter tests explicitly require a real comparison; they do not inherit the simulator's A/B opt-out.
     @MainActor func installForTests() { install(enabled: true) }
 
-    @MainActor private func install(enabled: Bool) {
+    @MainActor func install(enabled: Bool) {
         self.enabled.withLock { $0 = enabled }
         guard enabled else {
             enqueue { [weak self] in self?.removeAllChats() }
@@ -164,6 +166,10 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
                 try self.compareQueued(id, shape: "kind=loadOlder items=0")
             } catch { self.fail(id, rule: "older-request", shape: "kind=loadOlder items=0") }
         }
+    }
+
+    @MainActor func fillCompleted(_ completed: Bool, in store: ChatStore) {
+        _ = store.apply(.event(completed ? .fillCompleted : .fillFailed))
     }
 
     @MainActor func failed(_ kind: NativeContinuityInput.Kind, in store: ChatStore, fold: Item? = nil) {
@@ -262,6 +268,14 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
     }
 
+    func recordReportForTests(rule: String, shape: String) {
+        queue.sync { report(0, rule: rule, shape: shape) }
+    }
+
+    var reportShapeCountForTests: Int {
+        queue.sync { reports.count }
+    }
+
     var coreClientForTests: PersonaCoreClient? {
         queue.sync { client }
     }
@@ -324,7 +338,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         if kind == .after {
             chats[id]?.filling = requests.contains(.after) || requests.contains(.latest)
         }
-        if kind == .reloaded || kind == .fillFailed {
+        if kind == .reloaded || kind == .fillCompleted || kind == .fillFailed {
             chats[id]?.filling = false
         }
         if kind == .older || kind == .olderFailed {
@@ -420,11 +434,19 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         mismatches += 1
         chats[id]?.mismatches += 1
         let value = Report(domain: "continuity", rule: rule, inputShape: shape)
-        Self.logger.error("continuity mismatch domain=\(value.domain, privacy: .public) rule=\(value.rule, privacy: .public) input=\(value.inputShape, privacy: .public)")
         let count = reports[value, default: 0] + 1
+        Self.logger.error("continuity mismatch domain=\(value.domain, privacy: .public) rule=\(value.rule, privacy: .public) input=\(value.inputShape, privacy: .public)")
+        // A bounded cache prevents distinct shapes from growing for the app's lifetime. Evicting a dedupe entry only
+        // permits another bounded diagnostic; every occurrence still contributes to the mismatch counters.
+        if reports.count >= 256, reports[value] == nil {
+            reports.removeAll()
+        }
         reports[value] = count
         // Identical persistent mismatches cannot flood or evict the app's unrelated crash diagnostics.
         if count <= 3 { reportSink(value) }
+        // Synthetic cache-capacity checks do not need to flood the simulator log.
+        if id == 0, rule == "test-shape" { return }
+        Self.logger.error("continuity mismatch domain=\(value.domain, privacy: .public) rule=\(value.rule, privacy: .public) input=\(value.inputShape, privacy: .public)")
     }
 
     private func reportGlobal(_ rule: String) {
@@ -473,7 +495,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             event = .openFold(fold_id: input.fold?.id ?? "")
         case .loadOlder:
             event = .loadOlder
-        case .fillFailed: event = .fillFailed
+        case .fillCompleted, .fillFailed: event = .fillFailed
         case .olderFailed: event = .olderFailed
         case .rangeFailed: event = .rangeFailed(fold_id: input.fold?.id)
         }

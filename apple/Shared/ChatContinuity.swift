@@ -5,7 +5,7 @@ import PersonaWire
 /// A DEBUG mirror observes this protocol; it can never change the native result or apply a core patch to a view.
 nonisolated struct NativeContinuityInput: Sendable {
     enum Kind: String, Sendable {
-        case latest, pushed, after, reloaded, older, openFold, range, reconnected, loadOlder, fillFailed, olderFailed, rangeFailed
+        case latest, pushed, after, reloaded, older, openFold, range, reconnected, loadOlder, fillCompleted, fillFailed, olderFailed, rangeFailed
     }
 
     let kind: Kind
@@ -134,7 +134,7 @@ extension ChatStore: ChatContinuityAdapting {
             shadow(input)
             #endif
             return nil
-        case .openFold, .reconnected, .loadOlder, .fillFailed, .olderFailed, .rangeFailed:
+        case .openFold, .reconnected, .loadOlder, .fillCompleted, .fillFailed, .olderFailed, .rangeFailed:
             #if DEBUG
             shadow(input)
             #endif

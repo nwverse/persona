@@ -2147,11 +2147,11 @@ final class AppModel {
         guard shouldApply?() ?? true, let api = api(key.group), !filling.contains(key) else { return }
         filling.insert(key)
         let store = chat(key)
-        var received = false
+        var completed = false
         defer {
             filling.remove(key)
             #if DEBUG
-            if !received { ProductionContinuityShadow.shared.failed(.fillFailed, in: store) }
+            ProductionContinuityShadow.shared.fillCompleted(completed, in: store)
             #endif
         }
         for _ in 0..<8 {
@@ -2159,15 +2159,15 @@ final class AppModel {
             let response = try? await api.items(key, afterSeq: store.covered)
             guard shouldApply?() ?? true else { return }
             guard let r = response else { return }
-            received = true
             guard shouldApply?() ?? true else { return }
             switch applyBatch(store, kind: .after, items: r.items, span: r.span, moreAfter: r.moreAfter == true) {
-            case .none: return
+            case .none: completed = true; return
             case .fill: continue
-            case .reload: await reload(key, shouldApply: shouldApply); return
+            case .reload: await reload(key, shouldApply: shouldApply); completed = true; return
             }
         }
         await reload(key, shouldApply: shouldApply)
+        completed = true
     }
 
     /// Starts the chat over from the latest page (the hole was too big, or the transcript was replaced).

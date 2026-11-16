@@ -176,6 +176,38 @@ struct ProductionContinuityShadowTests {
         shadow.close(store)
     }
 
+    @Test func failureAfterAReceivedPageClearsTheOutstandingCoreRequest() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "shadow-fill-failure-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let model = AppModel(stateFolder: folder)
+        model.linksUpForTests = false
+        model.connectOnly(.demo)
+        let key = SessionKey(machineID: "fixture", sessionID: "fill-failure-after-page")
+        let store = model.chat(key)
+        _ = store.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", from: 0, to: 1), backlog: true))
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3)))
+        let responses = ContinuityFillResponses()
+        var client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "test-only"))
+        client.transport = { [weak store] request in
+            await responses.setNextPage(store?.covered ?? 0)
+            return try await responses.answer(request)
+        }
+        model.apiForTests = client
+        let allowed = MutexBox(true)
+        let first = Task { await model.fill(key, shouldApply: { allowed.withLock { $0 } }) }
+        try await responses.waitForRequests(1)
+        allowed.withLock { $0 = false }
+        try await responses.release(after: 1, items: [item(2)], from: 1, to: 2, moreAfter: true)
+        await first.value
+        // A later fence cancellation must clear the core request even though its first response arrived.
+        _ = store.apply(.batch(.pushed, items: [item(5)], span: ItemSpan(history: "h", from: 5, to: 5)))
+        let result = try await ProductionContinuityShadow.shared.compare(store)
+        #expect(result.compared == 4)
+        #expect(result.mismatches == 0)
+        ProductionContinuityShadow.shared.close(store)
+    }
+
     @Test func prefetchAcrossAnOccupiedNativeFillGateKeepsActualRequestEvidence() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "shadow-fill-gate-\(UUID())", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -186,30 +218,28 @@ struct ProductionContinuityShadowTests {
         let key = SessionKey(machineID: "fixture", sessionID: "occupied-fill-gate")
         let store = model.chat(key)
         _ = store.apply(.batch(.latest, items: [item(1)], span: ItemSpan(history: "h", from: 0, to: 1), backlog: true))
+        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3)))
         let responses = ContinuityFillResponses()
         var client = APIClient(config: ServerConfig(url: URL(string: "https://fake.invalid")!, token: "test-only"))
-        client.transport = { request in try await responses.answer(request) }
+        client.transport = { [weak store] request in
+            await responses.setNextPage(store?.covered ?? 0)
+            return try await responses.answer(request)
+        }
         model.apiForTests = client
 
         let first = Task { await model.fill(key) }
-        try await responses.waitForAfter(1)
-        // The independent HTTP prefetch is contiguous with the new push, so native calls fill after its response.
-        _ = store.apply(.batch(.pushed, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3)))
-        #expect(model.applyPrefetch(store, items: [item(3)], span: ItemSpan(history: "h", from: 2, to: 3), moreAfter: false) == .fill)
+        try await responses.waitForRequests(1)
+        // An independent HTTP prefetch completes the gap while the first native request remains outstanding.
+        #expect(model.applyPrefetch(store, items: [item(2), item(3)], span: ItemSpan(history: "h", from: 1, to: 3), moreAfter: false) == .none)
         await model.fill(key) // The existing native fill owns this gate; there is no second transport request.
         #expect(await responses.count == 1)
-        try await responses.release(after: 1, items: [item(2)], from: 1, to: 2, moreAfter: true)
+        try await responses.release(after: 1, items: [item(2)], from: 1, to: 2)
         await first.value
-        await model.fill(key)
-        try await responses.waitForAfter(3)
-        try await responses.release(after: 3, items: [item(4)], from: 3, to: 4)
-        _ = store.apply(.batch(.pushed, items: [item(6)], span: ItemSpan(history: "h", from: 6, to: 6)))
-        // A later prefetch completes that outstanding core request, then a new gap must ask for its own page.
-        #expect(model.applyPrefetch(store, items: [item(5), item(6)], span: ItemSpan(history: "h", from: 4, to: 6), moreAfter: false) == .none)
-        _ = store.apply(.batch(.pushed, items: [item(8)], span: ItemSpan(history: "h", from: 8, to: 8)))
+        // Once the prefetch and the native fill have finished, this new gap needs its own core request.
+        _ = store.apply(.batch(.pushed, items: [item(5)], span: ItemSpan(history: "h", from: 5, to: 5)))
         let result = try await ProductionContinuityShadow.shared.compare(store)
-        #expect(store.items.map(\.seq) == [1, 2, 3, 4, 5, 6, 8])
-        #expect(result.compared == 7)
+        #expect(store.items.map(\.seq) == [1, 2, 3, 5])
+        #expect(result.compared == 6)
         #expect(result.mismatches == 0)
         ProductionContinuityShadow.shared.close(store)
     }
@@ -222,6 +252,14 @@ struct ProductionContinuityShadowTests {
         shadow.loadOlder(store)
         shadow.failed(.fillFailed, in: store)
         #expect(shadow.coreClientForTests == nil)
+    }
+
+    @Test func diagnosticShapeCacheIsBounded() {
+        let shadow = ProductionContinuityShadow()
+        for count in 0..<600 {
+            shadow.recordReportForTests(rule: "test-shape", shape: "items=\(count)")
+        }
+        #expect(shadow.reportShapeCountForTests <= 256)
     }
 
     @Test func shapeCountsAndPresenceFlagsNeverCarrySequences() {
@@ -240,11 +278,20 @@ struct ProductionContinuityShadowTests {
 private actor ContinuityFillResponses {
     enum Failure: Error { case timeout, wrongRequest }
     private var pending: [(after: Int, resume: CheckedContinuation<Data, Error>)] = []
+    private var requests = 0
+    var nextPage = 0
     var count: Int { pending.count }
+    func setNextPage(_ value: Int) { nextPage = value }
 
     func answer(_ request: LocalRequest) async throws -> Data {
         guard request.path.hasSuffix("/items"), let value = request.query["after_seq"], let after = Int(value) else {
             throw Failure.wrongRequest
+        }
+        requests += 1
+        if requests > 2 {
+            return try JSONSerialization.data(withJSONObject: [
+                "items": [], "history": "h", "from_seq": nextPage, "to_seq": nextPage, "more_after": false,
+            ])
         }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { resume in pending.append((after, resume)) }
@@ -253,9 +300,9 @@ private actor ContinuityFillResponses {
         }
     }
 
-    func waitForAfter(_ expected: Int) async throws {
+    func waitForRequests(_ expected: Int) async throws {
         for _ in 0..<200 {
-            if pending.contains(where: { $0.after == expected }) { return }
+            if requests >= expected { return }
             try await Task.sleep(for: .milliseconds(10))
         }
         await cancelAll()
