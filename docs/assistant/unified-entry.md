@@ -431,6 +431,8 @@ lines, and in the user's own color and alignment they read as something the user
   (dismiss the sheet, switch to Agents, and open this Agent with the normal tab bar).
 - If a task has multiple Agents, add ⌄ beside the title. Tapping the title lists the task's Agents for switching (plus "Session Info"; web does the same, #3333).
 - Without an Agent (starting or failed to start), there is no chat page; the sheet uses its own header: state, task name, ⋯, Close.
+- On the web, that header and the empty panel say Starting only for a pending dispatch, using the same rule as the task tray.
+  Without one, the panel explains that no Agent is currently working on the task; a start failure keeps its reason and retry controls.
 - **What a dispatch opens (#3700, #3711, contract in #3718, card since #5569, one card per Agent #5110)**: each Agent a dispatch started or a task took over is one hand-off card
   (iOS `DispatchHandoffCard`, in a `DispatchHandoffCards` list; no "Dispatched N" heading). These cards name only that dispatch's Agents,
   never the whole In Progress tray. The ids are already on the client: a standalone `task` feed item's `ref` is the
