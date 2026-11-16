@@ -226,7 +226,7 @@ class Watcher:
                     continue
                 if item.get("repair_exhausted") and not item.get("failure"):
                     item["failure"] = "The previous repair budget was exhausted without a recorded diagnostic; the new three-round budget permits one more attempt."
-                if item.get("outcome") == "repair_exhausted":
+                if item.get("outcome") == "repair_exhausted" and not item.get("failure_posted"):
                     item["failure_posted"] = False
                 if item.get("outcome") == "findings":
                     item["published_findings"] = list(item.get("findings", []))
