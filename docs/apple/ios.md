@@ -2411,6 +2411,12 @@ Source view, code, JSON and logs all stay at 60 fps.
   - JSON is a tree, with expandable arrays;
   - README is rendered.
 
+## Developing Persona (#9460)
+
+Settings › About's switch that records the device's logs, errors and energy use (MetricKit, thermal state, battery,
+requests and socket frames a minute) and exports them as one zip for an Agent: [developing-persona.md](../operations/developing-persona.md).
+Code in `Persona/DevMode/`; shared code reports through `Shared/DevProbe.swift`.
+
 ## Error reports (#5621)
 
 iPhone, iPad and Mac crashes go to the hub's `error_reports` (format and rules: [protocol.md](../protocol/protocol.md) "Error reports"). Everything is in `Shared/ErrorReports.swift` (the report builder, the disk queue and the sender); `AppModel.flushErrorReports` wires it to the connection. There is no UI.

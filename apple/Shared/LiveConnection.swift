@@ -736,6 +736,7 @@ final class LiveConnection {
             }
             let event = data.flatMap(ServerEvent.decode)
             let meta = data.map(FrameMeta.read) ?? FrameMeta()
+            if let data { DevProbe.frame(type: meta.type, bytes: data.count) }
             if let event { prepare?(event) }
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
@@ -747,6 +748,7 @@ final class LiveConnection {
                     if meta.type != "extension_ui_stream" { self.note(meta) } // private sessions have no broadcast cursor
                     if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
                     if first {
+                        DevProbe.socket(.connected)
                         self.state = .connected
                         self.sayHello()
                         self.backoff = 1
@@ -758,6 +760,7 @@ final class LiveConnection {
                     if let event { self.onEvent?(event) }
                     self.receive(t, gen)
                 case .failure(let err):
+                    DevProbe.socket(.dropped)
                     self.personaContracts = false
                     let planned = self.restartNotice || (!self.closedQuiet && t.closeCode == .goingAway)
                     self.dropped(restart: planned)

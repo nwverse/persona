@@ -344,6 +344,7 @@ struct ChatView: View {
             // floats a bar over the chat (Persona's conversation, `MessageLiftHost`, #3188).
             .liftBlur(menu)
             .overlay { if liftHost == nil { MessageLiftLayer(menu: menu) } }
+            .devScreen(style == .assistant ? "assistant-chat" : "chat")
             .onAppear { liftHost?.menu = menu }
             .onDisappear { if liftHost?.menu === menu { liftHost?.menu = nil } }
             .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
