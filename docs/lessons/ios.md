@@ -78,6 +78,23 @@ function before trusting it.
 - The system's CPU and memory kills leave no `Persona-…` crash log: ask for the `cpu_resource` or `JetsamEvent` entry
   under Analytics Data instead.
 
+## A device's freeze report names its build: check it before reproducing (#9173)
+
+An iPhone Duo froze scrolling up an Agent chat, at the same answer each time, until the watchdog killed it
+(`0x8BADF00D`). Hours of simulator runs with the conversation's own items (layouts, text sizes, devices, live replies,
+an optimized build) never froze, because they ran today's code: the two `.ips` files showed the main thread in ICU
+under `PathRefs.textRefs(in:)` ← `AssistantRowText.init` ← `AssistantText.body`, the pattern #8911 had fixed that
+morning, and the device ran a Debug build from before it. The answer in view wasn't the culprit either: the lazy list
+lays out the next row past the screen, and the message above it had model names in code spans
+(`org/long-ascii-name-v1`, no extension), each tried 2^n ways.
+
+- Ask for the report (Analytics Data, `Persona-…ips`) and the build (Settings › About › Diagnostics › Build) first.
+  The frames date the code too: `textRefs(in:)` has had a deadline argument since #9128.
+  `git merge-base --is-ancestor <fix> <build>` says whether a fix is in it.
+- In a pattern run over message text, alternatives inside a repetition must not take the same character, and a
+  `[^x]*` scan started from every opener on a line is quadratic: past a few thousand characters, scan by hand with
+  the next closer's position worked out once (`PathMarkdown.protectedRanges`).
+
 ## A Debug build on an iPhone has a 1 MB main-thread stack (#6735)
 
 A Debug build installed on an iPhone crashed every time it opened on Agents: `EXC_BAD_ACCESS` in the main thread's stack
