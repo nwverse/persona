@@ -1057,12 +1057,19 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   backdrop) and closes once the switch is recorded. The pending pill names the engine and the target model with that
   model's own effort.
 - Panel (`web/src/ui/model-panel/`): opens above the pill, right edges aligned, 6 px gap, 8 px from the window's edges;
-  300–460 px wide, a 428 px body (a 48 px rail of Recent, Favorites, All and one cell per provider beside the model list),
+  300–460 px wide, a 428 px body (a 68 px rail of Recent, Favorites, All and one cell per provider beside the model list),
   search on top, "Configure models" at the bottom; two-line rows with hover-revealed Favorite and Customize; the model that
   runs has a static selected fill, no check. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast,
   the engine, an exact catalog reference-price line where known, and a footer that says whether the setup is the
   recommended one, customized or saved. A provider rail cell adds a 22 × 3 px weekly-remaining bar only when the existing
   launcher quota answer supplies a weekly ratio; its tooltip names the window and reset time.
+- Rail cells (`web/src/ui/model-panel/Rail.tsx`): each cell is 60 px wide, its mark (16 px
+  icon or the provider's letter tile) above a caption of up to two lines (the 11.5 px `text-submeta` on a 14 px line, centred, wrapping anywhere), the cell
+  growing to fit. A provider's caption is the part of its name that tells it apart (`railCaptions`): a trailing note in
+  brackets drops while the names stay distinct, and a first word shared with another provider drops ("claude-aster",
+  "claude-max", "codex" read "aster", "max", "codex") unless that would make two captions the same or leave only a note.
+  The full name stays the cell's accessible name and tooltip, and the list's group header. Why: providers often share a
+  letter tile, and a phone has no hover, so marks alone could not be told apart before opening one (2026-11-16).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. Unknown context mounts no row. Quota bars use the established accent / orange /
   red quota tones (≤ 30% left warning, ≤ 10% or exhausted critical); price marks use neutral `ink-2`, one to three `$` by
@@ -2222,9 +2229,10 @@ meeting started with the live view, three pages that swipe and are named in a ro
 in the positive color, those to come dimmed, each with its note). The bar keeps the question field and Talk; under it a
 row of round controls (`MeetingRoomButton`): Pause, Bookmark, Photo (a room meeting with photos), **Speaker** (Persona
 answers out loud or on screen; only while it is in), **Invite / Remove**, and **End** in the danger color, which asks
-first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as the meeting started; turning it on
-with the speaker mid-meeting is an experiment behind a switch (B2). Ordinary recordings and #3746 meetings keep the live
-view, in the same dark full screen.
+first, in a question anchored on it (End and Write the Minutes / Keep Going). The system's echo cancellation stays as
+the meeting started, unless Settings › Meetings' **Experimental** switch, **Echo Cancellation with the Speaker** (off by
+default, B2), is on: then the speaker turned on mid-meeting turns it on to the end, and the microphone stops for a
+moment. Ordinary recordings and #3746 meetings keep the live view, in the same dark full screen.
 
 The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
 `meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
@@ -2308,7 +2316,8 @@ page the user watches during the meeting is the page they keep writing in after 
   highlight is never announced. Reason: the owner sees what the meeting has come to at a glance, and the words as said
   stay one tap away on the Full Transcript page.
 - **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
-  meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
+  meeting"; none when the meeting began with Persona as the note-taker), and so is Persona invited or taken out while
+  it records ("Persona joined / left the meeting", where it happened); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
   lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
   **Persona** in `Theme.ai`, plain text in the room and Markdown in the follow-up; the end is a quiet "The meeting ended";
   the follow-up's seed is a collapsed capsule "The meeting's material", another context block one named "Context", its

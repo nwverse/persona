@@ -745,6 +745,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.agentDecisionSpoke(ctx, r, time.Now())
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
