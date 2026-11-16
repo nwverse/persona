@@ -1048,8 +1048,9 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   linked to it). Its processing conversation (`agent`, `handling`) is not touched, so the AI twin's sweep and timeouts never take the main conversation for one of its own.
   When that conversation dispatches work with `task_plan`, each related task supplies `inbox_item` with the handoff's exact item id.
   The manager validates the conversation, machine, open item and link policy, records the handoff operation on the plan, and rechecks it at Start.
-  Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link,
-  without filing the item, changing its draft or sending a reply. Unrelated tasks omit the field. Multiple tasks retain their own back-references:
+  Admission persists the to-do's existing `inbox_item` back-reference and the item's `agent.todo_id`; an explicit handoff replaces an earlier inferred link
+  without filing the item, changing its draft or sending a reply. New task rows include their source in the initial insert, before they become reusable.
+  Unrelated tasks omit the field. Multiple tasks retain their own back-references:
   the web detail lists each task and its current workers, scoped to the item's manager, and one completed task cannot file an item with other unfinished tasks.
   Reusing a to-do preserves its source; assigning it to a different item is refused. A failed item write rolls back the binding before any Agent starts.
   If a newer item write retains that target, admission instead keeps the to-do and its source, reports the failure without starting an Agent,

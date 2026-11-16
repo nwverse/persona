@@ -238,13 +238,17 @@ func TestTaskPlanInboxReusePreservesSourceAndCorrectsTheLegacyLink(t *testing.T)
 
 type taskInboxFailStore struct {
 	*db.DB
-	failCreate  atomic.Bool
-	failEdit    atomic.Bool
-	failInbox   atomic.Bool
-	onInboxFail func()
+	failCreate   atomic.Bool
+	failEdit     atomic.Bool
+	failInbox    atomic.Bool
+	onInboxFail  func()
+	expectSource string
 }
 
 func (s *taskInboxFailStore) CreateTodo(ctx context.Context, row db.TodoRow) error {
+	if s.expectSource != "" && row.InboxItem != s.expectSource {
+		return errors.New("task source missing at creation")
+	}
 	if s.failCreate.Load() {
 		return errors.New("test task creation failed")
 	}
@@ -266,6 +270,30 @@ func (s *taskInboxFailStore) PutInboxItem(ctx context.Context, id string, data [
 		return errors.New("test item write failed")
 	}
 	return s.DB.PutInboxItem(ctx, id, data, at, done)
+}
+
+func TestTaskPlanInboxSourceIsPresentWhenCreated(t *testing.T) {
+	ctx := context.Background()
+	st := &taskInboxFailStore{DB: todoTestDB(t)}
+	s, _ := newTaskServiceOn(t, st)
+	const conversation = "inbox-insert-source-test"
+	it := taskInboxItem(t, s, "example:insert-source", "box", conversation)
+	st.expectSource = it.ID
+	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(it.ID)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
+	if err != nil || p.Tasks[0].Error != "" || p.Tasks[0].TodoID == "" {
+		t.Fatalf("source must be in the initial insert: %+v %v", p, err)
+	}
+	row, err := st.GetTodo(ctx, p.Tasks[0].TodoID)
+	if err != nil || row.InboxItem != it.ID {
+		t.Fatalf("source was not created atomically: %+v %v", row, err)
+	}
+	waitFor(t, "sourced task Agent", func() bool {
+		td, _ := s.todoNow(row.ID)
+		return len(td.Agents) == 1
+	})
 }
 
 func TestTaskPlanInboxConcurrentWriteCannotLeaveADeletedTarget(t *testing.T) {
@@ -344,14 +372,27 @@ func TestTaskPlanInboxFailedAdmissionLeavesNoDanglingLink(t *testing.T) {
 			st := &taskInboxFailStore{DB: todoTestDB(t)}
 			s, _ := newTaskServiceOn(t, st)
 			it := taskInboxItem(t, s, "example:source", "box", conversation)
-			if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(it.ID)); err != nil {
+			args := taskInboxArgs(it.ID)
+			wantTodos := 0
+			if failure == "source" {
+				existing, err := s.createTodo(ctx, "Existing task", "", conversation, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var reused map[string][]map[string]any
+				_ = json.Unmarshal(args, &reused)
+				reused["tasks"][0]["todo_id"] = existing.ID
+				args, _ = json.Marshal(reused)
+				wantTodos = 1
+			}
+			if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, args); err != nil {
 				t.Fatal(err)
 			}
 			st.failCreate.Store(failure == "create")
 			st.failEdit.Store(failure == "source")
 			st.failInbox.Store(failure == "item")
 			p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
-			if err != nil || p.Tasks[0].Error == "" || p.Tasks[0].TodoID != "" || todoCount(s) != 0 {
+			if err != nil || p.Tasks[0].Error == "" || p.Tasks[0].TodoID != "" || todoCount(s) != wantTodos {
 				t.Fatalf("failed admission: %+v %v, todos %d", p, err, todoCount(s))
 			}
 			s.inbox.mu.Lock()
@@ -360,10 +401,31 @@ func TestTaskPlanInboxFailedAdmissionLeavesNoDanglingLink(t *testing.T) {
 			}
 			s.inbox.mu.Unlock()
 			rows, err := st.ListTodos(ctx)
-			if err != nil || len(rows) != 0 {
+			if err != nil || len(rows) != wantTodos {
 				t.Fatalf("dangling database tasks: %+v %v", rows, err)
 			}
+			for _, row := range rows {
+				if row.InboxItem != "" {
+					t.Fatalf("failed source write changed the reused task: %+v", row)
+				}
+			}
 		})
+	}
+}
+
+func TestTaskPlanInboxSourceExistsBeforeTheTaskCanBeReused(t *testing.T) {
+	ctx := context.Background()
+	st := &taskInboxFailStore{DB: todoTestDB(t)}
+	s, _ := newTaskServiceOn(t, st)
+	const conversation = "inbox-source-creation-test"
+	it := taskInboxItem(t, s, "example:creation", "box", conversation)
+	st.expectSource = it.ID
+	if _, err := s.toolTaskPlanFrom(ctx, "box", conversation, taskInboxArgs(it.ID)); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.startPlan(ctx, planOf(t, s, conversation).ID, nil, false)
+	if err != nil || p.Tasks[0].Error != "" || p.Tasks[0].TodoID == "" {
+		t.Fatalf("the task was exposed before its source was persisted: %+v %v", p, err)
 	}
 }
 
