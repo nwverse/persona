@@ -233,7 +233,9 @@ def read_manifest(path):
             raise ValueError("invalid snapshot timestamp")
         if value:
             try:
-                if datetime.datetime.fromisoformat(value).tzinfo is None:
+                # Python 3.9 needs an explicit offset for the Hub's UTC timestamps.
+                timestamp = value[:-1] + "+00:00" if value.endswith("Z") else value
+                if "Z" in timestamp or datetime.datetime.fromisoformat(timestamp).tzinfo is None:
                     raise ValueError("timestamp needs an offset")
             except ValueError as exc:
                 raise ValueError("invalid snapshot timestamp") from exc
@@ -329,7 +331,35 @@ def extract_history(path, destination):
     with tarfile.open(path / "files.tar.gz", "r:gz") as archive:
         members = history_members(archive, manifest["roots"])
         destination.mkdir(mode=0o700, exist_ok=True)
-        archive.extractall(destination, members=members, filter="data")
+        destination.chmod(0o700)
+        # All supported Pythons use the same restricted writer. Do not delegate
+        # paths, links, ownership or special files to tarfile's extraction API.
+        directories = sorted((m for m in members if m.isdir()),
+                             key=lambda m: len(PurePosixPath(m.name).parts))
+        for member in directories:
+            target = destination / member.name
+            target.mkdir(mode=0o700)
+            target.chmod(0o700)
+        for member in members:
+            if not member.isfile():
+                continue
+            target = destination / member.name
+            # Exclusive creation also refuses a colliding name or existing link.
+            with archive.extractfile(member) as source, target.open("xb") as output:
+                os.fchmod(output.fileno(), 0o600)
+                shutil.copyfileobj(source, output)
+                mode = member.mode & 0o755
+                if not mode & 0o100:
+                    mode &= ~0o111
+                os.fchmod(output.fileno(), mode | 0o600)
+            os.utime(target, (member.mtime, member.mtime))
+        # No more file writes through archive paths once links exist. Validation
+        # requires each target to be a direct, archived regular file/directory.
+        for member in members:
+            if member.issym():
+                (destination / member.name).symlink_to(member.linkname)
+        for member in reversed(directories):
+            os.utime(destination / member.name, (member.mtime, member.mtime))
 
 
 def backup_store(request):

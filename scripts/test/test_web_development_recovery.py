@@ -4,6 +4,7 @@ import gzip
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -89,17 +90,37 @@ class RecoveryValidation(unittest.TestCase):
         with patch.object(webdev, "digest", change_after_hash), self.assertRaisesRegex(ValueError, "native|program checksum"):
             webdev.prepare_backup(dict(self.request, backup_id=self.path.name, work=str(work), candidate=None))
 
-    def archive(self, members):
+    def test_manifest_timestamps_keep_utc_and_offsets_but_require_a_timezone(self):
+        for field in ("created_at", "from_updated_at"):
+            for value in ("2026-11-12T10:00:00Z", "2026-11-12T10:00:00.123456Z", "2026-11-12T18:00:00+08:00"):
+                with self.subTest(field=field, value=value):
+                    modified = copy.deepcopy(self.manifest)
+                    modified[field] = value
+                    self.save_manifest(modified)
+                    self.assertEqual(webdev.verify(self.path)[field], value)
+            for value in ("2026-11-12T10:00:00", "2026-11-12T10:00:00ZZ", "invalid"):
+                with self.subTest(field=field, value=value):
+                    modified = copy.deepcopy(self.manifest)
+                    modified[field] = value
+                    self.save_manifest(modified)
+                    with self.assertRaisesRegex(ValueError, "timestamp"):
+                        webdev.verify(self.path)
+
+    def archive(self, members, metadata=None):
         archive = self.path / "files.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
             for name, kind, content in members:
                 entry = tarfile.TarInfo(name)
+                for key, value in (metadata or {}).get(name, {}).items():
+                    setattr(entry, key, value)
                 if kind == "file":
                     data = content.encode(); entry.size = len(data)
                     output.addfile(entry, io.BytesIO(data))
                 else:
-                    entry.type = {"directory": tarfile.DIRTYPE, "symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE}[kind]
-                    if kind != "directory": entry.linkname = content
+                    entry.type = {"directory": tarfile.DIRTYPE, "symlink": tarfile.SYMTYPE,
+                                  "hardlink": tarfile.LNKTYPE, "fifo": tarfile.FIFOTYPE,
+                                  "character": tarfile.CHRTYPE, "block": tarfile.BLKTYPE}[kind]
+                    if kind in ("symlink", "hardlink"): entry.linkname = content
                     output.addfile(entry)
         manifest = copy.deepcopy(self.manifest)
         manifest["files"]["files.tar.gz"] = webdev.digest(archive)
@@ -115,6 +136,7 @@ class RecoveryValidation(unittest.TestCase):
         attacks += [[("root-0/link", "symlink", "data"), ("root-0/link/escape", "file", "unexpected")],
                     [("root-0/data/history.txt", "file", "duplicate")],
                     [("root-0/a", "symlink", "b"), ("root-0/b", "symlink", "a")]]
+        attacks += [[("root-0/special", kind, "")] for kind in ("fifo", "character", "block")]
         for i, attack in enumerate(attacks):
             with self.subTest(case=i):
                 self.archive(normal + attack)
@@ -125,15 +147,19 @@ class RecoveryValidation(unittest.TestCase):
         self.assertFalse((self.root / "escape").exists())
 
     def test_legal_history_and_relative_link_restore_into_empty_directory(self):
-        self.archive([("root-0", "directory", ""), ("root-0/data", "directory", ""),
+        # Member order cannot make a validated link or child become a write path.
+        self.archive([("root-0/latest", "symlink", "data"),
+                      ("root-0/data/latest", "symlink", "history.txt"),
                       ("root-0/data/history.txt", "file", "saved history"),
-                      ("root-0/data/latest", "symlink", "history.txt")])
+                      ("root-0/data", "directory", ""), ("root-0", "directory", "")])
         destination = self.root / "recovered"
         webdev.extract_history(self.path, destination)
         link = destination / "root-0/data/latest"
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.read_text(), "saved history")
         self.assertTrue(link.resolve().is_relative_to(destination))
+        self.assertTrue((destination / "root-0/latest").is_symlink())
+        self.assertEqual((destination / "root-0/latest/history.txt").read_text(), "saved history")
         self.assertEqual((Path(self.request["runtime"]) / "data/history.txt").read_text(), "synthetic history")
         with self.assertRaises(ValueError): webdev.extract_history(self.path, destination)
         cli_destination = self.root / "cli-recovered"
@@ -141,6 +167,41 @@ class RecoveryValidation(unittest.TestCase):
                                  "extract-history", str(self.path), str(cli_destination)], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0)
         self.assertEqual((cli_destination / "root-0/data/latest").read_text(), "saved history")
+
+    def test_extraction_preserves_data_and_safe_modes_without_archive_ownership(self):
+        stamp = 1600000000
+        self.archive([("root-0", "directory", ""), ("root-0/data", "directory", ""),
+                      ("root-0/data/history.txt", "file", "saved history"),
+                      ("root-0/run", "file", "saved executable")], metadata={
+            "root-0": {"mode": 0o2777, "mtime": stamp},
+            "root-0/data": {"mode": 0, "mtime": stamp},
+            "root-0/data/history.txt": {"mode": 0o6677, "uid": 12345, "gid": 12345,
+                                       "uname": "archive-owner", "gname": "archive-group", "mtime": stamp},
+            "root-0/run": {"mode": 0o7777, "mtime": stamp},
+        })
+        destination = self.root / "recovered"
+        webdev.extract_history(self.path, destination)
+        for name in ("", "root-0", "root-0/data"):
+            self.assertEqual(stat.S_IMODE((destination / name).stat().st_mode), 0o700)
+        for name, content, mode in (("data/history.txt", "saved history", 0o644),
+                                    ("run", "saved executable", 0o755)):
+            file = destination / "root-0" / name
+            self.assertEqual(file.read_text(), content)
+            self.assertEqual(stat.S_IMODE(file.stat().st_mode), mode)
+            self.assertEqual(file.stat().st_uid, os.getuid())
+            self.assertEqual(file.stat().st_gid, destination.stat().st_gid)
+            self.assertEqual(file.stat().st_mtime, stamp)
+        self.assertEqual((destination / "root-0/data").stat().st_mtime, stamp)
+
+    def test_extraction_refuses_linked_destination_without_touching_target(self):
+        target = self.root / "empty-target"
+        target.mkdir()
+        destination = self.root / "linked-destination"
+        destination.symlink_to(target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "empty directory"):
+            webdev.extract_history(self.path, destination)
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertTrue(destination.is_symlink())
 
     def test_snapshot_rejects_hard_linked_history_without_pruning(self):
         data = Path(self.request["runtime"]) / "data/history.txt"

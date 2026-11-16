@@ -213,8 +213,11 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 3. Extract history offline with
    `python3 server/internal/update/webdev.py extract-history /absolute/path/to/snapshot-<id> /absolute/path/to/empty-recovery-directory`.
    The destination must be absent or empty and cannot be a symlink. This command verifies the
-   snapshot and applies the same canonical member/link checks before extraction, with Python's
-   data filter as an additional layer. It rejects absolute, drive/UNC, backslash, noncanonical
+   snapshot and applies the same canonical member/link checks before extraction on Python 3.9+.
+   A restricted writer creates private directories, exclusively creates regular files, then
+   creates validated symlinks after all file writes. It preserves timestamps and safe file
+   permissions, removes special and group/other write bits, and never applies archive ownership.
+   It rejects absolute, drive/UNC, backslash, noncanonical
    and duplicate paths, hard links and non-directory parents. A relative symlink must point
    directly to a file or directory actually inside this archive; dangling links, link chains
    and links used as parent directories are rejected. Snapshot creation also refuses hard links.

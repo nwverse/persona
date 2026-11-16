@@ -37,6 +37,15 @@ Validate its complete schema and exact artifact mapping before reading payloads,
 the staged native hash independently. History verification and extraction must share the
 same canonical path and link rules; a checksum alone cannot make an unsafe tar safe.
 
+Run recovery on the oldest supported interpreter, not just the current Python. Early 3.9/3.11
+patch releases lack `extractall(filter=...)`; later security backports make the minor version
+alone an unreliable capability test. Recovery uses a single restricted writer on Python 3.9+:
+validate the complete inventory, create private directories and exclusive regular files, then
+create links last, without archive ownership or unsafe modes. Python 3.9 also needs `Z` UTC
+timestamps normalized to an explicit offset before `fromisoformat`. Exercise actual interpreter
+versions, legal recovery and hostile archives; a newer Python or mocked signature cannot prove
+that an older operator environment can recover its data.
+
 ## Validate the APNs signing curve before a push (#9438)
 
 ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
