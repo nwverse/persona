@@ -472,7 +472,9 @@ Phase 3 lands in several PRs.
     item id. Folded-work replay follows `ViewedImagesTests.aFoldGivesTheSameStripAsItsWork` with complete
     source-derived expected lines: path/size/`i:` identity, order and deduplication across ordinary and folded steps.
     The first segment stops at the next queued user; the last agent result independently owns running/error status.
-    Inline data with width/height and no explicit size uses its extended-grapheme-count-derived size. `FoldImage.ref`
+    Optional fold payloads do not reject ordinary or queued text+image items (#9024); real fold counts/through fields
+    retain their existing semantics. Inline data with width/height and no explicit size uses its
+    extended-grapheme-count-derived size. `FoldImage.ref`
     synthesis is outside the pure leaf. This is not full `ChatLine`, multiple viewed lines, UI loading, actual tool
     execution or performance evidence.
   - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift

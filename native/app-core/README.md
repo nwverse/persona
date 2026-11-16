@@ -77,7 +77,8 @@ checks real JNI output, malformed input and a wrong expectation. It does not pro
 consumer state, UI badges or actual background execution. The viewed-image leaf (#8860, #8943) uses the existing turn
 projection to keep the image entry's owner, compares complete post-overlay and source-derived viewed lines through
 real Kotlin/JNI, and checks duplicate/running/error/Read-extension and wrong-expectation cases. Folded images follow
-path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. This is not
+path/size/`i:` identity and join ordinary tool images in work-group order; no-image folds produce no line. Missing
+optional fold fields do not reject queued text+image messages (#9024); actual fold grouping is unchanged. This is not
 full ChatLine, multiple viewed lines, FoldImage.ref synthesis, UI image loading or actual tool execution.
 
 ```sh
