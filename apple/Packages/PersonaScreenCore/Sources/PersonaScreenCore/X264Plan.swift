@@ -81,11 +81,12 @@ public enum X264Plan {
     }
 }
 
-/// Whether x264 keeps up with a stream (#8859): it falls back to VideoToolbox when any frame takes over 50 ms, or when
-/// more than 10% of the frames in the last 2 s took over 8 ms (VideoToolbox's own time). A process's first frame counts
-/// for neither: it is a keyframe, and ffmpeg sets up its encoder on it (5–7 ms from a waiting process, 30–40 ms from a
-/// cold Homebrew ffmpeg, which loads many libraries); only `overdueMicros` bounds it. Times are µs on the helper's
-/// monotonic clock; nothing here reads a clock.
+/// Whether x264 keeps up with a stream (#8859): it falls back to VideoToolbox when any frame takes over 50 ms of its own,
+/// or when more than 10% of the frames in the last 2 s took over 8 ms of their own (VideoToolbox's whole time). A
+/// frame's own time starts when ffmpeg could start on it (`ownMicros`), so waiting behind the frame before it isn't
+/// counted twice. A process's first frame counts for neither: it is a keyframe, and ffmpeg sets up its encoder on it
+/// (5–7 ms from a waiting process, 30–40 ms from a cold Homebrew ffmpeg, which loads many libraries); only
+/// `overdueMicros` bounds it. Times are µs on the helper's monotonic clock; nothing here reads a clock.
 public struct X264Watch {
     public static let windowMicros: UInt64 = 2_000_000
     public static let slowMicros: Int64 = 8_000
@@ -97,18 +98,31 @@ public struct X264Watch {
     public static let overdueMicros: UInt64 = 200_000
 
     private var window: [(at: UInt64, slow: Bool)] = []
+    /// Why `encoded` last said too slow, for the helper's log.
+    public private(set) var why = ""
 
     public init() {}
+
+    /// A frame's own encode time: from when it was given, or when the frame before it came out if that was later (it
+    /// waited behind it), to `now`.
+    public static func ownMicros(given: UInt64, lastOut: UInt64, now: UInt64) -> Int64 {
+        Int64(bitPattern: now &- max(given, lastOut))
+    }
 
     /// One frame came back after `micros`. True: too slow, fall back.
     public mutating func encoded(micros: Int64, at now: UInt64, first: Bool) -> Bool {
         window.removeAll { now &- $0.at > Self.windowMicros }
         guard !first else { return false }
-        if micros > Self.stallMicros { return true }
+        if micros > Self.stallMicros {
+            why = String(format: "%.1f ms on its own", Double(micros) / 1000)
+            return true
+        }
         window.append((now, micros > Self.slowMicros))
         guard window.count >= Self.minFrames else { return false }
         let slow = window.filter(\.slow).count
-        return Double(slow) / Double(window.count) > Self.slowShare
+        guard Double(slow) / Double(window.count) > Self.slowShare else { return false }
+        why = "\(slow) of the last \(window.count) frames over 8 ms on their own"
+        return true
     }
 
     /// The oldest frame still with ffmpeg was given to it at `oldest`: true when that is overdue.
