@@ -13,7 +13,7 @@ final class TokenCalendarUITests: XCTestCase {
     @MainActor private func launch(_ scheme: String, _ extra: [String] = [], textSize: String? = nil) {
         app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-app.tab", "assistant", "-dev.openChat", "", "-showHomeState", "empty",
-                               "-newAssistant", "YES", "-ui.scheme", scheme] + extra
+                               "-newAssistant", "YES", "-ui.scheme", scheme, "-showSameIcon", "YES"] + extra
             + (textSize.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
         app.launchPinned()
     }

@@ -426,18 +426,17 @@ struct TokenUsagePage: View {
 
     private func machines(_ hours: UsageHours) -> some View {
         let top = Double(hours.machines.first?.tokens.total ?? 0)
-        return VStack(spacing: Theme.Space.s) {
+        // A grid, so every bar starts and ends where the others do whatever the name's and the number's widths.
+        return Grid(alignment: .leading, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.s) {
             ForEach(hours.machines.filter { $0.tokens.total > 0 }) { m in
-                HStack(spacing: Theme.Space.m) {
+                GridRow {
                     Text(m.name.isEmpty ? String(localized: "Removed Computer") : m.name)
                         .font(Theme.Font.body).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     MeterBar(fraction: top > 0 ? Double(m.tokens.total) / top : 0, color: Theme.accent)
-                        .frame(maxWidth: .infinity)
                     Text(TokenFormat.short(m.tokens.total))
                         .font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                        .gridColumnAlignment(.trailing)
                 }
-                .accessibilityElement(children: .combine)
             }
         }
     }
