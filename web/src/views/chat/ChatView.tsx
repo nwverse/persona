@@ -259,7 +259,18 @@ export interface PanelChrome {
   beside?: React.ReactNode;
 }
 
-export function ChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
+const DeletedConversation = lazy(() => import("../DeletedConversation").then((m) => ({ default: m.DeletedConversation })));
+
+/** A deleted chat has no composer or retained transcript, wherever its old link is opened. */
+export function ChatView(props: Parameters<typeof ActiveChatView>[0]) {
+  const deleted = useStore(() => getSession(props.mid, props.sid)?.deleted === true);
+  if (deleted) return <Suspense fallback={<div className="flex h-full items-center justify-center"><Loading /></div>}>
+    <DeletedConversation onToggleSidebar={props.onToggleSidebar} />
+  </Suspense>;
+  return <ActiveChatView {...props} />;
+}
+
+function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
   mid: string;
   sid: string;
   assistant?: boolean;

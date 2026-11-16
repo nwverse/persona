@@ -389,11 +389,12 @@ func TestSessionListFailureKeepsDecisionRetryable(t *testing.T) {
 	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
 	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
 	s.supervise.mu.Unlock()
+	var routeErr *i18n.Message
+	if !errors.As(err, &routeErr) || routeErr.Key != "assistant-tasks.route_offline" {
+		t.Fatalf("a failed session list returned the wrong error: %v", err)
+	}
 	if pending && g.Key == key || told || listedAsk(t, s, todo.ID) == nil {
 		t.Fatalf("the lookup failure ended the decision: %+v", g)
-	}
-	if listedAsk(t, s, todo.ID) == nil {
-		t.Fatal("the transient failure left no decision to retry")
 	}
 	f.sessionsFail["box"] = 0
 	result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量")
