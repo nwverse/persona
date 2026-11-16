@@ -339,7 +339,21 @@ struct ExtensionDetailView: View {
                 }
             }
             if let needs = page.detail?.plugin.needsSetup, !needs.isEmpty {
-                Text(String(localized: "Still needs: \(ExtensionText.list(needs))")).font(Theme.Font.label).foregroundStyle(Theme.caution)
+                let line = Text(String(localized: "Still needs: \(ExtensionText.list(needs))")).font(Theme.Font.label).foregroundStyle(Theme.caution)
+                if let d = page.detail, !d.readOnly, let target = ExtensionText.setupSecret(needs: needs, secrets: d.secrets) {
+                    // What is missing is a secret to set here: the line opens it (#8853).
+                    Button { editingSecret = target } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            line
+                            ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.captionStrong).foregroundStyle(Theme.caution)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("plugin-needs-setup")
+                } else {
+                    line
+                }
             }
             if let e = page.detail?.plugin.error ?? page.error, !e.isEmpty {
                 Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).textSelection(.enabled)

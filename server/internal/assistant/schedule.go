@@ -2016,8 +2016,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if text == "" {
 		if t.stateRunKey != "" && hasSession && failedSession.State != proto.StateNeedsYou && !failedSession.Starting {
 			if items, ok := s.lastTurnItems(ctx, m.ID, run.SessionID); ok && s.stillEnded(ctx, m.ID, run.SessionID, items) {
-				prompt, _ := turnExchange(items)
-				if matchesTaskStateRun(prompt, t.stateRunKey) {
+				if currentTurnHasTaskStateRun(items, t.stateRunKey) {
 					s.finishTaskState(ctx, t, run)
 				}
 			}
