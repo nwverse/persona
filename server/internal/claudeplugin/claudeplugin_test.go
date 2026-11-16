@@ -530,9 +530,13 @@ func TestKeeperChecksAndPassesOnCommands(t *testing.T) {
 		t.Fatalf("first check %+v", st)
 	}
 	// A command (another process) uninstalls: the keeper passes its status on.
-	time.Sleep(20 * time.Millisecond) // a file time apart from the keeper's own write
 	other := *fx.m
 	if _, err := other.Do(context.Background(), OpUninstall); err != nil {
+		t.Fatal(err)
+	}
+	// A file time apart from the keeper's own write, however coarse the file system's clock.
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(fx.data, StatusFile), later, later); err != nil {
 		t.Fatal(err)
 	}
 	if st := wait(proto.ClaudePluginNotInstalled); st.Auto {
