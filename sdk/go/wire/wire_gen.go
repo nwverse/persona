@@ -1443,6 +1443,15 @@ const (
 // TextStyles are the values of TextStyle, in order.
 var TextStyles = []string{"body", "secondary", "caption", "code", "title", "headline"}
 
+// ProgressStyle: A progress drawing hint: bar (the default) or ring.
+const (
+	ProgressStyleBar  = "bar"
+	ProgressStyleRing = "ring"
+)
+
+// ProgressStyles are the values of ProgressStyle, in order.
+var ProgressStyles = []string{"bar", "ring"}
+
 // FieldKind: date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD,
 // time HH:MM (24 hours), datetime YYYY-MM-DDTHH:MM local to context.tz, multichoice a JSON array of the chosen
 // values, multiline the text with \n.
