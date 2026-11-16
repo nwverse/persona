@@ -8,6 +8,8 @@ import { ago, clock, sessionCan, shortPath, stateOf, tabLabel, uuid } from "../l
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
+import { reviewState } from "../lib/supervision";
+import { TaskWaitInfo } from "./assistant/TaskWaitInfo";
 import { launchAgent } from "../lib/new-agent";
 import { currentHosts } from "../lib/engines";
 import { initialLauncher, launcherBlock, usableFirst } from "../lib/launcher-health";
@@ -1518,6 +1520,8 @@ const TodoListItem = memo(function TodoListItem({
   onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
+  const showWait = !todo.done_at && !["working", "waiting", "needs_you", "interrupted", "failed"].includes(status) &&
+    (reviewState(todo) === "parked" || ["pr", "parked"].includes(section ?? view.section ?? ""));
   // the PR it waits on: its current one, or an earlier one still open (#7935)
   const openPR = section === "pr" ? openMergePRs(todo, Date.now())[0] : undefined;
   const pr = openPR ? prLink(openPR.url) : null;
@@ -1624,6 +1628,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
+        {showWait && <div className="mt-1"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
@@ -1916,12 +1921,12 @@ const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; classNa
 };
 
 /** The task's criteria, each as its latest report or review found it, and what the supervisor said last. */
-export function ReviewChecklist({ todo }: { todo: Todo }) {
+export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: SessionLookup }) {
   const sup = todo.supervision;
   if (!sup) return null;
   const list = checklist(sup);
   const review = latestReview(sup);
-  const parked = parkedLine(todo);
+  const parked = reviewState(todo) === "parked" && !["working", "waiting", "needs_you", "interrupted", "failed"].includes(todoStatus(todo, lookup));
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
   return (
@@ -1963,7 +1968,7 @@ export function ReviewChecklist({ todo }: { todo: Todo }) {
           <BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />
         </Suspense>
       )}
-      {parked && <p data-testid="review-parked" className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{parked}</p>}
+      {parked && <div data-testid="review-parked" className="mt-2 select-text"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} expanded /></div>}
       {review?.note && <p className="mt-2 text-[12.5px] leading-[1.6] text-ink-2 select-text">{t("assistant-tasks.review_note", { note: review.note })}</p>}
       <AutoReviewResult sup={sup} />
     </section>
@@ -2185,7 +2190,7 @@ function TodoDetail({
           <TaskBriefPanel todo={todo} />
         </Suspense>
       )}
-      <ReviewChecklist todo={todo} />
+      <ReviewChecklist todo={todo} lookup={lookup} />
       {todo.brief && (
         <Suspense fallback={null}>
           <TaskBriefHistory todo={todo} />

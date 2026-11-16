@@ -11,6 +11,9 @@ import { usageLimitLabel } from "../../lib/usage-limit";
 import { sessionTitle } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
 import { t } from "../../i18n";
+import { reviewState } from "../../lib/supervision";
+import { openMergePRs, waitingForMerge } from "../../lib/todo-triage";
+import { TaskWaitInfo } from "./TaskWaitInfo";
 import { Dialog, IconButton, Menu } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
@@ -83,7 +86,8 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
               </h3>
               <div className="divide-y divide-line overflow-hidden rounded-card bg-field">
                 {sec.rows.map(({ todo, status }) => (
-                  <div key={todo.id} className="flex items-center hover:bg-hover">
+                  <div key={todo.id} className="min-w-0 hover:bg-hover">
+                    <div className="flex items-center">
                     <button
                       type="button"
                       onClick={() => {
@@ -109,6 +113,10 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                     {isRemovable(status) && (
                       <IconButton icon="trash" label={t("assistant-task-actions.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
                     )}
+                    </div>
+                    {!["working", "waiting", "needs_you", "interrupted", "failed"].includes(status) &&
+                      (reviewState(todo) === "parked" || waitingForMerge(todo, lookup, Date.now())) &&
+                      <div className="px-3 pb-2.5"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
                   </div>
                 ))}
                 {sec.agents.map(({ session: s, state }) => (

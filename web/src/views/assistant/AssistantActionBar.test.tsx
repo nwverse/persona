@@ -111,7 +111,7 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_changes_requested"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_pending"));
     expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_conflicts"));
-    expect(row.querySelector("a")?.classList).toContain("truncate");
+    expect(row.querySelector("a")?.classList).toContain("break-all");
     act(() => row.querySelector<HTMLButtonElement>("[data-pr-task-link]")!.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-task" });
   });
@@ -341,6 +341,27 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(slots).toHaveLength(2);
     // Its parked line and the shared open count survive the inactivity window.
     expect(host.textContent).toContain("Waiting on another team");
+  });
+
+  it("shows the recorded wait contact in the existing tray without a grouping dependency", async () => {
+    const evidence = { kind: "person_reply" as const, target: "Schedule owner", wake: "The owner replies in the thread",
+      recorded_by: "recording-conversation",
+      contact: { sender: "Example sender", channel: "Email", url: "https://example.test/messages/7",
+        sent_at: "2026-11-10T08:00:00Z", request: "Please confirm the schedule", status: "sent" } };
+    moreTodos = [{
+      ...todo, id: "tray-wait-evidence", title: "Example schedule wait", pr_url: undefined, plan_id: undefined, agents: [],
+      supervision: { supervisor: conversation, state: "parked", parked: {
+        reason: "Waiting for the schedule owner", until: "2026-11-14T09:00:00Z", waiting_on: "someone_else", count: 1, evidence,
+      }, reviews: [{ at: "2026-11-10T09:00:00Z", verdict: "parked", parks: 1, evidence }] },
+    }];
+    await act(async () => { await refreshTodos(); });
+    await act(async () => entry("running").click());
+    const info = host.querySelector('[data-task-wait-info="tray-wait-evidence"]');
+    expect(info?.querySelector("[data-wait-target]")?.textContent).toContain("Schedule owner");
+    expect(info?.querySelector("[data-wait-contact]")?.textContent).toContain("Example sender");
+    expect(info?.querySelector("[data-wait-contact]")?.getAttribute("href")).toBe(evidence.contact.url);
+    expect(info?.querySelector("[data-wait-age]")?.textContent).not.toContain(t("task-wait.age_unknown"));
+    expect(info?.textContent).not.toContain("recording-conversation");
   });
 
   it("updates the same row while it runs, opens the task, and moves it under Just finished once it is accepted", () => {

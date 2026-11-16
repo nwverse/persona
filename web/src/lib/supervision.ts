@@ -13,6 +13,28 @@ export interface Parked {
   until: string;
   waiting_on: "owner_priority" | "someone_else" | "external_event" | "date";
   count: number;
+  /** Source-backed account recorded by task_review, not a provider receipt fetched by the hub. */
+  evidence?: ParkEvidence;
+}
+
+export interface ParkContact {
+  channel: string;
+  url: string;
+  sender: string;
+  sent_at: string;
+  request: string;
+  status: string;
+}
+
+export interface ParkEvidence {
+  kind: "person_reply" | "merge_review" | "external_event" | "date";
+  target: string;
+  url?: string;
+  wake: string;
+  contact?: ParkContact;
+  ready?: boolean;
+  /** Recording conversation, not the person who sent the request. */
+  recorded_by?: string;
 }
 
 export interface ReviewCheck {
@@ -32,6 +54,10 @@ export interface TaskReview {
   reason?: string;
   recommend?: string;
   options?: { label: string; leads_to?: string }[];
+  until?: string;
+  waiting_on?: Parked["waiting_on"];
+  parks?: number;
+  evidence?: ParkEvidence;
 }
 
 export interface Supervision {

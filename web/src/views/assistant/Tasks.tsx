@@ -5,7 +5,6 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
-import { openMergePRs, prBlockers } from "../../lib/todo-triage";
 import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -68,7 +67,7 @@ const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from "./Handoff";
-import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
+import { latestReview, progressLine, reviewState } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
@@ -83,6 +82,7 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
+const ParkedTaskRow = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRow));
 import { conversationTitle } from "./conversations";
 import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
 import type { TaskWorkspace } from "../../lib/feed";
@@ -808,7 +808,7 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
-  const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
+  const parked = !liveWork && !finished && state !== "cancelled" && !!todo && reviewState(todo) === "parked";
   // judged finished and with its supervisor for review (the Persona reviewing tray, lib/assistant-entries `review`): the row says whose turn it is
   const reviewing = !!supervisorReview && !liveWork && !finished && state !== "cancelled";
   const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : reviewing ? t("assistant-tasks.review_supervisor") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" && starting ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
@@ -827,7 +827,8 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
   const limit = state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : limit ?? liveLine ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+  if (parked && todo && !ask) return <Suspense fallback={<Loading />}><ParkedTaskRow todo={todo} countsOpen={countsOpen} slot={card.id} /></Suspense>;
   return (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {
       onOpen?.();
@@ -851,18 +852,8 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorR
 }
 
 /** A task's fresh, open PRs waiting for their maintainers, shown in their own tray group: each with its own blockers. */
-function WaitingMergeRow({ todo }: { todo: Todo }) {
-  const prs = openMergePRs(todo, Date.now());
-  return <div data-pr-waiting-row={todo.id} className="flex items-start gap-2 px-3 py-2.5">
-    <Icon name="pullRequest" size={14} className="mt-0.5 shrink-0 text-accent-ink" />
-    <div className="min-w-0 flex-1">
-      <button type="button" data-pr-task-link={todo.id} onClick={() => openTask(todo.id)} className="block max-w-full truncate text-left text-sm font-medium hover:underline">{todo.title}</button>
-      {prs.map((facts) => <div key={facts.url} data-pr-waiting-url={facts.url}>
-        <a href={facts.url} target="_blank" rel="noreferrer noopener" title={facts.url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{facts.url}</a>
-        <div className="truncate text-xs text-ink-2">{prBlockers(todo, facts).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
-      </div>)}
-    </div>
-  </div>;
+function WaitingMergeRow({ todo, countsOpen }: { todo: Todo; countsOpen: boolean }) {
+  return <Suspense fallback={<Loading />}><ParkedTaskRow todo={todo} countsOpen={countsOpen} /></Suspense>;
 }
 
 /** Workflow counts never disappear behind an ellipsized phase, even on a narrow tray or with large text. */
@@ -1259,7 +1250,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {!entries.review.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_review")}</p>}
           </div>}
           {tray === "pr" && <div className="divide-y divide-line">
-            {entries.pr.map((item) => item.kind === "task" && <WaitingMergeRow key={item.key} todo={item.todo} />)}
+            {entries.pr.map((item) => item.kind === "task" && <WaitingMergeRow key={item.key} todo={item.todo} countsOpen={item.countsOpen} />)}
             {!entries.pr.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pr")}</p>}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">

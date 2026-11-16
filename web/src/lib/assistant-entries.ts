@@ -5,6 +5,7 @@ import { reviewState } from "./supervision";
 import { supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
+import { compareWaitAge } from "./task-wait";
 import { homeKey } from "./folded-rows";
 import type { Interaction, Session } from "./types";
 
@@ -221,7 +222,18 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
 
-  const newest = (a: { at: string; rank?: number }, b: { at: string; rank?: number }) => (a.rank ?? 0) - (b.rank ?? 0) || byTime(b.at, a.at);
+  const waiting = (row: { item: NeedsYouItem | RunningItem }): Todo | undefined => {
+    const item = row.item;
+    if (item.kind !== "task" || ("activity" in item && item.activity)) return undefined;
+    const rule = triage(item.todo, lookup, now).rule;
+    return rule === "parked" || rule === "pr_open" ? item.todo : undefined;
+  };
+  const newest = (a: { item: NeedsYouItem | RunningItem; at: string; rank?: number }, b: { item: NeedsYouItem | RunningItem; at: string; rank?: number }) => {
+    const aw = waiting(a), bw = waiting(b);
+    // A total order, including mixed progress rows: active/non-wait work first, then known waits oldest first.
+    return Number(!!aw) - Number(!!bw) || (aw && bw ? compareWaitAge(aw, bw, now) :
+      (a.rank ?? 0) - (b.rank ?? 0) || byTime(b.at, a.at));
+  };
   const firstAsk = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent" ? item.asks[0]?.created_at : undefined);
   return {
     needsYou: [
