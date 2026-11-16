@@ -135,8 +135,9 @@ def public_base_evidence(evidence):
 
 
 class Watcher:
-    def __init__(self, config, dry_run=False, verbose=True):
+    def __init__(self, config, dry_run=False, verbose=True, allow_config_migration=False):
         self.config = config
+        self.allow_config_migration = allow_config_migration
         self.repositories = {item["name"]: item for item in config["repositories"]}
         self.dry_run = dry_run
         self.verbose = verbose
@@ -172,10 +173,8 @@ class Watcher:
         marker = Path(self.config["state"]).with_suffix(".config")
         marker.parent.mkdir(parents=True, exist_ok=True)
         previous = self.state.data.get("config_fingerprint", digest)
-        if previous != digest:
+        if previous != digest and not self.allow_config_migration:
             raise WatchError("watcher configuration changed; use a fresh state file or --migrate-config while the service is stopped")
-        marker.write_text(digest + "\n", encoding="utf-8")
-        os.chmod(str(marker), 0o600)
         path = Path(self.config["state"]).with_suffix(".lock")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.instance = path.open("a+")
@@ -183,10 +182,13 @@ class Watcher:
             fcntl.flock(self.instance.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise WatchError("another watcher instance already holds the service lock")
-        self.migrate_policy(digest)
+        marker.write_text(digest + "\n", encoding="utf-8")
+        self.migrate_policy(digest, allow_config_migration=self.allow_config_migration)
 
-    def migrate_policy(self, digest):
-        """Explicitly opt in to the approved policy without resetting budgets."""
+    def migrate_policy(self, digest, allow_config_migration=False):
+        """Apply reviewed policy changes without silently changing repository mappings."""
+        if allow_config_migration and not self.allow_config_migration:
+            raise WatchError("configuration migration requires the explicit offline command")
         migration = "review-policy-v2:" + digest
         with self.state.lock:
             if self.state.data.get("policy_migration") == migration:
@@ -620,6 +622,7 @@ class Watcher:
             previous = old
             old = {"repair_rounds": int(previous.get("repair_rounds", 0))}
         if (old.get("head") == head and old.get("format") == FORMAT_VERSION
+                and old.get("retry_reason") != "semantic_review"
                 and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
                 and old.get("verification") not in ("passed", "base_failure")
                 and not old.get("repair_exhausted")
@@ -638,6 +641,10 @@ class Watcher:
                                  base=pr["baseRefOid"], format=FORMAT_VERSION)
         if old.get("head") == head and old.get("retry_after", 0) > time.time():
             return
+        if old.get("retry_reason") == "semantic_review" and int(old.get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+            # The completed backoff permits a fresh independent review budget.
+            old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                 review_attempts=0, retry_after=0)
         if old.get("outcome") in ("continuation", "repair_published", "base_updated"):
             return
         if old.get("outcome") == "base_comment_pending":
@@ -770,6 +777,15 @@ class Watcher:
             if current.get("semantic") != "passed" and current.get("semantic") != "findings":
                 self.phase(key, "independent semantic review")
                 review_attempts = int(current.get("review_attempts", 0))
+                if review_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
+                    self.state.put(repo, number, head, evidence_key=evidence_key,
+                                   outcome="retry", review_attempts=review_attempts,
+                                   retry_after=time.time() + 3600,
+                                   retry_reason="semantic_review",
+                                   failure=current.get("failure") or "semantic review is unavailable")
+                    return False
+                if current.get("outcome") == "retry" and current.get("retry_reason") == "semantic_review":
+                    review_attempts = 0
                 findings = None
                 for attempt in range(INFRASTRUCTURE_ATTEMPT_LIMIT - review_attempts):
                     try:
@@ -797,6 +813,7 @@ class Watcher:
                                          semantic=semantic, findings=findings,
                                          review_fingerprint=review_fingerprint,
                                          outcome="reviewed",
+                                         review_attempts=0,
                                          review_posted=bool(current.get("review_posted") and
                                                             published_fingerprint == review_fingerprint))
             findings = current.get("findings", [])
@@ -900,10 +917,12 @@ class Watcher:
             # this exact base/head until the PR changes.
             retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
             attempts = int(self.state.get(repo, number).get("review_attempts", 0)) + (0 if phase in ("semantic", "semantic_repair") else 1)
+            exhausted_review = phase == "semantic" and attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT
             outcome = ("retry" if retry or phase == "verification" else
                        "merge_failed" if phase == "merge" else "failed")
+            delay = 3600 if exhausted_review else min(1800, 30 * (2 ** min(attempts - 1, 6)))
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
-                           review_attempts=attempts, retry_after=time.time() + min(1800, 30 * (2 ** min(attempts - 1, 6))),
+                           review_attempts=attempts, retry_after=time.time() + delay,
                            failure=str(error))
             if not retry and phase != "verification" and not old.get("failure_posted") and phase != "semantic_repair":
                 if not self.dry_run:
@@ -1023,7 +1042,7 @@ def main(argv=None):
     if args.migrate_config:
         if args.repository or args.pr or args.dry_run or args.once:
             raise WatchError("--migrate-config is an exclusive offline operation")
-        watcher = Watcher(config)
+        watcher = Watcher(config, allow_config_migration=True)
         watcher.single_instance()
         watcher.instance.close()
         return 0

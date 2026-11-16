@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import contextmanager, nullcontext
 from unittest.mock import patch
@@ -203,6 +204,35 @@ class WatcherTests(unittest.TestCase):
         update.assert_not_called()
         self.assertIn("after 3 repair rounds", self.watcher.state.get("example/one", 7)["failure"])
 
+    def test_exhausted_review_backoff_can_recover_and_success_resets_attempts(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", review_attempts=3,
+                               failure="reviewer unavailable", retry_after=time.time() + 3600,
+                               retry_reason="semantic_review", verification_policy=pr_watch.VERIFICATION_POLICY_VERSION)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        self.watcher.state.data["prs"]["example/one#7"]["retry_after"] = 0
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        review.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["review_attempts"], 0)
+
+    def test_exhausted_review_records_a_bounded_retry_without_calling_the_model(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", side_effect=pr_watch_common.WatchError("reviewer unavailable")) as review:
+            self.watcher.process("example/one", 7)
+        self.assertEqual(review.call_count, 3)
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["review_attempts"], 3)
+        self.assertEqual(state["retry_reason"], "semantic_review")
+        self.assertGreater(state["retry_after"], time.time() + 3000)
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
@@ -280,6 +310,7 @@ class WatcherTests(unittest.TestCase):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])
 
+    def test_state_migration_preserves_policy_and_rejects_unapproved_config_changes(self):
         digest = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", self.config)
         self.watcher.single_instance()
         self.addCleanup(self.watcher.instance.close)
@@ -289,6 +320,17 @@ class WatcherTests(unittest.TestCase):
         with self.assertRaises(pr_watch_common.WatchError):
             self.watcher.single_instance()
 
+    def test_explicit_offline_migration_approves_a_changed_config_after_taking_the_lock(self):
+        self.watcher.state.data["config_fingerprint"] = "previous"
+        pr_watch.atomic_json(self.watcher.state.path, self.watcher.state.data)
+        with self.assertRaises(pr_watch_common.WatchError):
+            self.watcher.single_instance()
+        changed = pr_watch.Watcher(self.watcher.config, allow_config_migration=True)
+        changed.single_instance()
+        changed.instance.close()
+        self.assertNotEqual(pr_watch.State(self.watcher.state.path).data["config_fingerprint"], "previous")
+
+    def test_base_change_invalidates_same_head_evidence(self):
         new_base = "d" * 40
         with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(), pr(baseRefOid=new_base), pr(baseRefOid=new_base)]), \
                 patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
