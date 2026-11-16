@@ -1,3 +1,5 @@
+import com.android.build.api.variant.HasUnitTestBuilder
+
 plugins {
     id("persona.android.library")
     alias(libs.plugins.ksp)
@@ -35,9 +37,19 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
 
+androidComponents {
+    beforeVariants { variant ->
+        // The Gradle script accessor sees the builder's base type; AGP's public setter lives on the library variant.
+        if (variant is HasUnitTestBuilder && variant.name == "release") {
+            variant.javaClass.getMethod("setEnableUnitTest", Boolean::class.javaPrimitiveType).invoke(variant, true)
+        }
+    }
+}
+
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 
 val continuity = providers.gradleProperty("personaContinuity").orElse("kotlin")
+val sortShadow = providers.gradleProperty("persona.sort").orElse("kotlin")
 val coreWorkspace = rootProject.layout.projectDirectory.dir("../native/app-core")
 val hostLibrary = coreWorkspace.file("target/debug/" + when {
     org.gradle.internal.os.OperatingSystem.current().isMacOsX -> "libpersona_core.dylib"
@@ -52,4 +64,6 @@ tasks.withType<Test>().configureEach {
     systemProperty("persona.core.library", hostLibrary.asFile.absolutePath)
     systemProperty("persona.continuity", continuity.get())
     systemProperty("persona.continuity.frameScheduler", "persona.core.data.FlushContinuityFrameScheduler")
+    systemProperty("persona.sort", sortShadow.get())
+    if (name == "testDebugUnitTest") forkEvery = 1
 }

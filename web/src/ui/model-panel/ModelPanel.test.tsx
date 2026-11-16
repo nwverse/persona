@@ -22,7 +22,7 @@ vi.mock("../../lib/router", async (orig) => ({ ...(await orig<typeof import("../
 
 const { ModelPanel } = await import("./ModelPanel");
 const { panelStoreKey } = await import("./store");
-const { railEdges, railFade } = await import("./Rail");
+const { railCaptions, railEdges, railFade } = await import("./Rail");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -128,6 +128,23 @@ describe("the model panel", () => {
     expect(document.body.querySelector('[role="listbox"]')).not.toBeNull();
     // the rail: Recent, Favorites, All (on), one cell per provider
     expect([...document.body.querySelectorAll("[data-rail-cell]")].map((c) => `${c.getAttribute("data-rail-cell")}${c.getAttribute("aria-pressed") === "true" ? "*" : ""}`)).toEqual(["recent", "favorites", "all*", "claude", "codex"]);
+    // every cell says what it is under its mark, so a phone (no hover) tells providers apart before opening one
+    expect([...document.body.querySelectorAll("[data-rail-caption]")].map((c) => c.textContent)).toEqual(["最近", "收藏", "全部", "Claude", "Codex"]);
+    expect(document.body.querySelector('[data-rail-cell="claude"]')?.getAttribute("aria-label")).toBe("Claude");
+  });
+
+  it("captions providers by the words that tell them apart", () => {
+    expect(railCaptions(["claude-aster", "claude-max", "claude-desktop", "codex"])).toEqual(["aster", "max", "desktop", "codex"]);
+    // a first word nobody else has stays; so does a name that is only that word
+    expect(railCaptions(["claude", "claude-max", "codex"])).toEqual(["claude", "max", "codex"]);
+    expect(railCaptions(["Claude Max", "Claude Pro", "本机网关 aster", "本机网关 beta"])).toEqual(["Max", "Pro", "aster", "beta"]);
+    // a trailing note in brackets goes while the names stay apart without it
+    expect(railCaptions(["hone-claw（Claude）", "Zhipu (GLM)"])).toEqual(["hone-claw", "Zhipu"]);
+    expect(railCaptions(["gw (Claude)", "gw (Codex)"])).toEqual(["gw (Claude)", "gw (Codex)"]);
+    // shortening that would make two captions the same keeps those names whole
+    expect(railCaptions(["claude-max", "claude-pro", "codex-max", "codex-pro"])).toEqual(["claude-max", "claude-pro", "codex-max", "codex-pro"]);
+    expect(railCaptions(["claude-max", "max", "claude-pro"])).toEqual(["claude-max", "max", "pro"]);
+    expect(railCaptions([])).toEqual([]);
   });
 
   it("draws a provider's weekly quota bar and reset tooltip, and no bar when it is unknown", async () => {

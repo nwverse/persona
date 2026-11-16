@@ -28,7 +28,11 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 		}
 		return ContextResult{}
 	}
-	c := prompts.AssistantContext{Snapshot: s.contextSnapshot(ctx, s.snapshotScope(ctx, p.SessionID)), Owner: s.owner(ctx),
+	snapshot := ""
+	if !s.cleanRoundSession(p.SessionID) { // a granted schedule's round reads nothing from outside (schedule_grant.go)
+		snapshot = s.contextSnapshot(ctx, s.snapshotScope(ctx, p.SessionID))
+	}
+	c := prompts.AssistantContext{Snapshot: snapshot, Owner: s.owner(ctx),
 		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID), Background: s.isBackground(ctx, p.SessionID)}
 	switch {
 	case c.Main:
@@ -366,9 +370,10 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant {
+			if c.Assistant || c.FoldedUnder() != "" {
 				continue
 			}
+			c.State = c.FoldedState()
 			a := prompts.SnapshotAgent{Label: agentLabel(c), Machine: m.ID, Session: short(c.SessionID),
 				Link: sessionLink(web, m.ID, c.SessionID, false), Ultracode: ultracodeState(c.Ultracode), Plan: snapshotPlan(c)}
 			for _, w := range runningWorkflows(c, now) {

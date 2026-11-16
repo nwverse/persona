@@ -70,7 +70,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped:
+	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigFailed, sigStarted, sigAllStopped, sigDecisionReply:
 		return true
 	}
 	return false

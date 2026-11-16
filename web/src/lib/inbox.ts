@@ -101,6 +101,9 @@ export interface InboxItem {
   updated_at?: string;
   tier?: string;
   summary?: string;
+  /** An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it; `summary` and `preview`
+   *  are the same words without the marks. Older hubs leave it out. */
+  body?: string;
   reason?: string;
   read?: boolean;
   done_at?: string | null;
@@ -638,28 +641,6 @@ export function comparePosition(a: string, b: string): number {
   return a.localeCompare(b);
 }
 
-const CARD_SKIP = new Set(["button", "action", "overflow", "select_static", "select_person", "date_picker", "picker_time", "picker_datetime", "hr", "img"]);
-
-/** A card simplified to its title and lines of text (no buttons: the page only reads). */
-export function cardText(meta: Record<string, unknown> | undefined): { title: string; lines: string[] } {
-  if (!meta) return { title: "", lines: [] };
-  const str = (v: unknown): string => (typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { content?: unknown }).content === "string" ? (v as { content: string }).content : "");
-  const header = meta.header as Record<string, unknown> | undefined;
-  const title = str(meta.title) || str(header?.title) || "";
-  const lines: string[] = [];
-  const walk = (node: unknown) => {
-    if (Array.isArray(node)) return node.forEach(walk);
-    if (!node || typeof node !== "object") return;
-    const o = node as Record<string, unknown>;
-    if (typeof o.tag === "string" && CARD_SKIP.has(o.tag)) return;
-    const own = str(o.text) || (typeof o.content === "string" ? o.content : "");
-    if (own.trim()) lines.push(own.trim());
-    for (const [k, v] of Object.entries(o)) if (k !== "text" && k !== "content" && v && typeof v === "object") walk(v);
-  };
-  walk(meta.elements ?? (meta.body as Record<string, unknown> | undefined)?.elements ?? meta.body);
-  return { title, lines: lines.filter((l, i) => l !== title && l !== lines[i - 1]) };
-}
-
 // ── Moments ──────────────────────────────────────────────
 
 export interface MomentContent {
@@ -962,12 +943,15 @@ let started = false;
 let inFlight: Promise<void> | null = null;
 let again = false;
 
-/** The last list the hub answered in full, as it came (before the marks were laid over it), and its validator: a
- * reload sends it as If-None-Match, and a 304 says the hub's list is still this one (docs/protocol/protocol.md
- * "Inbox validator"). */
-let lastList: { etag: string; items: InboxItem[]; triage: InboxTriage | null } | null = null;
+/** The hub's last list as it came (before the marks were laid over it) and what names it: its cursor, so a reload asks
+ * only for what changed since (docs/protocol/protocol.md "Inbox delta"), and its validator, sent as If-None-Match: a
+ * 304 says the list is still this one ("Inbox validator"). Memory only: a page's first list is whole. */
+let lastList: { etag: string; cursor: string; items: InboxItem[]; triage: InboxTriage | null } | null = null;
 /** What a reload sends before it has a validator: a tag no list has, which asks the hub for its own. */
 const NO_LIST_TAG = 'W/"i1-"';
+/** Until when reloads ask without `since`: an answer had no cursor (an older hub or manager, or one that failed), so the
+ * validator does the work, and deltas are tried again ten minutes later. */
+let deltasOff = 0;
 
 function start() {
   if (started) return;
@@ -1006,16 +990,26 @@ export function reloadInbox(): Promise<void> {
         try {
           let status = 0;
           let etag = "";
-          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage }>("/inbox?sources=all", {
-            headers: { "If-None-Match": lastList?.etag ?? NO_LIST_TAG },
+          const held = lastList;
+          // "0" until a list is held: one no list has, so the hub answers the whole list and its cursor
+          const since = Date.now() < deltasOff ? "" : held?.cursor || "0";
+          // If-None-Match too: a hub that knows no `since` still answers a list it has with a 304
+          const r = await api<{ items?: InboxItem[]; triage?: InboxTriage; cursor?: string; delta?: boolean; removed?: { id: string; manager?: string }[] }>(`/inbox?sources=all${since && `&since=${enc(since)}`}`, {
+            headers: { "If-None-Match": held?.etag || NO_LIST_TAG },
             onResponse: (headers, code) => {
               status = code;
               etag = headers?.get("ETag") ?? "";
             },
           });
           // 304: the list is still the one kept, and the marks are laid over it again as over any list of this seq
-          const list = status === 304 ? lastList : { etag, items: r.items ?? [], triage: r.triage ?? null };
-          if (status !== 304) lastList = etag ? list : null;
+          let list = held;
+          if (status !== 304) {
+            const cursor = r.cursor ?? "";
+            if (since && !cursor) deltasOff = Date.now() + 600_000;
+            // a delta answers only the cursor sent, so the list it changes is the one held
+            list = { etag, cursor, items: r.delta && held ? applyInboxDelta(held.items, r.items ?? [], r.removed ?? []) : r.items ?? [], triage: r.triage ?? null };
+            lastList = etag || cursor ? list : null;
+          }
           if (list) set({ items: keepSameItems(state.items, withPending(list.items, seq)), triage: list.triage, loaded: true, error: "" });
         } finally {
           endList(seq);
@@ -1031,7 +1025,25 @@ export function reloadInbox(): Promise<void> {
   return inFlight;
 }
 
-/** "Refresh": the hub collects Feishu and mail now, then lists. */
+/** `held` with a delta applied (docs/protocol/protocol.md "Inbox delta"): changed items in place, new ones in, removed
+ *  ones out, in the hub's order (each manager's items together, the managers as they came; newest first, then by id). */
+export function applyInboxDelta(held: InboxItem[], changed: InboxItem[], removed: { id: string; manager?: string }[]): InboxItem[] {
+  const gone = new Set(removed.map(itemKey));
+  const fresh = new Map(changed.map((it) => [itemKey(it), it]));
+  const out = held.filter((it) => !gone.has(itemKey(it))).map((it) => {
+    const k = itemKey(it);
+    const now = fresh.get(k) ?? it;
+    fresh.delete(k);
+    return now;
+  });
+  out.push(...fresh.values());
+  const managers = new Map<string | undefined, number>();
+  for (const it of out) if (!managers.has(it.manager)) managers.set(it.manager, managers.size);
+  return out.sort((a, b) => managers.get(a.manager)! - managers.get(b.manager)! || byTime(b.updated_at, a.updated_at) || (a.id < b.id ? -1 : +(a.id > b.id)));
+}
+
+/** "Refresh": the hub collects Feishu and mail now, then lists. Its whole list has no cursor: what is held stays, so the
+ * next reload's delta is still from the list its cursor names. */
 export async function refreshInbox(): Promise<void> {
   set({ loading: true });
   const seq = beginList();
@@ -1598,6 +1610,7 @@ export function resetInboxForTests() {
   inFlight = null;
   again = false;
   lastList = null;
+  deltasOff = 0;
   pendingDone.clear();
   listsOut.clear();
   listSeq = 0;

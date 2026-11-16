@@ -98,6 +98,9 @@ var errArchiveBackground = i18n.Err("assistant-conversations.archive_background_
 
 // setArchived archives (on) or brings back a conversation; by is who did it. It reports whether anything changed.
 func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, by string) (bool, error) {
+	if err := s.conversationAvailable(ctx, machine, id); err != nil {
+		return false, err
+	}
 	if on && s.settings(ctx).Main == id {
 		return false, errArchiveMain
 	}
@@ -464,7 +467,9 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
-	if s.isBackground(ctx, to) {
+	if pick, ok := s.modelPickOf(ctx, machine, to); ok {
+		s.relayOnPick(ctx, machine, to, params, pick) // the conversation's own pick, as a message typed to it runs on (model_pick.go)
+	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, nil); err != nil {
@@ -674,7 +679,7 @@ func (s *Service) conversations(ctx context.Context, withArchived bool, space st
 	here := s.settings(ctx)
 	all, _ := s.sessions(ctx, here.MachineID) // none on no machine
 	for _, c := range all {
-		if c.Assistant && spaceOf(c) == space && (withArchived || !c.Archived) {
+		if c.Assistant && !c.IsDeleted() && spaceOf(c) == space && (withArchived || !c.Archived) {
 			list = append(list, c)
 		}
 	}
@@ -1016,6 +1021,11 @@ func (s *Service) ownSpaceConversation(ctx context.Context, self, id string) (pr
 	space, err := s.knownSpace(ctx, self)
 	if err != nil {
 		return proto.Session{}, err
+	}
+	if row, ok, err := s.deletedConversation(ctx, s.settings(ctx).MachineID, id); err != nil {
+		return proto.Session{}, err
+	} else if ok && row.Space == space {
+		return proto.Session{}, s.conversationAvailable(ctx, row.Machine, id)
 	}
 	return s.spaceConversation(ctx, id, &space)
 }

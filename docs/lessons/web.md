@@ -1,5 +1,29 @@
 # Lessons: web UI and interactions
 
+## Historical times need their own UTC offset (#9422)
+
+Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
+and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+
+## ZIP preview limits must check actual bytes (#9384)
+
+A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate
+stream to inflate far beyond the limit. Count the streamed output and cancel on overflow; also bound the directory
+range before requesting it. Exercise both with forged ZIP metadata, not only normal generated archives. A Range
+request can also receive a full 200 or a malformed 206: bound the HTTP body itself, validate the returned range,
+and test with real streamed responses (#9405).
+
+## Vite module IDs use forward slashes on Windows (#9341)
+
+`fileURLToPath` returns host-native paths, while Vite's module IDs use forward slashes. Normalize config directories
+with Vite's `normalizePath` before comparing allowlisted module IDs or removing build-machine paths from a graph.
+Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
+the rejection of an injected module outside the allowed graph.
+
+## A refused credential-mirror write must not erase the readable legacy login (#9023)
+
+Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
+
 ## Compact buttons need their touch targets when moved into a dialog (#7446)
 
 The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing
@@ -820,6 +844,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 
 - A paging fallback must change its data source as well as its component (#6362). `useAgentSessions` exposes only the bounded window on paging hubs, and those hubs suppress full socket snapshots. Pins and groups require a query-free complete `/sessions` read, refreshed by invalidation hints and scoped to the fallback's lifetime. Test a pin beyond the first page without injecting a full socket list. Bulk actions must also accept displayed rows absent from the detail cache: iterating only cached rows silently skips them. Overlay changed local details without replacing newer HTTP rows with unchanged old cache entries.
 - Serializing full-list reads is not throttling (#6362): working agents can continuously invalidate display data, producing back-to-back complete downloads. Enforce a completion-based cooldown with one trailing read at a fixed deadline; preserve immediate reconnects and clear scheduled reads on reset/unmount.
+- A throttle that lets "a read is out" skip its window does nothing on a busy fleet (#9215): the next hint always lands mid-read, so `SessionList` read back to back and `loading` never cleared. Every Load more, infinite scroll and auto-load waits for `!loading`, so the button vanished under the pointer. Every hint waits for a window counted from when the last read came back, a page someone asked for goes before a queued refresh, and Load more hides only while its own page is out (`loadingMore`), never for a background refresh. The mock hub only shows this with `/mock/delay` plus `/mock/bump?what=rev` every few hundred ms.
 - Treat loading counts as unknown, not zero (#6362). Clearing scoped counts before a refresh, or copying a temporary null root count during rebaseline, removes state chips and changes list height. Keep the last successful counts until a valid replacement arrives, including real zero counts; test deferred responses after root-count changes as well as filter changes.
 
 - Never nest buttons in link rows: make row ⋯ a sibling of `<a>`, absolutely positioned with `group-hover/row:flex` (Tailwind v4 `group-hover` already works only under `@media (hover:hover)`). Row-end hints / badges yield on hover with

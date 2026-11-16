@@ -291,7 +291,7 @@ fun JTextField(
             textStyle = (if (monospace) PersonaTheme.type.code else PersonaTheme.type.body).copy(color = palette.ink), cursorBrush = SolidColor(palette.accent.takeIf { style != AppStyle.Brief } ?: palette.ink),
             keyboardOptions = keyboardOptions, keyboardActions = keyboardActions, visualTransformation = visualTransformation,
             // On the text field's own semantics node: Autofill reads the node it would fill, not its parents.
-            modifier = if (autofill) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().semantics { contentDataType = ContentDataType.None },
+            modifier = (if (autofill) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().semantics { contentDataType = ContentDataType.None }).hardwareShortcutTextInput(),
             decorationBox = { field ->
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp.row).clip(shape).background(fill)
@@ -660,6 +660,8 @@ fun JChip(
      *  tappable one, so the × has its full touch target. */
     onRemove: (() -> Unit)? = null,
     removeLabel: String? = null,
+    /** Bounds the label inside a weighted chip while keeping its icons and count visible. */
+    boundedLabel: Boolean = false,
     breathes: Boolean = true,
     /** The [count] in a capsule of this state's colours ([JToneCount]: none at 0, 99+ past 99), spoken with the text
      *  ("Needs you, 12"): the Inbox's section bar (#9053). None: quiet digits, as before. */
@@ -697,9 +699,15 @@ fun JChip(
         status?.let { JStatusDot(it, size = JChipTokens.dotSize, breathes = breathes); Spacer(Modifier.width(JChipTokens.dotGap)) }
         if (status == null) dot?.let { Box(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(it)); Spacer(Modifier.width(JChipTokens.dotGap)) }
         icon?.let { JIcon(it, null, size = JChipTokens.iconSize, tint = ink); Spacer(Modifier.width(JChipTokens.iconGap)) }
-        // With a ×, a long text gives way to it rather than pushing it out of the chip.
-        Text(text, if (onRemove != null) Modifier.weight(1f, fill = false) else Modifier,
-            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // With a × or a bounded label, long text gives way instead of pushing out the rest of the chip.
+        Text(
+            text,
+            modifier = if (onRemove != null || boundedLabel) Modifier.weight(1f, fill = false) else Modifier,
+            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         if (countTone != null) count?.takeIf { it > 0 }?.let {
             Spacer(Modifier.width(JChipTokens.countGap))
             JToneCount(it, countTone, onFill = selected && style != AppStyle.Board)

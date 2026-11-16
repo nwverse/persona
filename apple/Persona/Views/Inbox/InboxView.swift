@@ -156,6 +156,8 @@ struct InboxPage: View {
                 }
                 // selecting: the bar at the bottom is the selection's (as in Mail), not the tabs'
                 .toolbar(picked == nil ? .automatic : .hidden, for: .tabBar)
+                // The selection's actions clear of the open Duo's floating tabs' switch (#4231); no bar of its own otherwise.
+                .tabSwitchBottomBarRoom(shown: picked != nil)
                 .sheet(item: $composing) { d in ComposeView(draft: d, accounts: d.accounts ?? accounts) }
                 .sheet(item: $editingDraft) { InboxDraftSheet(item: $0, accounts: accounts) }
                 .sheet(item: $answering) { SessionlessCardSheet(interaction: $0) }
@@ -849,6 +851,7 @@ struct InboxPage: View {
             }
         }
         .listStyle(.plain)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
@@ -1183,7 +1186,7 @@ struct InboxRow: View {
                     Text(LarkTime.short(item.updatedAt)).font(Theme.Font.caption).foregroundStyle(.secondary).fixedSize()
                 }
                 HStack(alignment: .top, spacing: Theme.Space.sm) {
-                    if let summary = item.summary, !summary.isEmpty {
+                    if let summary = item.lineSummary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + summary))
                                 // The hierarchical styles, not `Color.primary`: a Mac list's selected row turns that
@@ -1262,7 +1265,7 @@ struct InboxRow: View {
 
     /// Who wrote what (under the AI's summary once it has one).
     private var from: String {
-        if item.isAssistantRow { return item.preview } // the tag says who: no "Assistant:" in front
+        if item.isAssistantRow { return item.linePreview } // the tag says who: no "Assistant:" in front
         #if !os(macOS)
         if let meta = InboxNow.meta(item, lang: interfaceTextLocale.identifier) { return meta }
         #endif

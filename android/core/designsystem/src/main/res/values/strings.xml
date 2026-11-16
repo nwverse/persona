@@ -44,6 +44,7 @@
     <string name="designsystem_collapsed">Collapsed</string>
     <string name="designsystem_retry">Retry</string>
     <string name="designsystem_back">Back</string>
+    <string name="designsystem_sidebar">Sidebar</string>
     <string name="designsystem_cancel">Cancel</string>
     <string name="designsystem_close">Close</string>
     <string name="designsystem_done">Done</string>
@@ -435,4 +436,15 @@
     <string name="designsystem_stepper_plus">Increase</string>
     <string name="designsystem_copy_too_large">Text too large to copy; use Share instead</string>
     <string name="designsystem_copied">Copied</string>
+    <string name="designsystem_shortcuts_title">Keyboard shortcuts</string>
+    <string name="designsystem_shortcuts_send">Send message</string>
+    <string name="designsystem_shortcuts_send_keys">Ctrl or ⌘ + Return</string>
+    <string name="designsystem_shortcuts_newline">New line</string>
+    <string name="designsystem_shortcuts_newline_keys">Return or Shift + Return</string>
+    <string name="designsystem_shortcuts_close">Close the top layer</string>
+    <string name="designsystem_shortcuts_close_keys">Esc</string>
+    <string name="designsystem_shortcuts_help">Show keyboard shortcuts</string>
+    <string name="designsystem_shortcuts_help_keys">Ctrl + /</string>
+    <string name="designsystem_shortcuts_terminal">Terminal has priority</string>
+    <string name="designsystem_shortcuts_terminal_keys">Esc, Tab, Shift + Tab, Ctrl + C, arrow keys</string>
 </resources>

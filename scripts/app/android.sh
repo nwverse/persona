@@ -135,7 +135,10 @@ case "$COMMAND" in
     fi
     [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ] || { echo "密钥库口令命令没有输出。" >&2; exit 1; }
     case "$STORE_PASSWORD$KEY_PASSWORD" in *$'\n'*) echo "密钥库口令命令输出了多行。" >&2; exit 1 ;; esac
-    ./gradlew -q -PpersonaApplicationId="$APP_ID" :app:assembleRelease
+    # About shows the commit this APK is built from: this repository's HEAD, passed explicitly (unknown when it cannot be read).
+    BUILD_COMMIT=$(git -C .. rev-parse HEAD 2>/dev/null || true)
+    [[ $BUILD_COMMIT =~ ^[0-9a-f]{40}$ ]] || BUILD_COMMIT=unknown
+    ./gradlew -q -PpersonaApplicationId="$APP_ID" -PpersonaBuildCommit="$BUILD_COMMIT" :app:assembleRelease
     UNSIGNED=app/build/outputs/apk/release/app-release-unsigned.apk
     SIGNED=app/build/outputs/apk/release/app-release.apk
     python3 ../scripts/release/check_android_shrink.py "$UNSIGNED" app/build/outputs/mapping/release --build-tools "$TOOLS"

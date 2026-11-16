@@ -1,5 +1,5 @@
 // The Inbox page's own helpers (docs/assistant/inbox.md): the words for mutes, rules, bulk actions and the triage banner,
-// the "Hand to AI" message, Feishu message parts and sends. Split from inbox.ts, which the sidebar's badge and the chat
+// the "Hand to AI" message, Feishu message parts, cards and sends. Split from inbox.ts, which the sidebar's badge and the chat
 // load on every first screen, so that only the lazily loaded Inbox page and its settings carry them (#8806).
 
 import { itemHeaders, stampedHeaders } from "./manager-choice";
@@ -58,11 +58,14 @@ export function canDraft(it: InboxItem): boolean {
   return !it.connector || !!it.connector.can_reply;
 }
 
-/** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the summary), so it is not drawn twice. */
+/** The row's text under the summary says what the summary already says (the assistant's own rows: its text is the
+ *  summary, or its first words cut with an ellipsis when it is long), so it is not drawn twice. */
 export function repeatsSummary(it: InboxItem): boolean {
   const summary = it.summary?.trim();
   const text = it.preview?.trim();
-  return it.source === "assistant" && !!summary && !!text && (text === summary || text.startsWith(summary));
+  if (it.source !== "assistant" || !summary || !text) return false;
+  const head = text.endsWith("…") ? text.slice(0, -1) : text;
+  return text.startsWith(summary) || (!!head && summary.startsWith(head));
 }
 
 /** Where it came from, for the detail page's subtitle. */
@@ -321,4 +324,28 @@ export function nextLarkPosition(messages: LarkMessage[]): string {
     if (Number.isFinite(n) && n > max) max = n;
   }
   return String(max > 0 ? max + 1 : Date.now());
+}
+
+// ── Feishu cards ─────────────────────────────────────────
+
+const CARD_SKIP = new Set(["button", "action", "overflow", "select_static", "select_person", "date_picker", "picker_time", "picker_datetime", "hr", "img"]);
+
+/** A card simplified to its title and lines of text (no buttons: the page only reads). */
+export function cardText(meta: Record<string, unknown> | undefined): { title: string; lines: string[] } {
+  if (!meta) return { title: "", lines: [] };
+  const str = (v: unknown): string => (typeof v === "string" ? v : v && typeof v === "object" && typeof (v as { content?: unknown }).content === "string" ? (v as { content: string }).content : "");
+  const header = meta.header as Record<string, unknown> | undefined;
+  const title = str(meta.title) || str(header?.title) || "";
+  const lines: string[] = [];
+  const walk = (node: unknown) => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== "object") return;
+    const o = node as Record<string, unknown>;
+    if (typeof o.tag === "string" && CARD_SKIP.has(o.tag)) return;
+    const own = str(o.text) || (typeof o.content === "string" ? o.content : "");
+    if (own.trim()) lines.push(own.trim());
+    for (const [k, v] of Object.entries(o)) if (k !== "text" && k !== "content" && v && typeof v === "object") walk(v);
+  };
+  walk(meta.elements ?? (meta.body as Record<string, unknown> | undefined)?.elements ?? meta.body);
+  return { title, lines: lines.filter((l, i) => l !== title && l !== lines[i - 1]) };
 }
