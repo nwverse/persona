@@ -100,6 +100,8 @@ struct ChatView: View {
     #if os(iOS)
     /// Select Messages (#3838): the messages picked to forward together, while selecting.
     @State private var pick = MessagePick()
+    /// Export Image (#9468): the picked messages on their way into a picture (`ChatExportSheet`).
+    @State private var exporting: ExportRequest?
     #endif
     #if os(iOS)
     /// Full Page in this chat's system screenshot (#1609).
@@ -3202,6 +3204,7 @@ struct ChatView: View {
         .sheet(item: $menu.sharing) { m in MessageShareSheet(message: m) }
         #if os(iOS)
         .sheet(item: $menu.forwarding, onDismiss: forwardDone) { d in ForwardSheet(draft: d) { forwardPicked = $0 } }
+        .sheet(item: $exporting) { r in ChatExportSheet(request: r, pick: pick).presentationDetents([.large]) }
         .sheet(item: $forwardNewAgent) { f in
             NewChatView(contextBlock: f.refs.map(\.xml).joined(separator: "\n"), forwarded: f.refs, forwardedImages: f.images,
                         onlyGroup: key.group) { s in
@@ -4404,6 +4407,19 @@ struct ChatView: View {
                     if let a = answer { menu.sharing = ShareMessage(text: a.text ?? "", isUser: false, source: menu.source(), date: a.ts, agent: menu.agent()) }
                 }
             }
+            #if os(iOS)
+            // `-showExport replies|all` (#9468): selecting with every reply (or every message) picked, then Export Image.
+            if let what = UserDefaults.standard.string(forKey: "showExport") {
+                Task {
+                    try? await Task.sleep(for: .seconds(5))
+                    let bars = currentLines().compactMap { Self.pickBar($0) }.filter { what == "all" || !$0.isUser }
+                    guard let first = bars.first else { return }
+                    pick.start(first.id)
+                    for b in bars.dropFirst() { _ = pick.toggle(b.id) }
+                    exportPicks()
+                }
+            }
+            #endif
             if UserDefaults.standard.bool(forKey: "showCloseAgent") { // the close confirmation, for screenshots
                 Task { try? await Task.sleep(for: .seconds(3)); closing = session }
             }
@@ -4711,6 +4727,14 @@ struct ChatView: View {
             draft.selects = true
             menu.forwarding = draft
         }
+        // Select Messages (#9468): the long-press bar's row starts selecting with the pressed message picked; a reply's
+        // questions are its turn's messages from the user's side (Include Questions).
+        menu.select = { [pick] id in
+            Keyboard.dismiss()
+            withAnimation(Theme.Motion.standard) { pick.start(id) }
+        }
+        menu.selectable = { id in currentLines().contains { Self.pickBar($0)?.id == id } }
+        pick.readQuestions = { [model, key] in PickQuestions.map(model.chat(key).blocks) }
         #endif
     }
 
@@ -4790,11 +4814,12 @@ struct ChatView: View {
         return true
     }
 
-    /// The footer, or while selecting the bar with Cancel and Forward (N) in its place. The composer's words, quotes and
-    /// pictures are the model's, so it comes back as it was.
+    /// The footer, or while selecting the bar with Cancel, the count, Include Questions and Forward · Copy · Export Image in
+    /// its place. The composer's words, quotes and pictures are the model's, so it comes back as it was.
     @ViewBuilder private var pickOrFooter: some View {
         if pick.on {
-            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks)
+            PickBar(pick: pick, cancel: { withAnimation(Theme.Motion.standard) { pick.end() } }, forward: forwardPicks,
+                    copy: copyPicks, export: exportPicks, refused: pickRefused)
         } else {
             footer
         }
@@ -4805,16 +4830,56 @@ struct ChatView: View {
         model.toast = Toast(String(localized: "Up to \(ForwardMessage.most) messages at a time"), style: .error)
     }
 
-    /// Forward (N): the picked messages in the chat's order, to Forward To. Selecting ends once a target is picked
-    /// (`forwardDone`); Cancel there comes back to the selection.
-    private func forwardPicks() {
+    /// The picked messages as forwards, in the chat's order; with `questions`, with the questions they bring (#9468).
+    private func pickedDrafts(questions: Bool) -> [ForwardDraft] {
+        let ids = questions ? pick.ids.union(PickQuestions.brought(pick.ids, questions: pick.questions)) : pick.ids
         let shown = Dictionary(currentLines().compactMap { Self.pickBar($0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let bars = model.chat(key).items.compactMap { pick.ids.contains($0.id) ? shown[$0.id] : nil }
-        guard !bars.isEmpty else { return }
-        let drafts = bars.map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+        return model.chat(key).items.compactMap { ids.contains($0.id) ? shown[$0.id] : nil }
+            .map { Self.forwardDraft($0, key: key, model: model, menu: menu) }
+    }
+
+    /// Forward: the picked messages (and their questions, with Include Questions) to Forward To. Selecting ends once a
+    /// target is picked (`forwardDone`); Cancel there comes back to the selection.
+    private func forwardPicks() {
+        let drafts = pickedDrafts(questions: pick.include)
+        guard !drafts.isEmpty else { return }
         menu.forwarding = ForwardDraft(pieces: drafts.flatMap(\.pieces), loadImage: drafts[0].loadImage,
                                        share: drafts.count == 1 ? drafts[0].share : nil)
     }
+
+    /// Copy (#9468): the picked messages (and their questions) as text, each its whole, who wrote it over it; then
+    /// selecting ends.
+    private func copyPicks() {
+        let pieces = pickedDrafts(questions: pick.include).flatMap(\.pieces)
+        guard !pieces.isEmpty else { return }
+        Task {
+            do {
+                let messages = try await ChatExportRenderer.messages(pieces)
+                UIPasteboard.general.string = ExportText.copy(messages)
+                Haptics.success()
+                model.toast = Toast(String(localized: "Copied [Selected Messages]"), style: .success)
+                withAnimation(Theme.Motion.standard) { pick.end() }
+            } catch {
+                Haptics.error()
+                model.toast = Toast(error.isOffline ? String(localized: "Can't reach the hub") : error.shown ?? error.localizedDescription,
+                                  style: .error)
+            }
+        }
+    }
+
+    /// Export Image (#9468): the preview of the picked messages as a picture; selecting stays, to export again or forward.
+    private func exportPicks() {
+        let without = pickedDrafts(questions: false), with = pickedDrafts(questions: true)
+        guard let first = with.first else { return }
+        let s = model.session(key)
+        exporting = ExportRequest(title: s?.displayTitle ?? "",
+                                  agent: s?.assistant == true ? model.assistantShownName(in: key) : (s?.agentLabel ?? ""),
+                                  pieces: { questions in (questions ? with : without).flatMap(\.pieces) },
+                                  loadImage: first.loadImage, width: menu.areaWidth > 0 ? menu.areaWidth : Self.phoneWidth)
+    }
+
+    /// A phone's width, for a picture drawn before the chat knows its own.
+    private static let phoneWidth: CGFloat = 393
     #else
     private var pickOrFooter: some View { footer }
     #endif

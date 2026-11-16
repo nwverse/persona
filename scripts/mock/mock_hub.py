@@ -17678,6 +17678,51 @@ let wideCodeLine = forecast.hours.map { hour in hour.precipitation.rounded(toNea
     ITEMS[WIDE] = [it("user", "text", 4, text="给我看看宽表格"), it("assistant", "text", 3, text=_wide),
                    it("user", "text", 2, text="还有吗"), it("assistant", "text", 1, text="就这些。")]
 
+# MOCK_EXPORT=1 (#9468): an Agents chat for Select Messages, Include Questions and Export Image (SelectExportTests): two
+# questions and their replies with a heading, a list, a table, code, formulas inline and on their own, a picture
+# (/mock/picture.png), English and Arabic among the Chinese. MOCK_EXPORT=long adds a reply with a 300-line log: drawn in
+# pieces, its picture runs to a second page.
+EXPORT = "a1f3c2d4-0000-4000-8000-000000009468"
+if os.environ.get("MOCK_EXPORT") in ("1", "long"):
+    SESSIONS.append(sess("macbook", EXPORT, "天气小组件改版", "/Users/me/code/weather", "done", "read", "weather", 1, "export", 6, 1,
+                         "要我现在提交吗？"))
+    _export_a1 = """## 原因找到了
+
+小组件每 **30 分钟**才刷新一次，而且网络超时只有 10 秒，弱网下经常失败。
+
+1. 刷新间隔改成 15 分钟
+2. 超时改成 20 秒，失败最多重试 3 次
+
+| 文件 | 改动 |
+| --- | --- |
+| Provider.swift | 刷新间隔 |
+| Fetcher.swift | 超时和重试 |
+
+```swift
+for attempt in 0..<3 {
+    do { return try await fetch() }
+    catch { try await Task.sleep(for: .seconds(1 << attempt)) }
+}
+```"""
+    _export_a2 = """会多一点，但很少：按 $E = P \\times t$ 估算，一天约多用 $0.3\\%$ 的电量。
+
+$$
+E_{day} = \\sum_{i=1}^{96} P_i \\, t_i
+$$
+
+![耗电对比](http://127.0.0.1:{PORT}/mock/picture.png?w=900&h=600)
+
+The widget's timeline reloads at most **96** times a day, so the system keeps it in budget.
+
+مرحبا، هذا سطر تجريبي من اليمين إلى اليسار.
+
+要我现在提交吗？""".replace("{PORT}", str(PORT))
+    _export_log = "完整日志：\n\n```\n" + "\n".join("12:%02d:%02d fetch #%d ok in %d ms" % (k // 60, k % 60, k, 120 + k * 7 % 90) for k in range(300)) + "\n```"
+    ITEMS[EXPORT] = [it("user", "text", 6, text="小组件刷新太慢，帮我看看为什么"), it("assistant", "text", 5, text=_export_a1),
+                     it("user", "text", 4, text="改成 15 分钟会更费电吗？"), it("assistant", "text", 3, text=_export_a2)]
+    if os.environ.get("MOCK_EXPORT") == "long":
+        ITEMS[EXPORT] += [it("user", "text", 2, text="把刚才的日志贴给我"), it("assistant", "text", 1, text=_export_log)]
+
 # MOCK_CHAT_READ=1: a finished exchange for reading the chat on a phone (#1996, web_mobile_read_e2e.py): a long message
 # of yours, an edit of 60 lines (its diff folds on a phone), a command with output, and an answer with a code block and
 # formulas (KaTeX loads only for those).
@@ -25825,6 +25870,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
         if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
+        if p == "/mock/picture.png":  # a picture for replies to show (MOCK_EXPORT): ?w=&h=, a blue-to-violet gradient
+            data = _fs_png(min(int(q.get("w", ["600"])[0] or 600), 2000), min(int(q.get("h", ["400"])[0] or 400), 2000), (110, 160, 255), (190, 140, 255))
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(data)))
+            self.end_headers(); self.wfile.write(data)
+            return True
         if p == "/mock/share-page": return self.send_share_page()
         if p == "/mock/sent_to": return self.send_json({"sent": SENT_TO})
         if p == "/mock/lark_reads": return self.send_json({"reads": LARK_READS})

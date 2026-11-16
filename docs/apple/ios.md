@@ -268,12 +268,15 @@ Chat page:
   - **Sent**: the block is a card at the top of the bubble, as a quote's, with the arrow, "Forwarded from Claude · chat",
     the computer and time, and four lines; a tap opens the original chat at the message (`AppModel.openLinked`), or the
     whole text when this app does not have that chat. Nothing is written to the original chat.
-  - **Several at once** (#3838, `MessagePick.swift`): Forward To's Select Messages…, under Share as Image, closes the
-    picker and starts selecting in the chat with the pressed message picked; the long-press bar is unchanged. Each
+  - **Several at once** (#3838, #9468, `MessagePick.swift`): the long-press bar's last row, Select Messages (under a
+    hairline, `MessageActionBar.selects`: a sent message the chat can pick; as Telegram's menu ends in Select), or Forward
+    To's Select Messages…, under Share as Image, starts selecting in the chat with the pressed message picked. Each
     message (your own, a reply, a relayed or another session's; not steps, notices, injected lines or `/loop` ticks) gets
     the Inbox Select's round mark on its leading edge, and a tap anywhere on it picks or unpicks it; nothing inside it
-    answers. A long answer's parts (#4970) pick as the one answer, its mark on the first. The footer gives way to `PickBar`: Cancel (the chat as it was: the box's words, quotes and photos are the
-    model's), "N Selected", and Forward N, off with none picked; a 31st pick shows a toast. Forward N opens Forward To
+    answers. A long answer's parts (#4970) pick as the one answer, its mark on the first. The footer gives way to `PickBar`:
+    Cancel (the chat as it was: the box's words, quotes and photos are the model's), "N Selected", Include Questions when it
+    means something, and under them Forward · Copy · Export Image drawn as the long-press bar's actions, off with none
+    picked; a pick that would send more than 30 shows a toast. Forward opens Forward To
     with the picked messages in the chat's order (`ForwardDraft.pieces`), without Share as Image or Select Messages….
     They go over the target's box as one bar (`QuoteBar` groups forwards of one chat: "2 Forwarded Messages · chat", a
     line each, one × for all) and are sent as one block each; the sent bubble shows them as one card
@@ -281,8 +284,32 @@ Chat page:
     three, "N More"). Size: each cut at the smaller of 20,000 and 60,000 / N characters (`ForwardMessage.limit(count:)`),
     at most 30; photos share the box's limit. Selecting ends once a target is picked; cancelling Forward To comes back
     to the selection.
+  - **Include Questions** (#9468, `PickQuestions`): a reply's questions are its turn's messages from the user's side (yours,
+    and a relayed or another source's that opened it), in the chat's order. While a picked reply's question is not picked,
+    the bar offers Include Questions as a chip; on, Forward, Copy and Export Image take those questions too, and their
+    marks are filled in a lighter accent ("Goes with its answer" to VoiceOver). On by default; the last choice is kept
+    (`pickIncludeQuestions`, read when selecting starts, written only when changed). What goes stays within 30.
+  - **Copy** (#9468, `ExportText`): what goes as plain text, each whole (read when the chat holds it cut) as a forward
+    carries it, "Me:" or the author's name over it, a blank line between; selecting ends with a toast.
+  - **Export Image** (#9468, `ChatExport.swift`, `ChatExportRenderer.swift`, `ChatExportSheet.swift`): what goes drawn as the
+    chat shows it, into a picture as wide as the phone (360–430 pt) at the screen's 2× or 3×, light or dark as the phone
+    is, the text at the reading size (`.large`, never the phone's accessibility sizes: the picture is for others to read).
+    On top the chat's title, the day (or days) and who answers, never the computer or project (Title and Date turns it
+    off); then your bubbles with your photos, and each reply under its author: its Markdown in the share card's theme
+    (`MarkdownUI.Theme.export`), cards as the share card draws them (`ShareCardParts`), ```math and ```mermaid drawn
+    first and taken from `MarkdownRenderer`'s cache, a paragraph with inline formulas drawn as text with them in it
+    (`ExportMathText`: MarkdownUI loads inline images in a task an offscreen picture never runs), pictures loaded first
+    and sized as the inline-images rule has it (`ExportImageLayout`: never larger than their pixels, 240 pt high at
+    most, cut to 3:4 or 16:9 past those; several three to a row, all of them), and at the foot of each page Persona's
+    mark (`PersonaBrandLockup`) and "2/3" when there are several. Each block is drawn on its own and kept as a PNG; the
+    pages are stacked from them (`ExportPages`) at most 16,000 px and 64 MB to decode each, broken between blocks, a
+    block taller than a page cut at a row of one color (`ExportSlicer`); a code block over 60 lines is drawn in pieces.
+    The preview (`ChatExportSheet`) shows the pages small, read from their files as they come into view, with Include
+    Questions (when offered), Title and Date, and Share: the files go to the system's share sheet, whose Save Image saves
+    them, so the app never asks for Photos. `-showExport replies|all` (DEBUG) picks every reply or message and opens it.
   - Tests: `ForwardTests` (`spec/fixtures/forward`, `several.json`), `ForwardMessageTests` and `ForwardSeveralTests` (the
-    whole way on the mock hub, screenshots).
+    whole way on the mock hub, screenshots); `ChatExportTests` and `SelectExportTests` (`MOCK_EXPORT=1`, or `long` for a
+    300-line log that takes a second page).
   - Screenshots `-showSampleComments YES` (two code comments and an element over the box); `MOCK_COMMENTS=1` gives the widget chat a review sent from the web, and Persona's main conversation a quote and a comment on its answer; end-to-end `CommentBubbleTests`.
 - Files: message paths and Read / Edit / Write tool paths become tappable file tags, read from the session's computer
   (`GET /api/v1/machines/{mid}/file`, at most 2 MB, iCloud directories denied), rendered Markdown / numbered code / images / PDF / directories.
