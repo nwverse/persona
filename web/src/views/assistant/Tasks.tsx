@@ -71,7 +71,7 @@ import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
+import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -680,9 +680,7 @@ export const TaskQuestions = memo(function TaskQuestions({ conversation }: { con
   if (!first && !answered.length) return null;
   return (
     <div className="flex flex-col gap-1">
-      {answered.map((a) => (
-        <AnsweredCard key={a.ix.id} card={a} />
-      ))}
+      {answered.length > 0 && <AnsweredSummary answered={answered} />}
       {first && (
         <>
           <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">
