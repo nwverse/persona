@@ -215,7 +215,7 @@ class RepairIntegrationTests(unittest.TestCase):
         gh.assert_not_called()
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/pr-watch/*"), "")
 
-    def test_an_ordinary_repair_stops_when_main_moves_for_reverification(self):
+    def test_an_ordinary_repair_refuses_a_forward_moving_base(self):
         newer = self.push_main("newer")
         (self.repo / "repair.txt").write_text("repair\n")
         self.git("add", "repair.txt")
