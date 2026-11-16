@@ -622,7 +622,7 @@ and D1 stays. Filling in this table does not itself close #6871 or approve produ
    Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
    All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
    Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
-2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in that head's docs/archive/apple/reference-measurements-6871/ at commit
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in docs/archive/apple/reference-measurements-6871/ at the head commit
    [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
    exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
    uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
