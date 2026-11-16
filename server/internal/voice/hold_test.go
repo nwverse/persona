@@ -126,7 +126,10 @@ func TestHoldKeepsWhatComes(t *testing.T) {
 		{"the user's voice", func(t *testing.T, a *app, hub *fakeHub) {
 			a.speak(time.Second, true)
 		}, func(t *testing.T, a *app, up *sessionsUp) {
-			time.Sleep(300 * time.Millisecond)
+			// What the app sends now goes to the woken session after anything of the hold's that would have gone to it
+			// (kept for the wake, it goes out first).
+			_ = a.c.Write(t.Context(), websocket.MessageBinary, tone(320, 2000))
+			waitFor(t, "the woken session's audio", func() bool { amps, _ := up.audio(1); return slices.Contains(amps, 2000) })
 			if amps, _ := up.audio(1); slices.Contains(amps, 3000) {
 				t.Fatal("the voice of the hold went to the new session")
 			}
@@ -138,10 +141,11 @@ func TestHoldKeepsWhatComes(t *testing.T) {
 			hub := workingAgent(t)
 			up := newSessionsUp(t, false, nil)
 			pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
+			logs := captureLog(t, pl)
 			a := dialApp(t, pl, boundStart("a1", nil))
 			a.until(ofType("ready"))
 			hub.subscribed("a1")
-			time.Sleep(300 * time.Millisecond) // the call sees a1 working
+			logs.followed()
 			a.send(hold(true))
 			a.until(linkIn(linkPaused))
 			tt.while(t, a, hub)
@@ -168,6 +172,7 @@ func TestHoldWhileACardIsAsked(t *testing.T) {
 		Questions: []proto.Question{{Question: "数据库用哪个？", Options: []proto.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}}}}})
 	up := newSessionsUp(t, false, nil)
 	pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
+	logs := captureLog(t, pl)
 	a := dialApp(t, pl, boundStart("a1", nil))
 	a.until(ofType("ready"))
 	a.until(func(f map[string]any) bool { return f["type"] == "ask" && f["state"] == askAsking })
@@ -175,14 +180,8 @@ func TestHoldWhileACardIsAsked(t *testing.T) {
 	a.until(linkIn(linkPaused))
 	a.send(hold(false))
 	a.until(linkIn(linkLive))
-	asked := func() int {
-		return len(slices.DeleteFunc(up.frames(1), func(f map[string]any) bool { return !strings.Contains(content(f), "数据库用哪个") }))
-	}
-	waitFor(t, "the question in the new session", func() bool { return asked() > 0 })
-	time.Sleep(time.Second) // the tracker's looks after the session came up
-	if n := asked(); n != 1 {
-		t.Fatalf("asked %d times in the new session", n)
-	}
+	waitFor(t, "the question in the new session", func() bool { return cardAsks(up, 1) > 0 })
+	askedOnce(t, a, hub, up, logs, 1)
 }
 
 // A hold that comes as the upstream wakes (the user took the call off hold and put it on hold again at once) pauses
@@ -220,10 +219,11 @@ func TestHoldWhileReconnecting(t *testing.T) {
 	hub := workingAgent(t)
 	up := newSessionsUp(t, false, func(n int) bool { return n == 1 }) // the first reconnect fails: the next is 2 s later
 	pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
+	logs := captureLog(t, pl)
 	a := dialApp(t, pl, boundStart("a1", nil))
 	a.until(ofType("ready"))
 	hub.subscribed("a1")
-	time.Sleep(300 * time.Millisecond) // the call sees a1 working
+	logs.followed()
 	up.drop(0)
 	a.until(linkIn(linkReconnecting))
 	a.send(hold(true))
@@ -251,6 +251,7 @@ func TestHoldTypedWhileReconnecting(t *testing.T) {
 			hub := agentHub(t)
 			up := newSessionsUp(t, false, func(n int) bool { return n == 1 }) // the first reconnect fails: the next is 2 s later
 			pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
+			logs := captureLog(t, pl)
 			a := dialApp(t, pl, boundStart("a1", nil))
 			a.until(ofType("ready"))
 			up.drop(0)
@@ -267,6 +268,7 @@ func TestHoldTypedWhileReconnecting(t *testing.T) {
 			} else {
 				a.until(linkIn(linkLive))
 				a.until(linkIn(linkPaused))
+				up.find(t, 2, "session.close", ofType("session.close")) // all it got is in
 				if typed(2) != 0 {
 					t.Fatal("the line went to the session that came up on hold")
 				}
@@ -274,7 +276,7 @@ func TestHoldTypedWhileReconnecting(t *testing.T) {
 				a.until(linkIn(linkLive))
 			}
 			waitFor(t, "the typed line", func() bool { return typed(to) > 0 })
-			time.Sleep(300 * time.Millisecond)
+			wokeThrough(t, a, up, logs, to)
 			if typed(2)+typed(3) != 1 {
 				t.Fatalf("sent %d times (session 2: %d)", typed(2)+typed(3), typed(2))
 			}
@@ -292,7 +294,7 @@ func TestHoldAgainAsItWakes(t *testing.T) {
 	setVar(t, &pauseAfter, time.Hour)
 	hub := agentHub(t)
 	up := newSessionsUp(t, false, nil)
-	up.slow = func(n int) time.Duration { return map[bool]time.Duration{true: 500 * time.Millisecond}[n == 1] }
+	release := up.slowStart(t, 1)
 	pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
 	logs := captureLog(t, pl)
 	a := dialApp(t, pl, boundStart("a1", nil))
@@ -303,7 +305,8 @@ func TestHoldAgainAsItWakes(t *testing.T) {
 	a.until(linkIn(linkWaking))
 	a.send(hold(true))
 	a.send(map[string]any{"type": "text", "text": "数字是几"})
-	a.until(finalLine("user", "数字是几"))
+	a.until(finalLine("user", "数字是几")) // read after the hold: both came before the woken session is up
+	release()
 	a.until(linkIn(linkLive))
 	a.until(linkIn(linkPaused))
 	up.find(t, 1, "session.close", ofType("session.close"))
@@ -314,7 +317,7 @@ func TestHoldAgainAsItWakes(t *testing.T) {
 	a.send(hold(false))
 	a.until(linkIn(linkLive))
 	waitFor(t, "the typed line", func() bool { return typedIn(up, 2, "数字是几") > 0 })
-	time.Sleep(300 * time.Millisecond)
+	wokeThrough(t, a, up, logs, 2)
 	if n := typedIn(up, 2, "数字是几"); n != 1 || up.count() != 3 {
 		t.Fatalf("sent %d times, %d sessions", n, up.count())
 	}
@@ -326,9 +329,6 @@ func TestHoldAgainAsItWakes(t *testing.T) {
 func TestHoldAsksTheCardOnce(t *testing.T) {
 	card := proto.Interaction{ID: "q1", Kind: proto.IxQuestion, MachineID: "m", SessionID: "a1",
 		Questions: []proto.Question{{Question: "数据库用哪个？", Options: []proto.QuestionOption{{Label: "Postgres"}, {Label: "SQLite"}}}}}
-	asked := func(up *sessionsUp, n int) int {
-		return len(slices.DeleteFunc(up.frames(n), func(f map[string]any) bool { return !strings.Contains(content(f), "数据库用哪个") }))
-	}
 	for _, how := range []string{"woken", "reconnected"} {
 		t.Run(how, func(t *testing.T) {
 			setVar(t, &lookEvery, 100*time.Millisecond)
@@ -336,10 +336,12 @@ func TestHoldAsksTheCardOnce(t *testing.T) {
 			hub := workingAgent(t)
 			hub.raise(card)
 			up := newSessionsUp(t, false, func(n int) bool { return how == "reconnected" && n == 1 })
+			release := func() {}
 			if how == "woken" {
-				up.slow = func(n int) time.Duration { return map[bool]time.Duration{true: 500 * time.Millisecond}[n == 1] }
+				release = up.slowStart(t, 1)
 			}
 			pl := testPlugin(t, liveProvider(up.fakeUpstream), hub.server(t))
+			logs := captureLog(t, pl)
 			a := dialApp(t, pl, boundStart("a1", nil))
 			a.until(ofType("ready"))
 			a.until(func(f map[string]any) bool { return f["type"] == "ask" && f["state"] == askAsking })
@@ -350,6 +352,8 @@ func TestHoldAsksTheCardOnce(t *testing.T) {
 				a.send(hold(false))
 				a.until(linkIn(linkWaking))
 				a.send(hold(true))
+				logs.wait("call 1: hold 2: on") // before the woken session is up
+				release()
 			} else {
 				up.drop(0)
 				a.until(linkIn(linkReconnecting))
@@ -358,18 +362,16 @@ func TestHoldAsksTheCardOnce(t *testing.T) {
 			}
 			a.until(linkIn(linkLive))
 			a.until(linkIn(linkPaused))
-			time.Sleep(300 * time.Millisecond) // the tracker's look after that session came up
-			if n := asked(up, last-1); n != 0 {
+			// Paused, it is written nothing more: once its close is in, all it got is.
+			up.find(t, last-1, "session.close", ofType("session.close"))
+			if n := cardAsks(up, last-1); n != 0 {
 				t.Fatalf("asked %d times to the session on hold", n)
 			}
 			a.send(hold(false))
 			a.speak(600*time.Millisecond, true) // as it wakes: the question waits for the user to stop
 			a.until(linkIn(linkLive))
-			waitFor(t, "the question in the woken session", func() bool { return asked(up, last) > 0 })
-			time.Sleep(time.Second)
-			if n := asked(up, last); n != 1 {
-				t.Fatalf("asked %d times in the woken session", n)
-			}
+			waitFor(t, "the question in the woken session", func() bool { return cardAsks(up, last) > 0 })
+			askedOnce(t, a, hub, up, logs, last)
 		})
 	}
 }
@@ -391,10 +393,11 @@ func TestHoldEndsTheReplyUnderWay(t *testing.T) {
 			up := newSessionsUp(t, false, nil)
 			pl := testPlugin(t, Config{Providers: []Provider{{ID: "rt", URL: up.url(), Dialect: DialectRealtime, Models: []string{"m1"},
 				Tools: new(false)}}}, hub.server(t))
+			logs := captureLog(t, pl)
 			a := dialApp(t, pl, boundStart("a1", nil))
 			a.until(ofType("ready"))
 			hub.subscribed("a1")
-			time.Sleep(300 * time.Millisecond) // the call sees a1 working
+			logs.followed()
 			c := up.conn(0)
 			up.send(c, map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_1"}})
 			for range int(tt.audio / (100 * time.Millisecond)) { // 24 kHz
@@ -497,6 +500,54 @@ func typedIn(up *sessionsUp, n int, text string) int {
 	}))
 }
 
+// cardAsks is how often session n got the card's question (数据库用哪个).
+func cardAsks(up *sessionsUp, n int) int {
+	return len(slices.DeleteFunc(up.frames(n), func(f map[string]any) bool { return !strings.Contains(content(f), "数据库用哪个") }))
+}
+
+// followed waits until the call follows the turn a1 works on (workingAgent) as an observed run: what that turn brings
+// is the call's to say.
+func (l *logCapture) followed() {
+	l.t.Helper()
+	l.wait("call 1: run observed-1: the bound conversation works on a turn the call did not hand over: followed")
+}
+
+// trackerDone waits until the call's tracker has done every op it was given before now (a new session's reask): the
+// app's resend of a run the call does not know (id) is one more op in its queue, done in turn, and logged.
+func (a *app) trackerDone(logs *logCapture, id string) {
+	a.t.Helper()
+	a.send(map[string]any{"type": "resend", "id": id})
+	logs.wait("call 1: resend " + id + ": no such refused run")
+}
+
+// wokeThrough waits until what the call kept for its woken session n has all come in: the wake is over (logged once
+// all of it went out), and a line typed then reaches n after it.
+func wokeThrough(t *testing.T, a *app, up *sessionsUp, logs *logCapture, n int) {
+	t.Helper()
+	logs.wait("call 1: woke the upstream in")
+	a.send(map[string]any{"type": "text", "text": "还在吗"})
+	waitFor(t, "the line typed once it woke", func() bool { return typedIn(up, n, "还在吗") > 0 })
+}
+
+// askedOnce checks that the woken session n asked the card once, however late the tracker came to it. The wake is
+// over (logged after its connect gave the tracker the new session's reask), the tracker did all it was given by then
+// (trackerDone), and then the agent's result, which goes after any copy of the question queued before it (a card goes
+// first, and nothing queued later is let go sooner), reached n.
+func askedOnce(t *testing.T, a *app, hub *fakeHub, up *sessionsUp, logs *logCapture, n int) {
+	t.Helper()
+	logs.wait("call 1: woke the upstream in")
+	a.trackerDone(logs, "r-after-wake")
+	logs.followed()
+	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "集成测试全部通过。"})
+	hub.end("a1")
+	up.find(t, n, "the result, said after the question", func(f map[string]any) bool {
+		return said(f) && strings.Contains(content(f), "集成测试全部通过")
+	})
+	if got := cardAsks(up, n); got != 1 {
+		t.Fatalf("asked %d times in session %d", got, n)
+	}
+}
+
 // got: the app got a frame of type typ so far.
 func (a *app) got(typ string) bool {
 	a.mu.Lock()
@@ -510,6 +561,10 @@ func (a *app) got(typ string) bool {
 func TestHoldIgnored(t *testing.T) {
 	t.Run("protocol 1", func(t *testing.T) {
 		setVar(t, &pauseAfter, 100*time.Millisecond)
+		// The model is nudged for the typed line by the speaker's look 3 pauseAfter after it: a call that would pause
+		// would have by then, and a paused one is not nudged.
+		setVar(t, &nudgeAfter, 3*pauseAfter)
+		setVar(t, &nudgeQuiet, pauseAfter)
 		hub := newFakeHub(t)
 		hub.status("main1", "working")
 		up := newSessionsUp(t, false, nil)
@@ -523,7 +578,12 @@ func TestHoldIgnored(t *testing.T) {
 		a.send(map[string]any{"type": "text", "text": "数字是几"})
 		up.find(t, 0, "the typed line", func(f map[string]any) bool { return content(f) == "数字是几" })
 		logs.wait("call 1: hold frames on a protocol 1 call: ignored")
-		time.Sleep(300 * time.Millisecond)
+		waitFor(t, "the nudge for the typed line", func() bool {
+			if strings.Contains(logs.String(), "paused the upstream") {
+				t.Fatal("paused")
+			}
+			return strings.Contains(logs.String(), "call 1: nudge: answer owed for")
+		})
 		if n := strings.Count(logs.String(), "hold frames"); n != 1 {
 			t.Fatalf("logged %d times", n)
 		}

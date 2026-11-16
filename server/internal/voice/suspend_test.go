@@ -27,8 +27,8 @@ import (
 // sessionsUp is a live service that keeps each session's frames apart, in the order the sessions began; with hand, its
 // model hands every line the user types over as a client delegation (dlg1, dlg2…). refuse says whether session n
 // (from 0) is refused: closed before it starts; drops (set before the call) whether it is closed as soon as it started;
-// slow (set before the call) how long session n takes to start. It starts a realtime dialect's session too (its
-// session.update), as an otherwise silent service.
+// slow (set before the call, slowStart) what session n's start waits for: it starts once that is closed (nil: at once).
+// It starts a realtime dialect's session too (its session.update), as an otherwise silent service.
 type sessionsUp struct {
 	*fakeUpstream
 	mu       sync.Mutex
@@ -36,7 +36,7 @@ type sessionsUp struct {
 	conns    []*websocket.Conn
 	ids      map[*websocket.Conn]int
 	drops    func(n int) bool
-	slow     func(n int) time.Duration
+	slow     func(n int) <-chan struct{}
 }
 
 func newSessionsUp(t *testing.T, hand bool, refuse func(n int) bool) *sessionsUp {
@@ -59,7 +59,9 @@ func newSessionsUp(t *testing.T, hand bool, refuse func(n int) bool) *sessionsUp
 				return
 			}
 			if s.slow != nil {
-				time.Sleep(s.slow(n))
+				if wait := s.slow(n); wait != nil {
+					<-wait
+				}
 			}
 			u.send(c, map[string]any{"type": "session.started", "session": map[string]any{}})
 			if s.drops != nil && s.drops(n) {
@@ -72,6 +74,22 @@ func newSessionsUp(t *testing.T, hand bool, refuse func(n int) bool) *sessionsUp
 		}
 	})
 	return s
+}
+
+// slowStart makes session n slow to start (set before the call): its start waits until release, which the test calls
+// once it has done what it does meanwhile, and which the test's end calls at the latest (a failed assertion leaves no
+// start waiting).
+func (s *sessionsUp) slowStart(t *testing.T, n int) (release func()) {
+	started := make(chan struct{})
+	release = sync.OnceFunc(func() { close(started) })
+	t.Cleanup(release)
+	s.slow = func(i int) <-chan struct{} {
+		if i == n {
+			return started
+		}
+		return nil
+	}
+	return release
 }
 
 // count is how many sessions began.
