@@ -111,7 +111,7 @@ class State:
                 item.clear()
                 item["head"] = head
             # Omitted diagnostics retain prior evidence; None explicitly clears it.
-            if fields.get("failure") is None:
+            if "failure" in fields and fields["failure"] is None:
                 fields.pop("failure", None)
                 item.pop("failure", None)
             item.update(fields)
@@ -188,6 +188,12 @@ class Watcher:
             raise WatchError("another watcher instance already holds the service lock")
         marker.write_text(digest + "\n", encoding="utf-8")
         self.migrate_policy(digest, allow_config_migration=self.allow_config_migration)
+        with self.state.lock:
+            for lease in self.state.data.get("worktree_leases", {}).values():
+                # A newly acquired single-instance lock proves the previous
+                # process no longer owns active leases; heartbeat governs age.
+                lease["active"] = False
+            atomic_json(self.state.path, self.state.data)
 
     def migrate_policy(self, digest, allow_config_migration=False):
         """Apply reviewed policy changes without silently changing repository mappings."""
@@ -234,6 +240,10 @@ class Watcher:
                     item["retry_after"] = 0
                 elif item.get("outcome") == "findings" and any(
                         finding.get("severity") in ("P0", "P1") for finding in item.get("findings", [])):
+                    item["outcome"] = "retry"
+                    item["retry_after"] = 0
+                elif item.get("outcome") == "findings":
+                    item["semantic"] = "passed"
                     item["outcome"] = "retry"
                     item["retry_after"] = 0
                 if item.get("repair_rounds", 0) < REPAIR_LIMIT:
@@ -399,6 +409,10 @@ class Watcher:
             if lease:
                 lease["active"] = False
                 lease["released_at"] = time.time()
+                alias = leases.get(str(path) + "-base-check")
+                if alias:
+                    alias["active"] = False
+                    alias["released_at"] = lease["released_at"]
                 pr_watch_recovery.atomic_leases(self.state.path, self.state.data)
 
     def active_worktrees(self):
@@ -499,9 +513,15 @@ class Watcher:
                                  outcome="repair_exhausted", repair_exhausted=True, failure=reason,
                                  repair_rounds=max(int(previous.get("repair_rounds", 0)), REPAIR_LIMIT))
         if not current.get("failure_posted") or current.get("published_failure") != reason:
-            if not self.dry_run:
-                self.comment(repo, number, "Automatic repair stopped after %d rounds. The last failure was:\n\n```text\n%s\n```" % (
-                    REPAIR_LIMIT, reason))
+            try:
+                if not self.dry_run:
+                    self.comment(repo, number, "Automatic repair stopped after %d rounds. The last failure was:\n\n```text\n%s\n```" % (
+                        REPAIR_LIMIT, reason))
+            except WatchError as error:
+                self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                               outcome="repair_exhausted", repair_exhausted=True, failure=reason,
+                               failure_posted=False, comment_failure=str(error))
+                return False
             self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                            outcome="repair_exhausted", repair_exhausted=True, failure=reason,
                            failure_posted=True, published_failure=reason)
@@ -522,10 +542,12 @@ class Watcher:
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
-                       outcome="repairing", repair_rounds=rounds + 1, failure=reason,
-                       findings=findings, semantic="findings", base=pr["baseRefOid"])
+                       outcome="repairing", failure=reason,
+                       findings=old.get("findings", findings), semantic="findings", base=pr["baseRefOid"])
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), reason, self.config["reviewer"])
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
+                       repair_rounds=rounds + 1, outcome="repairing", failure=reason)
         new_number, checks = pr_watch_repair.commit_and_push_repair(
             repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
         if new_number == number:
@@ -592,7 +614,8 @@ class Watcher:
                 pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                 updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
                 self.state.put(repo, number, updated_head, evidence_key=updated_key,
-                               repair_rounds=rounds + 1, outcome="base_updated", failure=str(error))
+                               repair_rounds=rounds + 1, outcome="retry", retry_after=0,
+                               failure=None, base=base)
                 self.comment(repo, number, "The verification branch was behind main. The watcher merged current main into the same-repository branch and will review the new head.")
             return False
         latest = pr_snapshot(repo, number)
@@ -602,7 +625,7 @@ class Watcher:
             self.log("%s#%s moved before automatic repair; old checkout discarded" % (repo, number))
             return False
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
-                       outcome="repairing", repair_rounds=rounds + 1, failure=str(error))
+                       outcome="repairing", failure=str(error))
         if latest["headRefOid"] != pr["headRefOid"] or latest["baseRefOid"] != pr["baseRefOid"]:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            outcome="head_moved", repair_rounds=rounds, failure=str(error))
@@ -610,6 +633,8 @@ class Watcher:
             return False
         checked(["git", "reset", "--hard", pr["headRefOid"]], cwd=worktree, timeout=90)
         pr_watch_repair.repair_with_model(repo, pr, str(worktree), str(error), self.config["reviewer"])
+        self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
+                       repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
         new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
         if new_number == number:
             published = pr_snapshot(repo, number)
@@ -708,6 +733,8 @@ class Watcher:
                                  verification=old.get("verification"), checks=old.get("checks", []),
                                  base_failures=old.get("base_failures"), base_comment_posted=True)
         if old.get("repair_exhausted") and old.get("evidence_key") == evidence_key:
+            if not old.get("failure_posted"):
+                self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings"):
             if old.get("outcome") == "merged":
@@ -716,7 +743,8 @@ class Watcher:
                 return
             if old.get("review_posted") and not (old.get("outcome") == "passed_with_base_failures"
                                                 and old.get("semantic") == "passed") \
-                    and not (old.get("outcome") == "passed_with_findings" and not old.get("success_posted")):
+                    and not (old.get("outcome") == "passed_with_findings" and not old.get("success_posted")) \
+                    and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]):
                 return
             # A dry run keeps semantic/test evidence but has no external side
             # effects. A live run resumes publication and the merge gate.
@@ -731,9 +759,12 @@ class Watcher:
                     return
                 old = self.state.get(repo, number)
             elif old.get("semantic") == "findings":
-                self.comment_findings(repo, number, pr, old.get("findings", []))
-                self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
-                return
+                if not old.get("review_posted"):
+                    self.comment_findings(repo, number, pr, old.get("findings", []))
+                    self.state.put(repo, number, head, evidence_key=evidence_key, review_posted=True)
+                if not config["merge"]:
+                    return
+                old = self.state.get(repo, number)
             if old.get("outcome") == "passed_with_base_failures" and old.get("semantic") == "passed" and not old.get("review_posted"):
                 old = dict(old, outcome="passed", review_posted=False)
             if old.get("outcome") == "failed":
@@ -774,7 +805,8 @@ class Watcher:
                             pr_watch_repair.push_updated_head(repo, pr, str(worktree), updated_head)
                             updated_key = repo + "#" + str(number) + "@" + base + ".." + updated_head
                             self.state.put(repo, number, updated_head, evidence_key=updated_key,
-                                           repair_rounds=rounds + 1, outcome="base_updated")
+                                           repair_rounds=rounds + 1, outcome="retry", retry_after=0,
+                                           failure=None, base=base)
                             self.comment(repo, number, "The watcher merged current main into the same-repository branch to resolve the stale base. The new head will be reviewed.")
                 except WatchError as error:
                     self.recover_infrastructure(repo, worktree, error)
@@ -946,7 +978,8 @@ class Watcher:
                                verification=latest.get("verification"), checks=latest.get("checks", []),
                                base_failures=latest.get("base_failures"),
                                retry_after=time.time() + 300, failure=str(error),
-                               retry_reason="verification_repair")
+                               retry_reason="verification_repair",
+                               infrastructure_fingerprint=latest.get("infrastructure_fingerprint"))
                 if attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
                     # An unavailable repair worker is not a successfully
                     # completed repair round. Keep its budget intact but leave
@@ -955,7 +988,8 @@ class Watcher:
                                    outcome="retry", review_attempts=attempts,
                                    repair_attempts=attempts, repair_rounds=int(latest.get("repair_rounds", 0)),
                                    retry_after=time.time() + 3600, retry_reason="verification_repair",
-                                   failure=str(error))
+                                   failure=str(error),
+                                   infrastructure_fingerprint=latest.get("infrastructure_fingerprint"))
                 if not self.dry_run and publish:
                     self.comment(repo, number, "Automatic verification repair could not complete.\n\n```text\n%s\n```" %
                                  bounded(str(error), 12000))

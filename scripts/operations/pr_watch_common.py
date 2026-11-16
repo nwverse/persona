@@ -118,8 +118,23 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
                 entries = [line.split(None, 1) for line in refreshed.stdout.splitlines() if line.strip()]
                 if (len(entries) == 1 and len(entries[0]) == 2
                         and entries[0][1] in refspecs and SHA.fullmatch(entries[0][0])):
+                    # The commit was received but the ref transaction was
+                    # refused. Re-fetch just the object without rename checks,
+                    # then finish the exact ref update requested by the caller.
+                    checked(["git", "-c", "diff.renames=false", "fetch", "-q", "--no-write-fetch-head",
+                             remote_name, *refspecs], cwd=cwd, timeout=timeout, environ=environ)
                     checked(["git", "cat-file", "-e", entries[0][0] + "^{commit}"], cwd=cwd,
                             timeout=60, environ=environ)
+                    original_refspec = next(value for value in argv[4:] if value.split(":", 1)[0].lstrip("+") == entries[0][1])
+                    if ":" in original_refspec:
+                        destination = original_refspec.split(":", 1)[1]
+                        if not destination.startswith("refs/"):
+                            raise WatchError("fetch recovery needs a fully qualified destination ref")
+                        checked(["git", "update-ref", destination, entries[0][0]], cwd=cwd,
+                                timeout=60, environ=environ)
+                    else:
+                        checked(["git", "update-ref", "FETCH_HEAD", entries[0][0]], cwd=cwd,
+                                timeout=60, environ=environ)
                     return entries[0][0] + "\n"
         raise WatchError("%s failed (%s): %s" % (Path(argv[0]).name, result.returncode, detail))
     return result.stdout

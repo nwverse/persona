@@ -283,6 +283,21 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         self.assertEqual(self.watcher.state.get("example/one", 7)["repair_attempts"], 1)
 
+    def test_repeated_repair_infrastructure_failure_keeps_comment_deduplication(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        failure_fingerprint = pr_watch.fingerprint("example/one", 7, SHA_A, "repair-infrastructure", "offline")
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", repair_attempts=1,
+                               infrastructure_fingerprint=failure_fingerprint,
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", side_effect=pr_watch_common.VerificationError("failed")), \
+                patch.object(self.watcher, "repair_verification", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["infrastructure_fingerprint"], failure_fingerprint)
+
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
@@ -291,7 +306,7 @@ class WatcherTests(unittest.TestCase):
                 patch.object(pr_watch, "checked", return_value=""):
             self.watcher.process("example/one", 7)
         state = self.watcher.state.get("example/one", 7)
-        self.assertEqual(state["repair_rounds"], 1)
+        self.assertEqual(state["repair_rounds"], 0)
         self.assertEqual(state["review_attempts"], 0)
         self.assertEqual(state["failure"], "worker timeout")
 
@@ -382,6 +397,43 @@ class WatcherTests(unittest.TestCase):
             self.watcher.process("example/one", 7)
         review.assert_called_once()
         self.assertEqual(self.watcher.state.get("example/one", 7)["head"], SHA_B)
+
+    def test_saved_blocking_findings_resume_repair_when_merge_is_enabled(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="findings", semantic="findings",
+                               findings=[finding], review_posted=True)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+
+    def test_migrated_p2_findings_continue_to_verification_and_merge(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        self.watcher.state.data["prs"]["example/one#7"] = {
+            "head": SHA_A, "base": SHA_BASE, "evidence_key": evidence_key, "format": 1,
+            "outcome": "findings", "semantic": "findings", "findings": [finding], "review_posted": True,
+        }
+        self.watcher.migrate_policy("new")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.assertEqual(self.watcher.state.get("example/one", 7)["findings"], [finding])
+
+    def test_followup_write_without_failure_retains_the_diagnostic(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, failure="precise error")
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               infrastructure_fingerprint="same")
+        self.assertEqual(self.watcher.state.get("example/one", 7)["failure"], "precise error")
 
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
@@ -1084,7 +1136,8 @@ class WatcherTests(unittest.TestCase):
 
     def test_repair_exhausted_is_terminal_without_repeated_comments(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
-        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key, repair_exhausted=True)
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               repair_exhausted=True, failure_posted=True)
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review") as review, \
                 patch.object(pr_watch, "verify") as verify, \

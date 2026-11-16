@@ -114,6 +114,15 @@ class RecoveryIntegrationTests(unittest.TestCase):
                 pr_watch_recovery.remove_worktree(self.checkout, self.state, remaining)
         self.assertTrue(remaining.exists())
 
+    def test_failed_worktree_removal_is_not_counted_as_reclaimed(self):
+        stale = self.worktrees / "persona-7-old"
+        stale.mkdir()
+        pr_watch_recovery.atomic_leases(self.state, {"worktree_leases": {
+            str(stale): {"active": False, "heartbeat": 1}}})
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=pr_watch_common.WatchError("registered")):
+            self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state), 0)
+        self.assertTrue(stale.exists())
+
     def test_only_empty_loose_objects_and_old_temporary_packs_are_removed(self):
         loose = self.checkout / ".git/objects/ab"
         loose.mkdir(parents=True)
@@ -135,23 +144,29 @@ class RecoveryIntegrationTests(unittest.TestCase):
             pr_watch_recovery.recover_object_debris(self.worktrees)
 
     def test_rename_refusal_can_be_resolved_from_the_exact_remote_ref(self):
+        def successful(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, "", "")
         with patch.object(pr_watch_common, "run", side_effect=[
                 subprocess.CompletedProcess([], 2, "", "exhaustive rename detection was skipped"),
                 subprocess.CompletedProcess([], 0, "a" * 40 + "\trefs/heads/main\n", ""),
-                subprocess.CompletedProcess([], 0, "", "")]) as execute:
+                successful([]), successful([]), successful([])]) as execute:
             self.assertEqual(pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"]),
                              "a" * 40 + "\n")
         self.assertEqual(execute.call_args_list[1].args[0],
                          ["git", "ls-remote", "origin", "refs/heads/main"])
+        self.assertEqual(execute.call_args_list[-1].args[0],
+                         ["git", "update-ref", "FETCH_HEAD", "a" * 40])
         with patch.object(pr_watch_common, "run", side_effect=[
                 subprocess.CompletedProcess([], 2, "", "rename detection was skipped"),
                 subprocess.CompletedProcess([], 0, "b" * 40 + "\trefs/pull/7/head\n", ""),
-                subprocess.CompletedProcess([], 0, "", "")]) as execute:
+                successful([]), successful([]), successful([])]) as execute:
             self.assertEqual(pr_watch_common.checked(
                 ["git", "fetch", "-q", "origin", "+refs/pull/7/head:refs/pr-watch/heads/7"]),
                 "b" * 40 + "\n")
         self.assertEqual(execute.call_args_list[1].args[0],
                          ["git", "ls-remote", "origin", "refs/pull/7/head"])
+        self.assertEqual(execute.call_args_list[-1].args[0],
+                         ["git", "update-ref", "refs/pr-watch/heads/7", "b" * 40])
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 128, "", "fatal: corrupt")):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.checked(["git", "fetch", "-q", "origin", "refs/heads/main"])
