@@ -13,6 +13,7 @@ import { agentId, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
 import { sessionCan, stateOf } from "./format";
 import { runsAssistant, type AssistantLauncher } from "./assistant-chat";
+import { SUPERVISE_PURPOSE } from "./background-supervisor";
 import {
   defaultModel, forgetCustomModel, launcherModels, machineLaunchers, modelName, withoutCustom, type AgentModel, type LauncherDefault, type LauncherModels, type UnavailableLauncher,
 } from "./launcher-models";
@@ -90,6 +91,31 @@ export const assistantLaunchers = (mid: string): { info?: AssistantLaunchers; lo
   ...(assistantMachines.get(machineKey(mid, catalogScope("assistant"))) ?? {}),
   read: assistantReads.get(machineKey(mid, catalogScope("assistant"))),
 });
+
+const superviseDefaults = new Map<string, LauncherDefault | null>();
+const superviseReads = new Map<string, Promise<void>>();
+
+/** What the background supervisor's own model purpose resolves to on `mid` (`?purpose=assistant.supervise`: Main chat's
+ *  default until it is set apart); undefined before the first answer, null when the hub gave none. */
+export const superviseDefault = (mid: string): LauncherDefault | null | undefined => superviseDefaults.get(machineKey(mid, catalogScope("assistant")));
+
+/** Reads it: once, or `again` (a push changed the conversation, an opening of the panel). */
+export function readSuperviseDefault(mid: string, o: { again?: boolean } = {}): Promise<void> {
+  const scope = catalogScope("assistant");
+  const key = machineKey(mid, scope);
+  const reading = superviseReads.get(key);
+  if (reading) return reading;
+  if (superviseDefaults.has(key) && !o.again) return Promise.resolve();
+  const read = machineLaunchers(mid, { purpose: SUPERVISE_PURPOSE, manager: scope.manager }).then(
+    (r) => void superviseDefaults.set(key, r.default ?? null),
+    () => undefined, // the one shown stays; none shown: Main chat's default is the closest thing known
+  ).finally(() => {
+    superviseReads.delete(key);
+    changed();
+  });
+  superviseReads.set(key, read);
+  return read;
+}
 
 /** Reads them: once (a pill that needs the default), or `again` behind the ones shown (an opening of the panel). */
 export function readAssistantLaunchers(mid: string, o: { again?: boolean } = {}): Promise<void> {

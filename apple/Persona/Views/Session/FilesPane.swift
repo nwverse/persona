@@ -163,6 +163,7 @@ struct FilesPane: View {
                 }
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.bottom, Theme.Space.s)
+                .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
             }
         }
         .task(id: path) { await load() }

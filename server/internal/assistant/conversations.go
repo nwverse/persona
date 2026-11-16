@@ -467,7 +467,9 @@ func (s *Service) deliverRelay(ctx context.Context, machine, to string, msg rela
 	}
 	params := map[string]any{"session_id": to, "text": text, "message_source": msg.source(), "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
 		"once_id": relayMsgID(to, msg)} // every try of it under one id: the node sends it once (relay_once.go)
-	if s.isBackground(ctx, to) {
+	if pick, ok := s.modelPickOf(ctx, machine, to); ok {
+		s.relayOnPick(ctx, machine, to, params, pick) // the conversation's own pick, as a message typed to it runs on (model_pick.go)
+	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
 	}
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, nil); err != nil {

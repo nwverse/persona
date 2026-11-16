@@ -171,11 +171,22 @@ class AgentsListInfoTest {
     }
 
     @Test fun byToDoIsOfferedOnlyWhileTheHubHasToDos() {
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo), offeredGroupings(true))
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State), offeredGroupings(false))
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent),
+            offeredGroupings(true),
+        )
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent),
+            offeredGroupings(false),
+        )
         // By pinned only with the hub's direction tree (#4352), after the rest.
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo, AgentGrouping.Direction),
-            offeredGroupings(true, directions = true))
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent, AgentGrouping.Direction),
+            offeredGroupings(true, directions = true),
+        )
         // A saved By To-do on a hub without to-dos shows By project; the others stay.
         assertEquals(AgentGrouping.MachineSpace, resolvedGrouping(AgentGrouping.Todo, false))
         assertEquals(AgentGrouping.Todo, resolvedGrouping(AgentGrouping.Todo, true))

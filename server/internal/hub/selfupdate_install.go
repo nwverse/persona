@@ -84,8 +84,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 		return
 	}
 	u.set("downloading", "hub", "")
-	source := u.h.updateURL()
-	bin, err := update.Download(ctx, u.client, source, file, staged)
+	bin, err := u.download(ctx, m, file, staged)
 	if err != nil {
 		fail(err)
 		return
@@ -109,7 +108,7 @@ func (u *updater) install(ctx context.Context, auto bool) {
 			continue
 		}
 		u.set("downloading", name, "")
-		pb, err := update.Download(ctx, u.client, source, f, filepath.Join(staged, "programs"))
+		pb, err := u.download(ctx, m, f, filepath.Join(staged, "programs"))
 		if err != nil {
 			fail(err)
 			return
@@ -207,6 +206,27 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	}
 }
 
+// download fetches f of release m, the one the update installs, into dir: from the release's own address where the
+// update source has one, so a release published since the check cannot serve its files in m's place (#9263). When
+// the source moved on to another release all the same (update.MovedError), the hub offers that one from now on, as a
+// check would, and the update fails saying so rather than that the download did not match.
+func (u *updater) download(ctx context.Context, m *update.Manifest, f update.File, dir string) (string, error) {
+	src := u.h.updateSource()
+	bin, err := update.DownloadRelease(ctx, u.client, src.url, m, f, dir)
+	var moved *update.MovedError
+	if !errors.As(err, &moved) {
+		return bin, err
+	}
+	u.h.logf("update: %v", err)
+	blocked := u.unreplaced(moved.Now.Manifest)
+	u.mu.Lock()
+	u.lastCheck = time.Now()
+	u.release, u.releaseRead, u.blocked = moved.Now, u.lastCheck, blocked
+	u.mu.Unlock()
+	u.noteBehind(src, moved.Now.Manifest)
+	return "", i18n.Err("hub-selfupdate.err_release_moved", i18n.Args{"version": m.Version, "newer": moved.Now.Manifest.Version})
+}
+
 // stagedDir is where the update to build downloads its files: the hub's binary, the node binaries in nodes/ and the
 // programs in programs/ (docs/operations/hub-update.md "Updating").
 func (u *updater) stagedDir(build int64) string {
@@ -292,19 +312,23 @@ func (h *Hub) updateBusy() []busyItem {
 		m.mu.Lock()
 		resident := m.info.NodeUpdate // advertised only by a resident supervisor
 		m.mu.Unlock()
-		list := m.keptSessions() // only read, and no copy of it: the manager stamp is not read here
-		for i := range list {
-			s := &list[i]
-			// Terminal-host sessions outlive the node transport. Unknown hosts and
-			// direct assistant processes still wait: an ephemeral SSH node may own them.
-			if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
-				(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
-				continue
-			}
-			// On a turn, not working on in the background (#2228): a server an agent left running would hold the
-			// update back for as long as it runs, and the restart does not stop it.
-			if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
-				out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
+		// Only read, and no copies of them: the manager stamp is not read here. The archived rows told apart
+		// (Machine.archived) as well, as when they were in the list.
+		list, archived := m.keptWhole()
+		for _, rows := range [2][]proto.Session{list, archived} {
+			for i := range rows {
+				s := &rows[i]
+				// Terminal-host sessions outlive the node transport. Unknown hosts and
+				// direct assistant processes still wait: an ephemeral SSH node may own them.
+				if h.slot != nil && !h.upd.nodesEnabled() && m.cfg.Kind != "local" &&
+					(resident || s.Host == proto.EngineHerdr || s.Host == proto.EngineHerdrCore) {
+					continue
+				}
+				// On a turn, not working on in the background (#2228): a server an agent left running would hold the
+				// update back for as long as it runs, and the restart does not stop it.
+				if s.Status == proto.StatusWorking || s.State == proto.StateNeedsYou && !waitsOnlyUnwaited(s, unwaited[[2]string{m.cfg.ID, s.SessionID}]) {
+					out = append(out, busyItem{MachineID: m.cfg.ID, Machine: m.name(), SessionID: s.SessionID, Title: agentTitle(*s)})
+				}
 			}
 		}
 	}
