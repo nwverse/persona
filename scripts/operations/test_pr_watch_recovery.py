@@ -149,7 +149,11 @@ class RecoveryIntegrationTests(unittest.TestCase):
         pr_watch_recovery.atomic_leases(self.state, {"worktree_leases": {
             str(stale): {"active": False, "heartbeat": 1},
             str(broken): {"active": False, "heartbeat": 1}}})
-        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=[OSError("read failure"), None]):
+        def remove(checkout, state, path):
+            if path == stale:
+                raise OSError("read failure")
+            broken.rmdir()
+        with patch.object(pr_watch_recovery, "remove_worktree", side_effect=remove):
             self.assertEqual(pr_watch_recovery.reclaim_worktrees(self.checkout, self.state), 1)
 
     def test_only_empty_loose_objects_are_removed_and_pack_temps_are_preserved(self):

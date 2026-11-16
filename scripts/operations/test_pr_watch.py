@@ -238,6 +238,11 @@ class WatcherTests(unittest.TestCase):
             selector.return_value.select.return_value = {"web": True}
             commands = pr_watch_verify.persona_checks(".", pr(title="feat(web): a new view"), 1, {})
         self.assertEqual(commands[-1][0], "Visual acceptance not performed: no UI evidence adapter is configured")
+        with patch.object(pr_watch_verify, "checked", return_value=names), \
+                patch.object(pr_watch_verify, "run_check") as check:
+            results = pr_watch_verify.verify("example/one", pr(title="feat(web): a new view"), ".", {"profile": "persona"})
+        self.assertTrue(results[-1]["skipped"])
+        self.assertFalse(any(call.args[0].startswith("Visual acceptance not performed:") for call in check.call_args_list))
         with patch.object(self.watcher, "success_review", wraps=self.watcher.success_review), \
                 patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as execute:
             self.watcher.success_review("example/one", 7, pr(), [{"name": commands[-1][0], "ok": True}])
@@ -415,6 +420,30 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("repair_exhausted", state)
         self.assertEqual(state["repair_rounds"], 0)
         self.assertGreater(state["retry_after"], time.time() + 3000)
+
+    def test_changed_blocking_findings_are_published_before_repair(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        old = {"path": "x.py", "line": 2, "severity": "P1", "summary": "old", "suggestion": "fix"}
+        new = {"path": "x.py", "line": 4, "severity": "P1", "summary": "new", "suggestion": "fix differently"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", semantic="findings",
+                               findings=[old], published_findings=[], review_posted=True,
+                               retry_reason="semantic_review", retry_after=0,
+                               review_fingerprint=pr_watch.fingerprint("example/one", 7, SHA_A, "semantic", [old]))
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[new]), \
+                patch.object(self.watcher, "repair_findings", return_value=False) as repair:
+            self.watcher.process("example/one", 7)
+        repair.assert_called_once()
+        self.assertEqual(self.github.call_count, 1)
+        self.assertIn("new", self.github.call_args.kwargs["input_text"])
+
+    def test_exhausted_semantic_review_does_not_post_a_generic_failure_comment(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(self.comments, [])
+        self.assertEqual(self.watcher.state.get("example/one", 7)["review_attempts"], 3)
 
     def test_semantic_repair_failure_does_not_consume_a_review_attempt(self):
         findings = [{"path": "x.py", "line": 2, "severity": "P1", "summary": "wrong", "suggestion": "fix it"}]

@@ -108,8 +108,10 @@ def checked(argv, cwd=None, timeout=120, environ=None, input_text=None):
         if argv[:2] == ["git", "fetch"] and "exhaustive rename detection was skipped" in detail:
             # This fallback supports only the exact single-refspec shape used
             # by the watcher, never arbitrary options or multiple refspecs.
-            if len(argv) != 5 or any(arg.startswith("-") for arg in argv[3:]):
+            if len(argv) != 5 or argv[3].startswith("-"):
                 raise WatchError("unsupported fetch recovery command shape")
+            if argv[4].lstrip("+").startswith("-"):
+                raise WatchError("unsupported fetch recovery refspec")
             remote_name = argv[3]
             original_refspecs = argv[4:]
             if len(original_refspecs) != 1:

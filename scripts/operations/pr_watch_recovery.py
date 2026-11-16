@@ -44,10 +44,14 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
         keep = {Path(path).resolve(strict=False) for path in protected}
         candidates = []
         for name, lease in leases.items():
-            path = owned_path(state_file, name)
-            if (path in keep or lease.get("active") or not path.exists()
+            try:
+                path = owned_path(state_file, name)
+                expired = time.time() - float(lease.get("heartbeat", 0)) >= older_than
+            except (WatchError, TypeError, ValueError, OSError):
+                continue
+            if (path in keep or lease.get("active")
                     or repo is not None and lease.get("repository") != repo
-                    or time.time() - float(lease.get("heartbeat", 0)) < older_than):
+                    or not expired):
                 continue
             candidates.append(path)
         if not candidates:
@@ -61,7 +65,7 @@ def reclaim_worktrees(checkout, state_file, protected=(), older_than=86400, stat
                 continue
             try:
                 remove_worktree(checkout, state_file, path)
-                removed += 1
+                removed += int(not path.exists())
             except (WatchError, OSError):
                 continue
         run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
@@ -151,6 +155,5 @@ def recover_worktree_failure(checkout, state_file, error, protected=(), state=No
             return False
         return True
     if OBJECT_ERROR.search(str(error)):
-        recover_object_debris(checkout)
-        return True
+        return recover_object_debris(checkout) > 0
     return False

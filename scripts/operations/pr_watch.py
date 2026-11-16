@@ -972,7 +972,7 @@ class Watcher:
                                          verification_policy=VERIFICATION_POLICY_VERSION,
                                          review_policy=REVIEW_POLICY_VERSION,
                                          repair_rounds=rounds)
-            if current.get("semantic") != "passed" and current.get("semantic") != "findings":
+            if current.get("semantic") != "passed" and current.get("semantic") != "findings" or current.get("retry_reason") == "semantic_review":
                 self.phase(key, "independent semantic review")
                 review_attempts = int(current.get("review_attempts", 0))
                 if review_attempts >= INFRASTRUCTURE_ATTEMPT_LIMIT:
@@ -1004,7 +1004,8 @@ class Watcher:
                 review_fingerprint = fingerprint(repo, number, head, "semantic", findings)
                 published = current.get("published_findings", [])
                 published_fingerprint = (fingerprint(repo, number, head, "semantic", published)
-                                         if published else current.get("review_fingerprint"))
+                                         if published and current.get("review_posted")
+                                         else current.get("review_fingerprint") if current.get("review_posted") else None)
                 current = self.state.put(repo, number, head, evidence_key=evidence_key,
                                          semantic=semantic, findings=findings,
                                          review_fingerprint=review_fingerprint,
@@ -1116,7 +1117,15 @@ class Watcher:
             # Infrastructure failures remain retryable with capped backoff;
             # verification failures and semantic findings stay terminal for
             # this exact base/head until the PR changes.
-            retry = phase in ("preparing", "semantic", "semantic_repair") and old.get("verification") != "passed"
+            retry = phase in ("preparing", "semantic") and old.get("verification") != "passed"
+            exhausted_review = (phase == "semantic" and
+                                int(self.state.get(repo, number).get("review_attempts", 0)) >= INFRASTRUCTURE_ATTEMPT_LIMIT)
+            if phase == "semantic" and exhausted_review:
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               outcome="retry", retry_after=time.time() + 3600,
+                               retry_reason="semantic_review", failure=str(error))
+                self.log("%s#%s semantic review is still unavailable; retaining its bounded retry" % (repo, number))
+                return False
             if phase == "semantic_repair":
                 latest = self.state.get(repo, number)
                 repair_attempts = int(latest.get("repair_attempts", 0)) + 1
