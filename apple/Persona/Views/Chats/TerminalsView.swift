@@ -53,6 +53,7 @@ struct TerminalsView: View {
             }
         }
         .listStyle(.plain)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .themedPage()
         .overlay {
             if machines.isEmpty {

@@ -9,10 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Runner runs Claude Code's CLI exe with args for the config directory dir and returns what it printed on stdout. A
@@ -176,7 +177,7 @@ func (c cli) list(ctx context.Context, id string) (*listed, error) {
 	return nil, nil
 }
 
-var versionRe = regexp.MustCompile(`\d+\.\d+\.\d+[0-9A-Za-z.+-]*`)
+var versionRe = lazyre.New(`\d+\.\d+\.\d+[0-9A-Za-z.+-]*`)
 
 // Version asks exe its version ("" when it does not say).
 func Version(ctx context.Context, run Runner, exe, dir string) string {

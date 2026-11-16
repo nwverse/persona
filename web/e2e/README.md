@@ -78,6 +78,24 @@ at both widths and no card's content wider than the card. Only the mock's own re
 (the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
 run, and the last line is the verdict.
 
+## Extension pages on reload: the last places and view at first paint (#9283)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-first-paint.mjs <loopback-web-origin> <artifact directory> [--shots-only] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark, 1440 × 900. Every request the hub would
+relay to the manager (`/api/v1/extensions…`) is held for a second in the browser, as a far hub takes. The made-up "Today"
+page is loaded three times in one profile. The first load has kept nothing: its sidebar entry and header title come only
+after the first relayed answer. The second draws the sidebar's entry, the header's title and icon and the page's last view
+(marked as updating, inert) before the first relayed answer, and the extension's drawing then replaces it. The third's first
+paint is photographed while every relayed request is still held (`first-paint-after-<theme>.png`). `--shots-only` takes only
+that photograph (`first-paint-before-<theme>.png`), for a build without the cache. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line
+is the verdict.
+
 ## An extension's quota card: UI version 9's gauge (#9337)
 
 ```sh
