@@ -374,7 +374,10 @@ this by changing a locale, allowing an address or rearranging the generated plis
 
 A retained release worktree is not clean just because its source is unchanged: `release.sh` generates
 `apple/Persona.xcodeproj`, and an unignored generated project makes `testflight_action.py` reject its own next run.
-Ignore that generated directory, never delete an unrecognized untracked file to make the check pass. The action must
+Ignore that generated directory for future worktrees. An older immutable tag may still contain the old negated ignore
+rule, so the recovery tool must independently recognize only its five known generated files, reject any other file or
+symlink, then discard and regenerate them from the exact tag. Never trust the old generated content as source (#8933).
+The action must
 also recognize `PERSONA_OPERATION_LOCKS` as well as `PERSONA_OPERATION_RELEASE_LOCKED`; otherwise it nests the lock
 wrapper before doing any work. An `upload_started` checkpoint with no remote build means the upload did not complete
 or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
@@ -2769,3 +2772,12 @@ iOS 27.0 only Japanese failed, on 27.2 zh-Hans already did.
   buttons stack at the largest size (#6151) and covered the stage bar in Japanese while the test, checking only the
   window, passed with a screenshot that didn't show it. Take the bottom from the frames of each page's own bottom
   controls (on the chat, the action bar's entries, which also reach above the band at the largest size).
+
+## A fixed-size overlay grows past the screen when a line gets longer (2026-11-16, #8859)
+
+- The live screen's Connection Stats panel is `.fixedSize()`: it is as wide as its longest line. At xxxLarge the
+  codec line ("3.4 Mbps · 60 fps · HEVC · 2268×1472") already fills an iPhone 17 Pro's width; appending "· x264" made
+  the panel wider than the screen, and the whole page laid out wider with it (the toolbar buttons were cut off at both
+  edges). At the default size it looked fine.
+- Give new information a line of its own instead of lengthening a line that is already the widest, and look at the
+  screenshot at xxxLarge (`-UIPreferredContentSizeCategoryName UICTContentSizeCategoryXXXL`) before calling it done.
