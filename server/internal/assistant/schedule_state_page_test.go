@@ -17,8 +17,9 @@ import (
 
 // transcriptChat is a conversation's transcript file in one of the two formats the nodes read, paged by the real
 // transcript.File.PageTurns (so also by the real injected-prompt recognition) instead of the fake hub's own paging.
-// The run key tests (schedule_state_set, the watcher's commit) read "the latest turn" through that page, and its
-// start is the last prompt the node counts, which is not the latest scheduled prompt (#8874).
+// The run key tests (schedule_state_set, the watcher's commit) look for the latest scheduled prompt in the last
+// taskStateTurns turns of that page, which start at prompts the node counts as a user's: a scheduled prompt is not
+// one, so the page reaches back past it (#8874, #8935).
 type transcriptChat struct {
 	t     *testing.T
 	codex bool
@@ -202,11 +203,11 @@ func TestReusedChatEveryRunSavesItsOwnState(t *testing.T) {
 }
 
 // The watcher saves a staged draft only when the latest scheduled prompt in the conversation's last turns is the run's
-// own (currentTaskStateRun, #8913): what the user or anything else wrote after it, before the next scheduled prompt,
-// goes on with the run. Here the draft is staged (the key was right when the model called the tool) and not saved when
-// another run's prompt came after the run's, or what carries the run's key is not a prompt (a tool result, the
-// assistant's words).
-func TestWatcherDoesNotSaveStateWhenTheLatestTurnIsNotTheRuns(t *testing.T) {
+// own (currentTaskStateRun, #8913, #8935): what the user or anything else wrote after it, before the next scheduled
+// prompt, goes on with the run, so the draft is saved. Here the draft is staged (the key was right when the model
+// called the tool) and is not saved when another run's scheduled prompt came after the run's, or when what carries
+// the run's key is not a prompt (a tool result, the assistant's words).
+func TestWatcherSavesStateOnlyWhenTheRunsPromptIsTheLatestScheduledOne(t *testing.T) {
 	scheduled := scheduledPrompt
 	type scenario struct {
 		name  string
@@ -230,7 +231,7 @@ func TestWatcherDoesNotSaveStateWhenTheLatestTurnIsNotTheRuns(t *testing.T) {
 			c.queued("one more thing while you work")
 			c.assistant("done again")
 		}, true},
-		{"another run's prompt is the latest turn", func(c *transcriptChat, own, other string) {
+		{"another run's prompt is the latest scheduled prompt", func(c *transcriptChat, own, other string) {
 			c.user(scheduled(Task{stateRunKey: own}))
 			c.assistant("done")
 			c.user(scheduled(Task{stateRunKey: other}))
@@ -439,5 +440,38 @@ func TestLastTurnsPagesLikeTheNode(t *testing.T) {
 				t.Fatalf("the one-turn page starts at the last prompt the user wrote: %d items from %q", len(page), page[0].Text)
 			}
 		})
+	}
+}
+
+// The page the run key is looked for in holds taskStateTurns user turns, counted from the end, and its start is the
+// fourth counted prompt (a scheduled prompt is not one). So the run's own prompt with 3 user messages after it is
+// on the page, and with 4 it is not: its own key is refused, however current it is. This documents the known
+// fail-closed gap of #8935 on the real PageTurns, and it pins today's boundary, not a contract: update it when the
+// window (taskStateTurns) changes.
+func TestScheduleStateSetWindowBoundaryDocumentsTheKnownGap(t *testing.T) {
+	for format, codex := range chatFormats() {
+		for _, after := range []int{3, 4} {
+			t.Run(fmt.Sprintf("%s/%d user messages after the run's prompt", format, after), func(t *testing.T) {
+				chat := newTranscriptChat(t, codex)
+				node := newFakeHub().withMachine()
+				node.page = chat.page
+				s := newStorelessService(t, node)
+				task := Task{ID: "patrol", Repeat: repeatInterval, EveryMinutes: 30}
+				task.stateRunKey = s.openTaskStateDraft()
+				chat.user(scheduledPrompt(task))
+				chat.assistant("done")
+				for i := 1; i <= after; i++ {
+					chat.user(fmt.Sprintf("message %d", i))
+					chat.assistant("reply")
+				}
+				_, err := s.toolScheduleStateSet(t.Context(), "server", "scheduled", stateSetArgs(task.stateRunKey, "cursor"))
+				if accepted := err == nil; accepted != (after < 4) {
+					t.Fatalf("the run's own key with %d user messages after its prompt: accepted = %v, want %v (%v); the window changed, update this test", after, accepted, after < 4, err)
+				}
+				if err != nil && !strings.Contains(err.Error(), "current scheduled turn") {
+					t.Fatalf("refused for another reason: %v", err)
+				}
+			})
+		}
 	}
 }
