@@ -205,10 +205,21 @@ nonisolated struct InboxBarState: Equatable, Sendable {
 @MainActor final class InboxBarLanding {
     static let shared = InboxBarLanding()
     private(set) var shown: InboxItem?
+    /// The item last in front, kept after its page goes: a place left with it open brings it back on top.
+    private var last: InboxItem?
 
-    func appeared(_ item: InboxItem) { shown = item }
+    func appeared(_ item: InboxItem) {
+        shown = item
+        last = item
+    }
 
     func disappeared(_ item: InboxItem) {
         if shown?.key == item.key { shown = nil }
+    }
+
+    /// The Inbox comes back with what it kept open: its item is in front again before any of its pages appear. In the
+    /// Sidebar layout the new list is the root and appears at once, before the item's page does.
+    func broughtBack() {
+        if let last { shown = last }
     }
 }

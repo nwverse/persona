@@ -552,8 +552,10 @@ struct AssistantView: View {
         ShellTrace.shared.note("place \(page) \(kept == nil ? "root" : "kept") drawer=\(activeDrawer.isOut) path=\(navPath.wrappedValue.count) kept=\(kept?.count ?? 0)")
         #endif
         // The Inbox at its root: chosen again while in front, its page stays up and is told (#9053). A kept path puts
-        // a new page beneath its item, which lands on that item's choice by itself.
-        if page == .inbox && kept == nil { model.inboxEntries += 1 }
+        // a new page beneath its item, which lands on that item's choice.
+        if page == .inbox {
+            if kept == nil { model.inboxEntries += 1 } else { InboxBarLanding.shared.broughtBack() }
+        }
         underDrawer {
             backToRoot()
             if let kept {
@@ -612,7 +614,19 @@ struct AssistantView: View {
             traceRoot(page, nil)
             enterHealth()
         default:
-            traceRoot(page, SidebarPageRoot.of(page).map { unified.select($0, path: navPath) })
+            let step = SidebarPageRoot.of(page).map { unified.select($0, path: navPath) }
+            if page == .inbox, let step { inboxPicked(step) }
+            traceRoot(page, step)
+        }
+    }
+
+    /// The Inbox picked in the Sidebar layout (#9053): picked again while it is the root, its page stays up and is told,
+    /// as every entry opens on Needs You; brought back with what it kept open, its new page lands on that item's choice.
+    private func inboxPicked(_ step: SidebarPageRoots.Step) {
+        switch step.move {
+        case .none, .popToRoot: model.inboxEntries += 1
+        case .switchRoot: if !step.path.isEmpty { InboxBarLanding.shared.broughtBack() }
+        case .drillDown: break
         }
     }
 

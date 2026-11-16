@@ -161,5 +161,8 @@ struct InboxBarTests {
         #expect(landing.shown?.key == b.key)
         landing.disappeared(b)
         #expect(landing.shown == nil)
+        // the place left with b open and brought back: b is in front again before its page appears
+        landing.broughtBack()
+        #expect(landing.shown?.key == b.key)
     }
 }

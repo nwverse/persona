@@ -2867,6 +2867,10 @@ page's `onDisappear`. So the item page records itself on appear and clears itsel
 the list reads the record on its first appearance only, landing on the item's section; later appearances (an item it
 pushed itself, a chain link) leave its choice alone. `InboxSectionBarUITests.testAnItemBroughtBackLandsTheListOnItsChoice`
 walks it on an iPad, the layout whose sidebar can leave the place with an item open; with the read turned off it fails.
+In the Sidebar layout (#8359, also the iPad's Separate layout since #8367) the Inbox is the page's root, not pushed: brought
+back, the new list appears at once, before the kept item's page, so the record was empty when it looked. The record keeps
+the item last in front after its page goes, and bringing a place back with a kept path puts it in front again first
+(`InboxBarLanding.broughtBack`, from `AssistantView.show` and the Sidebar layout's pick).
 
 ## A scroll to an id lands on the item that owns it, not on a frame widened around it (2026-11-17, #9053)
 
@@ -2888,5 +2892,6 @@ one update: the path goes `[inbox]` → `[]` → `[inbox]`, SwiftUI sees the sam
 on every entry (the Inbox opens on Needs you) can't rely on being built anew: `show(.inbox)` bumps
 `AppModel.inboxEntries` when it goes to the root, and visionOS's tab, which the `TabView` keeps up, bumps it when the tab
 is picked or routed to; the page resets on `.onChange(of:)`. A kept path (`ShellPlaces`) puts a different root first,
-so that page is new and lands by itself. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
+so that page is new and lands by itself. The Sidebar layout's pick goes through `SidebarPageRoots` instead, and a pick of
+the root in front (no move, or a pop to it) bumps the counter there. Reviewers caught it at runtime with the Inbox on FYI and a route to the Inbox
 (`personactl navigate inbox --keep`, the widget's and the quick action's way in); `InboxSectionBarUITests` now walks it.
