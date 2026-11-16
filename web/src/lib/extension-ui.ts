@@ -18,8 +18,11 @@ import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
 
 export { isHttps };
 
-/** The UI version the web draws (context.ui_version): all of 8, the columns layout's too (views/extensions/ViewBody8.tsx). */
-export const UI_VERSION = 8;
+/**
+ * The UI version the web draws (context.ui_version): all of 9, the columns layout's (views/extensions/ViewBody8.tsx) and a
+ * tile's gauge (views/extensions/ViewBody9.tsx) too.
+ */
+export const UI_VERSION = 9;
 
 export type UITone = "neutral" | "positive" | "caution" | "danger";
 
