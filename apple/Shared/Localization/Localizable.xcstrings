@@ -637,6 +637,30 @@
       },
       "shouldTranslate" : false
     },
+    "%@ %@ · %@ tokens" : {
+      "comment" : "The hour grid's picked hour: its day, hour and tokens, as in Mon, Nov 16 2 PM · 520M tokens",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · %3$@ tokens"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · %3$@トークン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · %3$@ token"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%@ %@\\n\\nOn the server, run ssh-keygen -lf on its host public key and trust it only if the fingerprints match. If the fingerprint changes later, the connection is refused." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3406,6 +3430,30 @@
       },
       "shouldTranslate" : false
     },
+    "%@ · %@ tokens" : {
+      "comment" : "The token calendar's picked day: its date and its tokens, as in Nov 16 · 5.85B tokens",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@ tokens"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@トークン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@ token"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%@ · %@ ·" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5118,6 +5166,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$@：%2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "%@: %@ tokens" : {
+      "comment" : "The token calendar's day read aloud: its date and tokens",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@ tokens"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@トークン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：%2$@ token"
           }
         }
       },
@@ -30681,6 +30753,29 @@
       },
       "extractionState" : "manual"
     },
+    "By Computer · Last 7 Days" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By Computer · Last 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コンピューター別 · 過去7日間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按电脑 · 最近 7 天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "By Importance and Relevance" : {
       "localizations" : {
         "en" : {
@@ -30722,6 +30817,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分类"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "By Kind · Last 7 Days" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "By Kind · Last 7 Days"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "種類別 · 過去7日間"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按类别 · 最近 7 天"
           }
         }
       },
@@ -61053,6 +61171,30 @@
       },
       "extractionState" : "manual"
     },
+    "Each Day" : {
+      "comment" : "Token usage page: the calendar's heading",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each Day"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日ごと"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Each agent's row says what it is waiting for" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -61254,6 +61396,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每次运行都发进这个任务自己的对话，能看到前几次的结果。对话太长或想重来时，点「下次开新对话」，原来的对话还在。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Each square is an hour in your time zone, shaded by where it ranks among the week's hours." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Each square is an hour in your time zone, shaded by where it ranks among the week's hours."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1マスはあなたのタイムゾーンでの1時間です。色の濃さは、この7日間の中での順位で決まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每格是你所在时区的一小时，颜色深浅按它在这 7 天所有小时里的排位。"
           }
         }
       },
@@ -69241,6 +69406,30 @@
       },
       "extractionState" : "manual"
     },
+    "From %@ to %@" : {
+      "comment" : "A heat grid's legend: what its faintest and fullest squares mean",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From %1$@ to %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@から%2$@まで"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 %1$@ 到 %2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "From %@ · to %@ on %@" : {
       "localizations" : {
         "en" : {
@@ -77185,6 +77374,29 @@
       },
       "extractionState" : "manual"
     },
+    "Input, output, cache write and cache read added up: the same count as Today on the Machines page." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Input, output, cache write and cache read added up: the same count as Today on the Machines page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入力・出力・キャッシュ書き込み・キャッシュ読み取りの合計で、「マシン」ページの「今日」と同じ数です。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入、输出、缓存写、缓存读四项相加，和「机器」页的「今天」是同一个数。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Inspect Symbol" : {
       "localizations" : {
         "en" : {
@@ -82958,6 +83170,29 @@
       },
       "extractionState" : "manual"
     },
+    "Last 7 Days by the Hour" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last 7 Days by the Hour"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "過去7日間 · 1時間ごと"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近 7 天 · 每小时"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Last Check" : {
       "localizations" : {
         "en" : {
@@ -84073,6 +84308,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "左侧"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Less [Heat Legend]" : {
+      "comment" : "A heat grid's faintest squares",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Less"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "少"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "少"
           }
         }
       },
@@ -93024,6 +93283,30 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更多设置"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "More [Heat Legend]" : {
+      "comment" : "A heat grid's fullest squares",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "More"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "多"
           }
         }
       },
@@ -109126,6 +109409,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 %1$@ 上打开终端，粘贴下面这行，回车："
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Opens token usage by day, hour and computer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens token usage by day, hour and computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "日別・時間別・コンピューター別のトークン使用量を開きます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开按天、按小时、按电脑的 token 用量"
           }
         }
       },
@@ -130386,6 +130692,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已移除（%1$lld）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Removed Computer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removed Computer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除したコンピューター"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已移除的电脑"
           }
         }
       },
@@ -175792,6 +176121,30 @@
       },
       "extractionState" : "manual"
     },
+    "Today %@ tokens · Last 30 days %@" : {
+      "comment" : "The token calendar's line: today's tokens and the last 30 days', as in Today 3.2B tokens · Last 30 days 56.7B",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today %1$@ tokens · Last 30 days %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日 %1$@トークン · 過去30日間 %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天 %1$@ token · 近 30 天 %2$@"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Today [Home Widgets]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -176295,6 +176648,30 @@
           }
         }
       }
+    },
+    "Tokens a day" : {
+      "comment" : "The token calendar: one square a day",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tokens a day"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1日ごとのトークン使用量"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天的 token 用量"
+          }
+        }
+      },
+      "extractionState" : "manual"
     },
     "Tokens per Minute" : {
       "localizations" : {

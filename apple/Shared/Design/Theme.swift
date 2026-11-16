@@ -709,6 +709,32 @@ nonisolated enum Theme {
         static let lineStrong = Color.primary.opacity(0.18)
     }
 
+    /// A heat grid (`HeatGrid`, docs/design/DESIGN_SYSTEM.md 3.15): the token calendar's squares, a day each (a column a
+    /// week) or an hour each (a row a day), in the theme color's steps from faint to full and no usage in the neutral
+    /// fill. The squares keep their size at every text size; a wider screen shows more weeks.
+    enum Heat {
+        /// A day's square and the room between two: 19 weeks across an iPhone's card.
+        static let cell: CGFloat = 13
+        static let gap: CGFloat = 3
+        static let radius: CGFloat = 3
+        /// An hour's square on the last week's grid: as wide as 24 fit, this high, this far apart.
+        static let hourHeight: CGFloat = 15
+        static let hourGap: CGFloat = 2
+        /// The fewest and the most weeks a calendar shows.
+        static let minWeeks = 8
+        static let maxWeeks = 53
+        /// The theme color's strength at each step above none (`HeatLevels`, four steps).
+        static let steps: [Double] = [0.28, 0.5, 0.75, 1]
+        /// Today's outline and the picked square's.
+        static let todayLine: CGFloat = 1.5
+        static let pickedLine: CGFloat = 2
+
+        /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
+        static func fill(_ level: Int) -> Color {
+            level <= 0 ? Theme.Fill.chip : Theme.accent.opacity(steps[min(level, steps.count) - 1])
+        }
+    }
+
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner,
     /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
     /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion

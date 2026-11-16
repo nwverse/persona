@@ -677,6 +677,64 @@ def usage_card(mid):
     return {"today": usage_sum(today), "per_minute": int(tot(now_rows) / ((now - (minute - 120)) / 60)), "recent": recent}
 
 
+def usage_history_day(day, part=1.0):
+    """A made-up day of every machine's tokens (the token calendar, #9506), fixed by its date: quieter weekends, a few
+    days off, busier lately, cache reads most of it; part: how much of the day has passed (today)."""
+    import datetime
+    h = int(hashlib.md5(f"day{day.isoformat()}".encode()).hexdigest()[:6], 16) / 0xFFFFFF
+    if MOCK_TOKENS == "empty" or h < 0.08:
+        return {"in": 0, "cache_write": 0, "cache_read": 0, "out": 0, "req": 0}
+    ago = (datetime.date.fromtimestamp(T0) - day).days
+    trend = 0.45 + 0.55 * max(0.0, 1 - ago / 150)
+    total = (0.3 if day.weekday() >= 5 else 1.0) * trend * (h ** 1.7) * 6.0e9 * part
+    return {"in": int(total * 0.0006), "cache_write": int(total * 0.031), "cache_read": int(total * 0.9642),
+            "out": int(total * 0.0042), "req": int(total / 2.5e6)}
+
+
+def usage_history_days(n):
+    """GET /api/v1/usage/days (#9480): the last n days in the mock's zone, oldest first, the last today (so far)."""
+    import datetime
+    now = time.localtime()
+    today = datetime.date(now.tm_year, now.tm_mon, now.tm_mday)
+    part = (now.tm_hour * 3600 + now.tm_min * 60) / 86400
+    days = []
+    for i in range(n - 1, -1, -1):
+        d = today - datetime.timedelta(days=i)
+        days.append({"date": d.isoformat(), **usage_history_day(d, part if i == 0 else 1.0)})
+    return {"zone": time.strftime("%Z") or "UTC", "days": days, "stored": True}
+
+
+def usage_history_hours(n):
+    """GET /api/v1/usage/hours (#9480): the last n days by the hour, each machine's share, the total."""
+    import datetime
+    import math
+    now = time.time()
+    lt = time.localtime(now)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1)) - (n - 1) * 86400
+    hours, total = [], {"in": 0, "cache_write": 0, "cache_read": 0, "out": 0, "req": 0}
+    t = int(midnight)
+    while t <= now:
+        l = time.localtime(t)
+        day = datetime.date(l.tm_year, l.tm_mon, l.tm_mday)
+        whole = usage_history_day(day)
+        shape = max(0.0, math.sin(math.pi * (l.tm_hour - 8) / 16)) if 8 <= l.tm_hour <= 24 else 0.03
+        h = int(hashlib.md5(f"hr{t}".encode()).hexdigest()[:6], 16) / 0xFFFFFF
+        f = shape * (0.6 + 0.8 * h) / 11
+        row = {k: int(v * f) for k, v in whole.items()}
+        hours.append({"t": t, "date": day.isoformat(), "hour": l.tm_hour, **row})
+        for k in total:
+            total[k] += row[k]
+        t += 3600
+    machines = []
+    weights = {m: USAGE_SCALE[m] for m in USAGE_SCALE}
+    all_w = sum(weights.values())
+    for m in MACHINES:
+        if m["id"] in weights:
+            machines.append({"id": m["id"], "name": m["name"], **{k: int(v * weights[m["id"]] / all_w) for k, v in total.items()}})
+    machines.sort(key=lambda x: -(x["in"] + x["cache_write"] + x["cache_read"] + x["out"]))
+    return {"zone": time.strftime("%Z") or "UTC", "hours": hours, "machines": machines, "total": total, "stored": True}
+
+
 def sess(mid, sid, title, cwd, status, state, space, sidx, slot, slidx, minutes, last, agent="claude", pending=0, **kw):
     s = {"machine_id": mid, "session_id": sid, "title": title, "cwd": cwd, "status": status, "state": state,
          "agent": agent, "launcher": "claude", "model": "opus" if agent == "claude" else "gpt-5.5", "started_by_persona": True,
@@ -25758,6 +25816,12 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(computer_now(machine))
         if p == "/api/v1/usage/windows":  # subscription rate-limit windows (#2432); MOCK_USAGE=none answers no accounts
             return self.send_json(mock_usage_windows())
+        if p in ("/api/v1/usage/days", "/api/v1/usage/hours") and MOCK_TOKENS == "none":  # an older hub
+            return self.send_json({"error": "not found"}, 404)
+        if p == "/api/v1/usage/days":  # the token calendar's days (#9480, #9506); MOCK_TOKENS=empty has no usage
+            return self.send_json({"usage": usage_history_days(int(q.get("days", ["140"])[0]))})
+        if p == "/api/v1/usage/hours":
+            return self.send_json({"usage": usage_history_hours(int(q.get("days", ["7"])[0]))})
         if p == "/api/v1/metrics":
             # MOCK_METRICS_FAIL=1: every /metrics fails; =after: it answers for 5 s after the first ask, then fails (the
             # page's 10 s refreshes)

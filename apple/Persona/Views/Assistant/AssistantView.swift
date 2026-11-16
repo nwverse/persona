@@ -1043,6 +1043,10 @@ struct AssistantWelcome: View {
     /// The cards' rows at most (the shell: two, the page ends at their bottom, with no third row peeking out under the
     /// fade over Needs You, #5648); every suggestion when nil.
     var cardRows: Int? = nil
+    /// The token calendar's days (#9506) and its page.
+    @State private var usage = TokenUsageModel()
+    @State private var showUsage = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     /// A thing to ask: sent as `prompt`, or (`local`) opening help on this device; `needs`: the phone data it reads.
     struct Suggestion {
@@ -1109,6 +1113,14 @@ struct AssistantWelcome: View {
         .coordinateSpace(.named(WelcomeFold.space))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("assistant-welcome")
+        // Read when the page shows and when the app comes back to the front: no timer (the home stays still).
+        .tabActiveTask(id: sizeClass == .regular) {
+            await usage.loadDays(sizeClass == .regular ? TokenUsageModel.yearDays : TokenUsageModel.phoneDays)
+        }
+        .navigationDestination(isPresented: $showUsage) { TokenUsagePage() }
+        #if DEBUG
+        .onAppear { if UserDefaults.standard.bool(forKey: "openTokenUsage") { showUsage = true } } // screenshots
+        #endif
     }
 
     @ViewBuilder private var things: some View {
@@ -1175,17 +1187,10 @@ struct AssistantWelcome: View {
                  : String(localized: "Start a new side chat. I can see your computers, iPhone, email, Lark, and organized projects, and I can keep an eye on things and remind you when it's time."))
                 .font(Theme.Font.secondary).lineHeight(.secondary)
                 .foregroundStyle(.secondary)
-            // Wraps: in one HStack, a few more machines (or larger text) widened the whole page past the screen.
-            LarkFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(model.machines.filter { $0.online && model.assistantShows($0.manager) }) { m in
-                    Chip(text: m.name, symbol: m.symbol)
-                }
-                #if os(macOS)
-                // What this chip shows is this device's own link to the hub: on the Mac, this Mac.
-                Chip(text: ConnectorText.device, symbol: model.live.looksConnected ? Theme.Icon.laptop : Theme.Icon.laptopOffline)
-                #else
-                Chip(text: "iPhone", symbol: model.live.looksConnected ? Theme.Icon.phone : "iphone.slash")
-                #endif
+            // Tokens a day (#9506), where the computers' chips were: labels that did nothing (the connection is in the
+            // title). Only once the hub has history with usage in it: an older hub, or one with no computers, shows none.
+            if usage.hasUsage, let days = usage.days {
+                TokenCalendarCard(days: days) { showUsage = true }
             }
         }
     }
