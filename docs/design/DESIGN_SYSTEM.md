@@ -2427,6 +2427,14 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   picked or is the default. Note hides the meeting's options and the calendar line and shows one caption
   ("No minutes, and Persona stays out."); the same Record button then records a note (progressive disclosure, principle 2).
   Note is never a second button (section 3.7).
+- **The Meetings home** (#8731 v2): today's calendar meetings first (**Upcoming Meetings**, one row each: time in
+  the meeting's red while it is on, name, people and place, and a **Start** that is prominent only for the one on now),
+  then the **quick start**: the name as a text field (its prompt the calendar's or "Meeting · now"), **Meeting | Note**
+  as a segmented control, who is in it (you and **Invite Persona**; Persona invited shows its face and "Answers on
+  screen", its menu removes it), and one line for who transcribes (this iPhone, or "Cloud · service"; the warning tint
+  when the hub's default can't run). The rest of the start's options are the page's ⋯ (private, language, microphone).
+  **Start Meeting** stays the page's one prominent button. Reason: the owner asked for a meeting app, not a settings
+  form ("design it as a meeting app", principles 1 and 2).
 - **One home for meetings** (#8731): the page lists only what the knowledge base doesn't have whole yet (**Still on This
   iPhone**, each with its state word), then one row, **All Meetings**, into Knowledge's Meetings list. That list is the
   one place for every meeting and note, the imported ones and Persona's together, newest first (Persona's never fold

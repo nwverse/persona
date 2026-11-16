@@ -99,6 +99,10 @@ export interface SessionListOptions<T> {
   counts?: boolean;
 }
 
+/** What a `sessions_list` hint says of the change it follows (`sessions_list_changes`, #6685): the revision before it,
+ *  the one it reaches, and the rows changed in between as `[machine_id, session_id]`. */
+export interface ListChangeHint { revision?: unknown; since?: unknown; changed?: unknown }
+
 type PreparedDelta<T> = { overlay: Map<string, T | null>; changes: Map<string, T | null>; revision: string; total: number };
 type Work = { generation: number; load: boolean; more: boolean; kind: "load" | "more" | null; promise?: Promise<void> };
 class Rebaseline extends Error {}
@@ -108,25 +112,25 @@ class Rebaseline extends Error {}
  * Rejected reads also set `error`; invalidation is fire-and-forget and records errors without rejecting globally.
  */
 export class SessionList<T> {
-  private snapshot: ListSnapshot<T> = this.empty();
+  protected snapshot: ListSnapshot<T> = this.empty();
   private listeners = new Set<() => void>();
   private filters: ListFilters = {};
   private generation = 0;
-  private work: Work = { generation: 0, load: false, more: false, kind: null };
+  protected work: Work = { generation: 0, load: false, more: false, kind: null };
   // The frozen cursor never follows the delta checkpoint. Counts are not a row checkpoint either.
-  private cursor?: string;
+  protected cursor?: string;
   private frozenRevision?: string;
-  private checkpoint?: string;
+  protected checkpoint?: string;
   private frozen = new Map<string, T>();
   // Including unmaterialized identities is essential: a later frozen page may carry their stale copies.
   private overlay = new Map<string, T | null>();
   private prefixSize = PAGE_SIZE;
-  private invalidationQueued = false;
+  protected invalidationQueued = false;
   /** The next scheduled invalidation's read, shared by every hint in its window (`invalidate`). */
   private invalidationTimer?: ReturnType<typeof setTimeout>;
   /** When the last invalidation's read went out, then when it came back (0 when none): a hint inside the window waits
    *  for the window's end. */
-  private invalidatedAt = 0;
+  protected invalidatedAt = 0;
   private lastFailure: "load" | "more" = "load";
   private summary: boolean;
   private roots: boolean;
@@ -139,7 +143,7 @@ export class SessionList<T> {
     private identity: (row: T) => string,
     private compare: (a: T, b: T) => number,
     private onRows?: (rows: T[]) => void,
-    private removeIdentity: (id: string) => string = (id) => id,
+    protected removeIdentity: (id: string) => string = (id) => id,
     options: SessionListOptions<T> = {},
   ) {
     this.summary = options.summary ?? true;
@@ -206,7 +210,8 @@ export class SessionList<T> {
   /** A hint burst from a busy fleet (every working agent's update broadcasts a sessions_list notice) must not become
    *  a read per hint: the hints of one 2 s window share its read, also while a read is out (docs/design/PRINCIPLES.md,
    *  fast and local-first). A hint read at once whenever a read was out kept a busy fleet's list reading back to back:
-   *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. */
+   *  `loading` never cleared, so Load more stayed hidden and a queued page never ran. A grouped list's section also
+   *  passes over hints naming none of its rows (lib/section-list.ts, #9176). */
   invalidate(): void {
     if (this.invalidationQueued) return;
     this.invalidationQueued = true;
@@ -515,7 +520,7 @@ export class SessionList<T> {
     this.publish({ rows: this.visible(), total: first.total, hasMore: !!cursor || frozen.size > depth });
   }
 
-  private candidates(): Map<string, T> {
+  protected candidates(): Map<string, T> {
     const rows = new Map(this.frozen);
     for (const [id, row] of this.overlay) {
       if (row === null) rows.delete(id);
