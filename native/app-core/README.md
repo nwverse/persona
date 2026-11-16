@@ -36,7 +36,7 @@ emulator results never fill the physical-device column.
 | `sort` / `state` / `recents` | 30 sort, 13 state and 21 recents cases | Sort 30; state/recents not implemented | Sort smoke only; state/recents not implemented | Sort 30 on macOS (#8952); state/recents not implemented | Sort 30 + state 13; recents not implemented | Sort is compiled for OHOS but its actual NAPI invocation is not measured; state/recents have no NAPI export | Native / native + DEBUG sort shadow (#8954) / **core Agents-list sort in production** (#8957, #8966, #9066); no state/recents migration | No domain-specific physical run; acceptance blocked |
 | `turns` / `task_index` | 57 static turn cases and five task-index cases + receipt; four operation cases have host-JNI coverage | Turns 57 + 10 operation checkpoints; task index 5 + receipt | Turns 57; task index 5 + receipt | Turns 57; task index 5 + receipt on macOS (#8952) | Turns 57 + 10 operation checkpoints (#9235); task index 5 + receipt | Turns and task-index NAPI unexecuted; host turns is not #8808's Linux loader | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `answer` | 15 question + 9 recommendation cases (#9233), including newline / NBSP / TAB trimming | Full 15 + 9 | Full 15 + 9 | Full 15 + 9 on macOS (#8952 plus #9233) | Full 15 + 9 through host projection | Not measured | Native everywhere | No domain-specific physical run; acceptance blocked |
-| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker and inline source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 77 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 77 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
+| `stream_chunks` / `stream_repair` | Split 21; repair covers fence, table, final-marker and inline source-derived assertions | Split 21; repair 21 fence + 6 end, 22 table + 15 end, 14 final-marker, 51 explicit inline + 13 boundary expectations and 342 mixed-reply prefixes | Split 21; repair 80 complete objects (#9241) | Split 21 on macOS; repair not implemented | Split 21; repair 80 complete objects (#9241) | Split NAPI unexecuted; repair NAPI export committed, real NAPI not executed | Native everywhere | No domain-specific physical run; acceptance blocked |
 | `viewed_images` | Source-derived ordinary/folded leaf and turn ownership | Ordinary/folded leaf plus identity, ordering and error controls | Ordinary + folded complete objects (#9017) | 28 complete objects + 8 no-line boundaries on macOS (#9237 / #9246) | Not implemented | Not implemented; no NAPI export | Native everywhere | No domain-specific physical run; acceptance blocked |
 
 `scripts/ci/core.sh` exercises the cargo, C ABI and ArkTS-host columns, including generated-codec and OHOS declaration
@@ -85,7 +85,7 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
 `persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
-`{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 22 fence + 19 marker/boundary + 36
+`{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 22 fence + 19 marker/boundary + 39
 table/boundary complete `{repaired, end}` objects stated independently from the Apple tests/source and existing JNI
 replay,
 `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
@@ -302,7 +302,7 @@ from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong
 the ninth recommendation. The answer comparison preserves the fixture's
 conditional next-page, picks and display fields. The receipt retains its description and started call with empty
 notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
-`harmony/tests/core-host/stream-repair.test.mjs` (#9241) replays the same 77 complete `{repaired, end}` objects
+`harmony/tests/core-host/stream-repair.test.mjs` (#9241) replays the same 80 complete `{repaired, end}` objects
 through the `stream_repair` host projection command, including the digit, leading-blank-line and delimiter boundaries.
 Both surfaces reject malformed inputs and deliberately wrong `end`, wrong `repaired` and extra-field expectations.
 The `ohos`-feature NAPI projection exports are `coreProjectSort`, `coreProjectAnswer`, `coreDisplayAnswer`,

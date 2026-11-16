@@ -60,7 +60,7 @@ const marker = [
   [{text: '\n##', repaired: '\n', end: 'text'}, 'existing JNI leading blank line'],
 ];
 
-// 36 table expectations (22 repair inputs, the seven end-only inputs plus their already-covered duplicates, and seven
+// 39 table expectations (22 repair inputs, all 15 original end inputs including overlaps, and seven
 // JNI/Foundation delimiter boundaries): from holdsATablesHalfWrittenLastRowBack,
 // givesATableHeaderItsDelimiterRowEarly, findsATableRightUnderAParagraphLine, keepsATableInTheListItemItIsIn
 // and findsNoTableInALazyLine. Complete end values follow the explicitly asserted table boundaries and
@@ -96,6 +96,9 @@ const table = [
   [{text: '- 项\n\n  | a | b |\n  ', repaired: '- 项\n\n  | a | b |\n  | --- | --- |', end: 'table'}, 'Apple indented table end'],
   [{text: '| a | b |\n| --- | --- |\n| 1', repaired: '| a | b |\n| --- | --- |\n', end: 'table'}, 'tellsWhereTheTextEnds'],
   [{text: '| a | b |\n| --- | --- |\n| 1 | 2 |\n', repaired: '| a | b |\n| --- | --- |\n| 1 | 2 |\n', end: 'table'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a | b |\n', repaired: '| a | b |\n| --- | --- |', end: 'table'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a | b |\n| -', repaired: '| a | b |\n| --- | --- |', end: 'table'}, 'tellsWhereTheTextEnds'],
+  [{text: '| a | b', repaired: '| a | b', end: 'text'}, 'tellsWhereTheTextEnds'],
   [{text: '| a | b |\n| --- | --- |\n\n后文', repaired: '| a | b |\n| --- | --- |\n\n后文', end: 'text'}, 'tellsWhereTheTextEnds'],
   [{text: '| a |\n| -\r |\n| x', repaired: '| a |\n| -\r |\n| x', end: 'text'}, 'existing JNI CR delimiter'],
   [{text: '| a |\n| -\u000b |\n| x', repaired: '| a |\n| -\u000b |\n| x', end: 'text'}, 'existing JNI vertical-tab delimiter'],
@@ -154,7 +157,7 @@ test('ArkTS host replays every marker and boundary expectation as a complete obj
 
 test('ArkTS host replays every table and delimiter expectation as a complete object', options, async (context) => {
   await withHost(context, async (host) => {
-    assert.equal(table.length, 36);
+    assert.equal(table.length, 39);
     await replay(host, table, 'table');
     console.log(`  stream_repair table host replay: ${table.length} complete objects`);
   });

@@ -4,7 +4,7 @@
 // answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
-// The stream_repair replay (22 fence + 19 marker/boundary + 36 table/boundary complete objects) mirrors the Apple
+// The stream_repair replay (22 fence + 19 marker/boundary + 39 table/boundary complete objects) mirrors the Apple
 // Swift assertions and existing JNI-derived boundaries. Expectations are independently transcribed from Apple
 // tests/source and that replay, never derived from the Rust output. Every object compares both `repaired` and `end`.
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
@@ -919,6 +919,9 @@ static void check_stream_repair(void) {
         {"- 项\n\n  | a | b |\n  ", "- 项\n\n  | a | b |\n  | --- | --- |", "table", "Apple indented table end"},
         {"| a | b |\n| --- | --- |\n| 1", "| a | b |\n| --- | --- |\n", "table", "tellsWhereTheTextEnds"},
         {"| a | b |\n| --- | --- |\n| 1 | 2 |\n", "| a | b |\n| --- | --- |\n| 1 | 2 |\n", "table", "tellsWhereTheTextEnds"},
+        {"| a | b |\n", "| a | b |\n| --- | --- |", "table", "tellsWhereTheTextEnds"},
+        {"| a | b |\n| -", "| a | b |\n| --- | --- |", "table", "tellsWhereTheTextEnds"},
+        {"| a | b", "| a | b", "text", "tellsWhereTheTextEnds"},
         {"| a | b |\n| --- | --- |\n\n后文", "| a | b |\n| --- | --- |\n\n后文", "text", "tellsWhereTheTextEnds"},
         {"| a |\n| -\r |\n| x", "| a |\n| -\r |\n| x", "text", "existing JNI CR delimiter"},
         {"| a |\n| -\x0b |\n| x", "| a |\n| -\x0b |\n| x", "text", "existing JNI vertical-tab delimiter"},
@@ -933,7 +936,7 @@ static void check_stream_repair(void) {
     size_t table_matched = replay_complete_repairs(table, sizeof(table) / sizeof(table[0]), "table");
     if (fence_matched != 22) fail("stream_repair", "manifest", "expected exactly 22 complete fence objects");
     if (marker_matched != 19) fail("stream_repair", "manifest", "expected exactly 19 complete marker objects");
-    if (table_matched != 36) fail("stream_repair", "manifest", "expected exactly 36 complete table objects");
+    if (table_matched != 39) fail("stream_repair", "manifest", "expected exactly 39 complete table objects");
     /* Malformed inputs must produce an empty buffer. */
     expect_empty(persona_core_project_stream_repair, "stream_repair", "wrong_schema", "{\"invalid\":true}");
     expect_empty(persona_core_project_stream_repair, "stream_repair", "invalid_json", "not JSON");
@@ -947,7 +950,7 @@ static void check_stream_repair(void) {
         jfree(actual);
         jfree(input);
     }
-    printf("c-abi: stream_repair %zu/22 fence + %zu/19 marker/boundary + %zu/36 table/boundary complete objects\n",
+    printf("c-abi: stream_repair %zu/22 fence + %zu/19 marker/boundary + %zu/39 table/boundary complete objects\n",
            fence_matched, marker_matched, table_matched);
 }
 
@@ -1618,6 +1621,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, stream_repair 77 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, stream_repair 80 complete objects, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }
