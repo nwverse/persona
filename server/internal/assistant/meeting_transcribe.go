@@ -34,6 +34,7 @@ var (
 	jobRetry         = time.Minute      // a job that could not be opened, or failed, is opened again after this
 	jobReadyWait     = 30 * time.Second // a job answers ready within this, else it counts as upstream_unavailable
 	jobIdle          = time.Minute      // a job with no audio this long is ended (sessions bill silence)
+	jobAwayIdle      = 10 * time.Second // and this long while no phone socket is up (hubRun.idleLimitLocked)
 	jobStall         = 30 * time.Second // a job behind (audio skipped) that acknowledged nothing this long has failed
 	jobDoneWait      = 5 * time.Minute  // a replay job sends done within this of the manager's end
 	echoHoldMost     = 3 * time.Minute  // a speaking span open longer than this is assumed open from then on (hubRun.releaseHoldLocked)
@@ -281,8 +282,8 @@ func (r *hubRun) tick(now time.Time) {
 	if r.hubDirty && now.Sub(r.hubPutAt) >= hubSegmentsEvery {
 		r.putHubLocked()
 	}
-	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= jobIdle {
-		r.s.logf("recording %s: transcription job idle, ended", r.id)
+	if j := r.job; j != nil && !j.ending && !r.audioAt.IsZero() && now.Sub(r.audioAt) >= r.idleLimitLocked() {
+		r.s.logf("recording %s: transcription job idle (socket up: %t), ended", r.id, r.phone != nil)
 		r.endJobLocked(j)
 	}
 	if j := r.job; j != nil && j.ready && !j.ending && j.behind && now.Sub(j.behindAt) >= jobStall && now.Sub(j.ackAt) >= jobStall {
@@ -290,6 +291,18 @@ func (r *hubRun) tick(now time.Time) {
 		r.jobStalledLocked(j)
 	}
 	r.fallbackCheckLocked(now)
+}
+
+// idleLimitLocked is how long the live job may go without audio before it is ended: jobIdle while the phone's socket
+// is up (a slow link), jobAwayIdle once it is gone without end (dropped, paused, the app ended by the system). The job's
+// upstream sessions bill silence by the second, three at once in the voice extension, and a phone that died mid-meeting
+// kept them billed for the whole minute (#9198); one back within jobAwayIdle keeps its job, and one back later opens a
+// new job with its next audio, as after a dropped job, resending what the hub lacks from ready.from.
+func (r *hubRun) idleLimitLocked() time.Duration {
+	if r.phone == nil {
+		return jobAwayIdle
+	}
+	return jobIdle
 }
 
 // notifyLocked wakes the waiters (hubFlush, awaitHeard).
