@@ -18,7 +18,7 @@ an explicit host selection overrides it. Other offline sessions use the default 
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
 The web is wired: the machine page's Engine section is a checklist with "Make default", New Agent has "Open in", and a session live in
 two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working;
-iOS also offers "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
+iOS and Android also offer "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
 
 - **Only enabled hosts are registered.** An engine that is not checked gets no client, no polling and no event subscription; it is only probed once in
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.

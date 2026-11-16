@@ -48,8 +48,8 @@ compares complete expected objects, including exact array order and integer-vs-b
 case-name manifests, exercises malformed input in each domain, and catches deliberately wrong expected objects through
 the same comparison. `PersonaCoreProjectionTests` runs this on macOS through the real C XCFramework:
 
-- 30 `agents_list` sort cases. The separate `session_state` / `hub_state` projections have no C entry point and are
-  outside this six-function slice.
+- 33 `agents_list` sort cases, including the three iOS-derived held-row State, Space and quiet-fold cases (#9033).
+  The separate `session_state` / `hub_state` projections have no C entry point and are
 - Answer: 15 question and 8 recommendation cases, conditional expected fields, invalid page/option and U+200B.
 - Stream chunks: all 21 complete `{done, tail}` objects.
 - Turns: all 57 static cases with the checked-in current-iOS overlay applied by the caller; 54 cases hold 73 complete
