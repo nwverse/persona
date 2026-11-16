@@ -54,7 +54,8 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
 
 - **Setting**: Settings › Notifications › "Show at the MacBook notch" (`web/src/views/settings/DesktopIslandSettings.tsx`),
   shown only when the bridge has `getIsland` and answers `supported` (the desktop app on macOS). The desktop app keeps the
-  choice in its state file (`island`), as it keeps the hub's address, and draws the island again after a restart.
+  choice in its state file (`island`), as it keeps the hub's address, and draws the island again after a restart. It
+  saves the choice before applying it: one it cannot save changes nothing, and the switch says why.
 - **What it shows**: closed, a black pill around the notch: the most urgent category with its symbol and count on the left
   (Needs you, then Working, then Unread), the next one on the right, the iPhone's preset A (`IslandCell.sides`), in the
   iPhone island's colors. With the pointer over it, it opens downward into the agents that need you, then the working

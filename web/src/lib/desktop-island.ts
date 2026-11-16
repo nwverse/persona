@@ -32,6 +32,7 @@ export function islandState(sessions: readonly Session[], interactions: readonly
   // the card a row speaks for, as the Agents list finds it: its own, else one a child session folded under it waits on
   const card = (s: Session) => sessionCard(interactions, s.machine_id, s.session_id);
   const time = (s: Session) => Date.parse(s.updated_at ?? "") || 0;
+  // filter makes the copy that is sorted: the hooks' shared lists are never reordered
   const rows = sessions
     .filter((s) => !s.assistant && stateOf(s) in RANK)
     .sort((a, b) => RANK[stateOf(a)] - RANK[stateOf(b)] || time(b) - time(a))
@@ -70,6 +71,11 @@ export function setIslandOn(on: boolean): void {
 /** What the island shows of nobody: once the shell is gone (signed out, or the credential stopped working). */
 const NOTHING: DesktopIslandState = { needsYou: 0, working: 0, unread: 0, rows: [], summary: "" };
 
+/** Sends the island nothing of this account: the credential stopped working, or the shell is gone. */
+export function clearDesktopIsland(): void {
+  window.personaDesktop?.setIslandState?.(NOTHING);
+}
+
 /** Sends the island's state when it changes. A leaf, as AttentionSignals: a sessions push re-renders only it. */
 export function DesktopIslandSignals(): null {
   const on = useSyncExternalStore(subscribeIsland, getIslandOn, getIslandOn);
@@ -91,6 +97,6 @@ export function DesktopIslandSignals(): null {
   useEffect(() => {
     window.personaDesktop?.setIslandState?.(JSON.parse(sent) as DesktopIslandState);
   }, [sent]);
-  useEffect(() => () => window.personaDesktop?.setIslandState?.(NOTHING), []);
+  useEffect(() => () => clearDesktopIsland(), []);
   return null;
 }

@@ -37,7 +37,8 @@ describe("islandState", () => {
     const card: Interaction = { id: "ix1", machine_id: "mac", session_id: "n1", kind: "question", questions: [{ question: "用哪个框架？" } as NonNullable<Interaction["questions"]>[number]] };
     // a child session's question: the Agents list folds it under n3 and shows it on n3's row
     const childCard: Interaction = { id: "ix2", machine_id: "mac", session_id: "c3", folded_under: "n3", kind: "question", questions: [{ question: "先合哪个分支？" } as NonNullable<Interaction["questions"]>[number]] };
-    const state = islandState(sessions, [card, childCard], { needs: 3, working: 2, unread: 1 });
+    // frozen as the hooks' shared lists are treated: sorting it in place would throw
+    const state = islandState(Object.freeze(sessions), [card, childCard], { needs: 3, working: 2, unread: 1 });
     expect(state.rows.map((r) => [r.title, r.state, r.label, r.line])).toEqual([
       ["示例 n3", "needs_you", "需要你", "在问你：先合哪个分支？"],
       ["示例 n2", "needs_you", "需要你", "等你确认发布"],

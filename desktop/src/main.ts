@@ -163,9 +163,9 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     island: {
       status: () => island.status(),
       set: async enabled => {
-        const status = island.setEnabled(enabled);
-        await store().update({ island: status.enabled });
-        return status;
+        // Saved first: a choice that can't be kept changes nothing, so the island and the switch saying why agree.
+        await store().update({ island: enabled && island.supported });
+        return island.setEnabled(enabled);
       },
       state: value => island.setState(value, page),
     },

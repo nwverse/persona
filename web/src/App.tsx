@@ -58,7 +58,7 @@ import { SidePanel } from "./views/SidePanel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
-import { DesktopIslandSignals } from "./lib/desktop-island";
+import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
@@ -159,6 +159,8 @@ export function App() {
     handleUnauthorized(() => {
       setToken("");
       reset();
+      // and the notch island's agents (#7669), as signing out clears them: not left to the shell's unmount
+      clearDesktopIsland();
       // say why the sign-in page is back: this browser's credential stopped working (revoked, or the hub forgot it)
       setLinkError(t("app.signed_out"));
       setAuthed(false);
