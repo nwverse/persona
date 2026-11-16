@@ -11,6 +11,10 @@ ends that command. Persist the attempt latch with the session, and rearm only af
 below the threshold followed by another idle interval. Failed compactions must not turn every background wake into
 another summary attempt.
 
+Node-only JSON round trips do not prove this state survives a restart. The manager decodes `state.put` through
+`db.NodeSession`, then writes the `node_model` settings value and projects it back for `state.load`. Carry the opaque
+idle state through every boundary, and test the real manager entry points against Postgres after reopening the store.
+
 ## An acknowledged Enter does not confirm Codex consumed a message (#8354)
 
 Terminal key transport can succeed while the paste stays in the composer. Check consumption after both the host prompt

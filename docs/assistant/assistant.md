@@ -812,7 +812,9 @@ The idle clock, last actual context and attempt latch are kept in the node's exi
 record. User activity resets the clock on receipt, even while a send lock is held. A context reduction also restarts
 the idle interval. Dropping below the token threshold rearms compaction; context must then grow back over it and the
 new interval must elapse. Otherwise there is at most one attempt per idle interval, including failed attempts and
-node restarts. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
+node restarts. The manager carries this node-owned state opaquely through `db.NodeSession` and the existing
+`node_model` settings row, including the policy, idle timestamp, last actual context and attempt latch; no new table
+or migration is needed. A newly observed conversation or a changed policy starts a conservative fresh idle interval rather
 than guessing when the user last spoke.
 
 ### Impossible gateway usage (2026-11-06, #3300)
