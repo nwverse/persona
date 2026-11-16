@@ -805,6 +805,15 @@ class Watcher:
             if not old.get("failure_posted"):
                 self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
             return
+        if old.get("repair_exhausted") and old.get("head") == head:
+            # Legacy records may predate evidence keys. Bind them to the
+            # current exact head only for terminal-comment publication.
+            if old.get("base") == pr["baseRefOid"]:
+                self.state.put(repo, number, head, evidence_key=evidence_key,
+                               base=pr["baseRefOid"], outcome="repair_exhausted",
+                               repair_exhausted=True)
+                self.exhaust_repair(repo, number, pr, evidence_key, old.get("failure"))
+            return
         if old.get("head") == head and old.get("outcome") in ("findings", "failed", "merged", "passed", "passed_with_base_failures", "passed_with_findings", "repairing") \
                 and (old.get("outcome") not in ("passed", "passed_with_base_failures", "passed_with_findings")
                      or old.get("verification") in ("passed", "base_failure")):

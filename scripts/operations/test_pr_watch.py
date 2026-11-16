@@ -697,6 +697,23 @@ class WatcherTests(unittest.TestCase):
         verify.assert_not_called()
         comment.assert_not_called()
 
+    def test_legacy_exhaustion_publishes_once_without_restarting_repair(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.data["prs"]["example/one#7"] = {
+            "head": SHA_A, "base": SHA_BASE, "evidence_key": evidence_key, "format": 1,
+            "outcome": "repair_exhausted", "repair_exhausted": True, "repair_rounds": 3,
+            "failure": "final failure", "failure_posted": False,
+        }
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify:
+            self.watcher.process("example/one", 7)
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        self.assertEqual(len(self.comments), 1)
+        self.assertIn("final failure", self.comments[0])
+
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])
