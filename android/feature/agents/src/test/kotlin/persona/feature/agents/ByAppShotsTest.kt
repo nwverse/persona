@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -122,6 +123,41 @@ class ByAppShotsTest {
         val out = File(System.getProperty("persona.shots") ?: "build/by-app-shots").also { it.mkdirs() }
         val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
         File(out, "by-app-long-project-glass-light.png").outputStream()
+            .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    /** Very long machine display name: ellipsizes; must not run under the project count badge. */
+    @Test fun longMachineNameGlassLight() {
+        val longName = "Example computer with an unusually long display name for the By App project row"
+        val model = agentsModel(
+            listOf(
+                Session("mac", "a", title = "Ship on Mac", cwd = "/Users/me/code/app", state = "working",
+                    agent = "claude", agentSurface = "desktop", lastText = "On Mac.", updatedAt = at(50)),
+                Session("box", "b", title = "Ship on Box", cwd = "/Users/me/code/app", state = "idle",
+                    agent = "claude", agentSurface = "desktop", lastText = "On Box.", updatedAt = at(40)),
+            ),
+            listOf(
+                Machine("mac", "MacBook Pro", online = true, icon = "laptop"),
+                Machine("box", longName, online = true, icon = "desktop"),
+            ),
+        )
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                CompositionLocalProvider(LocalHomeChrome provides HomeChrome(emptyList(), "Agents", onSelect = {}, leading = {})) {
+                    AgentsScreen(model, NoNavigation, AgentsMetadata())
+                }
+            }
+        }
+        rule.waitUntil(5_000) { model.page.value.loaded }
+        rule.runOnIdle { model.grouping(AgentGrouping.App) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Claude desktop app").assertIsDisplayed()
+        rule.onNode(hasContentDescription(longName, substring = true)).assertIsDisplayed()
+        // Full name is spoken on the row; on screen the Text ellipsizes (clearAndSetSemantics hides the child's text).
+        rule.onAllNodes(hasText(longName, substring = false)).assertCountEquals(0)
+        val out = File(System.getProperty("persona.shots") ?: "build/by-app-shots").also { it.mkdirs() }
+        val bitmap = rule.onRoot().captureToImage().asAndroidBitmap()
+        File(out, "by-app-long-machine-glass-light.png").outputStream()
             .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 }

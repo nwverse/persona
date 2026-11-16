@@ -5,19 +5,17 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -37,12 +35,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 
@@ -256,9 +251,9 @@ fun AgentIdleRepoRow(
  * above it; its sessions are one level in. [compact] uses the denser type (iOS `CompactList`).
  *
  * Leading matches iOS `listRowInsets(… rowInsets(level: 0) …)`: the folder at the list's level-0 leading (same inset as
- * the app section's FoldButton), so it sits left of the heading's app mark — deliberate on iOS, not a bug. Trailing:
- * a custom layout pins the idle count and fold chevron at `constraints.maxWidth` (iOS `Spacer` after title/machine),
- * with the title ellipsized to at most two lines in the remaining width.
+ * the app section's FoldButton), so it sits left of the heading's app mark — deliberate on iOS, not a bug. Trailing
+ * mirrors iOS (`title; machine; Spacer; count; chevron`): one weighted lead for title+machine, then count and chevron
+ * with no extra Spacer (several `weight(1f, fill = false)` siblings would split the remaining width and leave the badge mid-row).
  */
 @Composable
 fun AgentAppProjectRow(
@@ -280,79 +275,39 @@ fun AgentAppProjectRow(
     val titleStyle = if (compact) type.caption.copy(fontWeight = FontWeight.SemiBold) else type.labelSmall
     val metaStyle = if (compact) type.micro else type.caption
     val tone = palette.status(Status.Idle)
-    val machineText = machine?.takeIf { it.isNotEmpty() }
-    // Custom layout: place badge + chevron at `constraints.maxWidth` (iOS Spacer after title/machine). Row+weight
-    // alone wrapped to content width in Lazy items here, so the badge stopped mid-row.
-    Layout(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = Tokens.MinTouch.android)
-            .clickable(role = Role.Button, onClick = onToggle)
-            .semantics {
-                contentDescription = listOfNotNull(title, machineText, foldState, agentsLabel)
-                    .joinToString(separator)
-                stateDescription = foldState
-            }
-            .padding(top = TreeRowPadding, bottom = TreeRowPadding),
-        content = {
-            // Flat children so indices stay stable: mark, title, machine, count, chevron.
-            JIcon(if (other) PersonaIcons.agents else PersonaIcons.folder, null, size = markSize, tint = palette.ink2)
-            Text(title, style = titleStyle, color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (machineText != null) {
-                Text(machineText, style = metaStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            } else {
-                Box(Modifier.size(0.dp))
-            }
-            Text(
-                "$count", style = type.micro.copy(fontWeight = FontWeight.SemiBold),
-                color = tone.text, maxLines = 1,
-                modifier = Modifier.clip(CircleShape).background(tone.tint)
-                    .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical),
-            )
-            val turn by animateFloatAsState(
-                if (folded) -90f else 0f,
-                if (PersonaTheme.reduceMotion) snap() else tween(PersonaTheme.motion.standard),
-                label = "app-project-fold",
-            )
-            JIcon(PersonaIcons.expand, null, size = TreeChevron, tint = palette.ink3, modifier = Modifier.rotate(turn))
+    RepoTreeLine(
+        level = 0, onClick = onToggle, modifier = modifier,
+        spoken = {
+            contentDescription = listOfNotNull(title, machine?.takeIf { it.isNotEmpty() }, foldState, agentsLabel)
+                .joinToString(separator)
+            stateDescription = foldState
         },
-    ) { measurables, constraints ->
-        val gap = Tokens.Space.s.roundToPx()
-        val xs = Tokens.Space.xs.roundToPx()
-        val loose = Constraints()
-        val mark = measurables[0].measure(loose)
-        val badge = measurables[3].measure(loose)
-        val chevron = measurables[4].measure(loose)
-        val machinePlaceable = measurables[2].measure(loose)
-        val machineBlock = if (machinePlaceable.width > 0) machinePlaceable.width + gap else 0
-        val trailing = xs + badge.width + gap + chevron.width
-        val lead = mark.width + gap + machineBlock
-        val width = if (constraints.hasBoundedWidth) {
-            constraints.maxWidth
-        } else {
-            val titlePref = measurables[1].maxIntrinsicWidth(constraints.maxHeight)
-            (lead + titlePref + trailing).coerceAtLeast(constraints.minWidth)
-        }
-        val titleMax = (width - lead - trailing).coerceAtLeast(0)
-        val title = measurables[1].measure(Constraints(maxWidth = titleMax))
-        val height = maxOf(mark.height, title.height, machinePlaceable.height, badge.height, chevron.height)
-            .coerceAtLeast(constraints.minHeight)
-        layout(width, height) {
-            fun cy(h: Int) = (height - h) / 2
-            var x = 0
-            mark.place(x, cy(mark.height))
-            x += mark.width + gap
-            title.place(x, cy(title.height))
-            x += title.width
-            if (machinePlaceable.width > 0) {
-                x += gap
-                machinePlaceable.place(x, cy(machinePlaceable.height))
+        mark = { JIcon(if (other) PersonaIcons.agents else PersonaIcons.folder, null, size = markSize, tint = palette.ink2) },
+    ) {
+        // One weight for the lead (iOS Spacer after title/machine); title shrinks first, machine capped.
+        Row(
+            Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+        ) {
+            Text(
+                title, style = titleStyle, color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            machine?.takeIf { it.isNotEmpty() }?.let {
+                Text(
+                    it, style = metaStyle, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = Tokens.Size.box120),
+                )
             }
-            var trail = width - chevron.width
-            chevron.place(trail, cy(chevron.height))
-            trail -= gap + badge.width
-            badge.place(trail, cy(badge.height))
         }
+        Text(
+            "$count", style = type.micro.copy(fontWeight = FontWeight.SemiBold),
+            color = tone.text, maxLines = 1,
+            modifier = Modifier.clip(CircleShape).background(tone.tint)
+                .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical),
+        )
+        FoldChevron(folded)
     }
 }
 
