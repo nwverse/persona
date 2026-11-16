@@ -90,7 +90,7 @@ func answerFixtures(t *testing.T, domain string) []answerFixture {
 func TestResolutionFixtures(t *testing.T) {
 	names := map[string]bool{}
 	policies := map[string]int{}
-	for _, domain := range []string{"answer", "approval"} {
+	for _, domain := range []string{"answer", "question-review", "approval"} {
 		for _, c := range answerFixtures(t, domain) {
 			t.Run(c.Name, func(t *testing.T) {
 				if !regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`).MatchString(c.Name) {
@@ -413,7 +413,7 @@ func TestResolutionFixturesIOS(t *testing.T) {
 		if out, err := compile.CombinedOutput(); err != nil {
 			t.Fatalf("swiftc: %v\n%s", err, out)
 		}
-		verify := exec.CommandContext(ctx, binary, filepath.Join(root, "spec/fixtures/answer"), filepath.Join(root, "spec/fixtures/approval/ios_current.json"))
+		verify := exec.CommandContext(ctx, binary, filepath.Join(root, "spec/fixtures/approval/ios_current.json"), filepath.Join(root, "spec/fixtures/answer"), filepath.Join(root, "spec/fixtures/question-review"))
 		if out, err := verify.CombinedOutput(); err != nil {
 			t.Fatalf("Swift fixtures: %v\n%s", err, out)
 		} else {
@@ -428,8 +428,9 @@ func TestResolutionFixturesIOS(t *testing.T) {
 }
 
 // reviewConfirmedCases are the questions.json cases whose expected Resolution is what the review's Submit sends: on a
-// card of several questions their click opens the review (#2970), and the replay then confirms it (#8483). review.json
-// asserts the click itself. Every other question case must leave the review closed.
+// card of several questions their click opens the review (#2970), and the replay then confirms it (#8483).
+// spec/fixtures/question-review/review.json asserts the click itself. Every other question case must leave the review
+// closed.
 var reviewConfirmedCases = []string{"multiple_questions_send_original_keys", "all_answered_can_submit_from_earlier_page"}
 
 // transportReplayGap keeps the `resolve` replay out until it is brought in line with the current AppModel.resolve.
@@ -511,8 +512,10 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
 }
 @main struct Main {
  @MainActor static func main() async throws {
-  let folder = URL(fileURLWithPath: CommandLine.arguments[1])
-  let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.path < $1.path }
+  var files: [URL] = []
+  for folder in CommandLine.arguments.dropFirst(2) {
+   files += try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.path < $1.path }
+  }
   var count = 0, transport = 0
   var confirmed = Set<String>()
   for file in files {
@@ -570,7 +573,7 @@ func check(_ expected: [String: Any], _ actual: [String: Any], _ name: String) {
   }
   precondition(confirmed == confirmedThroughReview, "review-confirmed cases missing: \(confirmedThroughReview.subtracting(confirmed).sorted())")
   print("Verified \(count) iOS answer fixtures against source declarations and button constructors (\(confirmed.count) through the review; \(transport) transport cases left to the transport replay)")
-  let policies = try JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2]))) as! [String:Any]
+  let policies = try JSONSerialization.jsonObject(with: Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))) as! [String:Any]
   var modes = 0
   for c in policies["cases"] as! [[String:Any]] {
    let input = c["input"] as! [String:Any], expected = c["expected"] as! [String:Any]

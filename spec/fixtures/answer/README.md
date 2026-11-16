@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `questions.json` | 单选、多选、自填、多题翻页与提交门禁 | `QuestionForm` |
 | `recommended.json` | 推荐标记的显示和原文发送 | `QuestionOption.display` |
-| `review.json` | The review of a card of several questions: the click that opens it, its Submit and Previous, and the cards that skip it | `QuestionForm.submit`, `send`; `QuestionSteps.enabled`; `ScreenReviewFooter` |
+| [`../question-review/review.json`](../question-review/review.json) | The review of a card of several questions: the click that opens it, its Submit and Previous, and the cards that skip it | `QuestionForm.submit`, `send`; `QuestionSteps.enabled`; `ScreenReviewFooter` |
 | `decisions.json` | 计划、授权、通知作答和交回终端 | `PlanForm`、`PermissionForm`、`NotificationActions` |
 | `screen.json` | 新旧 hub 的终端选项、自由输入、步骤栏 | `ScreenForm`、`ScreenParser`、Go `screen.ParseDialog` |
 | `transport.json` | 断网、成功、410、提示变化和失败后的卡片处理 | `AppModel.resolve` |
@@ -32,7 +32,7 @@
 
 `operation.picks` 是按问题原文索引的字符串数组，语义是集合；不能按输入数组次序拼答案。`other` 同样按问题原文索引。`page` 和 `option_index` 从零开始。`pick_option` 表示点击，`advance` 表示下一题／提交，`submit` 表示点击可用的提交入口；状态是点击前的快照。末题已答、前题漏答时，操作允许执行，但只跳回漏答题，`resolution` 仍为 null。
 
-**The review step (#2970, #8483).** On iPhone and iPad a card of several questions (`QuestionSteps.enabled`) shows a review before its answers go: with every question answered, Submit (or the button on an earlier question) only opens the review, and the review's own Submit calls `send()`. `operation.reviewing` is whether the review shows before the click (default false), and `expected.reviewing` whether it shows after. `confirm_review` is the review's Submit and `review_back` its Previous; both are disabled while the answer is on its way, and the options and the form's footer are not reachable while the review shows. `review.json` asserts these transitions, starting with the first click that sends nothing. `questions.json` stays a synchronous answer-construction contract read as-is by the Rust and Kotlin replays: two of its cases (`multiple_questions_send_original_keys`, `all_answered_can_submit_from_earlier_page`) expect what the final confirmation sends, so the Swift replay checks that their click opens the review and then confirms it (`reviewConfirmedCases` in the Go test). Every other question case must leave the review closed. The BeautifulUI style's `BUIQuestionForm` is a separate form and is not replayed.
+**The review step (#2970, #8483).** On iPhone and iPad a card of several questions (`QuestionSteps.enabled`) shows a review before its answers go: with every question answered, Submit (or the button on an earlier question) only opens the review, and the review's own Submit calls `send()`. `operation.reviewing` is whether the review shows before the click (default false), and `expected.reviewing` whether it shows after. `confirm_review` is the review's Submit and `review_back` its Previous; both are disabled while the answer is on its way, and the options and the form's footer are not reachable while the review shows. `../question-review/review.json` asserts these transitions, starting with the first click that sends nothing. It lives outside this folder because the Android replay reads every file here and does not model the review; only the Go and Swift checks below read it. `questions.json` stays a synchronous answer-construction contract read as-is by the Rust and Kotlin replays: two of its cases (`multiple_questions_send_original_keys`, `all_answered_can_submit_from_earlier_page`) expect what the final confirmation sends, so the Swift replay checks that their click opens the review and then confirms it (`reviewConfirmedCases` in the Go test). Every other question case must leave the review closed. The BeautifulUI style's `BUIQuestionForm` is a separate form and is not replayed.
 
 `screen_option` 的 `option` 是终端给的字符串键，不是数组下标。带 hub `dialog` 时发送 `option`，不把 `rev` 塞进 Resolution；hub 从待处理 Interaction 取版本并在 node 按键前校验。旧 hub 没有 `dialog` 时使用 `keys`；自填按 `pre_keys → text → keys` 执行。原始终端输入只禁用空字符串，空白字符照发；自填选项会去掉首尾空白。
 
@@ -125,7 +125,7 @@ macOS 需要能运行 `swiftc`；非 macOS 或未设置开关时，只跳过 Swi
 | 全部答完后可从前一题直接提交。 | `apple/Persona/Views/Interactions/InteractionViews.swift：QuestionForm`；`apple/Shared/Models.swift：Resolution` | `all_answered_can_submit_from_earlier_page` |
 | 正在发送时选项按钮不可再点。 | `apple/Persona/Views/Interactions/InteractionViews.swift：QuestionForm`；`apple/Shared/Models.swift：Resolution` | `sending_disables_option` |
 
-### review.json
+### question-review/review.json
 
 | Rule | Source | Case |
 | --- | --- | --- |

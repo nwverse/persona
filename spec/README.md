@@ -14,6 +14,7 @@ spec/
     lines/            对话行
     sort/             排序和分组
     answer/           回复与交互
+    question-review/  multi-question review step (Swift answer oracle only)
     terminal/         终端
     wire/             协议解码
     injected/         hub 注入给模型的消息怎么认
@@ -49,6 +50,7 @@ spec/
 | lines | 见各自 [README](fixtures/lines/README.md) |
 | sort | 见各自 [README](fixtures/sort/README.md) |
 | answer | 见各自 [README](fixtures/answer/README.md) |
+| question-review | [README](fixtures/question-review/README.md): the review step of a question card of several questions, replayed by the Swift answer oracle only (#8483) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
