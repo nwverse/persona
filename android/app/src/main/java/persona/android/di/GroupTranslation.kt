@@ -314,6 +314,12 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun skills() = source.skills().let { it.copy(machineId = names.machineId(it.machineId)) }
         override suspend fun alwaysGrants(session: SessionKey) = source.alwaysGrants(names.raw(session))
         override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = source.revokeAlwaysGrant(names.raw(session), keyHash)
+        override suspend fun standingAuthorizations() = source.standingAuthorizations().let { list ->
+            list.copy(authorizations = list.authorizations.map { grant ->
+                grant.copy(machineId = grant.machineId.takeIf { it.isNotBlank() }?.let(names::machineId).orEmpty())
+            })
+        }
+        override suspend fun revokeStandingAuthorization(id: String) = source.revokeStandingAuthorization(id)
     }
 }
 
