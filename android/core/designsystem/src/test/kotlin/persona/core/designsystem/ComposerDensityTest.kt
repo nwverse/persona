@@ -12,10 +12,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -43,23 +45,27 @@ class ComposerDensityTest {
     @Test fun writesHomeGlassFramesForInspection() {
         var compact by mutableStateOf(false)
         var dark by mutableStateOf(false)
+        var fontScale by mutableStateOf(1f)
         rule.setContent {
             LayoutDensity.apply(if (compact) LayoutDensity.Compact else LayoutDensity.Standard)
             CompositionLocalProvider(LocalHomeChrome provides HomeChrome(emptyList(), "chat", {}, {})) {
-                PersonaTheme(darkTheme = dark, style = AppStyle.Glass, reduceMotion = true) {
-                    Column(Modifier.testTag("shot").width(360.dp).background(PersonaTheme.palette.background)) {
-                        ComposerFrame { Text("Message") }
+                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)) {
+                    PersonaTheme(darkTheme = dark, style = AppStyle.Glass, reduceMotion = true) {
+                        Column(Modifier.testTag("shot").width(360.dp).background(PersonaTheme.palette.background)) {
+                            ComposerFrame { Text("Message") }
+                        }
                     }
                 }
             }
         }
         val out = File(System.getProperty("persona.shots") ?: "build/composer-density-shots").apply { mkdirs() }
-        for (isCompact in listOf(false, true)) for (isDark in listOf(false, true)) {
+        for (isCompact in listOf(false, true)) for (isDark in listOf(false, true)) for (scale in listOf(1f, 2f)) {
             compact = isCompact
             dark = isDark
+            fontScale = scale
             rule.waitForIdle()
             val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
-            val name = "composer-${if (isCompact) "compact" else "standard"}-${if (isDark) "dark" else "light"}.png"
+            val name = "composer-${if (isCompact) "compact" else "standard"}-${if (isDark) "dark" else "light"}${if (scale == 1f) "" else "-large-text"}.png"
             File(out, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }
