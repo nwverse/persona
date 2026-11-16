@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## A lazy waiting row can still grow startup code and copy (#9390)
+
+Ordering an unopened tray imports its age computation on the first screen. Keep that small read-only computation
+separate from the lazy display projection and reminder editor. Moving a row behind `lazyPage` also does not defer
+its phrases if startup still lists their whole namespace: the PR-blocker phrases belong to client-rest once their
+only callers are lazy waiting rows and To-dos. Keep the other Assistant task phrases available at startup, retain
+the same catalog keys, and check both the key-split regression and every language's measured first-screen budget.
+Do not hide the growth with an exemption or a larger budget.
+
 ## ZIP preview limits must check actual bytes (#9384)
 
 A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate

@@ -31,7 +31,9 @@ export function sentWaitContact(evidence: ParkEvidence | undefined, now: number)
 
 function identity(evidence: ParkEvidence | undefined, waitingOn?: string, reason?: string): string {
   // A reminder's receipt URL and recorder can change without starting a different external wait.
-  return evidence ? JSON.stringify([evidence.kind, evidence.target?.trim(), evidence.kind === "person_reply" ? evidence.contact?.channel : waitSource(evidence.url)]) :
+  const source = waitSource(evidence?.url);
+  const object = evidence?.kind === "merge_review" ? source?.split(/[?#]/)[0].replace(/\/$/, "") : source;
+  return evidence ? JSON.stringify([evidence.kind, evidence.target?.trim(), evidence.kind === "person_reply" ? evidence.contact?.channel : object]) :
     JSON.stringify(["legacy", waitingOn, reason]);
 }
 

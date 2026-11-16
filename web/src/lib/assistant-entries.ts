@@ -141,7 +141,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
-  const parked: { item: RunningItem; at: string }[] = [];
+  const parked: { item: Extract<RunningItem, { kind: "task" }>; at: string }[] = [];
   const review: { item: RunningItem; rank: number; at: string }[] = [];
   const finished: { item: RunningItem; at: number }[] = [];
   const folded = new Set<string>();
@@ -220,18 +220,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
 
-  const waiting = (row: { item: NeedsYouItem | RunningItem }): Todo | undefined => {
-    const item = row.item;
-    if (item.kind !== "task" || ("activity" in item && item.activity)) return undefined;
-    const rule = triage(item.todo, lookup, now).rule;
-    return rule === "parked" || rule === "pr_open" ? item.todo : undefined;
-  };
-  const newest = (a: { item: NeedsYouItem | RunningItem; at: string; rank?: number }, b: { item: NeedsYouItem | RunningItem; at: string; rank?: number }) => {
-    const aw = waiting(a), bw = waiting(b);
-    // A total order, including mixed progress rows: active/non-wait work first, then known waits oldest first.
-    return Number(!!aw) - Number(!!bw) || (aw && bw ? compareWaitAge(aw, bw, now) :
-      (a.rank ?? 0) - (b.rank ?? 0) || byTime(b.at, a.at));
-  };
+  const newest = (a: { at: string; rank?: number }, b: { at: string; rank?: number }) => (a.rank ?? 0) - (b.rank ?? 0) || byTime(b.at, a.at);
   const firstAsk = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent" ? item.asks[0]?.created_at : undefined);
   return {
     needsYou: [
@@ -242,7 +231,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     ],
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
-    parked: parked.sort(newest).map((row) => row.item),
+    parked: parked.sort((a, b) => compareWaitAge(a.item.todo, b.item.todo, now)).map((row) => row.item),
     review: review.sort(newest).map((row) => row.item),
     justFinished: finished.sort((a, b) => b.at - a.at).map((row) => row.item),
   };

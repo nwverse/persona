@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { initI18n } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 import { reset } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { TaskWaitInfo } from "./TaskWaitInfo";
@@ -82,6 +82,15 @@ describe("task wait information", () => {
     expect(text("[data-wait-age]")).toContain("Wait start not recorded");
     expect(text("[data-wait-wake]")).toContain("not recorded");
     expect(host.querySelectorAll("[data-wait-source]")).toHaveLength(0);
+  });
+
+  it("keeps PR blockers and one source when the request receipt is the PR page", async () => {
+    const url = "https://github.com/example/demo/pull/7";
+    const todo = makeTodo({ kind: "merge_review", target: "Review team", wake: "Review and merge", ready: true, url, contact: { ...contact, url } });
+    await act(async () => root.render(<TaskWaitInfo todo={todo} merges={[{ url, state: "open", draft: false, review: "required", checks: "failure", conflicts: false, checked_at: new Date(NOW).toISOString() }]} />));
+    expect(host.querySelectorAll(`a[href="${url}"]`)).toHaveLength(1);
+    expect(host.querySelector("[data-pr-waiting-url]")?.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
+    expect(host.querySelector("[data-pr-waiting-url]")?.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
   });
 
   it("refreshes elapsed wait age from the current clock, not the task update time", async () => {

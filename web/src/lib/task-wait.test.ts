@@ -60,6 +60,16 @@ describe("recorded external wait information", () => {
     expect(waitStart(todo, now).at).toBe(Date.parse(iso(2)));
   });
 
+  it("keeps a review wait's start when only the PR query, fragment or trailing slash changes", () => {
+    const todo = make("same-review", 25);
+    const first: ParkEvidence = { ...evidence(100), kind: "merge_review", ready: true, url: `${pr.url}?from=review#note` };
+    const last: ParkEvidence = { ...evidence(25), kind: "merge_review", ready: true, url: `${pr.url}/` };
+    todo.supervision!.parked!.count = 2;
+    todo.supervision!.parked!.evidence = last;
+    todo.supervision!.reviews = [review(first, 99, 1), review(last, 24, 2)];
+    expect(waitStart(todo, now).at).toBe(Date.parse(iso(100)));
+  });
+
   it.each(["target", "channel", "object", "verdict"])("does not carry an age across a changed %s", (change) => {
     const todo = make("changed", 2), first = evidence(100), last = evidence(2);
     if (change === "target") first.target = "Another owner";

@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { formatDate, t } from "../../i18n";
 import { taskWait } from "../../lib/task-wait-info";
+import { waitSource } from "../../lib/task-wait";
 import { prBlockers } from "../../lib/todo-triage";
 import type { PRFacts, Todo } from "../../lib/todos";
 import { Button, copyText, cx, Dialog, useNow } from "../../ui/atoms";
@@ -24,7 +25,8 @@ export function TaskWaitInfo({ todo, merges = [], expanded = false }: { todo: To
   const contactTime = contact && formatDate(contact.sent_at, { dateStyle: "medium", timeStyle: "short" });
   const age = elapsed(info.since, now, info.sinceRequest);
   const target = info.target ?? t("task-wait.target_unknown");
-  const sourceLinks = info.sources.filter((url) => url !== contact?.url);
+  const contactURL = waitSource(contact?.url);
+  const sourceLinks = info.sources.filter((url) => url !== contactURL || merges.some((pr) => waitSource(pr.url) === url));
   const extra = <>
     {info.reason && <p data-wait-reason>{info.reason}</p>}
     {contact && <p className="whitespace-pre-wrap" data-wait-request>{t("task-wait.request", { request: contact.request })}</p>}
@@ -43,9 +45,9 @@ export function TaskWaitInfo({ todo, merges = [], expanded = false }: { todo: To
     </a> : <p data-wait-contact-missing className="text-ink-3">{t(info.kind === "date" || info.kind === "external_event" ? "task-wait.no_person_request" : "task-wait.contact_unknown")}</p>}
     <p data-wait-wake className="break-words">{info.wake ? t("task-wait.wake", { wake: info.wake }) : t("task-wait.wake_unknown")}</p>
     {sourceLinks.length > 0 && <div className="space-y-1">{sourceLinks.map((url, i) => {
-      const pr = merges.find((facts) => facts.url === url);
+      const pr = merges.find((facts) => waitSource(facts.url) === url);
       return <div key={url} data-pr-waiting-url={pr ? url : undefined}>
-        <a data-wait-source href={url} target="_blank" rel="noreferrer noopener" title={url} className="block break-all text-accent-ink hover:underline pointer-coarse:min-h-11">{pr ? url : t("task-wait.source", { number: i + 1 })}</a>
+        {url !== contactURL && <a data-wait-source href={url} target="_blank" rel="noreferrer noopener" title={url} className="block break-all text-accent-ink hover:underline pointer-coarse:min-h-11">{pr ? url : t("task-wait.source", { number: i + 1 })}</a>}
         {pr && <p>{prBlockers(todo, pr).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</p>}
       </div>;
     })}</div>}

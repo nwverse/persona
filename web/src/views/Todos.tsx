@@ -8,7 +8,6 @@ import { ago, clock, sessionCan, shortPath, stateOf, tabLabel, uuid } from "../l
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
-import { reviewState } from "../lib/supervision";
 import { TaskWaitInfo } from "./assistant/TaskWaitInfo";
 import { launchAgent } from "../lib/new-agent";
 import { currentHosts } from "../lib/engines";
@@ -77,7 +76,7 @@ import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { directionTitle, groupsByDirection, useDirectionTree, type Direction } from "../lib/direction-tree";
 import { DirectionCountsText } from "./DirectionMarks";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, prBlockers, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, countsAsOpen, lastActivity, openMergePRs, supersededFailedStarts, triage, triageTodos, type TriageGroup, type TriageResult, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
@@ -1519,8 +1518,7 @@ const TodoListItem = memo(function TodoListItem({
   onMenu?: TodoRowMenuOpener;
 }) {
   const { status, dotState, activeCount } = view;
-  const showWait = !todo.done_at && !["working", "waiting", "needs_you", "interrupted", "failed"].includes(status) &&
-    (reviewState(todo) === "parked" || ["pr", "parked"].includes(section ?? view.section ?? ""));
+  const showWait = (section ?? view.section) === "parked";
   // the PR it waits on: its current one, or an earlier one still open (#7935)
   const openPR = (section ?? view.section) === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
   const toneClass = TONE_CLASS[TODO_STATUS_INFO[shownStatus(todo, status)].tone];
@@ -1907,7 +1905,7 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
   if (!sup) return null;
   const list = checklist(sup);
   const review = latestReview(sup);
-  const parked = reviewState(todo) === "parked" && !["working", "waiting", "needs_you", "interrupted", "failed"].includes(todoStatus(todo, lookup));
+  const parked = triage(todo, lookup, Date.now()).section === "parked";
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
   return (

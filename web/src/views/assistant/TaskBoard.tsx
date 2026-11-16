@@ -10,11 +10,8 @@ import { dockAgents, isRemovable, mostUrgentAgent, openAsk, type Todo, type Todo
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { sessionTitle } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
-import { parkedLine } from "../../lib/supervision";
-import { triage } from "../../lib/todo-triage";
+import { openMergePRs, triage } from "../../lib/todo-triage";
 import { t } from "../../i18n";
-import { reviewState } from "../../lib/supervision";
-import { openMergePRs, waitingForMerge } from "../../lib/todo-triage";
 import { TaskWaitInfo } from "./TaskWaitInfo";
 import { Dialog, IconButton, Menu } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -110,7 +107,7 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="truncate text-[13.5px] font-medium text-ink">{todo.title}</span>
-                        <span className="truncate text-[12px] text-ink-3">{sec.key === "parked" ? parkedLine(todo) ?? t("todos.section_pr") : subtitle(todo, status)}</span>
+                        {sec.key !== "parked" && <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>}
                       </span>
                       <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
                     </button>
@@ -118,8 +115,7 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                       <IconButton icon="trash" label={t("assistant-task-actions.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
                     )}
                     </div>
-                    {!["working", "waiting", "needs_you", "interrupted", "failed"].includes(status) &&
-                      (reviewState(todo) === "parked" || waitingForMerge(todo, lookup, Date.now())) &&
+                    {sec.key === "parked" &&
                       <div className="px-3 pb-2.5"><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
                   </div>
                 ))}

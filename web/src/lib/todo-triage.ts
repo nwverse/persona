@@ -327,11 +327,7 @@ export function triageTodos(
 
   const sections = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, [] as TriageGroup[]])) as Record<TriageSection, TriageGroup[]>;
   const todoCounts = Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, 0])) as Record<TriageSection, number>;
-  const byWaitAge = (a: Todo, b: Todo) => {
-    const waits = (todo: Todo) => ["parked", "pr_open"].includes(placed.get(todo.id)!.rule);
-    const aw = waits(a), bw = waits(b);
-    return Number(aw) - Number(bw) || (aw && bw ? compareWaitAge(a, b, now) : 0);
-  };
+  const byWaitAge = (a: Todo, b: Todo) => placed.get(a.id)!.section === "parked" && placed.get(b.id)!.section === "parked" ? compareWaitAge(a, b, now) : 0;
   let open = 0;
   for (const td of list) {
     const tr = placed.get(td.id)!;
