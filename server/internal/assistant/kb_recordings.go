@@ -59,12 +59,16 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		}
 		id, _ := kb.RecordingID(r.PathValue("id"))
 		day := dayUpload(u)
-		if status == kb.RecordingStored && (u.Complete || day) {
-			s.kbWake() // its summary and minutes now, not at the next round; a day's recap repaired or final
+		if status == kb.RecordingStored && (u.Complete || day || put.TitleDue) {
+			// its summary and minutes now, not at the next round; a day's recap repaired or final; its live title (#8873)
+			s.kbWake()
 		}
 		// The role in effect, always (an older manager leaves it out, so the phone stops attending), and what was
 		// wrong with the upload's attendance fields, which never fail it.
 		out := map[string]any{"id": id, "revision": u.Revision, "status": status, "attendance": put.Attendance}
+		if put.NameSource != "" { // what the hub calls it and why (#8873): none while it is named only by its start
+			out["name"], out["name_source"] = put.Name, put.NameSource
+		}
 		if day {
 			putDayFields(out, put)
 		}

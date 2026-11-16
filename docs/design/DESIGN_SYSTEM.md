@@ -702,7 +702,7 @@ sending identity or confirmation behavior.
   - The Inbox's rows (iOS `InboxView`, Android `InboxItemRow` and `InboxConversationItemRow`, #4210 T1): one trailing swipe, from the end, and nothing from the start. It is **Done** in the positive color, or **Move Back** with the undo arrow (`Theme.Icon.undo`) in the accent color on a done item, so the rows of the Done section move back with the same swipe; there is none while a write for the row is out or items are being picked. The hand-off to the assistant is not a swipe: it is in the row's long-press menu (on Android, where a long press on an open row starts a selection, in the picked row's More). Android's swipe component (`JSwipeActions`) takes a tone (`SwipeTone`, accent or positive), which Glass draws as a fill of that color under the row, as iOS tints the action; Brief and Board keep their neutral backing and the action's status color. Every action of a swipe is also a custom accessibility action on the row (`swipeActionSemantics`, which `MessageItem` applies), so TalkBack and switch access reach it without swiping.
   - The assistant's conversation history (iOS `AssistantSidebar`): a row swipes left to Archive (not the main conversation); its long press shows what the conversation last said and when above the menu, whose items are Pin, Rename…, Archive, Copy Session ID, Copy Diagnostics and End…; "Archived (N)" ends the list while there are any and opens them, where a tap opens one and Unarchive brings it back. Android shows the preview in the action sheet (`JActionSheet`'s `preview` and `previewCaption`, six lines at most), and the archived rows keep a visible Unarchive as its Agents archive does.
 - Rows with a control (extension pages, UI version 6, iOS `ExtensionControlRow`): a system switch or stepper at the row's end, a slider on its own line under the row, labeled by the row's title. A row that also opens something keeps its words tappable and the control separate. A confirm is an alert whose Cancel puts the control back (section 4.4).
-- **A switch that mirrors another device** (#4741, Knowledge › Recordings' Today, `RecordingDayTodaySection`): the All-Day Recording switch is a `SettingsSwitchRow` whose value is the Apple Watch's reported state (on while it records or is paused, `RecordingDayWatchState.isOn`; off when it is off or stopped by itself, from low battery or storage, a failed write, an audio reset or the app ending, though a stopped day still continues with a tap on the watch and its line says "Stopped — tap Continue on your Apple Watch"), never the tap alone. Flipping it sends the watch a command. Until the watch's state answers it, for at most 2 minutes, the switch holds the asked value and its line says the command is on its way ("Tap Start on your Apple Watch to begin", "Stopping on your Apple Watch…"); after that the switch shows the watch's state again and the line says "Your Apple Watch hasn't answered. Open Persona on it." for 10 more minutes (`RecordingDayStatus.line`, `RecordingDaySwitch`). The line under the title always says where the action happens ("Paused — tap Continue on your Apple Watch"). Turning it on before the user agreed opens the consent sheet (3.6) instead, and the start goes once they agree. Why: the phone can't open the watch's microphone; a switch that flipped on the tap would claim a recording that hasn't started.
+- **A switch that mirrors another device** (#4741, the Recordings page's Today, `RecordingDayTodaySection`): the All-Day Recording switch is a `SettingsSwitchRow` whose value is the Apple Watch's reported state (on while it records or is paused, `RecordingDayWatchState.isOn`; off when it is off or stopped by itself, from low battery or storage, a failed write, an audio reset or the app ending, though a stopped day still continues with a tap on the watch and its line says "Stopped — tap Continue on your Apple Watch"), never the tap alone. Flipping it sends the watch a command. Until the watch's state answers it, for at most 2 minutes, the switch holds the asked value and its line says the command is on its way ("Tap Start on your Apple Watch to begin", "Stopping on your Apple Watch…"); after that the switch shows the watch's state again and the line says "Your Apple Watch hasn't answered. Open Persona on it." for 10 more minutes (`RecordingDayStatus.line`, `RecordingDaySwitch`). The line under the title always says where the action happens ("Paused — tap Continue on your Apple Watch"). Turning it on before the user agreed opens the consent sheet (3.6) instead, and the start goes once they agree. Why: the phone can't open the watch's microphone; a switch that flipped on the tap would claim a recording that hasn't started.
 - **Recap pages reuse the minutes' layout** (#4741, a recorded day's page, `RecordingDayView`): a compact header, then the recap drawn as a meeting's minutes are (`RecordingMinutesSections`, `docs/apple/recording.md` "Minutes"), then one last section: a **Transcript** link to the day's transcript on its own page (`RecordingDayTranscriptView`, by the hour), with the actions under it (**Erase Last 10 Minutes** on today's day while it is open, **Delete Recording**). A meeting's page instead shows its transcript inline, in a section of its own above its actions. The recap: summary with Copy and Share; the timeline as sections named for the time of day (Morning, Afternoon, Evening) with a meeting entry marked by `Theme.Icon.meetingMark` and its name; points and suggested to-dos as the minutes' items (a mark, the words, `RecordingMinutes.byline`, a time chip: `Chip` `.tint(Theme.accent)`, compact, with a 44 pt hit area, opening the transcript at that line and lighting it for 2 s). Before it exists the section says what it waits for, "Writing the recap…" with a spinner, or the failure with Retry, as minutes do. Suggested to-dos are read-only here, with a footer saying they are confirmed on the web.
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
 - Web sidebar hierarchy (#7609): peer section titles such as **Persona chats** and **Agents** start at the same inset. In a nested list, use the shared `sidebar-indent` utility (`--sidebar-indent`, 12 px) once at each parent boundary. In Persona chats, **Pinned**, **Recent**, and **All Persona chats** sit one step in. Conversation rows and Show more sit another step in under their subgroup. The same unit indents children in the sidebar's nested trees. Indent the content wrapper so the right edge stays available for counts and menus. A fold is a button with a chevron and `aria-expanded`. A destination uses a link with `aria-current` when selected. Keep help beside the control in an InfoTip when the scope or count needs explanation.
@@ -1546,7 +1546,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
   they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
   Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
-  The stack holds the conversation's own cards alone, so its "N pending" (shown only past half the page) counts only them.
+  The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
   What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions`, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
@@ -1889,33 +1889,66 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 
 ## HarmonyOS native structure
 
-HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, floating Tabs, lists, menus, sheets and
-confirmation dialogs. The window breakpoint selects stack (XS/SM/MD) or native split (LG/XL); device names do not.
-The master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. Its bottom tabs are 56 vp with a
-12 vp system-component margin; the system safe area is not added a second time.
+HarmonyOS 7 / API 26 uses native ArkUI Navigation, destination titles, lists, menus, sheets, selection controls and
+confirmation dialogs. Persona and Agents are peer conversation views in the native title control. Inbox, Todos,
+Knowledge, Health, Apps, Devices and full Settings open from the native Spaces sheet; extensions do not add peer
+views. Use native `CapsuleSegmentButtonV2` for the peer switch at ordinary font scales and native `Select` at 1.5× or
+larger. XS/SM/MD use a stack and LG/XL use native split navigation, based on the actual window class rather than a
+device name. The expanded master pane starts at 320 vp, drags from 280 to 440 vp and collapses to 64 vp. It has no
+permanent third pane or replacement navigation rail.
 
-An Agent's detail title is omitted only while its identifying selected row is fully visible in the expanded master.
-Compact, collapsed, filtered-out, offscreen or different-owner contexts restore the native title. Child pages keep
-their own title and back action. A title already provided by the destination is not repeated in the body. Avoid
-explanatory subtitles, explanatory child controls and duplicate actions; native control placement, names and state
-must explain their purpose. Explicit target and consequence text remains necessary for a consequential decision.
+Navigation owns system avoidance on main pages. Main content adds only its 4 vp business footer; do not copy the gesture
+area height into padding. A bottom sheet measures the actual content host against the current system avoidance
+boundary after layout and adds only the remaining overlap. Recompute when the host or avoid area changes; an already
+avoided host or centered sheet needs zero extra system inset. Never hard-code an inset or repeat it on inner rows. Preserve the system
+gesture region and keep the last row and primary action above it.
 
-Glass, Brief and Board preserve this structure and the same fields/actions, using semantic own-message colors with
-light/dark resources. Device-wide Avatar and Accent preferences are independent of the Hub and style. Native
-`WithTheme` supplies both light and dark system tokens; an own-message subtree supplies readable bubble tokens.
+The 4 vp footer is application spacing, not a fixed HarmonyOS safe-area measurement. Native Navigation paints the primary pane's grouped/canvas background through the gesture area while leaving scrolling controls in the safe layout region; a short list's remaining height is not extra inset. Question, plan-editor, context-selection and Spaces sheet content uses 16 vp internal edges plus only the outstanding measured system overlap. The intrinsic-height Agent filter sheet keeps its 12 vp internal inset and measures its own outstanding overlap; centered sheets add no system inset. Chat siblings and wrapped GridRow rows use 8 vp gaps, and same-level feed cards use 16 vp content edges. The compact composer reserves fixed action targets and 8 vp gaps, giving its remaining width to the same editor instead of rounding button slots to coarse columns. Do not merge the jump-to-latest button into the composer surface. Appearance labels and Select controls wrap as whole items. At enlarged text sizes Inbox status uses the Agents native Select pattern. Native Back visibility also determines whether a custom title needs its own leading 16 vp inset.
+
+Conversation detail hides its title only while the matching selected row is fully visible in the expanded master
+and identifies the conversation for the same owner. Compact, collapsed, filtered-out, offscreen or different-owner
+contexts restore the native title. Child pages keep their own title and back action. A title already provided by the
+destination is not repeated in the body. Avoid explanatory subtitles, child controls and duplicate actions; native
+control placement, names and state must explain their purpose. Explicit target and consequence text remains
+necessary for consequential decisions.
+
+Use the shared native roles and `Tokens`, not screen-specific literals. The System style's light palette uses the
+emphasized action blue (`#0071E3`) with white on-action text, text-link blue (`#0064C8`) and a light
+own-message bubble (`#DCEAFF`; dark `#233B57`). The emphasized control uses the system's paired light/dark resources.
+Status roles stay distinct: needs-you is `#0064C8` / `#86B6FF`, working is `#9B5500` / `#FFB224`, unread is
+`#1D7A4C` / `#4CC38A`, and positive is `#237337` / `#30D158` in light / dark appearance. Visible state words or
+symbols accompany color. Destructive/error colors are not substitutes for working or positive states.
+The standard system typography is 20 fp title, 17 fp body, 14 fp secondary and 13 fp caption, with 24 fp body line
+height. Follow the application system font scale up to 3.2×; use 16 vp page edges, 12 vp insets, 8 vp gaps, 24 vp
+section spacing, 20 vp business-surface corners and a 48 vp minimum response region. System controls own their
+internal dimensions and material. Fixed icon slots use 22 vp symbols, independently of the text scale.
+The compact Persona/Agents Select caps only its displayed value at 2× so both title actions remain reachable;
+its native option menu and content continue to follow the system text scale. Native Radio and Checkbox outlines
+use the secondary foreground when unselected; the control background is not an outline color.
+
+System is the default style for a fresh or unset preference. Existing explicit Glass, Brief and Board selections stay
+selected and remain available after update. Avatar, Accent, color mode and style are separate. Standard is the
+default row density when an older device-appearance record has no density value; saving density preserves the
+existing Avatar and Accent fields. Agent grouping (flat, computer, repository or worktree) is a separate owner- and
+view-scoped workspace preference, not a device appearance field. Preference restoration finishes before selection
+is enabled, failed writes keep the last confirmed value, and changing one option does not reset the others.
+
+Native `WithTheme` supplies light and dark system tokens; an own-message subtree supplies readable bubble tokens.
 Avatar choices use intrinsic native list groups and Radio controls, with no fixed-height nested list or descriptive
-captions. Preference restoration completes before selection is enabled, and a failed write retains the previous
-selection. Native system materials belong to supported controls; the client does not simulate them with
-another navigation shell. Horizontal half-fold uses `FoldSplitContainer`: reading above, the current decision or
-composer below, with native crease avoidance and a scrollable interaction area. The view samples native crease capability at creation; an image that omits fold geometry retains ordinary native Column/Scroll layout, without fabricated hover regions. Configuration updates do not replace that view’s input or transcript subtree. Ordinary posture uses measured
-interaction height rather than a fixed 50/50 split. A system photo editor returns a separate selected copy; system preview owns supported
-image zoom and document viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and
-verification contract. This is a new platform implementation and does not alter another client's default style.
+captions. Package images remain bounded, decoded natively and installed atomically. Native system materials belong
+to supported controls; the client does not simulate them with another navigation shell. Horizontal half-fold uses
+`FoldSplitContainer`: reading above, the current decision or composer below, with native crease avoidance and a
+scrollable interaction area. The view samples crease capability at creation; an image without fold geometry uses an
+ordinary native Column/Scroll layout, without fabricated hover regions. Configuration changes do not replace the
+view's input or transcript subtree. Ordinary posture uses measured interaction height, not a fixed 50/50 split.
+A system photo editor returns a separate selected copy; system preview owns supported image zoom and document
+viewing. The [HarmonyOS guide](../harmony/harmony.md) records the full interaction and verification contract.
 
-The composer uses native GridRow/GridCol spans and order. At an effective application font scale of 2 or higher, or when the pane width
-leaves too little writing space, the same input occupies a full row and full-width actions stack below it, Send before Attach, with single-line labels. The input and draft
-keep their identity; controls grow with their labels instead of clipping a fixed-height row. Native Ability configuration
-callbacks supply the actual application font scale. A local font multiplier is not a substitute for that system value.
+The composer uses native GridRow/GridCol spans and order. Focus, draft, attachments, the actual composer width and
+system font scale rearrange one TextArea in place; they do not replace its node or draft owner. At 1.5× or in a narrow
+pane, actions can stack with complete single-line labels. A local font multiplier is not a substitute for the
+native system scale. Verify focus and IME composition on device when width, keyboard or posture changes; static
+layout and portable tests do not prove native composition continuity.
 
 A HarmonyOS destination has one native route title and the Navigation-owned return action. Content does not repeat
 that title or add another route-back button. Local actions such as returning to a file's parent directory or closing
@@ -1928,9 +1961,20 @@ Open editable questions begin with their prompt, without a generic answer subtit
 states stay explicit. Chat has no permanent Hub/computer/path subtitle. Agent permissions and plans keep their
 existing approval gates.
 
+Plan and receipt summaries open a native detail destination bound to the source conversation and item identity.
+The detail locates that exact item from the feed head through successive cursors; a first-page miss is not evidence
+that the item disappeared. Failed lookup can be retried. An inline cached plan summary may remain readable, but
+plan writes need a fresh authoritative read and the existing owner/admission checks. Receipt detail distinguishes the Hub's `done`,
+`failed` and `interrupted` states; `stopped` is derived only from a successful read showing the associated Todo is
+still open, and a failed Todo read leaves the outcome unknown. Only `met` criteria count as passed; `criteria_more`
+does not imply a result. Done/stopped receipts do not offer continue. Retry requires an eligible failed-start Todo
+and current write capability; Continue requires an incomplete Todo, eligible lead Agent and current write capability.
+Suppress a duplicate Continue while automatic recovery is active, and recheck recovery/reset state before admitting
+an action.
+
 Extension applications open from a root Navigation menu into a native destination and complete List, without adding
-a primary tab. Session actions share one native Menu with MenuItem rows of at least 48vp from the title's More item or the hidden-title pane's
-More button. These are the same captured actions, not two parallel toolbars.
+a peer view. Session actions share one native Menu with MenuItem rows of at least 48 vp from the title's More item or
+the main Persona or hidden-title pane's More button. Read-only details and blocking decisions retain one fallback More button. These are the same captured actions, not parallel toolbars.
 
 The file workspace uses native composed list items, three labeled system-icon controls and scrollable, automatically
 sized local tabs. Computer transfer uses the system sheet, named computer switches, a native Radio list and Progress.
@@ -1940,6 +1984,8 @@ and minimum touch heights, with no second bottom inset. The composer and transcr
 text sizes; verification must reach each complete action within its own viewport. Theme primary fills include matching
 readable foreground tokens in both modes. Reopening an active transfer retains its captured receiving computer and
 folder; pending or unknown outcomes never silently resend.
+
+Large system text never clips decision metadata: plan machine, path and permission wrap in native Flex. Inbox search moves above its native actions from 1.5×, with intrinsic button height. Preference labels and Select controls wrap when their combined intrinsic widths exceed the row. The native peer Select uses the available title slot; only the normal-size segmented control keeps its maximum width.
 
 ## 8. Inconsistencies and duplicate definitions
 
@@ -2367,6 +2413,14 @@ to press; impromptu talks are meetings too (principles 1 and 4).
   picked or is the default. Note hides the meeting's options and the calendar line and shows one caption
   ("No minutes, and Persona stays out."); the same Record button then records a note (progressive disclosure, principle 2).
   Note is never a second button (section 3.7).
+- **One home for meetings** (#8731): the page lists only what the knowledge base doesn't have whole yet (**Still on This
+  iPhone**, each with its state word), then one row, **All Meetings**, into Knowledge's Meetings list. That list is the
+  one place for every meeting and note, the imported ones and Persona's together, newest first (Persona's never fold
+  under Not Yet Organized: one just ended has no summary yet); only notes and all-day
+  recordings carry a pill (the exceptions), and Knowledge has no Recordings chip. A recording this phone has opens its own
+  page from there and deletes with a swipe, asked first. Reason: the same list sat in two places (the page and
+  Knowledge's last chip, start controls included), and after the rename two Meetings lists would split meetings by how
+  they arrived (principles 2 and 4).
 - **While it records**: the live sheet's page menu ends with the same choice, Meeting and Note with their marks (a menu
   section, the current one checked), so it can change after the start (principle 3): the meeting page's menu, and in the live view a page menu beside **Hide** (the ellipsis, named
   "Recording options" for VoiceOver, apart from the Persona strip's "Persona" and the bar's "More"). Turning a meeting into
