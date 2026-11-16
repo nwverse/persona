@@ -269,7 +269,8 @@ func TestTrashAndRestore(t *testing.T) {
 	}
 	if runtime.GOOS == "linux" {
 		ti := fileText(t, filepath.Join(info, "a.txt.trashinfo"))
-		if !strings.Contains(ti, "[Trash Info]\nPath="+filepath.Join(home, "proj", "a.txt")) || !strings.Contains(ti, "DeletionDate=") {
+		// The file's path as the node resolved it (entry's realPath; on macOS /var is /private/var, #9138).
+		if !strings.Contains(ti, "[Trash Info]\nPath="+filepath.Join(resolved(t, home), "proj", "a.txt")) || !strings.Contains(ti, "DeletionDate=") {
 			t.Fatalf("trashinfo: %q", ti)
 		}
 	}

@@ -132,6 +132,7 @@ type fakeHub struct {
 
 	// The hub's other apps as a test answers them (answerApp), and the calls they got.
 	apps     map[string]appAnswer
+	blocking map[string]bool // app methods whose answer runs outside the lock (answerAppBlocking)
 	appCalls []AppCall
 
 	inbox *fakeInbox // the inbox's sources (inbox_fake_test.go); nil: the hub has none
@@ -672,6 +673,16 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		}
 	}
 	f.mu.Lock()
+	if key := p.AppID + " " + p.Method; f.blocking[key] {
+		answer := f.apps[key]
+		f.appCalls = append(f.appCalls, p)
+		f.mu.Unlock()
+		out, err := answer(p.Params)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(out)
+	}
 	defer f.mu.Unlock()
 	switch p.AppID + " " + p.Method {
 	case AppConnectors + " " + ConnectorsSignedIn:
@@ -1150,6 +1161,20 @@ func (f *fakeHub) answerApp(app, method string, answer appAnswer) {
 		f.apps = map[string]appAnswer{}
 	}
 	f.apps[app+" "+method] = answer
+}
+
+// answerAppBlocking is answerApp for an answer that waits on the test (a post held until the test lets it land): it
+// runs outside the fake's lock, so the service's other calls go on meanwhile. Under the lock, a goroutine of a
+// synctest bubble that calls the fake would wait on the mutex, which is not a durable block: the bubble's clock would
+// stop, and a timer the test waits for would never fire (#8924). The answer must not touch the fake's fields.
+func (f *fakeHub) answerAppBlocking(app, method string, answer appAnswer) {
+	f.answerApp(app, method, answer)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.blocking == nil {
+		f.blocking = map[string]bool{}
+	}
+	f.blocking[app+" "+method] = true
 }
 
 // appParams are the params of each call to app's method, in order.

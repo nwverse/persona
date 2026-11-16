@@ -66,7 +66,7 @@ func (sc urgentScenario) rules(own []urgentRule) []urgentRule {
 func (sc urgentScenario) prompt(own []urgentRule) string {
 	p := &prompts.UrgentCall{}
 	for _, r := range sc.rules(own) {
-		p.Rules = append(p.Rules, prompts.UrgentCallRule{ID: r.ID, Text: urgentRuleText(r)})
+		p.Rules = append(p.Rules, prompts.UrgentCallRule{ID: r.ID, Text: urgentRuleText(r, "")})
 	}
 	md := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{UrgentCall: p})
 	section := md[strings.Index(md, "## 加急来电"):]

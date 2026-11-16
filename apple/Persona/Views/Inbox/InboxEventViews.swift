@@ -1,4 +1,5 @@
 import BeautifulUI
+import MarkdownUI
 import SwiftUI
 
 // Inbox phase 1 (docs/assistant/inbox.md): what an event adds to the inbox's screens — the row's mark and the detail's
@@ -128,9 +129,12 @@ struct InboxEventBlocks: View {
         #endif
     }
 
-    /// The short AI summary, below the state rather than above the metadata on iPhone and iPad.
+    /// The short AI summary, below the state rather than above the metadata on iPhone and iPad. The assistant's own row
+    /// has its text there instead, as Markdown (#9041).
     @ViewBuilder private var summary: some View {
-        if let s = item.summary, !s.isEmpty {
+        if let text = item.markdownBody {
+            InboxMarkdownBody(id: item.key, text: text)
+        } else if let s = item.summary, !s.isEmpty {
             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                 .font(Theme.Font.secondary)
                 .lineHeight(.secondary)
@@ -636,6 +640,30 @@ nonisolated extension InboxEventText {
     }
 }
 
+/// The assistant's own row's text (#9041): the chat's Markdown in the chat's theme at the reading size, folded to its
+/// first lines with Expand under them when it is long (`LineFold`, open or not kept by the row), never cut with "…".
+struct InboxMarkdownBody: View {
+    /// The row's key: what keeps it open.
+    var id: String
+    var text: String
+
+    /// Lines shown folded: a briefing's first screen, its conclusion and first section.
+    static let foldedLines = 10
+
+    var body: some View {
+        LineFold(lines: Self.foldedLines, id: "inbox-body-" + id) {
+            Markdown(MarkdownMemo.content(text))
+                .markdownSoftBreakMode(.lineBreak)
+                .markdownTheme(.persona)
+                .readingContent()
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox.body")
+    }
+}
+
 /// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
 /// where its link says (the source at that message, a conversation, another item) or opens its detail in place.
 struct InboxChainSection: View {
@@ -652,6 +680,8 @@ struct InboxChainSection: View {
     @State private var todo: TodoDetailRoute?
     /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
     @State private var whole: [InboxItem.ChainEntry]?
+    /// An assistant row's received message: its whole text is drawn above (#9041), so a few lines say which, cut with "…".
+    private static let assistantMessageLines = 3
 
     var body: some View {
         let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
@@ -819,8 +849,11 @@ struct InboxChainSection: View {
     private func expansion(_ e: InboxItem.ChainEntry) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             ForEach(Array((e.messages ?? []).enumerated()), id: \.offset) { _, m in
-                Text(m.sender.map { String(localized: "\($0): \(m.text)", comment: "Who wrote it: what they wrote") } ?? m.text)
+                // An older assistant row's message is its Markdown run into one line: said without the marks (#9041).
+                let text = item.markdownInSummary ? InboxItem.withoutMarks(m.text) : m.text
+                Text(m.sender.map { String(localized: "\($0): \(text)", comment: "Who wrote it: what they wrote") } ?? text)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .lineLimit(item.isAssistantRow ? Self.assistantMessageLines : nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let d = InboxEventText.expansionDetail(e) {

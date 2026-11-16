@@ -122,6 +122,25 @@ test('a non-items frame is Other and a refused page returns only its code and de
   await core.end();
 });
 
+test('production transport rejects shared scalar keys before Other routing (#8995)', {timeout: 60_000}, async () => {
+  // These expected outcomes were hand-derived from current iOS ServerEvent.Envelope in #8955; they are not generated
+  // from the Rust decoder. Full nested Fleet / Item parity remains outside this production scalar gate.
+  const cases = [
+    {body: '{"type":"items","machine_id":"m1","session_id":"s1","rows":"24"}', code: 'wrong_type', detail: 'rows'},
+    {body: '{"type":"inbox","items":{}}', code: 'wrong_type', detail: 'items'},
+    {body: '{"type":"future_event","backlog":"yes"}', code: 'wrong_type', detail: 'backlog'},
+    {body: '{"type":"hello","from_seq":"8"}', code: 'wrong_type', detail: 'from_seq'},
+    {body: '{"type":"inbox","status":7}', code: 'wrong_type', detail: 'status'},
+  ];
+  const core = startCore();
+  for (const fixture of cases) {
+    assert.deepEqual(await core.transport(PayloadKind.frame, fixture.body), {error: {code: fixture.code, detail: fixture.detail}});
+  }
+  assert.deepEqual(await core.transport(PayloadKind.frame, '{"type":"future_event","unknown":1.5}'),
+    {accepted: true, frame: 'other'});
+  await core.end();
+});
+
 function rawArray(raws) {
   return '[' + raws.join(',') + ']';
 }

@@ -147,7 +147,8 @@ async function hint() {
   await act(async () => {
     for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
     await list.load();
-    await vi.advanceTimersByTimeAsync(0);
+    // past the invalidation throttle window (lib/session-list.ts): a section's trailing read has gone out
+    await vi.advanceTimersByTimeAsync(2_100);
   });
 }
 
@@ -354,20 +355,26 @@ describe("the list by project, on a hub with the catalog", () => {
       .toEqual([`${t("lib-state-labels.needs_you")} 1`, `${t("lib-state-labels.idle")} 2`]);
   });
 
-  it("reads the groups once for a burst of hints, while the open sections follow every one", async () => {
+  it("reads the groups once per hint window, and the open sections' rows follow every one of them", async () => {
     await show();
     await browseBy("project");
     const groupReads = () => reads("catalog").length;
     const rowReads = () => reads("page").filter((path) => params(path).getAll("place").includes(listPair("pc", "C:\\code\\App"))).length;
     vi.mocked(api).mockClear();
-    for (let i = 0; i < 5; i++) await hint();
-    expect(groupReads()).toBe(0); // within the refresh gap of the first read: held for its end
-    expect(rowReads()).toBe(5);
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A burst of hints within one window (the fleet broadcasts one per working-agent update) reads the section's
+    // rows once, not once per hint; the groups refresh (their own 1.5 s gap) ride that same window.
+    await act(async () => {
+      for (let i = 0; i < 5; i++) {
+        for (const entry of [...hub.handlers]) if (entry.event === "sessions_list") entry.fn();
+      }
+      await list.load();
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    expect(rowReads()).toBe(1);
     expect(groupReads()).toBe(1);
-    // a hint after a quiet stretch is read at once
-    await act(async () => { await vi.advanceTimersByTimeAsync(SESSION_LIST_METRICS.groupsRefresh); });
+    // A hint after a quiet stretch is read at once
     await hint();
+    expect(rowReads()).toBe(2);
     expect(groupReads()).toBe(2);
   });
 

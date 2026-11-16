@@ -508,6 +508,8 @@ struct AssistantTaskEditor: View {
     @State private var confirmBypass = false
     @State private var deleted = false
     @State private var runs: [APIClient.ScheduleRun] = []
+    /// The kind whose Remove under Starts Without Asking is on its way (#8045).
+    @State private var ungranting: String?
     /// Presented as the "new task" sheet: nothing is saved unless Add (or Run Now) is tapped.
     private let creating: Bool
     /// The task as the sheet opened: Cancel asks first once it differs (Mac).
@@ -540,6 +542,10 @@ struct AssistantTaskEditor: View {
     private var machineID: String { model.assistantConfig?.machineID ?? model.hubMachineID }
 
     var body: some View {
+        ScrollViewReader { proxy in form(proxy) }
+    }
+
+    private func form(_ proxy: ScrollViewProxy) -> some View {
         Form {
             Section {
                 TextField(draft.repeats == .once ? String(localized: "Title (optional)") : String(localized: "Title, e.g. “Morning briefing”"), text: $draft.title)
@@ -562,6 +568,7 @@ struct AssistantTaskEditor: View {
                 Text("Write it as you would in a chat: what to look at and how to report. It can use schedule_followup to set up one-time follow-ups, like 10 minutes before a meeting.")
             }
             runsWithSection
+            if let grant = saved?.startGrant, !grant.kinds.isEmpty { startGrantSection(grant) }
             if showsPush { pushSection }
             if showsInbox { inboxSection }
             conversationSection
@@ -647,8 +654,62 @@ struct AssistantTaskEditor: View {
             runs = (try? await api.scheduleRuns(ref: id)) ?? []
         }
         #if DEBUG
-        .onAppear { if UserDefaults.standard.string(forKey: "openAssistantPage") == "bypassTask" { confirmBypass = true } }
+        .onAppear {
+            if UserDefaults.standard.string(forKey: "openAssistantPage") == "bypassTask" { confirmBypass = true }
+            if StartGrantSample.on, saved != nil, saved?.startGrant == nil {
+                saved?.startGrant = APIClient.StartGrant(keys: StartGrantSample.kinds)
+                Task { try? await Task.sleep(for: .milliseconds(600)); proxy.scrollTo(Self.startGrantID, anchor: .center) }
+            }
+        }
         #endif
+    }
+
+    /// Starts without asking (#8045): the kinds of task this task's own runs start without the plan card, each with Remove.
+    /// Not drawn while there are none: only ticking it on one of its runs' cards adds one.
+    private static let startGrantID = "task.startGrant"
+
+    private func startGrantSection(_ grant: APIClient.StartGrant) -> some View {
+        Section {
+            ForEach(grant.kinds, id: \.key) { kind in
+                let place = [kind.machine.isEmpty ? nil : TaskPlace.machineName(kind.machine), kind.folder].compactMap { $0 }.joined(separator: " · ")
+                HStack(spacing: Theme.Space.m) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                        Text(place).font(Theme.Font.body).lineLimit(2).truncationMode(.middle)
+                        Text(kind.readonly ? String(localized: "Read-only [Start Grant]") : String(localized: "Can edit files"))
+                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: Theme.Space.s)
+                    if ungranting == kind.key {
+                        ProgressView()
+                    } else {
+                        Button(role: .destructive) { Task { await removeGrant(kind.key) } } label: {
+                            Text("Remove [Start Grant]").lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(ungranting != nil)
+                        .accessibilityLabel(String(localized: "Remove \(place)"))
+                    }
+                }
+            }
+        } header: {
+            Text("Starts without asking").id(Self.startGrantID)
+        } footer: {
+            Text("Tasks of these kinds that this scheduled task hands out start without your OK, unless that run read mail, Inbox or web pages. Changing its instructions or where it runs clears this list.")
+        }
+    }
+
+    private func removeGrant(_ kind: String) async {
+        guard let id = saved?.id, let api = model.api, ungranting == nil else { return }
+        ungranting = kind
+        defer { ungranting = nil }
+        do {
+            let t = try await api.revokeStartGrant(task: id, kind: kind)
+            // only the grant: what is being edited stays as it is
+            withAnimation(Theme.Motion.standard) { saved?.startGrant = t.startGrant }
+            Haptics.success()
+        } catch {
+            model.show(error)
+        }
     }
 
     /// Where runs go (docs/assistant/assistant.md「Scheduled tasks」): the conversation it came from (Continue in Original Chat), else the task's own

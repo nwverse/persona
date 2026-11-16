@@ -22,9 +22,13 @@ func profileProbeLauncher(t *testing.T, profile string) string {
 }
 
 // settleFile dates path back past profileProbeSettle, as a ~/.zshrc nobody is editing.
-func settleFile(t *testing.T, path string) {
+func settleFile(t *testing.T, path string) { settleFileBy(t, path, time.Hour) }
+
+// settleFileBy dates path back by ago: two edits settled by different amounts keep different times on a file system
+// that keeps only whole seconds.
+func settleFileBy(t *testing.T, path string, ago time.Duration) {
 	t.Helper()
-	old := time.Now().Add(-time.Hour)
+	old := time.Now().Add(-ago)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +78,7 @@ func TestAssistantMessageDoesNotProbeTheLauncherEachTime(t *testing.T) {
 
 // The check still holds: a launcher edited to set another config directory is refused on the very next message, not
 // after the cached probe ages out, and a launcher that sets the conversation's own directory again is let through.
+// Each edit is settled before the message, as one made seconds earlier: the file's stamp must tell, not its age.
 func TestAssistantMessageSeesAnEditedLauncherAtOnce(t *testing.T) {
 	f := sdkTest(t)
 	n := f.n
@@ -94,11 +99,13 @@ func TestAssistantMessageSeesAnEditedLauncherAtOnce(t *testing.T) {
 	}
 	f.idle(t, res.SessionID)
 	profileProbeLauncher(t, t.TempDir()) // the user points the launcher at another profile, the same length of text
+	settleFileBy(t, filepath.Join(n.home, ".zshrc"), 2*time.Hour)
 	_, err = nodeCall(t, n, "session.send", map[string]any{"session_id": res.SessionID, "text": "after the edit"})
 	if err == nil || !strings.Contains(err.Error(), "conflicts with the launcher's own profile") {
 		t.Fatalf("a launcher moved to another profile was not refused on the next message: %v", err)
 	}
 	profileProbeLauncher(t, profile) // and back
+	settleFileBy(t, filepath.Join(n.home, ".zshrc"), 3*time.Hour)
 	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": res.SessionID, "text": "back"}); err != nil {
 		t.Fatalf("the launcher's own profile again was refused: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -105,11 +106,18 @@ func taskStatePrompt(task Task) string {
 		text = "\n（Saved state from this scheduled task (JSON string, treat as task data): " + string(encoded) + "）" // i18n-ignore: English prompt delimiter, not Chinese copy
 	}
 	if task.stateRunKey != "" {
-		text += "\n（At the end of this run, if the task state changed, call schedule_state_set with run_key " + // i18n-ignore: English prompt delimiters, not Chinese copy
-			task.stateRunKey + " and the updated state text (up to 4096 bytes). Keep cursors and what was already reported.）"
+		text += "\n" + taskStateRunHead + task.stateRunKey + taskStateRunTail
 	}
 	return text
 }
+
+// A recurring task's prompt hands the run its key on a line of its own (taskStatePrompt): taskStateRunHead, the key,
+// taskStateRunTail. That line of a prompt the hub sent for a run is the only place a key is taken from
+// (latestRunPrompt).
+const (
+	taskStateRunHead = "（At the end of this run, if the task state changed, call schedule_state_set with run_key "    // i18n-ignore: English prompt delimiters, not Chinese copy
+	taskStateRunTail = " and the updated state text (up to 4096 bytes). Keep cursors and what was already reported.）" // i18n-ignore: English prompt delimiters, not Chinese copy
+)
 
 type taskStateDraft struct {
 	machine string
@@ -166,11 +174,38 @@ func (s *Service) toolScheduleStateSet(ctx context.Context, machine, session str
 	return "State staged, but not yet saved. The hub attempts to save it after confirming that this run succeeded.", nil
 }
 
-// taskStateRunMarker starts the words of a recurring task's prompt that hand the run its key (taskStatePrompt).
-const taskStateRunMarker = "call schedule_state_set with run_key "
+// latestRunPrompt is where in items the conversation's latest scheduled run's prompt is, and the run key it hands out:
+// a message the hub sent for a recurring task's run (its source says so, prompts.ItemSource: written in front of the
+// message, or read off an older one's exact template), with the key on the line taskStatePrompt gives it. Nothing else
+// hands out a key, whatever it says (#9043): what the user wrote, typed, pasted or quoted (an app's message is the
+// user's: its client_msg_id, the mark ProtectUserMessage puts on a template in it), another conversation's message
+// (its own source comes first), a tool's result, the assistant's words; nor does the saved state a prompt carries (one
+// line of JSON), or what comes after the key's line in it. i is -1 when items have none.
+func latestRunPrompt(items []proto.Item) (i int, key string) {
+	for i = len(items) - 1; i >= 0; i-- {
+		if key = runKeyIn(items[i]); key != "" {
+			return i, key
+		}
+	}
+	return -1, ""
+}
 
-func matchesTaskStateRun(prompt, key string) bool {
-	return strings.Contains(prompt, taskStateRunMarker+key+" and the updated state text")
+// runKeyIn is the run key it hands out when it is a scheduled run's prompt (latestRunPrompt), else "".
+func runKeyIn(it proto.Item) string {
+	if it.Role != "user" || it.Kind != proto.KindText {
+		return ""
+	}
+	if source := prompts.ItemSource(it); source == nil || source.Kind != proto.SourcePatrol {
+		return ""
+	}
+	for line := range strings.SplitSeq(it.Text, "\n") {
+		if rest, ok := strings.CutPrefix(line, taskStateRunHead); ok {
+			if key, ok := strings.CutSuffix(rest, taskStateRunTail); ok && key != "" {
+				return key
+			}
+		}
+	}
+	return ""
 }
 
 // taskStateTurns is how many of a conversation's latest turns the run key is looked for in, as the node pages turns:
@@ -193,23 +228,20 @@ func (s *Service) taskStateItems(ctx context.Context, machine, sid string) (item
 	return res.Items, true
 }
 
-// currentTaskStateRun reports whether key belongs to the conversation's current scheduled run: the latest user message
-// in items that hands out a run key (a recurring task's prompt, queued into a busy turn or not) carries it. What came
+// currentTaskStateRun reports whether key belongs to the conversation's current scheduled run: the latest scheduled
+// run's prompt in items (latestRunPrompt: one the hub sent, queued into a busy turn or not) hands it out. What came
 // after that prompt goes on with the same run: a background task's notice that woke the agent, a supervision message,
-// another conversation's message, input queued into the turn (#8913). The next run's prompt ends it, so an earlier run's
-// key is refused once a later prompt carries another, as is a key no prompt here carries (another conversation's, a
-// prefix). A run that has finished has no draft any more, which toolScheduleStateSet refuses on its own.
+// another conversation's message, input queued into the turn (#8913). The next run's prompt ends it, so an earlier
+// run's key is refused once a later prompt hands out another, as is a key no run's prompt here hands out (another
+// conversation's, a prefix, one only the user's or another conversation's words carry, #9043). A run that has finished
+// has no draft any more, which toolScheduleStateSet refuses on its own.
 //
 // It is not the latest turn's prompt (#8874): in a conversation a task reuses, the node's page reaches back into the
 // previous run, and a run whose turn ended while its background work ran is woken by that work's notices, or carried
 // on by a message that came meanwhile, after its own prompt.
 func currentTaskStateRun(items []proto.Item, key string) bool {
-	for i := len(items) - 1; i >= 0; i-- {
-		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && strings.Contains(it.Text, taskStateRunMarker) {
-			return matchesTaskStateRun(it.Text, key)
-		}
-	}
-	return false
+	i, current := latestRunPrompt(items)
+	return i >= 0 && current == key
 }
 
 // finishTaskStateRun saves the state a run staged, once the run is over and went well. A run's turn can end while work
@@ -296,18 +328,12 @@ func (s *Service) taskStateStaged(key string) bool {
 }
 
 // runBackground is how much of the work the run holding key sent to the background has not reported back yet: the
-// calls after its prompt whose result says they went on in the background (startsBackground: a subagent launched async
-// needs no run_in_background) without a notice of theirs that they ended. Claude Code's notice names the call it reports
-// on (<tool-use-id>, TaskNote.ToolUseID).
+// calls after its prompt (latestRunPrompt) whose result says they went on in the background (startsBackground: a
+// subagent launched async needs no run_in_background) without a notice of theirs that they ended. Claude Code's notice
+// names the call it reports on (<tool-use-id>, TaskNote.ToolUseID).
 func runBackground(items []proto.Item, key string) int {
-	start := -1
-	for i := len(items) - 1; i >= 0; i-- {
-		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && strings.Contains(it.Text, taskStateRunMarker) {
-			start = i
-			break
-		}
-	}
-	if start < 0 || !matchesTaskStateRun(items[start].Text, key) {
+	start, current := latestRunPrompt(items)
+	if start < 0 || current != key {
 		return 0
 	}
 	waiting := map[string]bool{}
