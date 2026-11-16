@@ -116,6 +116,14 @@ func configuredClaudeModelDefault(settings map[string]any, inherited map[string]
 		effort = claudeCatalogEffortArg(args)
 	}
 	if effort == "" {
+		// A saved per-model level beats effortLevel in the same file. Native matching also covers aliases, dated
+		// snapshots and provider-specific IDs; keep its answer whenever that matching may apply.
+		if value, present := settings["modelSettings"]; present {
+			perModel, readable := value.(map[string]any)
+			if !readable || len(perModel) > 0 {
+				return out
+			}
+		}
 		if configured, _ := settings["effortLevel"].(string); configured != effortAuto {
 			for _, setting := range claudeSettings {
 				if setting.Key == "effortLevel" && slices.Contains(setting.Options, configured) {

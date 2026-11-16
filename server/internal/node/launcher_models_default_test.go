@@ -126,6 +126,33 @@ func TestConfiguredClaudeModelDefaultKeepsHigherPriorityModels(t *testing.T) {
 	}
 }
 
+func TestConfiguredClaudeModelDefaultKeepsPerModelEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		perModel any
+		env      map[string]string
+		args     []string
+		want     string
+	}{
+		{"saved level", map[string]any{"chosen": map[string]any{"effortLevel": "low"}}, nil, nil, "low"},
+		{"canonical alias", map[string]any{"claude-fable-5-2": map[string]any{"effortLevel": "low"}}, nil, nil, "low"},
+		{"empty map", map[string]any{}, nil, nil, "high"},
+		{"unknown format", "unreadable", nil, nil, "low"},
+		{"environment wins", map[string]any{"chosen": map[string]any{"effortLevel": "low"}}, map[string]string{"CLAUDE_CODE_EFFORT_LEVEL": "max"}, nil, "max"},
+		{"command line wins", map[string]any{"chosen": map[string]any{"effortLevel": "low"}}, nil, []string{"--effort", "high"}, "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := []proto.AgentModel{{ID: "default", Default: true},
+				{ID: "chosen", Resolved: "claude-fable-5-2[1m]", Efforts: []string{"low", "high", "max"}, DefaultEffort: "low"}}
+			settings := map[string]any{"model": "chosen", "effortLevel": "high", "modelSettings": tc.perModel}
+			got := configuredClaudeModelDefault(settings, tc.env, tc.args, catalog)
+			if got[0].Default || !got[1].Default || got[1].DefaultEffort != tc.want {
+				t.Fatalf("per-model effort changed: %+v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLauncherModelEnvironmentIncludesProfileAndUnset(t *testing.T) {
 	home := t.TempDir()
 	n := &Node{home: home}
