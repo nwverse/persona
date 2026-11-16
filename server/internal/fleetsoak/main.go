@@ -150,7 +150,7 @@ func run(ctx context.Context, o *options) (*report, error) {
 
 	say("starting Postgres")
 	o.pgc = fmt.Sprintf("persona-ci-db-fleetsoak-%d", os.Getpid())
-	defer func() { _ = exec.Command("docker", "rm", "-f", o.pgc).Run() }()
+	defer func() { _ = exec.Command("docker", "rm", "-fv", o.pgc).Run() }()
 	database, err := startPostgres(ctx, o.pgc)
 	if err != nil {
 		return nil, err
