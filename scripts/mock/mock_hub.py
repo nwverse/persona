@@ -14549,6 +14549,10 @@ if os.environ.get("MOCK_MODEL_PANEL_USAGE"):
     # A critical weekly bar beside cc_main's / cc_team's ordinary ones (#5056); all values are synthetic.
     LAUNCHER_QUOTAS["claude"] = {"gateway": "example-subscription", "pools": [
         {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.95, resets=later(hours=36))]}]}
+    # a provider whose long name wraps to two lines in the rail (anthropic_main, with MOCK_PROVIDERS) gets a half-used
+    # weekly bar too, to check a two-line caption and the bar don't touch
+    LAUNCHER_QUOTAS["anthropic_main"] = {"gateway": "example-subscription", "pools": [
+        {"name": "示例订阅", "state": "available", "windows": [_w("每周", 0.5, resets=later(hours=36))]}]}
 # "Add provider" › "Add from plugin" (docs/extensions/extensions.md "Model providers"): the providers made-up plugins offer (GET /api/v1/launchers/presets).
 LAUNCHER_PRESETS = [
     {"id": "example-gateway/team", "plugin": "example-gateway", "name": "示例网关 · 团队", "description": "团队共用的 Claude Code 网关，按 Key 计费",
@@ -20373,6 +20377,10 @@ PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" e
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
+# The user's navigation choices (#9071, GET / PUT /api/v1/navigation): the start page. Empty until something is stored;
+# MOCK_NAVIGATION=off is a hub (or a default manager) from before, which answers 404 and keeps nothing.
+NAVIGATION = {}
+NAVIGATION_START = re.compile(r"(?:[a-z][a-z0-9-]{0,63}|p:[^/\x00-\x20\x7f]{1,128}/[^/\x00-\x20\x7f]{1,128})")
 
 def personal_prefs():
     return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
@@ -24400,6 +24408,9 @@ def markets_route(handler, p, body):
         if COLUMNS_MODE and placement in ("", "nav_page"):
             ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
                     "placement": "nav_page", "size": "full", "icon": "calendar"}]
+        if GAUGE_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-quota", "plugin_name": "Example Quota", "id": "quota", "title": "Quota",
+                    "placement": "nav_page", "size": "full", "icon": "gauge"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26085,6 +26096,9 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             return self.send_json(personal_prefs())
+        if p == "/api/v1/navigation":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -26614,6 +26628,16 @@ class H(BaseHTTPRequestHandler):
                 try: c["send"]({"type": "agents"})
                 except Exception: pass
             return self.send_json({"ok": True, "hidden": op == "hide"})
+        if p == "/api/v1/navigation" and self.command == "PUT":
+            if os.environ.get("MOCK_NAVIGATION") == "off": return self.send_json({"error": "not found"}, 404)
+            start = json.loads(self.last_body or b"{}").get("start")
+            if not isinstance(start, str) or (start and not NAVIGATION_START.fullmatch(start)):
+                return self.send_json({"error": "start must be empty, a page's key or p:<extension>/<page>"}, 400)
+            NAVIGATION["start"] = start
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "navigation", "start": start})
+                except Exception: pass
+            return self.send_json(NAVIGATION)
         if p == "/api/v1/agents/prefs" and self.command == "PUT":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             if PERSONAL_PREF_FAIL["status"]:
@@ -28985,7 +29009,9 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_NAVIGATION=off  A hub (or default manager) from before the start page (#9071): GET / PUT /api/v1/navigation answer 404, so the web keeps the choice in the browser")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
+MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29563,6 +29589,8 @@ _plugins_route_without_extensions = plugins_route
 def plugins_route(handler, p, body):
     if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
         return mock_today(handler, body)
+    if PLUGINS_MODE and GAUGE_MODE and p == "/api/v1/extensions/example-quota/-/ui/quota":
+        return mock_quota(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29656,6 +29684,48 @@ def mock_today(handler, body):
             {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
     else:
         handler.send_json({"view": _today_view()})
+    return True
+
+
+# MOCK_EXTENSION_GAUGE=1 (with MOCK_EXTENSIONS=1): a made-up gateway's quota page, UI version 9's gauge (#9337): a row
+# of status tiles, then a card of three rings, each filled to the quota left with the amount in its centre and the
+# limit's name below, green while there is enough and amber once it runs low; the reset times are the card's footer.
+# Pressing the low ring answers a toast. All names and numbers are invented.
+GAUGE_MODE = os.environ.get("MOCK_EXTENSION_GAUGE") == "1"
+
+
+def _quota_ring(key, title, value, ratio, **extra):
+    color = "amber" if ratio < 0.2 else "green"
+    tile = {"key": key, "title": title, "value": value, "gauge": {"ratio": ratio, "unit": "USD", "color": color}}
+    tile.update(extra)
+    return tile
+
+
+def _quota_view():
+    return {"title": "Gateway quota", "refresh_after": 300, "sections": [
+        {"key": "status", "items": [{"type": "grid", "key": "status", "tiles": [
+            {"key": "state", "title": "Gateway", "value": "Online", "icon": "wifi", "color": "green"},
+            {"key": "keys", "title": "Keys", "subtitle": "1 paused", "value": "3", "icon": "lock"},
+            {"key": "requests", "title": "Requests today", "value": "1,284", "icon": "chart",
+             "spark": {"values": [420, 610, 580, 820, 960, 1010, 1284], "color": "blue"}},
+            {"key": "errors", "title": "Errors", "value": "0.4%", "icon": "warning", "badge": {"text": "Low", "color": "green"}},
+        ]}]},
+        {"key": "quota", "title": "Quota left", "footer": "5 hours resets in 1 h 49 min · this week resets in 1 d 16 h",
+         "items": [{"type": "grid", "key": "rings", "max_columns": 3, "tiles": [
+             _quota_ring("five_hours", "5 hours", "4.69", 0.94),
+             _quota_ring("week", "This week", "38.20", 0.76),
+             _quota_ring("fable_week", "Fable this week", "0.62", 0.12, badge={"text": "Low", "color": "amber"},
+                         action={"id": "open_limit", "values": {"limit": "fable_week"}}),
+         ]}]},
+    ]}
+
+
+def mock_quota(handler, body):
+    request = json.loads(body) if body else {}
+    if request.get("action") == "open_limit":
+        handler.send_json({"toast": "Fable this week: 0.62 USD left"})
+    else:
+        handler.send_json({"view": _quota_view()})
     return True
 
 
@@ -30637,7 +30707,8 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
 # default and pushes a main-chat revision for the notice's live positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
-MODEL_PICK_DEFAULT = "claude"
+MODEL_PICK_HOME = "claude"  # the launcher-list default a reset restores
+MODEL_PICK_DEFAULT = MODEL_PICK_HOME
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -30658,11 +30729,23 @@ MODEL_PICK_REASONS = {
 }
 if MODEL_PICK_MODE:
     LAUNCHER_MODELS["team-api"] = {"agent": "claude", "models": []}
+# MOCK_MODEL_PICK_GROUPS=1: several Claude launchers whose names share their first word, as an owner with a few gateways
+# has them, for the model panel rail's captions ("claude-aster" reads "aster" beside "claude-max")
+if MODEL_PICK_MODE and os.environ.get("MOCK_MODEL_PICK_GROUPS") == "1":
+    MODEL_PICK_LAUNCHERS[:] = [
+        {"name": "claude-aster", "model": "opus", "source": "persona"},
+        {"name": "claude-max", "model": "opus", "source": "persona"},
+        {"name": "claude-desktop", "model": "opus", "source": "persona"},
+        {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex", "source": "builtin"},
+    ]
+    MODEL_PICK_HOME = MODEL_PICK_DEFAULT = "claude-max"
+    for _name in ("claude-aster", "claude-max", "claude-desktop"):
+        LAUNCHER_MODELS[_name] = dict(LAUNCHER_MODELS["claude"])
 
 
 def model_pick_reset():
     global MODEL_PICK_DEFAULT
-    MODEL_PICK_DEFAULT = "claude"
+    MODEL_PICK_DEFAULT = MODEL_PICK_HOME
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
@@ -30747,6 +30830,7 @@ MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
                  "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
                  "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
+MOCK_HELP.append("MOCK_MODEL_PICK_GROUPS=1  配合 MOCK_MODEL_PICK：几个同为 claude- 开头的启动器（claude-aster / claude-max / claude-desktop）和 codex，看模型面板分组栏的短名")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

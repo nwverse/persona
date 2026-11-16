@@ -61328,6 +61328,28 @@
       },
       "extractionState" : "manual"
     },
+    "Echo Cancellation with the Speaker" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Echo Cancellation with the Speaker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スピーカー使用時のエコー除去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开喇叭时消除回声"
+          }
+        }
+      }
+    },
     "Edit" : {
       "localizations" : {
         "en" : {
@@ -64906,6 +64928,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Experimental [Meeting Settings]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimental"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実験的機能"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实验"
+          }
+        }
+      }
     },
     "Expired" : {
       "localizations" : {
@@ -118930,6 +118974,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Persona が会議に参加しました"
+          }
+        }
+      }
+    },
+    "Persona left the meeting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona left the meeting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 离开了会议"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が会議から退出しました"
           }
         }
       }
@@ -178882,6 +178949,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已在设置中关闭"
+          }
+        }
+      }
+    },
+    "Turning on the speaker during a meeting stops the microphone for a moment." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turning on the speaker during a meeting stops the microphone for a moment."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議中にスピーカーをオンにすると、マイクが一瞬止まります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会中打开喇叭时，麦克风会短暂中断一下。"
           }
         }
       }

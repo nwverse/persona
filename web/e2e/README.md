@@ -60,6 +60,27 @@ drawn after it with the header where it was tapped, and a search for `make step-
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
 
+## Start page (#9071)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off as well
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> --old-hub [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English. It checks that a fresh hub opens on the main chat, that
+Settings › General › Start page lists the main chat first and selected, then Overview and the made-up extension's Today;
+that choosing Today saves it to the hub (`PUT /api/v1/navigation`) and a new tab opens on Today while the Persona row and a
+reload stay on the main chat; that a second browser (another device) opens on the main chat the first time, reads the
+choice at its hello and opens on Today from its next opening; and that a Today the hub's extension list leaves out opens
+from the browser's copy and then gives way to the main chat, the choice kept and the setting saying why. `--old-hub`
+checks that a hub answering 404 leaves the choice in the browser and the setting says so. Light and dark screenshots of
+the setting and of the app opened on Today (Today moved first with Sidebar pages' ↑, as that setting already allows) at
+1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory. The run sets the mock's start page and puts it
+back to the default; a 240-second watchdog ends it, and the last line is the verdict.
+
 ## An extension's dashboard page: UI version 8's columns layout (#9158)
 
 ```sh
@@ -95,6 +116,24 @@ paint is photographed while every relayed request is still held (`first-paint-af
 that photograph (`first-paint-before-<theme>.png`), for a build without the cache. Only the mock's own requests leave the
 browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line
 is the verdict.
+
+## An extension's quota card: UI version 9's gauge (#9337)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-gauge.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+gateway's "Quota" page and checks what jsdom cannot lay out: the three rings in order, each read out as "title: value unit, N%"
+(a meter, or a button for the one with an action), its arc filled to the ratio in the named color the browser resolves, its value
+centred in the ring and not cut, its title below, the ring inside its tile, and the reset times under the rings; at 1440 × 900 the
+four status tiles in one row above three rings side by side of one width, and pressing the low ring answers its toast; at 390 × 844
+two rings a line; with Settings › Appearance's Large text the values still whole and centred at both widths; with Reduce Motion the
+arc does not ease. It waits for the page's finite animations to end, never for a fixed time. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line is the
+verdict.
 
 ## User-input navigation acceptance
 
