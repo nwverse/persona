@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // report is `persona-link status --json`: what is known here about the link, without asking the running persona-link
@@ -40,10 +41,13 @@ type report struct {
 	// Passive is passive mode's pairing, whichever mode is on.
 	Passive *passiveReport `json:"passive,omitempty"`
 	Service *serviceState  `json:"service,omitempty"`
-	Config  string         `json:"config"`
-	Log     string         `json:"log"`
-	Error   string         `json:"error,omitempty"` // link.json there but unreadable
-	loadErr error          // the same error with its catalog identity; never serialized
+	// ClaudePlugin is the Persona plugin for Claude Code as the node last checked it (persona-link plugin status checks
+	// now).
+	ClaudePlugin *proto.ClaudePlugin `json:"claude_plugin,omitempty"`
+	Config       string              `json:"config"`
+	Log          string              `json:"log"`
+	Error        string              `json:"error,omitempty"` // link.json there but unreadable
+	loadErr      error               // the same error with its catalog identity; never serialized
 }
 
 // passiveReport is passive mode's part of link.json, without the credential's hash.
@@ -125,6 +129,7 @@ func gather(e *env) report {
 	if e.goos == "windows" {
 		r.Service = e.taskState() // winservice.go
 	}
+	r.ClaudePlugin = e.savedPluginStatus() // plugin.go
 	return r
 }
 
@@ -169,6 +174,7 @@ func (r report) text(now time.Time, user string) string {
 	if r.Mode == link.ModePassive {
 		r.passiveText(line, now, live)
 		r.serviceText(line, user)
+		r.pluginText(line)
 		if live {
 			line("%s", terminalText("link-cli.process", i18n.Args{"pid": st.PID, "version": st.Version}))
 		}
@@ -265,11 +271,22 @@ func (r report) text(now time.Time, user string) string {
 		}
 	}
 	r.serviceText(line, user)
+	r.pluginText(line)
 	if live {
 		line("%s", terminalText("link-cli.process", i18n.Args{"pid": st.PID, "version": st.Version}))
 	}
 	line("%s", terminalText("link-cli.log_path", i18n.Args{"path": r.Log}))
 	return b.String()
+}
+
+// pluginText is the report's line about the Claude Code plugin, when the node has checked it.
+func (r report) pluginText(line func(string, ...any)) {
+	if r.ClaudePlugin == nil {
+		return
+	}
+	for _, l := range strings.Split(strings.TrimRight(pluginText(r.ClaudePlugin, false), "\n"), "\n") {
+		line("%s", l)
+	}
 }
 
 func (r report) credentialsErrorText() string {

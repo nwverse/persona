@@ -157,6 +157,7 @@ func runResident(ctx context.Context, b Build, supervised bool) error {
 	}
 	node.SetResident(b.Program, b.Version)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
+	node.StartClaudePlugin(ctx, logger) // keeps the Persona plugin for Claude Code installed (node/claudeplugin.go)
 	tctx, tstop := context.WithCancel(context.Background())
 	defer tstop()
 	conns, stopped, err := node.ServeTailcat(tctx, logger, func() { askRestart("tailcat update") })

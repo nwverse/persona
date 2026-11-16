@@ -44,6 +44,9 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad office docx|pptx|xlsx|check …
                            write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
                            one (the office skill): personad office --help
+  personad claude-plugin status|install|uninstall|on|off
+                           the Persona plugin for Claude Code on this computer, as JSON (persona-link plugin says it in
+                           words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
                            message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
@@ -90,6 +93,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
+	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
+		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
 	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
 		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":

@@ -63,7 +63,11 @@ func TestGenerate(t *testing.T) {
 		"runtime-sdk/index.js": "i", "runtime-sdk/lib/r.js": "r", "dsh/test/t.js": "no",
 		"pi/package.json": "{}", "pi/index.js": "x", "pi/companion.mjs": "c", "pi/lib/pi.js": "p", "pi/e2e/run.mjs": "no",
 		"paseo/package.json": "{}", "paseo/bridge.mjs": "b", "paseo/lib/bridge.js": "l", "paseo/test/bridge.test.js": "no",
-		"agent-sdk/package.json": "{}", "agent-sdk/dist/bridge.mjs": "b", "agent-sdk/src/bridge.mjs": "no", "agent-sdk/build.mjs": "no"}
+		"agent-sdk/package.json": "{}", "agent-sdk/dist/bridge.mjs": "b", "agent-sdk/src/bridge.mjs": "no", "agent-sdk/build.mjs": "no",
+		"claude-code-plugin/.claude-plugin/plugin.json": "{}", "claude-code-plugin/hooks/hooks.json": "{}",
+		"claude-code-plugin/hooks/register.ts": "r", "claude-code-plugin/hooks/register.test.ts": "no",
+		"claude-code-plugin/test/fixture.json": "no", "claude-code-plugin/node_modules/x/index.js": "no",
+		"claude-code-plugin/.gitignore": "no", "claude-code-plugin/README.md": "doc"}
 	for path, data := range cmd {
 		_ = os.MkdirAll(filepath.Join(src, filepath.Dir(path)), 0o755)
 		if err := os.WriteFile(filepath.Join(src, path), []byte(data), 0o644); err != nil {
@@ -91,7 +95,7 @@ func TestGenerate(t *testing.T) {
 	}
 	// One part per directory: the three packages that take runtime-sdk share one blob. The stale files are gone.
 	parts, _ := filepath.Glob(filepath.Join(out, "*"+partSuffix))
-	if entries, _ := os.ReadDir(out); len(parts) != 5 || len(entries) != 7 || string(mustRead(t, filepath.Join(out, "README.md"))) != "old" {
+	if entries, _ := os.ReadDir(out); len(parts) != 6 || len(entries) != 8 || string(mustRead(t, filepath.Join(out, "README.md"))) != "old" {
 		t.Fatalf("wrote %d parts, %d entries", len(parts), len(entries))
 	}
 	for _, part := range parts {
@@ -144,9 +148,23 @@ func TestGenerate(t *testing.T) {
 	if want = []string{"agent-sdk/package.json", "agent-sdk/dist/bridge.mjs"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("agent-sdk copied %v, want %v", got, want)
 	}
+	// An asset's "/**" takes the directory's files, without tests, dependencies and hidden files.
+	got = got[:0]
+	for _, f := range files[ClaudeCodePlugin] {
+		got = append(got, f.Path)
+	}
+	if want = []string{"claude-code-plugin/.claude-plugin/plugin.json", "claude-code-plugin/README.md",
+		"claude-code-plugin/hooks/hooks.json", "claude-code-plugin/hooks/register.ts"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("claude-code-plugin copied %v, want %v", got, want)
+	}
 	_ = os.Remove(filepath.Join(src, "runtime-sdk", "index.js"))
 	if _, err := Generate(src, out); err == nil || !strings.Contains(err.Error(), "matches no file") {
 		t.Fatalf("a missing file: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(src, "runtime-sdk", "index.js"), []byte("i"), 0o644)
+	_ = os.RemoveAll(filepath.Join(src, "claude-code-plugin"))
+	if _, err := Generate(src, out); err == nil || !strings.Contains(err.Error(), "matches no file") {
+		t.Fatalf("a missing asset directory: %v", err)
 	}
 }
 
