@@ -335,7 +335,7 @@ func TestCodexAppChatHistoryAfterItsRolloutWasDeleted(t *testing.T) {
 			id = s.SessionID
 		}
 	}
-	if src, _ := n.codexSource(id); src.path != rollout {
+	if src, _ := n.codexSource(id); src.path != resolved(t, rollout) { // the node names it resolved (#9138)
 		t.Fatalf("registered with %q, want its rollout", src.path)
 	}
 	if err := os.Remove(rollout); err != nil {
@@ -739,7 +739,7 @@ func TestAWatchedCodexAppChatWhoseRolloutGoes(t *testing.T) {
 	turns := []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "first")}}}
 	writeCodexHistory(t, home, turns)
 	id, _ := readChat(t, n, appChat)
-	if src, _ := n.codexSource(id); src.path != rollout {
+	if src, _ := n.codexSource(id); src.path != resolved(t, rollout) { // the node names it resolved (#9138)
 		t.Fatalf("registered with %q, want its rollout", src.path)
 	}
 	hub := withHub(t, n)
