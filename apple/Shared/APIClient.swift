@@ -877,7 +877,9 @@ nonisolated struct APIClient: Sendable {
         var query = ["range": range.rawValue]
         if let model { query["model"] = model }
         if let launcher { query["launcher"] = launcher.isEmpty ? "-" : launcher }
-        return try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        var usage = try await get("/api/v1/machines/\(machine)/usage", query: query, as: R.self).usage
+        usage.receivedAt = Date() // the step under way has run until now (#9205)
+        return usage
     }
     func sessions() async throws -> [Session] {
         let data = try await request("GET", "/api/v1/sessions")

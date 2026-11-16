@@ -73,8 +73,8 @@ type usagePath struct {
 	st   os.FileInfo
 }
 
-// usageFiles lists the transcripts that may hold usage of the window: Claude Code's (every config directory, and
-// their subagents, projectTranscripts), Codex's and the compatible CLI's rollouts.
+// usageFiles lists the transcripts that may hold usage of the window: Claude Code's (every config directory, their
+// subagents and their workflow runs' agents, projectTranscripts), Codex's and the compatible CLI's rollouts.
 func (n *Node) usageFiles(cutoff time.Time) []usagePath {
 	paths := n.projectTranscripts()
 	for _, home := range []string{n.codexHome(), n.traexHome()} {
@@ -166,11 +166,15 @@ func (m *usageMeter) scan(path string, st os.FileInfo, cutoff time.Time) {
 }
 
 // usageSession is the session a transcript belongs to: a Claude Code transcript's name (<id>.jsonl), the session
-// folder over a subagent's (<id>/subagents/agent-….jsonl), a Codex rollout's thread id (its name ends with it).
+// folder over a subagent's (<id>/subagents/agent-….jsonl) or a workflow run's agent's
+// (<id>/subagents/workflows/<run>/agent-….jsonl), a Codex rollout's thread id (its name ends with it).
 func usageSession(path string) string {
 	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	if dir := filepath.Dir(path); filepath.Base(dir) == "subagents" {
 		return filepath.Base(filepath.Dir(dir))
+	}
+	if runs := filepath.Dir(filepath.Dir(path)); filepath.Base(runs) == "workflows" && filepath.Base(filepath.Dir(runs)) == "subagents" {
+		return filepath.Base(filepath.Dir(filepath.Dir(runs)))
 	}
 	if strings.HasPrefix(name, "rollout-") && len(name) >= 36 {
 		return name[len(name)-36:]

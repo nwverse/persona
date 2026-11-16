@@ -4688,6 +4688,7 @@ def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
         (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_live_view"] if meeting_live_view_on() else []) + \
         (["meeting_highlights"] if meeting_highlights_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["meeting_notes"] if meeting_live_view_on() and os.environ.get("MOCK_MEETING_NOTES") != "0" else []) + \
         (["meeting_transcription"] if meeting_transcription_on() else []) + \
         (["recording_day"] if RECORDING_DAY["on"] else [])
 
@@ -24362,6 +24363,9 @@ def markets_route(handler, p, body):
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
         if volc_mock.ENABLED and PLUGINS.get(volc_mock.EXT, {}).get("enabled") and placement in ("", "plugin_page", "extension_page"):
             ui += PLUGINS[volc_mock.EXT]["ui"]
+        if COLUMNS_MODE and placement in ("", "nav_page"):
+            ui += [{"plugin": "example-today", "plugin_name": "Example Today", "id": "today", "title": "Today",
+                    "placement": "nav_page", "size": "full", "icon": "calendar"}]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -28947,6 +28951,7 @@ def features():
     return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
 
 
+MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
@@ -29522,6 +29527,8 @@ _plugins_route_without_extensions = plugins_route
 
 
 def plugins_route(handler, p, body):
+    if PLUGINS_MODE and COLUMNS_MODE and p == "/api/v1/extensions/example-today/-/ui/today":
+        return mock_today(handler, body)
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -29543,6 +29550,79 @@ def plugins_route(handler, p, body):
             except ValueError: pass
         return _plugins_route_without_extensions(_NewKeysHandler(handler), "/api/v1/plugins" + p[len("/api/v1/extensions"):], body)
     return _plugins_route_without_extensions(handler, p, body)
+
+
+# MOCK_EXTENSION_COLUMNS=1 (with MOCK_EXTENSIONS=1): a made-up extension's "Today" page, a dashboard of UI version 8
+# (#9158): a full-width "Needs me" card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents,
+# each card with an icon, a link beside its title, a summary line, a list and a link at the bottom. The links and the
+# bottom rows push a plain page of the card's (its state); a row's own action answers a toast. All names are invented.
+COLUMNS_MODE = os.environ.get("MOCK_EXTENSION_COLUMNS") == "1"
+
+
+def _today_row(key, title, subtitle="", value="", **extra):
+    row = {"type": "row", "key": key, "title": title, "action": {"id": "open", "values": {"row": key}}}
+    if subtitle: row["subtitle"] = subtitle
+    if value: row["value"] = value
+    row.update(extra)
+    return row
+
+
+def _today_more(key, title, page):
+    return {"type": "row", "key": key, "title": title, "action": {"id": "page", "push": {"state": page, "title": title}}}
+
+
+def _today_card(key, title, icon, color, link, summary, rows, more=None, **extra):
+    section = {"key": key, "title": title, "icon": icon, "icon_color": color,
+               "link": {"title": link, "action": {"id": "page", "push": {"state": key, "title": title}}},
+               "items": [{"type": "text", "key": key + ".summary", "text": summary, "style": "secondary"}] + rows}
+    if more: section["items"].append(_today_more(key + ".more", more, key))
+    section.update(extra)
+    return section
+
+
+def _today_view():
+    return {"title": "Today", "layout": "columns", "sections": [
+        _today_card("needs", "Needs me", "bell", "orange", "All", "4 things wait for you · 1 due today", [
+            _today_row("need.travel", "Approve the travel request", "Approval · from Robin", icon="check", icon_color="blue",
+                       badge={"text": "Today", "tone": "caution"}),
+            _today_row("need.review", "Reply about the design review", "Chat · Kai asked 2 h ago", icon="chat", icon_color="teal"),
+            _today_row("need.agent", "Agent waits for a permission", "Running Agents · release notes", icon="robot", icon_color="purple"),
+            _today_row("need.report", "Sign the quarterly report", "Document · due Friday", icon="doc", icon_color="gray"),
+        ], span="full", columns=2),
+        _today_card("calendar", "Calendar", "calendar", "red", "Calendar", "3 events today · next at 14:00", [
+            _today_row("cal.sync", "Weekly sync", "Room 4 · 6 people", "14:00"),
+            _today_row("cal.robin", "1:1 with Robin", "Video call", "16:30"),
+            _today_row("cal.release", "Release review", "Room 2", "17:30"),
+        ], "3 more this week"),
+        _today_card("lark", "Lark today", "chat", "blue", "Lark", "12 unread in 4 chats", [
+            _today_row("lark.design", "Design team", "Kai: the new cards look good", avatar={"text": "DT"}, badge={"text": "5"}),
+            _today_row("lark.release", "Release", "Build 812 is out", avatar={"text": "RE"}, badge={"text": "2"}),
+        ], "2 more chats"),
+        _today_card("wechat", "WeChat", "chat", "green", "WeChat", "3 unread · 1 mention", [
+            _today_row("wechat.family", "Family", "Mom: dinner at 7?", avatar={"text": "FA"}, badge={"text": "2"}),
+            _today_row("wechat.club", "Climbing club", "Saturday trip is on", avatar={"text": "CC"}, badge={"text": "1"}),
+        ], "1 more chat"),
+        _today_card("agents", "Running Agents", "robot", "purple", "Agents", "2 running · 1 waits for you", [
+            _today_row("agent.notes", "Release notes", "Waits for a permission", badge={"text": "Needs you", "tone": "caution"}),
+            _today_row("agent.tests", "Flaky test hunt", "Running · 12 min"),
+            _today_row("agent.docs", "Docs sweep", "Running · 3 min"),
+        ], "1 finished today"),
+    ]}
+
+
+def mock_today(handler, body):
+    request = json.loads(body) if body else {}
+    state = request.get("state") or ""
+    if request.get("action") == "open":
+        handler.send_json({"toast": "Opened " + ((request.get("values") or {}).get("row") or "")})
+    elif state:
+        card = next((s for s in _today_view()["sections"] if s["key"] == state), None)
+        title = card["title"] if card else state
+        handler.send_json({"view": {"title": title, "sections": [{"items": [
+            {"type": "empty", "title": title, "detail": "Everything of this card would be listed here."}]}]}})
+    else:
+        handler.send_json({"view": _today_view()})
+    return True
 
 
 def mock_showcase(handler, ui, body):

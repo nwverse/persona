@@ -75,6 +75,8 @@
     <string name="agents_grouping_state">状態別</string>
     <string name="agents_grouping_todo">ToDo別</string>
     <string name="agents_grouping_project">プロジェクト別</string>
+    <string name="agents_grouping_app">アプリ別</string>
+    <string name="agents_grouping_recent">最近使用した項目</string>
     <string name="agents_grouping_direction">常駐別</string>
     <string name="agents_menu_compact">コンパクト表示</string>
     <string name="agents_menu_detailed">詳細表示</string>
