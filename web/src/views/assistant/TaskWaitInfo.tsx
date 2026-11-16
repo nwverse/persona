@@ -62,7 +62,13 @@ export function TaskWaitInfo({ todo, merges = [], expanded = false }: { todo: To
     {info.canRemind && <Button testId="wait-reminder" className="pointer-coarse:min-h-11" onClick={() => setDraft((previous) => previous ?? t("task-wait.reminder", { target, title: todo.title, request: contact!.request }))}>{t("task-wait.draft_reminder")}</Button>}
     {draft !== undefined && <Dialog open onClose={() => setDraft(undefined)} title={t("task-wait.draft_reminder")} footer={<>
       <Button className="pointer-coarse:min-h-11" onClick={() => setDraft(undefined)}>{t("common.cancel")}</Button>
-      <Button className="pointer-coarse:min-h-11" tone="primary" onClick={() => { void copyText(draft!); }}>{t("task-wait.copy_draft")}</Button>
+      <Button className="pointer-coarse:min-h-11" tone="primary" onClick={() => {
+        const text = draft!;
+        void copyText(text).then((copied) => {
+          // Dismiss after success, but keep a failed copy or a draft edited while clipboard permission was pending.
+          if (copied) setDraft((current) => current === text ? undefined : current);
+        });
+      }}>{t("task-wait.copy_draft")}</Button>
     </>}>
       <p className="mb-3 text-sm text-ink-2">{t("task-wait.draft_note")}</p>
       <label htmlFor={draftId} className="mb-1 block text-xs text-ink-2">{t("task-wait.message")}</label>

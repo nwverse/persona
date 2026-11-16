@@ -125,10 +125,40 @@ describe("task wait information", () => {
     expect(clipboard).toHaveBeenCalledWith("Edited local draft");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(JSON.stringify(todo)).toBe(snapshot);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid='wait-reminder']")!.click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(b => b.textContent === "Cancel")!.click());
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(JSON.stringify(todo)).toBe(snapshot);
+  });
+
+  it("keeps the draft recoverable when copying fails", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn(async () => { throw new Error("Clipboard unavailable"); }) } });
+    const todo = makeTodo({ kind: "person_reply", target: "Design team", wake: "They reply", contact });
+    await render(todo);
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid='wait-reminder']")!.click());
+    const before = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!.value;
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(b => b.textContent === "Copy draft")!.click());
+    expect(document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')?.value).toBe(before);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not discard an edit made while clipboard permission is pending", async () => {
+    let copied!: () => void;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn(() => new Promise<void>((resolve) => { copied = resolve; })) } });
+    await render(makeTodo({ kind: "person_reply", target: "Design team", wake: "They reply", contact }));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid='wait-reminder']")!.click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(b => b.textContent === "Copy draft")!.click());
+    const field = document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Newer local draft");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => copied());
+    expect(document.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')?.value).toBe("Newer local draft");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("lets waiting text select its task row while controls and the portalled draft remain separate", async () => {

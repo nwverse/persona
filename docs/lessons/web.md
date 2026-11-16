@@ -9,6 +9,8 @@ sections and counts. Check the boundary regression and every language's measured
 growth with an exemption, a larger budget or unrelated catalog changes. New waiting copy stays in its own lazy namespace.
 On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
 on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
+Copying a reminder should dismiss the editor only after success, so the phone's confirmation toast does not cover
+its footer. Keep the editor on failure, and do not discard text edited while clipboard permission was pending.
 
 ## Transcript cut sizes are bytes, not characters (#9442)
 

@@ -160,12 +160,16 @@ try {
         "zh-Hans": { copy: "复制话术", cancel: "取消", all: "全部" },
         ja: { copy: "下書きをコピー", cancel: "キャンセル", all: "すべて" },
       }[mode.lang];
+      await shot("draft");
+      await dialog.getByRole("button", { name: words.cancel, exact: true }).click();
+      assert.equal(writes.length, writesBeforeDraft, "cancelling a draft does not write or send");
+      await person.locator('[data-testid="wait-reminder"]').click();
+      await dialog.locator("textarea").fill("Edited synthetic reminder draft");
       await dialog.getByRole("button", { name: words.copy, exact: true }).click();
       assert.equal(await page.evaluate(() => window.__testClipboard), "Edited synthetic reminder draft");
       assert.equal(writes.length, writesBeforeDraft, "copying the draft does not write task state or send a message");
       const draftWrites = writes.length - writesBeforeDraft;
-      await shot("draft");
-      await dialog.getByRole("button", { name: words.cancel, exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
       if (!grouped) await page.locator('[data-tray-entry="pr"]').click();
       const review = page.locator('[data-task-wait-info="wait-review"]'); await review.waitFor();
       assert.equal(await review.getAttribute("data-wait-kind"), "merge_review");
