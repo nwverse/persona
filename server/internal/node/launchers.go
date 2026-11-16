@@ -186,7 +186,8 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 		{"agy", agyAgent, agyPath},
 	} {
 		if strings.TrimSpace(bin.path) != "" && !seen[bin.name] && codex[bin.name] == nil {
-			list = append(list, proto.Launcher{Name: bin.name, Model: "默认", Agent: bin.agent, Source: "zshrc"})
+			list = append(list, proto.Launcher{Name: bin.name, Model: "默认", Agent: bin.agent, Source: "zshrc",
+				RuntimeFallback: bin.agent == agyAgent && !taken[bin.name]})
 		}
 	}
 	return list, codex, settings, scripts

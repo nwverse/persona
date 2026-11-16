@@ -166,14 +166,21 @@ public final class X264Process: @unchecked Sendable {
 ///
 /// Each frame out maps to the frame given in by order, checked by its FLV timestamp (`X264Plan.timestampMs`). Anything
 /// off — a process ending, bad output, a frame that isn't the next, one overdue or too slow (`X264Watch`) — ends x264
-/// for the stream with an `off` reason; the caller goes back to VideoToolbox.
+/// for the stream with an `off` reason and what was seen; the caller goes back to VideoToolbox.
+///
+/// A frame's encode time for the overlay runs from its write to its end, queueing included. Whether x264 keeps up is
+/// judged on each frame's own time, from when ffmpeg could start on it (it came in, and the frame before it was out) to
+/// its end: frames that waited behind a cold process's first one (30–40 ms, ffmpeg loading) are not slow themselves
+/// (#8859: on the first real session the frame after the first read 21 ms and x264 stopped as "the Mac couldn't keep
+/// up" a fraction of a second into the stream).
 ///
 /// Called only on `queue`, which its processes' events hop onto too.
 public final class X264Session<Context>: @unchecked Sendable {
     public enum Event {
         case parameterSets([Data])
         case frame(sample: Data, keyframe: Bool, context: Context, encodeMicros: Int64)
-        case off(X264Plan.Off)
+        /// x264 stopped: why, and what was seen, for the helper's log ("frame 12: 61.0 ms").
+        case off(X264Plan.Off, String)
     }
 
     private struct Pending {
@@ -186,6 +193,8 @@ public final class X264Session<Context>: @unchecked Sendable {
         var process: X264Process!
         var next = 0
         var pending: [Pending] = []
+        /// When its last frame came out (µs), 0 before the first.
+        var lastOut: UInt64 = 0
     }
 
     public let width: Int
@@ -234,7 +243,7 @@ public final class X264Session<Context>: @unchecked Sendable {
                        write: @escaping @Sendable (_ write: (UnsafeRawPointer, Int) -> Bool) -> Void) {
         guard !ended, var run = active else { return }
         if keyframe, run.next > 0 {
-            guard let spare, let fresh = spawn() else { return off(.failed) }
+            guard let spare, let fresh = spawn() else { return off(.failed, "a new spare didn't start") }
             run.process.stop()
             run = spare
             active = spare
@@ -247,8 +256,11 @@ public final class X264Session<Context>: @unchecked Sendable {
 
     /// Every 100 ms or so: x264 ends when the oldest frame inside ffmpeg is overdue.
     public func tick() {
-        guard !ended, let run = active, X264Watch.overdue(oldest: run.pending.first?.given, now: clock()) else { return }
-        off(run.pending.first?.index == 0 ? .failed : .slow)
+        let now = clock()
+        guard !ended, let run = active, let oldest = run.pending.first,
+              X264Watch.overdue(oldest: oldest.given, now: now) else { return }
+        let detail = String(format: "frame %d still inside after %.0f ms", oldest.index, Double(now &- oldest.given) / 1000)
+        off(oldest.index == 0 ? .failed : .slow, detail)
     }
 
     /// Ends both processes; nothing more is said.
@@ -276,30 +288,38 @@ public final class X264Session<Context>: @unchecked Sendable {
         guard !ended, let run else { return }
         let isActive = run === active
         switch event {
-        case .ended:
-            if isActive || run === spare { off(.failed) } // an old process ends because it was ended
+        case let .ended(error):
+            if isActive || run === spare { // an old process ends because it was ended
+                off(.failed, "ffmpeg ended" + (error.map { ": \($0)" } ?? ""))
+            }
         case let .item(item):
             guard isActive else { return } // an old process's last frames: superseded by the keyframe
             switch item {
             case let .parameterSets(sets):
                 onEvent(.parameterSets(sets))
             case let .frame(timestamp, keyframe, sample):
-                guard !run.pending.isEmpty else { return off(.failed) }
+                guard !run.pending.isEmpty else { return off(.failed, "a frame out that wasn't given") }
                 let pending = run.pending.removeFirst()
                 guard timestamp == X264Plan.timestampMs(index: pending.index, fps: fps),
-                      pending.index > 0 || keyframe else { return off(.failed) }
+                      pending.index > 0 || keyframe else {
+                    return off(.failed, "frame \(pending.index) out of order (\(timestamp) ms)")
+                }
                 let now = clock()
                 let micros = Int64(bitPattern: now &- pending.given)
+                let own = X264Watch.ownMicros(given: pending.given, lastOut: run.lastOut, now: now)
+                run.lastOut = now
                 onEvent(.frame(sample: sample, keyframe: keyframe, context: pending.context, encodeMicros: micros))
-                if watch.encoded(micros: micros, at: now, first: pending.index == 0) { off(.slow) }
+                if watch.encoded(micros: own, at: now, first: pending.index == 0) {
+                    off(.slow, "frame \(pending.index): " + watch.why)
+                }
             }
         }
     }
 
-    private func off(_ reason: X264Plan.Off) {
+    private func off(_ reason: X264Plan.Off, _ detail: String) {
         guard !ended else { return }
         stop()
-        onEvent(.off(reason))
+        onEvent(.off(reason, detail))
     }
 }
 #endif
