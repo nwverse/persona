@@ -41,17 +41,18 @@ func snapshotWaitTest(t *testing.T, took, lastRead, delay time.Duration, chat st
 	}
 }
 
-// readIn waits for the read the last message started to be in: takeSnapshot clears snapping and then closes it.
+// readIn waits for the read the last message started to be in: takeSnapshot stores it, then closes the channel that
+// was in snapping.
 func readIn(t *testing.T, s *Service) {
 	t.Helper()
 	s.live.mu.Lock()
-	reading := s.live.snapping
+	in := s.live.snapping
 	s.live.mu.Unlock()
-	if reading == nil {
+	if in == nil {
 		return
 	}
 	select {
-	case <-reading:
+	case <-in:
 	case <-time.After(snapshotSlowest + time.Second):
 		t.Fatal("the snapshot read never came in")
 	}

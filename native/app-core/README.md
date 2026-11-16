@@ -8,8 +8,8 @@ One Rust library under the iOS, Android and HarmonyOS clients' native UIs. Desig
 | Crate | What it is |
 | --- | --- |
 | `persona-core` | Pure logic: no IO, no clock, no FFI, no `unsafe`. Today it holds `continuity` (a chat's items, how far they are complete, and what to fetch), ported from the rules every client implements (`spec/fixtures/continuity`). `transport` decodes the hub's continuity payloads from raw bytes into `continuity`'s inputs (see "Transport decoding" below). |
-| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` only queues an action's bytes. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
-| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. |
+| `persona-core-runtime` | Runs `persona-core` on one worker thread. `dispatch` is lock-free on the caller: it pushes an encoded action onto the worker's channel, with the pending count and stop flag in atomics. The worker applies actions, sends requests to the client and builds each chat's patch. `changed` wakes the client once per batch, and the client pulls the patch with `drain`. `wire` holds every type that crosses the boundary. |
+| `persona-core-ffi` | The entry points, built as `libpersona_core`: C functions for Swift (`include/persona_core.h`) and JNI functions for Android's `persona.core.rustcore.NativeBridge`. Each catches panics and returns its failure value. The JNI dispatch moves the action bytes into the worker's channel without a second copy. |
 | `persona-core-ohos` | HarmonyOS's single NAPI library. Its default host build tests the close-safe runtime registry and all shared fixtures; the `ohos` feature adds ohos-rs's NAPI entry points and thread-safe callbacks, supplied by the device runtime. |
 | `persona-core-typegen` | Generates the clients' bincode codecs for the `wire` types: Kotlin to android/core/rustcore, Swift to apple/Packages/PersonaCore and ArkTS to harmony/entry/src/main/ets/core/rustcore. All are committed and checked for drift. |
 
@@ -70,9 +70,10 @@ The stream replay (#8827) calls `projectStreamChunks` through the real Kotlin/JN
 `spec/fixtures/stream-chunks/split.json` cases, comparing complete `{done, tail}` expected objects from the unchanged
 fixture. It checks malformed input and a wrong expected object. It does not execute Swift or cover full StreamRepair,
 visual gaps, rendering, timing/coalescing, production adapters, C/NAPI/Swift bindings or physical-device performance.
-The fence-only StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
-stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation, partial markers
-and malformed/wrong-expected controls. Tables, inline markup, math and `plainOpenFence` are not implemented.
+The fence StreamRepair replay (#9051) calls `projectStreamRepair` through real Kotlin/JNI for 21 independently
+stated repaired strings and six explicit code/text end cases from Apple's tests, including opener/closure indentation,
+partial markers and malformed/wrong-expected controls. The final-marker hold-back (#9084) replays all 13 Apple
+`markersOnly` cases/controls plus digit boundaries. Tables, inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
 8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
