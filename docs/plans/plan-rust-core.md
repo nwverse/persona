@@ -467,15 +467,23 @@ Phase 3 lands in several PRs.
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
     labels, with 15 + 8 complete fixture comparisons and Apple/CoreFoundation-derived whitespace boundaries.
-  - The current SwiftUI multi-question review confirmation remains separately #8483. No UI timing, transport,
-    production adapter or new answer FFI/JNI/NAPI boundary is included.
+  - `AnswerBindingFixtureTest` drives `projectAnswer` and `displayAnswer` through real host-JNI string boundaries
+    (#8838). All 15 + 8 cases compare complete expected objects from the unchanged fixtures, including conditional
+    next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
+    expectation are rejected, and the U+200B boundary is exercised. This is synchronous host-JNI evidence, not UI
+    timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
+    remains separately #8483; C/NAPI/Swift bindings, transport and physical-device evidence are not included.
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
     source-cited cases compare complete expected objects; direct Apple-test assertions are distinguished from
     source-derived boundaries. No Apple runtime was run for this slice.
-  - `StreamRepair`, visual gaps, timing, rendering, bindings, production adapters and the #4044 performance goal
-    remain open.
+  - `StreamBindingFixtureTest` drives the same pure projection through the real Kotlin/JNI `projectStreamChunks`
+    boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
+    malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
+    the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
+  - `StreamRepair`, visual gaps, timing, rendering, C/NAPI/Swift bindings, production adapters and the #4044
+    performance goal remain open.
 
 ### Migration rules (each domain)
 
