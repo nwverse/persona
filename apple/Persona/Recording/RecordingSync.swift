@@ -454,6 +454,11 @@ final class RecordingSync {
                                   uniquingKeysWith: max)
             // The hub's word replaces ours: one it lost (a new hub) goes again, one it has newer is not resent.
             store.synced = have.filter { library.entry($0.key) != nil && library.entry($0.key)?.isDay != true }
+            // What the hub calls each now (#8873): the summary's or the minutes' title arrives after the last upload.
+            for row in rows where row.kind != "day" {
+                guard let id = UUID(uuidString: row.id), library.entry(id) != nil else { continue }
+                library.noteHubName(id, RecordingTitle.hubName(name: row.name, source: row.nameSource))
+            }
             handDays(rows, deleted: (answer.deleted ?? []).compactMap(UUID.init(uuidString:)))
             for id in (answer.deleted ?? []).compactMap(UUID.init(uuidString:)) where library.entry(id).map({ !$0.isDay }) == true {
                 deletedOnHub(id)
@@ -479,10 +484,14 @@ final class RecordingSync {
             var recapState: String?
             var recapFinal: Bool?
             var recapFinalAt: String?
+            // What the hub calls it and why (#8873).
+            var name: String?
+            var nameSource: String?
 
             private nonisolated enum CodingKeys: String, CodingKey {
-                case id, revision, kind, part, next, base
+                case id, revision, kind, part, next, base, name
                 case recapState = "recap_state", recapFinal = "recap_final", recapFinalAt = "recap_final_at"
+                case nameSource = "name_source"
             }
 
             init(from decoder: Decoder) throws {
@@ -497,6 +506,8 @@ final class RecordingSync {
                 recapState = try? c.decodeIfPresent(String.self, forKey: .recapState)
                 recapFinal = try? c.decodeIfPresent(Bool.self, forKey: .recapFinal)
                 recapFinalAt = try? c.decodeIfPresent(String.self, forKey: .recapFinalAt)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+                nameSource = try? c.decodeIfPresent(String.self, forKey: .nameSource)
             }
         }
 
@@ -555,6 +566,16 @@ final class RecordingSync {
                 privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
             }
         }
+        /// What the hub calls it and why (#8873), read on its own: a field of another shape reads as absent.
+        struct NameAnswer: Decodable {
+            var name: String?; var source: String?
+            enum CodingKeys: String, CodingKey { case name, source = "name_source" }
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+                source = try? c.decodeIfPresent(String.self, forKey: .source)
+            }
+        }
         /// The mode in effect (#3862 phase 5), read on its own: a field of another shape reads as absent.
         struct TranscriptionAnswer: Decodable {
             var transcription: String?; var problem: String?
@@ -589,6 +610,10 @@ final class RecordingSync {
             }
             store.rejected[entry.id] = nil
             save()
+            if answer?.status != "expired" { // what the hub calls it now (#8873); none from an older manager
+                let named = try? JSON.decoder.decode(NameAnswer.self, from: data)
+                library.noteHubName(entry.id, RecordingTitle.hubName(name: named?.name, source: named?.source))
+            }
             if body.endedAt != nil, !endedStored.contains(entry.id) { endedStored.insert(entry.id) }
             if body.transcription != nil {
                 // Absent from the answer (or no answer to read): an older manager, which transcribes nothing.

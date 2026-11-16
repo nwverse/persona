@@ -804,7 +804,7 @@ final class ChatStore {
     /// image) arrives for a call before it; then everything is built again.
     nonisolated static func rebuild(_ items: [Item], settled: SettledRows?) -> (rows: [ChatRow], blocks: [ChatBlock], settled: SettledRows?) {
         // Before the cut at the last message: a picture sent with it comes first in its line, and went to the rows
-        // before it, already built (`picturesAfterTheirText`).
+        // before it, already built (`picturesAfterTheirText`). `buildRows` orders each part again, which changes nothing.
         let items = picturesAfterTheirText(items)
         func full() -> (rows: [ChatRow], blocks: [ChatBlock], settled: SettledRows?) {
             let rows = buildRows(items)
@@ -1125,20 +1125,25 @@ final class ChatStore {
     /// pictures first (image blocks, then the text), where a picture pasted in an Agents chat comes after the text:
     /// first, a picture went to the exchange before its own message (into its work, out of sight) and the chat no
     /// longer showed what was sent once the transcript's copy replaced the one being sent.
+    /// A picture after a text of its line is in place and stays there, so a second pass changes nothing: `rebuild` orders
+    /// the items and `buildRows` orders them again, and a picture before two text blocks went on behind the second (#8706).
     nonisolated static func picturesAfterTheirText(_ items: [Item]) -> [Item] {
         func isPhoto(_ it: Item) -> Bool { it.kind == .image && it.role == "user" && it.toolUseID == nil }
         guard items.contains(where: isPhoto) else { return items }
         var out: [Item] = []
         out.reserveCapacity(items.count)
         var held: [Item] = [] // the pictures of one line, waiting for its text
+        var texted: Int? // the line of the last text: a picture of that line after it is in place
         for it in items {
             if isPhoto(it) {
                 if let first = held.first, first.seq != it.seq { out += held; held.removeAll() }
-                held.append(it)
+                if it.seq == texted { out.append(it) } else { held.append(it) }
                 continue
             }
+            let isText = it.kind == .text && it.role == "user"
+            if isText { texted = it.seq }
             if let first = held.first {
-                if it.kind == .text, it.role == "user", it.seq == first.seq {
+                if isText, it.seq == first.seq {
                     out.append(it) // the message, then its pictures
                     out += held
                     held.removeAll()

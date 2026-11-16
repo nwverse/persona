@@ -735,7 +735,7 @@ func TestOwnerDecidedIsKeptWithTheDecision(t *testing.T) {
 		return ruleOwnerDecisions(events)
 	}
 	a := acceptAsk{Conclusion: true, Outcome: outcomeDecide, Reason: "The PR is green. What next?", Recommend: "Merge", WhyOwner: whyPriority}
-	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
 		t.Fatal(err)
 	}
 	list, err := database.ListTodoDecisions(ctx, todo.ID, true)
@@ -746,7 +746,7 @@ func TestOwnerDecidedIsKeptWithTheDecision(t *testing.T) {
 		t.Fatalf("owner_decided = %v, want %s for %s", got, whyPriority, list[0].ID)
 	}
 	a.ByDefault, a.Deadline = true, time.Now()
-	if err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
+	if _, err := s.takeRecommendation(ctx, todo.ID, a); err != nil {
 		t.Fatal(err)
 	}
 	if got := decided(); len(got) != 1 {

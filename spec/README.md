@@ -36,6 +36,7 @@ spec/
     file-types/       a .ts file's type from its bytes, TypeScript or an MPEG transport stream, checked by the node and the hub (Go)
     screen-udp/       the live screen's video over UDP: sealing, packets, Reed-Solomon blocks, checked by the node (Go) and the iPhone
     screen-input/     the live screen's pixel scroll record, checked by the node (Go) and PersonaInputKit (helper and iPhone)
+    review/           what the node's git.review answers (empty fields left out), written by the node and decoded by iOS
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7
 ```
@@ -51,6 +52,7 @@ spec/
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
+| review | [README](fixtures/review/README.md): the node's real `git.review` answers, empty `header` and base `hash` left out, written by the node's test and decoded by iOS (#8733) |
 | comments | [README](fixtures/comments/README.md): the `> Comment N` / `Code comment N` / `Element comment N` blocks a message leads with, written and read back by the web app and the iOS app (#151) |
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
 | session-search | [README](fixtures/session-search/README.md): ranked runtime-Agent search, explicit query operators and shared local/server matching (#7624) |

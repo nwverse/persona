@@ -1,6 +1,6 @@
 # Persona for HarmonyOS
 
-Native ArkTS / ArkUI client for HarmonyOS 7 phones and foldables (API 26). See the [product, interaction and architecture guide](../docs/harmony/harmony.md).
+Native ArkTS / ArkUI client for HarmonyOS 7 phones and foldables (API 26). Persona and Agents are the two peer conversation views; Inbox and the other workspaces open from native Spaces. See the [product, interaction, architecture and verification guide](../docs/harmony/harmony.md).
 
 Open this directory in DevEco Studio with the HarmonyOS 7 SDK installed, resolve the pinned OHPM dependencies, and select a phone, foldable or wide-foldable emulator. Build the pinned ARM64 SSH core first using [the native build instructions](native/ssh/README.md). With that library and DevEco CLI available:
 
@@ -19,7 +19,7 @@ node --test tests/*.test.mjs
 node tests/run-domain.mjs
 ```
 
-Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification). The [native extension fixture](tests/native-extension-fixture/README.md) reproduces legacy and streamed component updates, focus retention and the Hub confirmation gate on a disposable Hub.
+Native SDK tests use the `entry@ohosTest` target and `OpenHarmonyTestRunner`; they exercise actual platform storage, credentials, URL handling, TLS/WebSocket transport and image preview. The transport fixture is separate from a real Hub; see [verification](../docs/harmony/harmony.md#verification) for the three-category UI matrix and the evidence each environment can establish. The [native extension fixture](tests/native-extension-fixture/README.md) reproduces legacy and streamed component updates, focus retention and the Hub confirmation gate on a disposable Hub. These commands are reusable checks, not a claim that production regression, a real Hub or Agent runtime, physical hinge behavior, or device system materials have been verified.
 
 The shared Rust core uses one ohos-rs NAPI library, not a C++ shim. With the API 26 native SDK and Rust 1.98.0 installed:
 
@@ -40,5 +40,13 @@ builds `native/app-core`'s `host_replay` example and runs `tests/core-host/repla
 38 cases / 94 steps through `persona-core-ohos`'s registry with ArkTS encoding and decoding, and compares ArkTS and
 Rust bytes for independently built values. It found the `u32` width defect (#7485). It exercises neither the NAPI glue
 (argument conversion, thread-safe callbacks) nor a HAP, so `coreReplay` above remains the only device test of those.
+
+The Agents list has its existing ArkTS projection behind `NativeAgentListAdapter`. DEBUG alone dynamically loads a
+serial `taskpool` shadow that compares plain input/output snapshots through `coreProjectSort`; release does not load
+it. Diagnostics contain only domain, rule and input counts/flags. The core lane's
+`tests/core-host/agent-sort-adapter.test.mjs` runs both the production adapter and real core over all 30
+`agents_list` fixtures without weakening expectations. Current host parity is 1/30; the 29 differing cases and their
+`counts` / `group-order` / `unread-shown` rules are recorded in #8966. This is neither full parity nor a NAPI/HAP or
+physical-device result (**blocked: no physical device**). The environment used for this addition has no DevEco CLI.
 
 The application icon reuses Persona's approved artwork. Run `python3 scripts/export-icons.py` from this directory to regenerate its layers, startup image and provenance manifest. The system applies its own launcher mask.

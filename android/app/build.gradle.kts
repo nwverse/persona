@@ -45,6 +45,7 @@ androidComponents.onVariants { variant ->
 
 android {
     namespace = "persona.android"
+    buildFeatures { buildConfig = true }
     testOptions { unitTests { isIncludeAndroidResources = true } }
     lint {
         baseline = file("lint-baseline.xml")
