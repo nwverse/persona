@@ -310,7 +310,7 @@ struct Index {
     if (!this.model.notificationTarget) return;
     const row = this.routeRow(this.model.notificationTarget); this.model.notificationTarget = '';
     if (!this.model.sessions.concat(this.model.conversations).some((item: ResourceRow) => item.key() === row.key())) return;
-    this.changeSection(row.kind === 'conversation' ? 0 : 1); this.openRow(row);
+    this.changeSection(row.kind === 'conversation' ? 0 : 1); this.openRow(row, false);
   }
   private consumePairingLink(): void {
     if (!this.model.pairingLink) return; this.address = this.model.pairingLink; this.pairCode = ''; this.model.pairingLink = ''; this.openSheet('connect');
@@ -339,11 +339,11 @@ struct Index {
     if (copy.kind === 'session' || copy.kind === 'conversation') { const data = copy.data(); data['navigation_root'] = root; copy.raw = JSON.stringify(data); }
     return copy;
   }
-  private openRow(row: ResourceRow): void {
+  private openRow(row: ResourceRow, root: boolean = true): void {
     const name = NavigationContext.destination(row);
     this.chatReady = false; this.detailRoute = '';
     if (row.kind === 'session') { this.stack.clear(); this.tool = 0; }
-    this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, true)) }); this.savePath();
+    this.stack.pushPath({ name: name, param: JSON.stringify(this.routeTarget(row, root || !this.stack.size())) }); this.savePath();
   }
   private async openLinkedResource(row: ResourceRow): Promise<void> {
     const generation = this.model.connectionGeneration(), scope = this.model.scope(), source = this.activeChild;

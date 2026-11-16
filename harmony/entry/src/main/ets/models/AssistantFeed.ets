@@ -939,14 +939,20 @@ export class AssistantFeedModel {
     };
     this.error = '';
     this.markBusy('todo:' + todoId, true);
+    const conversation = this.conversationId, owner = this.owner;
+    const acknowledged = (response: Record<string, Object>): boolean => {
+      const todo = Wire.object(response, 'todo');
+      return Wire.text(todo, 'id') === todoId && Wire.text(todo, 'origin') === conversation &&
+        Wire.text(todo, 'manager', owner) === owner;
+    };
     try {
       if (!admit()) return false;
-      const response = await repository.call(path, 'POST', Wire.payload([], []), '', admit);
+      const response = await repository.call(path, 'POST', Wire.payload([], []), '', admit, false, acknowledged);
       if (!this.current(run)) return false;
-      const updatedTodo = Wire.object(response, 'todo');
-      if (Wire.text(updatedTodo, 'id') !== todoId || Wire.text(updatedTodo, 'origin') !== this.conversationId ||
-        Wire.text(updatedTodo, 'manager', this.owner) !== this.owner) {
-        this.error = 'request_updated';
+      if (!acknowledged(response)) {
+        this.markUncertain(path, true);
+        await this.locateItem(receiptId, 'receipt');
+        if (this.current(run)) this.error = 'result_unknown';
         return false;
       }
       this.markUncertain(path, false);
@@ -955,7 +961,11 @@ export class AssistantFeedModel {
     } catch (error) {
       if (!this.current(run)) return false;
       this.error = this.errorKey(error as Error);
-      if (this.error === 'result_unknown') this.markUncertain(path, true);
+      if (this.error === 'result_unknown') {
+        this.markUncertain(path, true);
+        await this.locateItem(receiptId, 'receipt');
+        if (this.current(run)) this.error = 'result_unknown';
+      }
       if (this.error === 'request_updated' || this.error === 'unsupported') await this.refreshTodos(run);
       return false;
     } finally {

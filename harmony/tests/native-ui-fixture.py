@@ -124,7 +124,7 @@ def receipt(item_id, todo_id, state, title, summary, criteria, **extra):
     }
 
 
-def feed_items():
+def feed_items(recovered_todos=()):
     return [
         {
             'id': 'fixture-feed-plan', 'kind': 'plan', 'ref': 'fixture-plan',
@@ -146,7 +146,7 @@ def feed_items():
         receipt('fixture-receipt-interrupted', 'fixture-todo-interrupted', 'interrupted', 'Interrupted fixture task',
                 'The listed synthetic lead session stopped with an error.', [
                     {'criterion': 'Work resumed', 'state': 'unchecked', 'evidence': ''},
-                ]),
+                ], resolution='resumed' if 'fixture-todo-interrupted' in recovered_todos else 'pending'),
     ]
 
 
@@ -559,7 +559,7 @@ def main():
                         'items': [], 'plans': {}, 'task_cards': [], 'views': {},
                         'view_actions': {}, 'view_blocks': [], 'next_cursor': '',
                     })
-                items = feed_items()
+                items = feed_items(snapshot['recovered_todos'])
                 plan_state = snapshot.get('plan_state', 'open')
                 if plan_state == 'dismissed':
                     items = [item for item in items if item['kind'] != 'plan']

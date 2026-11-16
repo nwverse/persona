@@ -19,8 +19,14 @@ export class HubRepository {
     this.transport = transport || new HubTransport(config); this.owner = config.managerId; this.changed = changed; this.defaultOwner = defaultOwner;
     if (local) this.mutations = MutationStore.shared(local, JSON.stringify([config.hubId, config.managerId]));
   }
-  async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false): Promise<Record<string, Object>> {
-    if (method === 'GET' || !this.mutations) { if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false); return Wire.parse(await this.transport.request(path, method, method === 'GET' ? '' : JSON.stringify(body), op)); }
+  async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false,
+    acknowledged?: (result: Record<string, Object>) => boolean): Promise<Record<string, Object>> {
+    if (method === 'GET' || !this.mutations) {
+      if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
+      const result = Wire.parse(await this.transport.request(path, method, method === 'GET' ? '' : JSON.stringify(body), op));
+      if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
+      return result;
+    }
     const payload = JSON.stringify(body), record = await this.mutations.begin(path, method, payload, op); this.changed();
     let pendingReceipt = false;
     try {
@@ -30,6 +36,7 @@ export class HubRepository {
       if (state === 'pending' || state === 'unknown' || Wire.text(result, 'delivered') === 'unknown') {
         pendingReceipt = state === 'pending'; await this.mutations.finish(record, pendingReceipt ? 'pending' : 'unknown'); throw new HttpFailure(202, 'result_unknown', true, pendingReceipt);
       }
+      if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
       await this.mutations.finish(record, 'done'); return result;
     } catch (error) {
       if (completedAsAck && record.state === 'done') return Wire.payload(['state'], ['done']);

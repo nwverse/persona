@@ -149,5 +149,25 @@ class ReadingFixtureTests(unittest.TestCase):
         self.assertEqual(append['from_seq'], 59)
         self.assertTrue(append['has_more'])
 
+    def test_paged_after_cursor_is_the_exclusive_span_boundary(self):
+        page = fixture.transcript(after_seq=40, control={
+            'reading_case': True, 'reading_prepend': True, 'reading_paged': True,
+        })
+        self.assertEqual([item['seq'] for item in page['items']], list(range(41, 60)))
+        self.assertEqual((page['from_seq'], page['to_seq']), (40, 59))
+
+    def test_interrupted_receipt_resolution_tracks_its_own_successful_recovery(self):
+        baseline = fixture.feed_items()
+        pending = next(item for item in baseline if item['id'] == 'fixture-receipt-interrupted')
+        self.assertEqual(pending['body']['resolution'], 'pending')
+        unrelated = fixture.feed_items(['fixture-todo-failed'])
+        self.assertEqual(unrelated, baseline)
+        recovered = fixture.feed_items(['fixture-todo-interrupted'])
+        resumed = next(item for item in recovered if item['id'] == pending['id'])
+        self.assertEqual(resumed['body']['resolution'], 'resumed')
+        self.assertEqual({**resumed, 'body': {**resumed['body'], 'resolution': 'pending'}}, pending)
+        self.assertEqual([item for item in recovered if item['id'] != pending['id']],
+                         [item for item in baseline if item['id'] != pending['id']])
+
 if __name__ == '__main__':
     unittest.main()

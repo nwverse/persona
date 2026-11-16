@@ -15,7 +15,7 @@ function method(name){
  for(;i<source.length&&depth;i++){const c=source[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';}else if(c==='"'||c==="'"||c==='`')quote=c;else if(c==='{')depth++;else if(c==='}')depth--;}
  assert.equal(depth,0,name);return source.slice(start,i);
 }
-const names=['destinationBackHidden','chatSelectionShown','peerUsesSelect','measurePeerSlot','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
+const names=['consumeNotification','destinationBackHidden','chatSelectionShown','peerUsesSelect','measurePeerSlot','readingAgentDetail','routeTarget','openRow','mainDestination','openMain','hideChatTitle','newConversation','resolveMainDestination','ensureMainDestination','pushChat','redeem','childKey','routeRow','openSettings','settingsKind','settingsModel','targetReady','openLinkedResource','openFrom','openComputer','handoffResource','restoreTarget','routeShown','dismissChatActions','markDetailReady'];
 const NativeNavigation=new Function('NavigationContext','ResourceRow','mainConversationData','Wire','Tokens','return '+stripTypeScriptTypes('class NativeNavigation {'+names.map(method).join('\n')+'}'))(NavigationContext,ResourceRow,mainConversationData,Wire,Tokens);
 function row(id='source',manager='owner-b',kind='conversation'){const r=new ResourceRow(id,id,kind);r.manager=manager;r.machine='machine';r.session=id;return r;}
 function deferred(){let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};}
@@ -199,6 +199,29 @@ test('root selection and source links serialize independent route-local copies',
  shell.openRow(inventory);assert.equal(inventory.raw,original);assert.equal(JSON.parse(JSON.parse(pushed[0].param).raw).navigation_root,true);
  const previouslyRoot=NavigationContext.rowFrom(pushed[0].param);shell.activeChild='source-todo';primary.viewFor=async()=>detail;
  await shell.openLinkedResource(previouslyRoot);assert.equal(JSON.parse(JSON.parse(pushed[1].param).raw).navigation_root,false);assert.equal(previouslyRoot.data().navigation_root,true);assert.equal(inventory.raw,original);
+});
+
+test('conversation navigation preserves Back when a main notification pushes over an existing route',()=>{
+ const {shell,primary,pushed}=fixture(),main=row('main','owner-a');main.group='hub';primary.profile.manager='owner-a';primary.mainId='main';primary.mainMachineId='machine';
+ const original=main.raw;
+ shell.wide=()=>true;shell.rail=()=>false;
+ shell.openRow(main);assert.equal(shell.mainDestination('conversation',pushed[0].param),true,'an empty stack admits a root');
+ primary.sessions=[];primary.conversations=[main];primary.notificationTarget=JSON.stringify(main);shell.changeSection=()=>{};
+ pushed.push({name:'knowledge',param:'source'});shell.consumeNotification();
+ assert.equal(pushed.length,3);assert.equal(shell.mainDestination('conversation',pushed[2].param),false,'a pushed notification remains a child with Back');
+ assert.equal(shell.destinationBackHidden('conversation',pushed[2].param),false);
+ assert.equal(main.raw,original,'route metadata never mutates the inventory row');
+ const agent=row('agent','owner-a','session');shell.openRow(agent);
+ assert.equal(pushed.length,1);assert.equal(JSON.parse(JSON.parse(pushed[0].param).raw).navigation_root,true,'Agent selection still replaces its stack');
+});
+
+test('normal secondary-conversation sidebar selection retains its split root title semantics',()=>{
+ const {shell,primary,pushed}=fixture(),secondary=row('secondary','owner-a');
+ primary.mainId='main';primary.mainMachineId='machine';primary.selected=secondary;primary.target=r=>(r||primary.selected).id;
+ shell.rowVisibility=new Map([[primary.scope()+primary.target(secondary),1]]);shell.visibilityEpoch=0;shell.peer=()=>0;shell.wide=()=>true;shell.rail=()=>false;
+ pushed.push({name:'conversation',param:JSON.stringify(row('main','owner-a'))});shell.openRow(secondary);
+ assert.equal(secondary.data().navigation_root,undefined);assert.equal(shell.hideChatTitle('conversation',pushed[1].param),true);
+ assert.equal(JSON.parse(JSON.parse(pushed[1].param).raw).navigation_root,true);
 });
 
 

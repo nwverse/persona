@@ -1024,7 +1024,13 @@ export class ClientModel {
       await repo.resolve(request, option, values, util.generateRandomUUID(), dispatch);
     } catch (error) {
       if (!current()) return;
-      if (retiredBeforeSend) { decision.status = 'open'; if (!personaQuestion) this.operationState = previousState; return; }
+      if (retiredBeforeSend) {
+        if (decision.status === 'pending' && decision.raw === request.raw) {
+          decision.status = 'open';
+          if (!personaQuestion && this.operationState === 'pending') this.operationState = previousState;
+        }
+        return;
+      }
       decision.status = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'open';
       if (!personaQuestion) this.operationState = ['pending', 'unknown'].includes(decision.status) ? decision.status : 'failed';
       this.failure(error as Error);

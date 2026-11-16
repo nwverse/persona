@@ -191,4 +191,3 @@ test('retire after native presentation clears presenting and isolates the next l
   assert.equal(workspace.presenting,true);
   assert.equal(workspace.session,next);
 });
-

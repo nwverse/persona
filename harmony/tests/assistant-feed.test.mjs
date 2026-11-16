@@ -574,6 +574,52 @@ test('a missing listed session never qualifies as continued or as a manual conti
   assert.equal(feed.canContinueReceipt(interrupted.id, missingSessionTodo.id), false);
 });
 
+test('an unrecognized recovery acknowledgment blocks another write while reconciling authoritative cards', async () => {
+ for(const action of ['retry','continue'])for(const mismatch of ['missing','id','origin','manager']){
+  const task=receiptTodo(action==='retry'?{done_at:timestamp,start_error:'Launcher unavailable'}:{agents:[{machine_id:'machine-receipt',session_id:'session-receipt'}]});
+  const card=receipt('receipt-uncertain',task.id,action==='retry'?'failed':'interrupted','pending');
+  const session=listedSession();let posts=0,readsAfterPost=0;
+  const {feed}=await opened(async(call)=>{
+   if(call.path.includes('/feed')){if(posts)readsAfterPost++;return feedPage([card]);}
+   if(call.method==='GET'&&call.path.startsWith('/api/v1/todos'))return {todos:[task]};
+   if(call.method==='POST'){
+    posts++;const todo={...task};
+    if(mismatch==='missing')return {};
+    todo[mismatch]='another-'+mismatch;return {todo};
+   }
+   return {};
+  },{sessions:[session]});
+  assert.equal(await feed.retryReceipt(card.id,task.id,action),false);
+  assert.equal(feed.error,'result_unknown',action+'/'+mismatch);
+  assert.ok(readsAfterPost>0,'reconcile feed after the unrecognized acknowledgment');
+  assert.equal(feed.busyKeys.length,0);
+  assert.equal(action==='retry'?feed.canRetryReceipt(card.id,task.id):feed.canContinueReceipt(card.id,task.id),false);
+  assert.equal(await feed.retryReceipt(card.id,task.id,action),false);assert.equal(posts,1,'uncertainty cannot dispatch a second recovery');
+ }
+});
+
+test('uncertain recovery reads feed and todos after POST even while an earlier refresh is in flight',async()=>{
+ const task=receiptTodo({done_at:timestamp,start_error:'Synthetic failure'}),card=receipt('receipt-refresh-race',task.id,'failed');
+ let holdNext=false,posts=0,postFeedReads=0,postTodoReads=0,entered,release;
+ const started=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+ const {feed}=await opened(async(call)=>{
+  if(call.path.includes('/feed')){
+   if(holdNext){holdNext=false;entered();await gate;}
+   else if(posts)postFeedReads++;
+   return feedPage([card]);
+  }
+  if(call.method==='GET'&&call.path.startsWith('/api/v1/todos')){if(posts)postTodoReads++;return {todos:[task]};}
+  if(call.method==='POST'){posts++;return {};}
+  return {};
+ });
+ holdNext=true;const stale=feed.refresh();await started;
+ try{
+  assert.equal(await feed.retryReceipt(card.id,task.id,'retry'),false);
+  assert.ok(postFeedReads>0&&postTodoReads>0,'fresh reconciliation cannot coalesce into the pre-POST read');
+  assert.equal(feed.canRetryReceipt(card.id,task.id),false);
+ }finally{release();await stale;}
+});
+
 test('a receipt updated to resumed cannot act on a later interruption', async () => {
   const oldReceipt = receipt('receipt-old', 'todo-receipt', 'interrupted', 'pending');
   const laterReceipt = receipt('receipt-later', 'todo-receipt', 'interrupted', 'pending');

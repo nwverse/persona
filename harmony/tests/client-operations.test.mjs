@@ -654,7 +654,7 @@ test('interrupt is active-turn only and its pending admission retires with the r
 test('question resolution rechecks journal-delayed scope, request, capability and active-sheet admission',async()=>{
  const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
  const {QuestionWorkspace}=await import('../entry/src/main/ets/models/QuestionWorkspace.ets');
- for(const retirement of ['none','same-content','sheet','native-dismiss','request','owner','target','capability']){
+ for(const retirement of ['none','same-content','sheet','native-dismiss','request','owner','target','capability','uncertain-refresh']){
   const {model}=fixture();delete model.canApprove;model.selected.kind='conversation';model.selected.manager='personal';model.selected.raw=JSON.stringify({source_kind:'native',capabilities:{read:true,send:true,approve:true}});model.decisionReadyTarget=model.target();
   const raw={id:'question-admission',kind:'question',tool_name:'ask_user',resumable:true,status:'open',manager:'personal',machine_id:'machine-one',session_id:'chat-one',can_cancel:true,questions:[{question:'Which?',options:[{label:'A'}]}]};
   model.decisionRefreshSequence=1;model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);const request=model.personaQuestions[0];assert.ok(request);assert.equal(model.canApprove(),true);
@@ -664,7 +664,13 @@ test('question resolution rechecks journal-delayed scope, request, capability an
   try{
    const answering=model.answer('answer',{'Which?':'A'},request,()=>visible&&admit());await entered.promise;assert.equal(request.status,'pending');
    if(retirement==='sheet')visible=false;else if(retirement==='native-dismiss')workspace.dismiss(sheet,()=>{assert.equal(admit(),false);gate.resolve();});else if(retirement==='request')model.replacePendingDecisions([{...raw,questions:[{question:'Which?',options:[{label:'B'}]}]}],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);else if(retirement==='same-content')model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);else if(retirement==='owner')model.generation++;else if(retirement==='target')model.selected=new ResourceRow('other','Other','conversation');else if(retirement==='capability')model.selected.raw=JSON.stringify({source_kind:'native',capabilities:{approve:false}});
+   if(retirement==='uncertain-refresh'){
+    model.unresolvedWrites=[{path:'/api/v1/interactions/'+request.id+'/resolve'}];
+    model.replacePendingDecisions([raw],model.selected,model.target(),model.connectionGeneration(),model.scope(),1);
+    assert.equal(model.pendingDecisions[0],request);assert.equal(request.status,'unknown');
+   }
    gate.resolve();await answering;assert.equal(posts,['none','same-content'].includes(retirement)?1:0,retirement);assert.equal(repo.mutations.blocked().length,0);if(['sheet','native-dismiss'].includes(retirement))assert.equal(request.status,'open');
+   if(retirement==='uncertain-refresh')assert.equal(request.status,'unknown','a newer authoritative uncertainty must not reopen after admission fails');
   }finally{gate.resolve();globalThis.clientTestRequest=previous;}
  }
 });
