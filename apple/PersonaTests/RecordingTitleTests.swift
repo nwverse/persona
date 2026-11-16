@@ -27,7 +27,7 @@ import PersonaWire
         #expect(entry(hubName: "Export cap").displayTitle == "Export cap")
         #expect(RecordingTitle.source(entry(hubName: "Export cap")) == .hub)
         #expect(entry().displayTitle == String(localized: "Meeting · \(when)"))
-        #expect(entry(meeting: false).displayTitle == String(localized: "Recording · \(when)"))
+        #expect(entry(meeting: false).displayTitle == String(localized: "Note · \(when)")) // a note says so (#8731)
         #expect(entry(hubName: "").displayTitle == String(localized: "Meeting · \(when)"))
         // An all-day recording keeps its day's name.
         var day = entry(hubName: "Export cap", meeting: false)
