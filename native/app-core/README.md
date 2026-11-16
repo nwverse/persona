@@ -69,7 +69,11 @@ single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects
 later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
 
 Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
-finishes nor cancels it; only a coroutine whose transport actually failed emits `FillFailed`. `Rejected` has no chat
+finishes nor cancels it; until a response is successfully queued, its request owner reports failures or cancellation
+with `FillFailed`. Successful content acknowledgements, not arbitrary Acks, clear errors and complete a reconciliation.
+Synchronous adapters retain the native state lock and serialized HTTP operations; only asynchronous adapters submit
+outside that lock and open concurrent folds. Ack-only frames reuse the item list and do not schedule cache writes.
+`Rejected` has no chat
 or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
 releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
 

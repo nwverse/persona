@@ -47,6 +47,8 @@ val hostLibrary = coreWorkspace.file("target/debug/" + when {
 tasks.withType<Test>().configureEach {
     // Adapter parity always exercises JNI; the switch selects the implementation for every repository test.
     dependsOn(":core:rustcore:buildHostCore")
+    inputs.files(project(":core:rustcore").tasks.named("buildHostCore"))
+        .withPropertyName("hostCore").withPathSensitivity(PathSensitivity.NONE)
     systemProperty("persona.core.library", hostLibrary.asFile.absolutePath)
     systemProperty("persona.continuity", continuity.get())
     systemProperty("persona.continuity.frameScheduler", "persona.core.data.FlushContinuityFrameScheduler")

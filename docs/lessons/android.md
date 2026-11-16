@@ -12,8 +12,12 @@ through range responses and failures. Never let a late effect use a newer call's
 generation against submitted inputs under the same input mutex, not against the still-old displayed frame. Start
 fold cleanup protection before any suspension after reserving its ID, and bind initialization waiters to the driver
 scope so closing before the first frame cancels them. A queued async fill belongs
-to its applied callback chain: only an actual failed transport emits `FillFailed`, not a coroutine exiting after
-`accept` returned null. Dispatch follow-ups outside the entry's state mutex. Rejected effects have no owner; record
+to its applied callback chain. Before successful response queueing, its request owner must release the gate on failure
+or cancellation, including cancellation after HTTP returns. Queue acknowledgement is neither successful content nor
+completion of a later reconciliation: preserve errors across ordinary Acks and give each reconciliation a receipt.
+Bound overtaken-After follow-ups by progress and a request budget. Only async submissions leave the state mutex;
+the default synchronous adapter must share the original state lock for mutation/publication and the requests mutex
+for all HTTP operations. Lock ordering is inputs then state, never the reverse. Rejected effects have no owner; record
 and broadcast diagnostics without cancelling another chat. Immediate test-only flush/drain schedulers do not prove
 these races: use real JNI with independently controlled worker completion, frames and transport.
 

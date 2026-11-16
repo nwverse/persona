@@ -43,12 +43,15 @@ interface ContinuityAdapter {
     }
 
     /** A single input's effect set, including an acknowledged no-op. Never reused by a later input. */
-    data class Operation(val id: Long, val requests: List<Action>)
+    data class Operation(val id: Long, val requests: List<Action>, val content: Boolean = false, val fillResponse: Boolean = false)
     data class Applied(
         val chat: String, val state: State, val gap: Gap = Gap.None, val requests: List<Action> = emptyList(),
         val verified: Boolean = gap == Gap.None && state.loadedOnce,
         val operations: List<Operation> = emptyList(),
         val reloadApplied: Boolean = false,
+        val afterApplied: Boolean = false,
+        val contentApplied: Boolean = false,
+        val stateChanged: Boolean = true,
         /** Diagnostic notification only; it neither cancels requests nor changes another chat's gates. */
         val rejected: Boolean = false,
         val diagnosticOnly: Boolean = false,
@@ -62,6 +65,14 @@ interface ContinuityAdapter {
     suspend fun accept(input: Input, operation: Long? = null): Applied?
     fun close() {}
 }
+
+internal val ContinuityAdapter.Input.isContent: Boolean get() = when (this) {
+    is ContinuityAdapter.Input.Push, is ContinuityAdapter.Input.Latest, is ContinuityAdapter.Input.After,
+    is ContinuityAdapter.Input.Reload, is ContinuityAdapter.Input.Older, is ContinuityAdapter.Input.Range -> true
+    else -> false
+}
+internal val ContinuityAdapter.Input.isFillResponse: Boolean get() =
+    this is ContinuityAdapter.Input.After || this is ContinuityAdapter.Input.Reload || this is ContinuityAdapter.Input.Latest
 
 /** The existing reducer and sync, without changing their rules or request gates. */
 class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {
@@ -110,7 +121,8 @@ class KotlinContinuityAdapter(private val chat: String) : ContinuityAdapter {
             ContinuityAdapter.Input.OlderFailed -> { sync.finishOlder(); emptyList() }
             is ContinuityAdapter.Input.RangeFailed -> { sync.cancelFold(); emptyList() }
         }
-        return ContinuityAdapter.Applied(chat, state, gap, requests,
-            verified = gap == Gap.None && state.loadedOnce && state.items.none { it.seq > state.covered })
+        val view = state
+        return ContinuityAdapter.Applied(chat, view, gap, requests,
+            verified = gap == Gap.None && (input is ContinuityAdapter.Input.Push || view.items.none { it.seq > view.covered }))
     }
 }

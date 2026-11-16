@@ -8,7 +8,7 @@ import persona.core.contracts.*
 import persona.core.contracts.api.ItemsQuery
 import persona.core.contracts.api.ChatSnapshot
 
-/** Runs on both selections: the Kotlin reference serializes folds, while Rust uses independent fold IDs. */
+/** Both synchronous test selections retain serialized HTTP; real async fold concurrency has separate coverage. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ContinuityFoldFlowTest {
     private val key = SessionKey("fixture", "fold-flow")
@@ -56,8 +56,8 @@ class ContinuityFoldFlowTest {
         val first = async { repository.expandFold(key, 2, 3) }
         val second = async { repository.expandFold(key, 5, 6) }
         runCurrent()
-        val parallel = System.getProperty("persona.continuity", "kotlin") == "rust"
-        assertEquals(if (parallel) listOf(2, 5) else listOf(2), requests.map { it.fromSeq })
+        // Both selected test adapters are synchronous here; only the real async adapter enables parallel folds.
+        assertEquals(listOf(2), requests.map { it.fromSeq })
         held.complete(ItemsResponse(listOf(work(2), work(3))))
         first.await(); second.await()
         runCurrent()

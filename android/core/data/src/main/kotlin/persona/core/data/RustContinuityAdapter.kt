@@ -236,7 +236,8 @@ class RustContinuityAdapter(
     private var nextSequence = 0UL
     private var verified = false
     private var reset = false
-    private data class Pending(val operation: Long?, val reload: Boolean, val foldId: String?, val requests: MutableList<Action> = mutableListOf())
+    private data class Pending(val operation: Long?, val content: Boolean, val after: Boolean, val reload: Boolean,
+        val foldId: String?, val requests: MutableList<Action> = mutableListOf())
     private val pending = linkedMapOf<ULong, Pending>()
     private var immediate: ContinuityAdapter.Applied? = null
 
@@ -245,13 +246,13 @@ class RustContinuityAdapter(
     override suspend fun accept(input: ContinuityAdapter.Input, operation: Long?): ContinuityAdapter.Applied? = inputs.withLock {
         immediate = null
         if (!opened && input !is ContinuityAdapter.Input.Restore) {
-            opened = true
             driver.dispatch(CoreAction.OpenChat(owner, CoreSnapshot("[]", null, 0, null, false)))
+            opened = true
         }
         val action = when (input) {
             is ContinuityAdapter.Input.Restore -> {
                 if (opened) driver.dispatch(CoreAction.CloseChat(owner))
-                opened = true
+                opened = false
                 synchronized(metadata) { reset = true }
                 CoreAction.OpenChat(owner, CoreSnapshot(json(input.state.items), input.state.history,
                     input.state.covered.toLong(), input.state.hasMore, input.state.loadedOnce))
@@ -272,7 +273,7 @@ class RustContinuityAdapter(
             is ContinuityAdapter.Input.RangeFailed -> event(ChatEvent.RangeFailed(input.foldId))
         }
         val sequence = synchronized(metadata) {
-            (++nextSequence).also { pending[it] = Pending(operation,
+            (++nextSequence).also { pending[it] = Pending(operation, input.isContent, input is ContinuityAdapter.Input.After,
                 input is ContinuityAdapter.Input.Reload || input is ContinuityAdapter.Input.Latest,
                 when (input) {
                     is ContinuityAdapter.Input.OpenFold -> input.id
@@ -280,7 +281,13 @@ class RustContinuityAdapter(
                     else -> null
                 }) }
         }
-        driver.submit(action, sequence)
+        try {
+            driver.submit(action, sequence)
+            if (input is ContinuityAdapter.Input.Restore) opened = true
+        } catch (failure: Throwable) {
+            synchronized(metadata) { pending.remove(sequence) }
+            throw failure
+        }
         if (driver.synchronous) immediate ?: ContinuityAdapter.Applied(publicChat, state, verified = verified) else null
     }
 
@@ -289,11 +296,13 @@ class RustContinuityAdapter(
     private fun apply(patch: ChatPatch, fetches: List<RustContinuityDriver.Delivery>, rejected: Boolean) {
         val result = synchronized(metadata) {
             val changed = patch.version != version && patch.version != 0UL
+            val before = state
+            val wasVerified = verified
             if (changed) {
                 version = patch.version
-                val list = if (reset) mutableListOf() else state.items.toMutableList()
+                val list = if (reset) mutableListOf() else if (patch.ops.isNotEmpty()) state.items.toMutableList() else null
                 reset = false
-                for (op in patch.ops) when (op) {
+                if (list != null) for (op in patch.ops) when (op) {
                     is ListOp.Remove -> list.removeAt(op.index.toInt())
                     is ListOp.Insert -> list.add(op.index.toInt(), item(op.id, op.json))
                     is ListOp.Update -> {
@@ -301,9 +310,12 @@ class RustContinuityAdapter(
                         list[op.index.toInt()] = item(op.id, op.json)
                     }
                 }
-                state = ContinuityAdapter.State(list, patch.history, patch.covered.toInt(), patch.has_more, patch.loaded_once)
+                if (list != null || state.history != patch.history || state.covered != patch.covered.toInt() ||
+                    state.hasMore != patch.has_more || state.loadedOnce != patch.loaded_once)
+                    state = ContinuityAdapter.State(list ?: state.items, patch.history, patch.covered.toInt(), patch.has_more, patch.loaded_once)
                 verified = patch.verified
             }
+            val stateChanged = state !== before || wasVerified != verified
             val requests = fetches.mapNotNull { delivery ->
                 val expectedFold = delivery.sequence?.let { pending[it]?.foldId }
                 if (delivery.request is Request.FetchRange && expectedFold != null && delivery.request.fold_id != expectedFold)
@@ -322,15 +334,19 @@ class RustContinuityAdapter(
             val completed = acknowledged.mapNotNull { pending.remove(it) }
             if (!changed && requests.isEmpty() && completed.isEmpty() && !rejected && !driver.synchronous) return
             ContinuityAdapter.Applied(publicChat, state, requests = requests, verified = verified,
-                operations = completed.mapNotNull { p -> p.operation?.let { ContinuityAdapter.Operation(it, p.requests.toList()) } },
-                reloadApplied = completed.any { it.reload }, rejected = rejected,
+                operations = completed.mapNotNull { p -> p.operation?.let { ContinuityAdapter.Operation(it, p.requests.toList(), p.content, p.after || p.reload) } },
+                reloadApplied = completed.any { it.reload }, afterApplied = completed.any { it.after },
+                contentApplied = completed.any { it.content }, stateChanged = stateChanged, rejected = rejected,
                 diagnosticOnly = rejected && !changed && requests.isEmpty() && completed.isEmpty())
         }
         if (driver.synchronous) {
             val previous = immediate
             immediate = result.copy(requests = previous?.requests.orEmpty() + result.requests,
                 operations = previous?.operations.orEmpty() + result.operations,
-                reloadApplied = previous?.reloadApplied == true || result.reloadApplied)
+                reloadApplied = previous?.reloadApplied == true || result.reloadApplied,
+                afterApplied = previous?.afterApplied == true || result.afterApplied,
+                contentApplied = previous?.contentApplied == true || result.contentApplied,
+                stateChanged = previous?.stateChanged == true || result.stateChanged)
         } else applied(result)
     }
 
