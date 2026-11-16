@@ -15873,6 +15873,28 @@
         }
       }
     },
+    "Answers Out Loud" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answers out loud"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声で回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出声回答"
+          }
+        }
+      }
+    },
     "API Key" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -26315,24 +26337,24 @@
         }
       }
     },
-    "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs." : {
+    "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Assistant and Agents each have a page, switched at the top. On iPad they are the Persona and Agents tabs."
+            "value" : "Assistant and Agents each have a page. On iPhone you switch at the top, on iPhone Duo at the bottom right, and on iPad with the Persona and Agents tabs."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあり、上部で切り替えます。iPad では Persona と Agents のタブです。"
+            "value" : "アシスタントと Agents がそれぞれ 1 ページずつあります。iPhone では上部、iPhone Duo では右下で切り替え、iPad では Persona と Agents のタブです。"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "助手和 Agents 各占一页，在顶部切换。iPad 上是 Persona 和 Agents 两个标签。"
+            "value" : "助手和 Agents 各占一页。iPhone 上在顶部切换，iPhone Duo 上在右下角切换，iPad 上是 Persona 和 Agents 两个标签。"
           }
         }
       },
@@ -62385,6 +62407,50 @@
         }
       }
     },
+    "End [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束"
+          }
+        }
+      }
+    },
+    "End and Write the Minutes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End and Write the Minutes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "終了して議事録を作成"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束并生成纪要"
+          }
+        }
+      }
+    },
     "End Conversation" : {
       "localizations" : {
         "en" : {
@@ -62430,6 +62496,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "End the Meeting?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the Meeting?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議を終了しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束会议？"
+          }
+        }
+      }
     },
     "End-of-Day Review" : {
       "localizations" : {
@@ -71427,6 +71515,28 @@
         }
       }
     },
+    "Highlights [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlights"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要点"
+          }
+        }
+      }
+    },
     "HTML Card" : {
       "shouldTranslate" : false,
       "localizations" : {
@@ -78515,6 +78625,28 @@
         }
       }
     },
+    "Invite [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "招待"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邀请"
+          }
+        }
+      }
+    },
     "Invite Persona" : {
       "localizations" : {
         "en" : {
@@ -78555,6 +78687,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开会时自动邀请 Persona"
+          }
+        }
+      }
+    },
+    "Invite Persona to ask, or use Just Me." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite Persona to ask, or use Just Me."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先邀请 Persona 再提问，或者用“仅自己”。"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "質問するには Persona を招待するか、「自分だけ」を使ってください。"
           }
         }
       }
@@ -80611,6 +80766,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Keep Going [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keep Going"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "続ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续开会"
+          }
+        }
+      }
     },
     "Keep Recalled Messages" : {
       "localizations" : {
@@ -85325,6 +85502,28 @@
         }
       }
     },
+    "Live [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Live"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライブ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "实时"
+          }
+        }
+      }
+    },
     "Live Activities" : {
       "localizations" : {
         "en" : {
@@ -87444,6 +87643,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "低打扰模式"
+          }
+        }
+      }
+    },
+    "Map [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Map"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导图"
           }
         }
       }
@@ -108843,6 +109064,28 @@
         }
       }
     },
+    "On Now [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "On Now [Upcoming Meeting]" : {
       "localizations" : {
         "en" : {
@@ -115148,6 +115391,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Photo [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        }
+      }
     },
     "PR to Merge" : {
       "extractionState" : "manual",
@@ -124685,6 +124950,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Remove [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "外す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出"
+          }
+        }
+      }
     },
     "RTF document" : {
       "localizations" : {
@@ -135885,6 +136172,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SOCKS5 代理"
+          }
+        }
+      }
+    },
+    "Speaker [Meeting Room]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Speaker"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スピーカー"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "喇叭"
           }
         }
       }
@@ -158382,6 +158691,28 @@
         }
       }
     },
+    "The map grows as the meeting moves through its topics." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The map grows as the meeting moves through its topics."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議が議題を進むにつれて、ここにマップができていきます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议进入各个议题后，导图会在这里长出来。"
+          }
+        }
+      }
+    },
     "The Meta glasses are not ready yet" : {
       "localizations" : {
         "en" : {
@@ -159247,7 +159578,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "音频保存在这台设备上，文字会进入知识库。结束后的录音无法继续。"
+            "value" : "音频保存在这台设备上，文字会进入知识库。结束后不能再接着录。"
           }
         }
       }
@@ -178099,29 +178430,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Turn Persona on in the menu to ask, or use Just Me." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Turn Persona on in the menu to ask, or use Just Me."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在菜单里打开 Persona 再提问，或者用“仅自己”。"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "質問するにはメニューで Persona をオンにするか、「自分だけ」を使ってください。"
-          }
-        }
-      }
     },
     "Turn it on and tap Restart" : {
       "localizations" : {

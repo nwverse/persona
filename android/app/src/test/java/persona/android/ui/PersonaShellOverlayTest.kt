@@ -315,15 +315,30 @@ class PersonaShellOverlayTest {
         shell(automation = false) {
             awaitText("The trip outline is ready.")
             awaitText("Weekend plans")
-            sidebar()
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
+            val switcherOut = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals(690f, (switcherOut.left.value + switcherOut.right.value) / 2f, 0.5f)
+
+            hideSidebar()
             assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+            val switcherFolded = rule.onNodeWithTag("home-switcher").getBoundsInRoot()
+            assertEquals("Top-bar switcher must stay centered when hiding sidebar",
+                500f, (switcherFolded.left.value + switcherFolded.right.value) / 2f, 0.5f)
             awaitSavedColumns(sidebar = false)
         }
         shell(automation = false) {
             awaitText("The trip outline is ready.")
             assertFalse(isTextDisplayed("Weekend plans"))
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            assertTrue(hasDisplayedContentDescription("Sidebar"))
+
             sidebar()
             awaitText("Weekend plans")
+            assertFalse(hasDisplayedContentDescription("Sidebar"))
+            assertTrue(hasDisplayedContentDescription("Hide sidebar"))
             awaitSavedColumns(sidebar = true)
         }
     }
@@ -334,14 +349,16 @@ class PersonaShellOverlayTest {
         shell(width = width, automation = false) {
             awaitText("The trip outline is ready.")
             awaitText("Weekend plans")
-            sidebar()
+            hideSidebar()
             assertFalse(isTextDisplayed("Weekend plans"))
             awaitSavedColumns(sidebar = false)
 
             rule.runOnIdle { width.value = 673 }
             frames()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
             sidebar()
             close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
             close().performTouchInput { click(centerRight) }
             frames()
             close().assertDoesNotExist()
@@ -356,6 +373,20 @@ class PersonaShellOverlayTest {
             frames()
             assertFalse(isTextDisplayed("Weekend plans"))
             awaitSavedColumns(sidebar = false)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsDrawerNeverShowsColumnFoldButton() {
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            awaitText("Weekend plans")
+            clickText("Agents")
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
+            sidebar()
+            close().assertExists()
+            assertFalse(hasDisplayedContentDescription("Hide sidebar"))
         }
     }
 
@@ -389,6 +420,55 @@ class PersonaShellOverlayTest {
             assertFalse(isTextDisplayed(agent.displayTitle))
 
             rule.onNodeWithContentDescription(resize).performClick()
+            awaitText(agent.displayTitle)
+            awaitSavedColumns(agents = true)
+        }
+    }
+
+    @Config(qualifiers = "en-w1000dp-h800dp-mdpi")
+    @Test fun wideAgentsHidesBackBesideListAndHeaderButtonRestoresCollapsedList() {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val resize = app.getString(persona.core.designsystem.R.string.designsystem_pane_resize)
+        val collapsedState = app.getString(persona.core.designsystem.R.string.designsystem_pane_collapsed)
+        shell(automation = false) {
+            awaitText("The trip outline is ready.")
+            clickText("Agents")
+            awaitText(otherAgent.displayTitle)
+            clickText(otherAgent.displayTitle)
+            awaitText("The packing list is ready.")
+            assertTrue(isTextDisplayed(agent.displayTitle))
+            // First page beside the Agents list: no Back button in the header.
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            rule.onNodeWithContentDescription(resize).assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.StateDescription, collapsedState))
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = false)
+
+            // With the list collapsed, the header's sidebar button brings it back and records the kept choice.
+            sidebar()
+            awaitText(agent.displayTitle)
+            assertFalse(hasDisplayedContentDescription("Back"))
+            awaitSavedColumns(agents = true)
+
+            // Collapse again before restart to verify the restored collapsed state exposes the header button too.
+            rule.onNodeWithContentDescription(resize).performTouchInput {
+                swipe(center, center + androidx.compose.ui.geometry.Offset(-350f, 0f), 200)
+            }
+            frames()
+            awaitSavedColumns(agents = false)
+        }
+        shell(automation = false) {
+            awaitText("The packing list is ready.")
+            assertFalse(isTextDisplayed(agent.displayTitle))
+            assertFalse(hasDisplayedContentDescription("Back"))
+
+            sidebar()
             awaitText(agent.displayTitle)
             awaitSavedColumns(agents = true)
         }
@@ -550,6 +630,12 @@ class PersonaShellOverlayTest {
         buttons[visible].performClick()
         frames()
     }
+    private fun hideSidebar() {
+        val buttons = rule.onAllNodesWithContentDescription("Hide sidebar")
+        val visible = (0 until buttons.fetchSemanticsNodes().size).single { buttons[it].isDisplayed() }
+        buttons[visible].performClick()
+        frames()
+    }
     private fun clickText(text: String) {
         val nodes = rule.onAllNodesWithText(text)
         val visible = (0 until nodes.fetchSemanticsNodes().size).single { nodes[it].isDisplayed() }
@@ -577,6 +663,10 @@ class PersonaShellOverlayTest {
     }
     private fun isTextDisplayed(text: String): Boolean {
         val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true)
+        return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
+    }
+    private fun hasDisplayedContentDescription(description: String): Boolean {
+        val nodes = rule.onAllNodesWithContentDescription(description, useUnmergedTree = true)
         return (0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }
     }
     private fun back(scenario: ActivityScenario<ComponentActivity>) {

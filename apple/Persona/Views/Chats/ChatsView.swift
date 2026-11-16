@@ -250,12 +250,14 @@ struct ChatsView: View {
     /// The top on a phone: its own search field and layout (#2478).
     @State private var header = AgentsHeader()
     private var ownsTop: Bool { widthClass != .regular && unified == nil }
+    #if os(iOS)
     /// The Separate layout's tab at regular width, the system's tab bar across the top: the split makes the tab bar's
-    /// room once (`TabBarRoomOnce`, #8596).
+    /// room once (`TabBarRoomOnce`, #8596). iOS only, as `TabBarRoomOnce` and the side bars are (#9310).
     private var tabSplit: Bool {
         widthClass == .regular && !splitSideBars && (unified?.part == .persona || unified?.part == .agents)
     }
     @Environment(\.splitSideBars) private var splitSideBars
+    #endif
     /// This page opens the Agents' chats asked for from outside: all but the Persona tab's (the Separate layout's new
     /// look, #4206), whose column has no Agents; the Agents tab's takes them.
     private var takesAgents: Bool { unified?.part != .persona }

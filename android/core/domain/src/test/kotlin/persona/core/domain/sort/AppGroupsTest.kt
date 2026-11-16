@@ -258,6 +258,8 @@ class AppGroupsTest {
         assertEquals(AgentGrouping.App, AgentGrouping.fromPreference("App"))
         val offered = AgentGrouping.selectable
         assertTrue(offered.indexOf(AgentGrouping.App) > offered.indexOf(AgentGrouping.Todo))
+        // By Machine sits between By to-do and By App (#9319).
+        assertEquals(offered.indexOf(AgentGrouping.Machine) + 1, offered.indexOf(AgentGrouping.App))
         assertEquals(offered.indexOf(AgentGrouping.App) + 1, offered.indexOf(AgentGrouping.Recent))
     }
 
