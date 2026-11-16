@@ -42,17 +42,17 @@ final class PersonaCoreProjectionTests: XCTestCase {
             larger, wrong: smaller, label: "JSON integers above 2^53 remain distinct"
         )
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            .number(1), wrong: .number(0), label: "scalar mismatches are catchable Swift errors"
+            .number("1"), wrong: .number("0"), label: "scalar mismatches are catchable Swift errors"
         )
         let original = try ProjectionFixture.decode("9007199254740993", "encoded integer")
         XCTAssertEqual(try original.encoded(), "9007199254740993")
         let negative = try ProjectionFixture.decode("-9007199254740992", "adjacent negative integer")
         XCTAssertNotEqual(negative, try ProjectionFixture.decode("-9007199254740991", "another negative integer"))
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            .bool(true), wrong: .number(1), label: "JSON booleans are not numbers"
+            .bool(true), wrong: .number("1"), label: "JSON booleans are not numbers"
         )
         try ProjectionFixture.assertWrongExpectationIsRejected(
-            .bool(false), wrong: .number(0), label: "JSON false is not zero"
+            .bool(false), wrong: .number("0"), label: "JSON false is not zero"
         )
         // Programmatic invalid numeric text must throw rather than reach Foundation's non-finite exception.
         XCTAssertThrowsError(try ContinuityJSON.number("nan").encoded())
