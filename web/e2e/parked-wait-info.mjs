@@ -188,7 +188,7 @@ try {
       assert.equal(await rows.locator('[data-task-wait-info="wait-legacy"] [data-wait-contact-missing]').count(), 1);
       assert.equal(await rows.locator('[data-task-wait-info="wait-active"]').count(), 0);
       await shot("todos");
-      await page.locator('[data-todo="wait-person"]').click();
+      await page.locator('[data-todo="wait-person"] [data-wait-target]').click();
       const details = page.locator('[data-testid="review-checklist"] [data-task-wait-info="wait-person"]');
       await details.locator("[data-wait-request]").waitFor({ state: "visible" });
       assert.equal(await details.locator("[data-wait-contact]").getAttribute("href"), contact.url);
