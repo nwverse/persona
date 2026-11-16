@@ -48,7 +48,7 @@ nonisolated enum QuestionSteps {
     /// step first (`step(replacing:)`); this is the check behind that. Each pick used to step on its own, so a second tap
     /// within the pause skipped a question, or took the card past the last one onto a page with none.
     static func next(after from: Int, now: Int, count: Int) -> Int? {
-        guard now == from, from + 1 < count else { return nil }
+        guard from >= 0, now == from, from + 1 < count else { return nil } // no step from a page that isn't one
         return from + 1
     }
 

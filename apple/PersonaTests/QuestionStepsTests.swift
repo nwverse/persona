@@ -42,6 +42,9 @@ struct QuestionStepsTests {
         #expect(QuestionSteps.next(after: 2, now: 2, count: 3) == nil)
         // Previous within the pause: the card stays where it went
         #expect(QuestionSteps.next(after: 1, now: 0, count: 3) == nil)
+        // not from a page before the first question: no step to the first one (a page with no question before it)
+        #expect(QuestionSteps.next(after: -1, now: -1, count: 3) == nil)
+        #expect(QuestionSteps.next(after: -2, now: -2, count: 3) == nil)
     }
 
     @MainActor private final class Count { var steps = 0 }
