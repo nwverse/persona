@@ -765,9 +765,13 @@ class Watcher:
         else:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                            outcome="continuation", continuation=new_number, failure=None)
-        self.comment(repo, number, "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
+        self.publication_comment(repo, number,
+                                 published_head if new_number == number else pr["headRefOid"],
+                                 published_key if new_number == number else old.get("evidence_key"),
+                                 "The watcher pushed an automated verification repair. The new head will receive a fresh semantic review and verification.")
         if new_number != number:
-            self.comment(repo, number, "A continuation PR was opened for the fork branch: #%d." % new_number)
+            self.publication_comment(repo, number, pr["headRefOid"], old.get("evidence_key"),
+                                     "A continuation PR was opened for the fork branch: #%d." % new_number)
         return False
 
     def mergeable(self, pr):
@@ -1423,7 +1427,7 @@ class Watcher:
             self.state.put(repo, number, head, evidence_key=evidence_key, outcome=outcome,
                            review_attempts=attempts, retry_after=time.time() + delay,
                            failure=str(error))
-            if not retry and phase != "verification" and not old.get("failure_posted") and phase != "semantic_repair":
+            if not retry and phase not in ("verification", "merge") and not old.get("failure_posted") and phase != "semantic_repair":
                 if not self.dry_run:
                     self.comment(repo, number, "Automated review at `%s` could not complete. Not merged.\n\n```text\n%s\n```" %
                                  (head[:9], bounded(error, 14000)))

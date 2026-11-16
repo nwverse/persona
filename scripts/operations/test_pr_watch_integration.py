@@ -23,7 +23,7 @@ out = ""
 code = 0
 if args[:1] == ["api"]:
     entry["input"] = sys.stdin.read() if "--input" in args else ""
-    entry["review"] = json.loads(entry["input"]) if entry["input"] and "/pulls/" in args[1] else None
+    entry["review"] = json.loads(entry["input"]) if entry["input"] and len(args) > 1 and args[1].endswith("/reviews") else None
 if args[:1] == ["api"] and len(args) > 1 and any(args[1].endswith(suffix) for suffix in ("/comments", "/reviews", "/commits")) and "--input" not in args:
     kind = next((suffix for suffix in ("/comments", "/reviews", "/commits") if args[1].endswith(suffix)), "")
     records = {"comments": state.get("comments", []), "reviews": state.get("reviews", []), "commits": state.get("commits", [])}[kind[1:]]
@@ -48,18 +48,6 @@ elif args[:2] == ["pr", "view"]:
     out = json.dumps(state["pr"])
 elif args[:1] == ["api"] and "/commits/" in args[1]:
     out = state["pr"]["baseRefOid"]
-elif args[:1] == ["api"] and args[1].endswith("/reviews"):
-    payload = json.loads(sys.stdin.read())
-    entry["review"] = payload
-    if os.environ.get("FAKE_REJECT_INLINE") == "1":
-        code = 422
-    else:
-        out = json.dumps({"id": 1})
-    entry["returncode"] = code
-    with open(log_path, "a") as log:
-        log.write(json.dumps(entry) + "\n")
-    print(out)
-    sys.exit(code)
 elif args[:2] in (["pr", "review"], ["pr", "comment"]):
     entry["body"] = args[args.index("--body") + 1]
     if args[:2] == ["pr", "comment"]:

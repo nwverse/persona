@@ -1799,6 +1799,41 @@ class WatcherTests(unittest.TestCase):
         verify.assert_not_called()
         merge.assert_not_called()
 
+    def test_merge_phase_failure_does_not_become_a_success_on_next_poll(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "success_review", return_value=None), \
+                patch.object(self.watcher, "merge", side_effect=pr_watch_common.WatchError("merge unavailable")) as merge:
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merge_failed")
+            self.assertEqual(merge.call_count, 1)
+            self.watcher.state.put("example/one", 7, SHA_A,
+                                   evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                                   retry_after=0)
+            self.watcher.process("example/one", 7)
+            self.assertEqual(merge.call_count, 2)
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "merge_failed")
+        self.assertNotEqual(self.watcher.state.get("example/one", 7)["outcome"], "merged")
+
+    def test_verification_repair_comment_outage_keeps_new_head_for_fresh_review(self):
+        self.watcher.state.put("example/one", 7, SHA_A,
+                               evidence_key="example/one#7@" + SHA_BASE + ".." + SHA_A,
+                               base=SHA_BASE, format=1, semantic="passed", findings=[], repair_rounds=0)
+        with patch.object(pr_watch, "pr_snapshot", side_effect=[pr(), pr(SHA_B)]), \
+                patch.object(pr_watch_repair, "main_failure_comparison", return_value={"reproduced": False}), \
+                patch.object(pr_watch_repair, "update_branch_with_main", return_value=None), \
+                patch.object(pr_watch, "checked", return_value=""), \
+                patch.object(pr_watch_repair, "repair_with_model", return_value=None), \
+                patch.object(pr_watch_repair, "commit_and_push_repair", return_value=(7, [])), \
+                patch.object(self.watcher, "comment", side_effect=pr_watch_common.WatchError("offline")):
+            self.watcher.repair_verification(self.watcher.config["repositories"][0], pr(), self.root,
+                                             pr_watch_common.VerificationError("real failure"))
+        state = self.watcher.state.get("example/one", 7)
+        self.assertEqual(state["head"], SHA_B)
+        self.assertEqual(state["outcome"], "retry")
+        self.assertIn("comment_failure", state)
+
     def test_verification_failure_uses_bounded_repair(self):
         with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
                 patch.object(pr_watch, "semantic_review", return_value=[]), \
