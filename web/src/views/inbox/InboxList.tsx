@@ -1,12 +1,8 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import {
-  agentDraft, agentWorking, conversationRoute, fromLine, repeatsSummary, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
-  itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
-  BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
-  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup,
-} from "../../lib/inbox";
+import { agentDraft, agentWorking, conversationRoute, fromLine, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
+import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
 import { nowText, rowMeta } from "../../lib/inbox-now";
 import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
 import { useMailAccounts } from "../../lib/mail";
@@ -479,7 +475,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                     action={clear && list.length && !picking ? { label: clear, run: () => setAllDone(list, true) } : undefined}>
                     {titled ? (
                       <>
-                        {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox.group_agents"), items: [] }, agentRows, { count: waiting.length })}
+                        {waiting.length > 0 && groupOf(tier.key, { key: "agents", title: t("lib-inbox-groups.group_agents"), items: [] }, agentRows, { count: waiting.length })}
                         {groups.map((g) => groupOf(tier.key, g, <Rows items={g.items} row={openRow} keep={isSelected} all={view.restored} />, { pickable: true }))}
                       </>
                     ) : (
@@ -912,8 +908,9 @@ const IX_GLYPH: Record<Interaction["kind"], GlyphName | "list" | "terminal"> = {
  * only when one of those changed.
  */
 const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; off?: boolean }) {
-  // a child session's card opens its parent's page, where it is answered (#5120)
-  const to = useStore((s) => ix.session_id === "" ? requestRoute(ix) : conversationRoute(ix.machine_id, requestHome(ix), s.sessions, s.assistant));
+  // a child session's card opens its parent's page, where it is answered (#5120); a side session's its parent's page
+  // with the side shown (#7944, requestRoute)
+  const to = useStore((s) => ix.session_id === "" || ix.folded_as === "side" || ix.folded_side ? requestRoute(ix) : conversationRoute(ix.machine_id, requestHome(ix), s.sessions, s.assistant));
   const persona = to.name === "persona";
   const where = useStore((s) => (persona ? "Persona" : machineWithHub(ix.machine_id, s.machines)));
   const ask = interactionAsk(ix);

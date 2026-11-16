@@ -19,6 +19,9 @@ import {
   initial,
   kindOf,
   knownZone,
+  LIST_KINDS,
+  mergeMeetingLists,
+  recordingKindTag,
   linkGroups,
   markParts,
   citedPhoto,
@@ -58,6 +61,46 @@ describe("kinds", () => {
     expect(kindOf(undefined)).toBe("projects");
     expect(kindOf("nope")).toBe("projects");
     expect(kindOf("people")).toBe("people");
+  });
+
+  it("lists recordings under meetings (#8871): no chip of their own, and an old link opens meetings", () => {
+    expect(LIST_KINDS).not.toContain("recordings");
+    expect(LIST_KINDS).toContain("meetings");
+    expect(kindOf("recordings")).toBe("meetings");
+  });
+});
+
+describe("the meetings list (#8871)", () => {
+  it("merges the imported meetings and the recordings, tags once each", () => {
+    const m = { items: [e("m1", { kind: "meetings" })], tags: ["周会", "客户"] };
+    const r = { items: [e("r1", { kind: "recordings", recording_kind: "note" })], tags: ["周会", "旅行"] };
+    const out = mergeMeetingLists(m, r);
+    expect(out.items?.map((x) => x.id)).toEqual(["m1", "r1"]);
+    expect(out.tags).toEqual(["周会", "客户", "旅行"]);
+    expect(mergeMeetingLists({ items: null }, { items: null, tags: null })).toEqual({ items: [], tags: [] });
+  });
+
+  it("marks only notes and all-day recordings", () => {
+    expect(recordingKindTag(e("n", { kind: "recordings", recording_kind: "note" }))).toBe("笔记");
+    expect(recordingKindTag(e("d", { kind: "recordings", recording_kind: "day" }))).toBe("全天录音");
+    expect(recordingKindTag(e("m", { kind: "recordings", recording_kind: "meeting" }))).toBeNull();
+    expect(recordingKindTag(e("old", { kind: "recordings" }))).toBeNull(); // a hub before #8870
+    expect(recordingKindTag(e("imported", { kind: "meetings", recording_kind: "note" }))).toBeNull();
+  });
+
+  it("orders meetings newest first, sorted ones open and the rest folded", () => {
+    const s = groupEntries("meetings", [
+      e("old", { kind: "meetings", importance: "P0", updated: "2026-10-01T09:00:00Z" }),
+      e("new", { kind: "recordings", importance: "P3", updated: "2026-11-16T09:00:00Z" }),
+      e("raw", { kind: "meetings", updated: "2026-11-15T09:00:00Z" }),
+      e("undated", { kind: "meetings" }),
+    ]);
+    expect(s.map((x) => [x.key, x.title, x.items.map((i) => i.id), !!x.fold])).toEqual([
+      ["ranked", "全部", ["new", "old"], false],
+      ["rest", "还没整理的", ["raw", "undated"], true],
+    ]);
+    const tagged = groupEntries("meetings", [e("a", { kind: "meetings", updated: "2026-01-01T00:00:00Z" }), e("b", { kind: "recordings", updated: "2026-02-01T00:00:00Z" })], "周会");
+    expect(tagged.map((x) => [x.title, x.items.map((i) => i.id)])).toEqual([["#周会", ["b", "a"]]]);
   });
 });
 

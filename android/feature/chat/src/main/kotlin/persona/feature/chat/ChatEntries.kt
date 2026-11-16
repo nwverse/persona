@@ -180,6 +180,8 @@ fun ChatDestination(
     historyReadOnly: Boolean = false, onHistoryBack: (() -> Unit)? = null,
     historyFooter: (@Composable () -> Unit)? = null,
     historySession: Session? = null,
+    /** A Health conversation identified by its host even while its live session row is still loading. */
+    healthChat: Boolean = false,
 ) {
     val context = LocalContext.current.applicationContext
     val services = remember(context) { EntryPointAccessors.fromApplication(context, ChatServices::class.java) }
@@ -188,8 +190,18 @@ fun ChatDestination(
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
     val routingState = wiring?.connection?.state?.collectAsStateWithLifecycle()?.value
-    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, wiring?.connection?.lastHello?.features.orEmpty(),
-        routingState == ConnectionState.Online)
+    val features = wiring?.connection?.lastHello?.features.orEmpty()
+    val home = rememberChildSessionHome(requested, metadata, wiring?.actions, features,
+        routingState == ConnectionState.Online, side = route.side)
+    // A link to a side session (#7944) opens its parent, then the side's own chat over it, once.
+    val landedSide = remember(home, metadata, features) { home.shownSide(metadata, features)?.takeUnless { historyReadOnly } }
+    var sideShown by androidx.compose.runtime.saveable.rememberSaveable(route.machineId, route.sessionId) { mutableStateOf(false) }
+    LaunchedEffect(landedSide) {
+        val side = landedSide ?: return@LaunchedEffect
+        if (sideShown) return@LaunchedEffect
+        sideShown = true
+        navigator.navigate(ChatRoute(side.machineId, side.sessionId, persona.core.navigation.ConversationKind.Agent, side = true))
+    }
     val session = home.key
     val shownMetadata = metadata + home.rows
     val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
@@ -219,10 +231,12 @@ fun ChatDestination(
             onTerminal = onTerminal ?: { navigator.navigate(TerminalRoute(it.machineId, it.sessionId)) },
             onResumeInTerminal = { navigator.navigate(TerminalRoute(it.machineId, it.sessionId, resume = true)) },
             chrome = ChatChromeBindings(actions = wiring?.actions.takeUnless { historyReadOnly }, connection = wiring?.connection,
-                childSessionId = home.childSessionId,
+                childSessionId = home.childSessionId.takeIf { landedSide == null },
                 lookupRows = home.rows,
                 worktrees = wiring?.worktrees.takeUnless { historyReadOnly },
                 onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                onOpenSide = if (historyReadOnly) null else ({ navigator.navigate(ChatRoute(it.machineId, it.sessionId,
+                    persona.core.navigation.ConversationKind.Agent, side = true)) }),
                 onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
                 onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
                 files = wiring?.files, ports = wiring?.ports, onHandToPersona = handToPersona,
@@ -235,6 +249,7 @@ fun ChatDestination(
             renderStyle = style,
             embedded = embedded, showTopBar = showTopBar,
             historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,
+            healthChat = healthChat,
             composerState = composer, onDraftChanged = editor?.let { it::changed },
             composerService = wiring?.composer.takeUnless { historyReadOnly },
             statusBindings = ChatStatusBindings(recovery = wiring?.recovery.takeUnless { historyReadOnly }, draftSaveError = error?.let { stringResource(it) }),

@@ -391,6 +391,7 @@ data class ExtensionContributes(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -424,6 +425,7 @@ private data class ExtensionContributesKnown(
     val connectors: List<ExtensionConnectorItem>? = null,
     val voice: List<ExtensionNamedItem>? = null,
     val transcription: List<ExtensionNamedItem>? = null,
+    val speech: List<ExtensionNamedItem>? = null,
     val computer: List<ExtensionNamedItem>? = null,
     val browser: List<ExtensionNamedItem>? = null,
     val iphone: List<ExtensionNamedItem>? = null,
@@ -452,7 +454,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -464,6 +466,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = fields.connectors,
             voice = fields.voice,
             transcription = fields.transcription,
+            speech = fields.speech,
             computer = fields.computer,
             browser = fields.browser,
             iphone = fields.iphone,
@@ -498,6 +501,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             connectors = value.connectors,
             voice = value.voice,
             transcription = value.transcription,
+            speech = value.speech,
             computer = value.computer,
             browser = value.browser,
             iphone = value.iphone,
@@ -908,7 +912,7 @@ data class ExtensionConnectorItem(
 )
 
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 @Serializable
 data class ExtensionNamedItem(
@@ -1235,6 +1239,36 @@ data class ExtensionAuthPrompt(
 )
 
 /**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+@Serializable
+data class ExtensionSettingsCheckParams(
+    /**
+     * The whole configuration as it would be saved, the schema's defaults filled in.
+     */
+    val config: JsonElement = JsonNull,
+    val secrets: Map<String, String> = emptyMap(),
+    /**
+     * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+     * permissions.network names an address: requests sent through it reach the addresses this configuration names,
+     * its ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+     * ordinary proxy (an older hub sends none).
+     */
+    val proxy: String? = null,
+)
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+@Serializable
+data class ExtensionSettingsCheckResult(
+    val ok: Boolean = false,
+    val error: String? = null,
+)
+
+/**
  * Values of HubRole.
  */
 object ExtensionHubRole {
@@ -1249,7 +1283,8 @@ object ExtensionHubRole {
 object ExtensionHubCapability {
     const val INBOX_GROUP = "inbox_group"
     const val INBOX_GROUP_STATE = "inbox_group_state"
-    val ALL = listOf("inbox_group", "inbox_group_state")
+    const val TOOL_IMAGES = "tool_images"
+    val ALL = listOf("inbox_group", "inbox_group_state", "tool_images")
 }
 
 /**

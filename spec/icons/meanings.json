@@ -601,6 +601,10 @@
       "sf": "sidebar.left",
       "phosphor": "sidebar-simple"
     },
+    "sideSessions": {
+      "sf": "rectangle.portrait.on.rectangle.portrait",
+      "phosphor": "stack"
+    },
     "skills": {
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
@@ -690,7 +694,7 @@
       "phosphor": "eye"
     },
     "voiceChannel": {
-      "sf": "waveform.and.mic",
+      "sf": "phone.fill",
       "phosphor": "waveform"
     },
     "voiceConnecting": {
