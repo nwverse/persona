@@ -90706,6 +90706,28 @@
       },
       "extractionState" : "manual"
     },
+    "Name After Calendar Meetings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name After Calendar Meetings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "カレンダーの会議名で名前を付ける"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用日历里的会议命名"
+          }
+        }
+      }
+    },
     "Name Changes per Session" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -456,7 +456,7 @@ struct RecordingCaptureControls: View {
             Text("English").tag("en-US")
             Text("Japanese").tag("ja-JP")
         } label: {
-            Label { Text("Recording Language") } icon: { ThemedIcon(Theme.Icon.language) }
+            Label { Text("Language") } icon: { ThemedIcon(Theme.Icon.language) } // the meeting's (#8731: no "Recording")
         }.font(Theme.Font.body).disabled(busy)
         if form.hasBluetooth {
             Picker(selection: $inputRaw) {
@@ -508,7 +508,7 @@ struct RecordingCaptureControls: View {
                     form.meetingNow = await MeetingCalendar.meetingOffMain()
                 }
             } label: {
-                Label("Name Recordings After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
+                Label("Name After Calendar Meetings", systemImage: Theme.Icon.calendarEvent).font(Theme.Font.caption)
                     .lineLimit(1).multilineTextAlignment(.leading)
             }
             .buttonStyle(.borderless)
