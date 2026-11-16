@@ -14,5 +14,9 @@ describe("wait information stays off the first screen", () => {
     expect(inStartup("assistant-tasks.pr_blocker_review_required")).toBe(false);
     expect(inStartup("assistant-tasks.progress_count")).toBe(true);
     expect(inStartup("assistant-tasks.prepare")).toBe(true);
+    expect(inStartup("assistant-assistantchat.new_main_ellipsis")).toBe(true);
+    expect(inStartup("assistant-assistantchat.new_main_elsewhere")).toBe(true);
+    expect(inStartup("assistant-assistantchat.new_main_title")).toBe(false);
+    expect(inStartup("assistant-assistantchat.carry_summary_hint")).toBe(false);
   });
 });
