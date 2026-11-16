@@ -167,12 +167,18 @@ func (s *Service) urgentOn(ctx context.Context) bool {
 	return err == nil && set.Enabled
 }
 
-// urgentRuleText is what rule says: the owner's words, or a built-in rule's definition.
-func urgentRuleText(r urgentRule) string {
+// urgentRuleText is what rule says: the owner's words, or a built-in rule's definition in language (the owner's,
+// urgentLanguage; "" is Chinese).
+func urgentRuleText(r urgentRule, language string) string {
 	if r.Text != "" || !r.Builtin {
 		return r.Text
 	}
-	return prompts.UrgentRuleBuiltin(r.ID)
+	return prompts.UrgentRuleBuiltinIn(r.ID, language)
+}
+
+// urgentLanguage is the owner's language for the built-in rules' words, as the assistant answers in it.
+func (s *Service) urgentLanguage(ctx context.Context) string {
+	return answerLanguage(s.hello(ctx).Locale)
 }
 
 // urgentPrompt is the urgent-call block of the assistant's instructions; nil while urgent calls are off, so an
@@ -183,8 +189,9 @@ func (s *Service) urgentPrompt(ctx context.Context) *prompts.UrgentCall {
 		return nil
 	}
 	out := &prompts.UrgentCall{}
+	language := s.urgentLanguage(ctx)
 	for _, r := range set.Rules {
-		out.Rules = append(out.Rules, prompts.UrgentCallRule{ID: r.ID, Text: urgentRuleText(r)})
+		out.Rules = append(out.Rules, prompts.UrgentCallRule{ID: r.ID, Text: urgentRuleText(r, language)})
 	}
 	return out
 }

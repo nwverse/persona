@@ -26,9 +26,13 @@ var (
 	wfNameRe   = lazyre.New("\\bname:\\s*['\"`]([^'\"`\\n]+)['\"`]")
 	expiresRe  = lazyre.New(`expires in (\d+)(ms|s|m|h)\b`)
 	wakeInRe   = lazyre.New(`Next wakeup scheduled for [^(]*\(in (\d+)s\)`)
-	bgMovedRe  = lazyre.New(`moved to the background \(ID: ([A-Za-z0-9_-]+)\)`) // a foreground command that timed out
-	// a foreground command backgrounded by hand: "Command was manually backgrounded by user with ID: bmk9rnfdz. Output is being written to: …"
-	bgManualRe = lazyre.New(`manually backgrounded by user with ID:?\s*([A-Za-z0-9_-]+)`)
+	// A foreground command moved to the background, timed out ("Command did not complete within its 120s timeout and
+	// was moved to the background (ID: b1). …") or by hand ("Command was manually backgrounded by user with ID:
+	// bmk9rnfdz. Output is being written to: …"). Claude Code starts a line with the notice, alone or after the output
+	// so far; the same words inside a line are the output quoting them (grep hits, a numbered Read, a test table), and
+	// taking those for a launch kept a finished session Working for a day (#9091).
+	bgMovedRe  = lazyre.New(`(?m)^Command\b[^\n]*?moved to the background \(ID: ([A-Za-z0-9_-]+)\)`)
+	bgManualRe = lazyre.New(`(?m)^Command\b[^\n]*?manually backgrounded by user with ID:?[ \t]*([A-Za-z0-9_-]+)`)
 	bgOutputRe = lazyre.New(`Output is being written to:\s*(\S+?)\.?(?:\s|$)`)
 )
 
