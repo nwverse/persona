@@ -9,9 +9,9 @@ import { conversationPage } from "../../lib/conversation-page";
 import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import {
-  BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
+  BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, grantKinds, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
   parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskTitle, toLocalInput, untilLabel, validateTask,
-  TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type InboxMode, type Push, type Repeat, type Run, type Task,
+  TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type GrantKind, type InboxMode, type Push, type Repeat, type Run, type Task,
 } from "../../lib/routines";
 import { hubHas, useStore } from "../../lib/store";
 import { Button, cx, Dialog, Spinner, toast, useNow } from "../../ui/atoms";
@@ -155,6 +155,23 @@ export function TaskEditor({
       toast(errorText(e), "error");
     } finally {
       setBusy("");
+    }
+  };
+
+  /** Stops one kind from starting without asking in this task's runs (#8045): its next plan of that kind asks again. */
+  const [ungranting, setUngranting] = useState("");
+  const removeGrant = async (kind: string) => {
+    if (!saved || ungranting) return;
+    setUngranting(kind);
+    try {
+      const r = await api<{ task: Task }>(`/assistant/tasks/${enc(saved.id)}/start-grant`, { method: "DELETE", json: { kind } });
+      // only the grant: what the user is editing stays as it is
+      setSaved((s) => (s ? { ...s, start_grant: r.task.start_grant ?? null } : s));
+      onSaved(r.task);
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setUngranting("");
     }
   };
 
@@ -376,6 +393,8 @@ export function TaskEditor({
             )}
           </section>
 
+          {saved && <StartGrantSection task={saved} removing={ungranting} onRemove={(kind) => void removeGrant(kind)} />}
+
           {hasPush && (
             <section>
               <SectionTitle>{t("assistant-taskeditor.section_push")}</SectionTitle>
@@ -481,6 +500,43 @@ export function TaskEditor({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** "Starts without asking" (#8045): the kinds of task this task's own runs start without the plan card, each with
+ *  Remove. Nothing when there are none: only ticking it on one of its runs' cards adds one. */
+function StartGrantSection({ task, removing, onRemove }: { task: Task; removing: string; onRemove: (kind: string) => void }) {
+  const machines = useStore((s) => s.machines);
+  const kinds = grantKinds(task);
+  if (!kinds.length) return null;
+  const place = (k: GrantKind) => [k.machine && (machines.find((m) => m.id === k.machine)?.name ?? k.machine), k.folder].filter(Boolean).join(" · ");
+  return (
+    <section data-start-grant>
+      <SectionTitle>{t("assistant-taskeditor.section_start_grant")}</SectionTitle>
+      <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+        {kinds.map((k) => (
+          <div key={k.key} data-start-grant-kind className="flex items-center gap-3 px-3.5 py-2.5">
+            <Icon name="folder" size={14} className="shrink-0 text-ink-3" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-meta text-ink" title={place(k)}>{place(k)}</div>
+              <div className="text-submeta text-ink-3">{t(k.readonly ? "settings-assistantsettings.trust_read" : "settings-assistantsettings.trust_edit")}</div>
+            </div>
+            <Button
+              tone="quiet"
+              size="sm"
+              className="text-red enabled:hover:text-red pointer-coarse:min-h-11"
+              busy={removing === k.key}
+              disabled={!!removing}
+              aria-label={t("assistant-taskeditor.start_grant_remove_label", { place: place(k) })}
+              onClick={() => onRemove(k.key)}
+            >
+              {t("assistant-taskeditor.start_grant_remove")}
+            </Button>
+          </div>
+        ))}
+      </div>
+      <p className={HINT}>{t("assistant-taskeditor.start_grant_note")}</p>
+    </section>
   );
 }
 
