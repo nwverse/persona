@@ -1,11 +1,11 @@
 import Foundation
 
 /// A little room where inline code meets a CJK letter (#9477). Inline code has no background under it any more, so
-/// `用`pnpm`装依赖` ran the code into the words beside it. Before a reply is parsed a thin space (U+2009, about 0.12 em,
-/// the web's margin) goes between a code span and a Han, kana, Hangul or bopomofo letter right beside it. Nothing goes
-/// beside a space or CJK punctuation, which have room of their own, or beside anything else. Code blocks (fenced and
-/// indented), and code spans in a link or an autolink, are left as written, as `CodeCopyMarkdown` leaves them. What is
-/// copied stays the source; this is only what is drawn.
+/// code written straight against Chinese words, with no space, ran into them. Before a reply is parsed a thin space
+/// (U+2009, about 0.12 em, the web's margin) goes between a code span and a Han, kana, Hangul or bopomofo letter right
+/// beside it. Nothing goes beside a space or CJK punctuation, which have room of their own, or beside anything else.
+/// Code blocks (fenced and indented), and code spans in a link or an autolink, are left as written, as
+/// `CodeCopyMarkdown` leaves them. What is copied stays the source; this is only what is drawn.
 public nonisolated enum InlineCodeGap {
     /// What goes in the room: a thin space, so a line may still break there.
     public static let thin: Character = "\u{2009}"

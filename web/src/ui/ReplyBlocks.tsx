@@ -87,7 +87,7 @@ type HNode = { type: string; tagName?: string; value?: string; properties?: Reco
  *  it stays the link's and is not a copy button of its own inside it (Markdown's `code`). Inline code in a table cell
  *  of at most 24 characters is marked `data-chip`: styles.css keeps it whole on one line (#9146). A side of inline code
  *  whose words beside it end or start with a CJK letter is marked in `data-gap` (`s` before it, `e` after it), and
- *  styles.css leaves a little room there (#9477): with no background, `用`pnpm`装` ran the code into the words. Not beside
+ *  styles.css leaves a little room there (#9477): with no background, code written straight against Chinese words ran into them. Not beside
  *  a space or CJK punctuation, which have room of their own. Only plain words count (the first screen's bytes): code
  *  after bold words or alone in a link gets none. */
 export function rehypeLinkedCode() {
