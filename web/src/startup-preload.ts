@@ -356,6 +356,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
 // Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
 // en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
+// Agent-only task-row status and separate to-do chips (#6492), measured against main 3324a7323c in the same environment:
+// en 478,843 -> 479,284 B, ja 481,979 -> 482,430 B, zh-Hans 479,676 -> 480,113 B. The budget adds 424 B of ja's measured
+// 451 B feature delta, using 27 B of main's 123 B of room and keeping 96 B rather than adding any new room.
 // #9283: an extension's sidebar entries and an open page's header drawn from the last places list at first paint
 // (lib/extension-slots.ts keeps it under lib/feed-cache.ts's hub and sign-in scope; it is read at startup, so it is
 // first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
@@ -375,7 +378,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // pages as its own folding section (lib/sidebar-pages.ts arrangeSections, views/Sidebar.tsx PageGroup), and the
 // arrangement goes to and from the hub with the start page (lib/start-page.ts). The editor is in the Settings chunk.
 // Main's room is kept on top.
-export const FIRST_SCREEN_BUDGET = 482_102;
+export const FIRST_SCREEN_BUDGET = 482_526;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
