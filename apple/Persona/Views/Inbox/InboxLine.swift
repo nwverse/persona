@@ -175,6 +175,7 @@ struct InboxLineSection: View {
                         todo = nil
                     }).macSheetDone { todo = nil }
                 }
+                .overTabSwitch()
                 #if os(macOS)
                 .macSheet()
                 #endif

@@ -1563,9 +1563,9 @@ const (
 var Platforms = []string{"ios", "mac", "android", "web"}
 
 // NavIcon: the fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the
-// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's).
-// Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old
-// name).
+// icons after money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8
+// a section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin
+// is its old name).
 const (
 	NavIconPlugin      = "plugin"
 	NavIconChart       = "chart"
@@ -1672,6 +1672,14 @@ type Section struct {
 	Items  []Component `json:"items"`
 	More   *More       `json:"more,omitempty"`
 	Pane   string      `json:"pane,omitempty"`
+	Span   string      `json:"span,omitempty"`
+	// Drawn before the title.
+	Icon      string       `json:"icon,omitempty"`
+	IconColor string       `json:"icon_color,omitempty"`
+	Link      *SectionLink `json:"link,omitempty"`
+	// How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+	// screen and when absent. Other components keep the whole width.
+	Columns int `json:"columns,omitempty"`
 }
 
 // Component: one component of a view, told apart by type. A type an app does not know is skipped and the rest drawn.
@@ -1934,18 +1942,35 @@ type Tile struct {
 	Control *RowControl `json:"control,omitempty"`
 	Actions []RowAction `json:"actions,omitempty"`
 	Action  *Action     `json:"action,omitempty"`
+	// Draws the tile as a ring (UI version 9): never with an image or a spark.
+	Gauge *Gauge `json:"gauge,omitempty"`
+}
+
+// Gauge: A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in
+// its centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+// app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+// color as the tile's.
+type Gauge struct {
+	// How full the ring is, 0 to 1.
+	Ratio *float64 `json:"ratio"`
+	// A short word under the value (USD, GB, h), as a control's unit.
+	Unit  string `json:"unit,omitempty"`
+	Color string `json:"color,omitempty"`
 }
 
 // Layout: stack: sections one under another. split: on a wide screen the side pane's sections in a column at the
 // start, the rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that
-// opens as a sheet.
+// opens as a sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three
+// when there is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow
+// one a single column, as stack. An older app gets stack.
 const (
-	LayoutStack = "stack"
-	LayoutSplit = "split"
+	LayoutStack   = "stack"
+	LayoutSplit   = "split"
+	LayoutColumns = "columns"
 )
 
 // Layouts are the values of Layout, in order.
-var Layouts = []string{"stack", "split"}
+var Layouts = []string{"stack", "split", "columns"}
 
 // Pane: where a section of a split view goes.
 const (
@@ -1955,6 +1980,23 @@ const (
 
 // Panes are the values of Pane, in order.
 var Panes = []string{"main", "side"}
+
+// SectionSpan: how much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one
+// column. Other layouts ignore it.
+const (
+	SectionSpanFull = "full"
+)
+
+// SectionSpans are the values of SectionSpan, in order.
+var SectionSpans = []string{"full"}
+
+// SectionLink: A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls
+// ui.action with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as
+// the section's last row.
+type SectionLink struct {
+	Title  string `json:"title"`
+	Action Action `json:"action"`
+}
 
 // Values of FileStatus.
 const (
@@ -6202,6 +6244,8 @@ var newDef = map[string]func() any{
 	"RowAction":                     func() any { return new(RowAction) },
 	"Spark":                         func() any { return new(Spark) },
 	"Tile":                          func() any { return new(Tile) },
+	"Gauge":                         func() any { return new(Gauge) },
+	"SectionLink":                   func() any { return new(SectionLink) },
 	"Tabs":                          func() any { return new(Tabs) },
 	"Tab":                           func() any { return new(Tab) },
 	"Fact":                          func() any { return new(Fact) },

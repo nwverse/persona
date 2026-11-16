@@ -80,7 +80,7 @@ export function PickStrip({ chat, setup, named, onBack }: { chat: AssistantChat;
         ? t("chat-modelpill.header_default", { setup: named })
         : t("chat-modelpill.header_own", { setup: named });
   // the main chat and the new one go back to the default; another chat's pick is undone (it then keeps what it runs)
-  const back = chat.session && !chat.isMain ? t("chat-modelpill.undo_pick") : t("chat-modelpill.follow_default");
+  const back = chat.session && !(chat.followsDefault ?? chat.isMain) ? t("chat-modelpill.undo_pick") : t("chat-modelpill.follow_default");
   return (
     <div data-pick-strip={setup.source} className="flex min-w-0 items-baseline gap-2 border-b border-line px-3.5 py-2 text-[12px] leading-[1.45] text-ink-2">
       <span className="min-w-0 flex-1 break-words">{text}</span>

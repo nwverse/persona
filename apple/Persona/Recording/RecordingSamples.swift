@@ -32,6 +32,21 @@ enum RecordingSamples {
         return id
     }
 
+    #if os(iOS)
+    /// `-showUpcomingSample YES` (#8731): today's calendar meetings on the Meetings home without a calendar (screenshots,
+    /// UI tests): one on now, two later.
+    static func upcomingIfAsked(at date: Date) -> [MeetingCalendar.Candidate]? {
+        guard UserDefaults.standard.bool(forKey: "showUpcomingSample") else { return nil }
+        let hour = 3600.0
+        return [
+            MeetingCalendar.Candidate(id: "sample-1", title: "产品周会", start: date.addingTimeInterval(-0.5 * hour), end: date.addingTimeInterval(0.5 * hour),
+                                      location: "飞书会议", attendees: ["Ada", "Bo", "Cy", "Di", "Ed", "Flo", "Gus", "Hal"]),
+            MeetingCalendar.Candidate(id: "sample-2", title: "设计评审", start: date.addingTimeInterval(3.5 * hour), end: date.addingTimeInterval(4 * hour),
+                                      location: "3 楼会议室", attendees: ["Ada", "Bo", "Cy", "Di"]),
+        ]
+    }
+    #endif
+
     /// The meeting being recorded (`-showMeetingSample recording|paused|interrupted`).
     static let liveMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     /// A finished meeting, transcribed (`-showMeetingSample minutes|pending` opens it).
@@ -166,7 +181,8 @@ enum RecordingSamples {
     }
 
     /// `-showMeetingSample recording|paused|interrupted`: a meeting 12:34 into its recording, as the recording page and its
-    /// Live Activity show it (no microphone); `listening|taking-part|answered`: the same with Persona attending (#2981);
+    /// Live Activity show it (no microphone); `stopped`: `recording` with its activity stale, drawn as after iOS ended the
+    /// app (#9108); `listening|taking-part|answered`: the same with Persona attending (#2981);
     /// `room-listening|room-taking-part`: the same as a room meeting (#3862) started with the live view (phase 2), whose
     /// sheet is the meeting page;
     /// `room-whiteboard`: `room-taking-part` started with photos, which adds a made-up whiteboard photo as the camera
@@ -262,6 +278,8 @@ enum RecordingSamples {
             try? FileManager.default.removeItem(at: RecordingLibrary.shared.folder(liveMeeting).appending(path: MeetingPhotos.listFile))
         }
         try? RecordingLibrary.shared.save(live)
+        // `stopped` (#9108): `recording` whose Live Activity went stale, as the island draws one after iOS ended the app.
+        if mode == "stopped" { RecordingActivity.sampleStale = true }
         RecordingCapture.shared.showSample(liveMeeting, elapsed: elapsed, paused: mode == "paused", interrupted: mode == "interrupted")
         if photos { Task { await addWhiteboard() } }
         // The room meetings' microphone for Talk (#3862 phase 4): canned audio into the recorder's tap. `room-talk-held`:

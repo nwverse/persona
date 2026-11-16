@@ -14,6 +14,7 @@ spec/
     lines/            对话行
     sort/             排序和分组
     answer/           回复与交互
+    question-review/  multi-question review step (Swift answer oracle only)
     terminal/         终端
     wire/             协议解码
     wire-envelope/    WebSocket 共享 Envelope 的宽容解码，iOS 源码推导并由 Rust / Kotlin host JNI 回放
@@ -48,8 +49,9 @@ spec/
 | --- | --- |
 | continuity | [连续性 README](fixtures/continuity/README.md)：连续位置、丢批补洞、历史变化、分页三态、重连、fold 替换与展开. Also replayed by the shared Rust core (`native/app-core`, `cargo test`) and through its Android binding (`:core:rustcore`), #6871 |
 | lines | 见各自 [README](fixtures/lines/README.md) |
-| sort | 见各自 [README](fixtures/sort/README.md) |
+| sort | See the domain [README](fixtures/sort/README.md). The reference implementation is `persona_core::sort` in `native/app-core`, checked by these iOS-derived fixtures. HarmonyOS production uses the core projection through `coreProjectSort` (#7579, #8966). |
 | answer | 见各自 [README](fixtures/answer/README.md) |
+| question-review | [README](fixtures/question-review/README.md): the review step of a question card of several questions, replayed by the Swift answer oracle only (#8483) |
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md). The `items`, `items_after`, `items_range` cases and the `items` events are also replayed by the shared Rust core's `transport` decoders (`native/app-core`, `cargo test`), #7385 |
 | wire-envelope | [README](fixtures/wire-envelope/README.md): a narrow, source-derived current-iOS WebSocket Envelope slice (#8955), replayed by Rust and real host Kotlin/JNI; no iOS execution or production transport change |

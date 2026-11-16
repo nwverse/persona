@@ -4,7 +4,9 @@ Move the client logic that has no UI (sync and continuity, list state, counts, p
 out of Swift, Kotlin and ArkTS into one Rust library, and keep each client's UI native: SwiftUI, Jetpack Compose and
 ArkUI. The maintainer made the open decisions on 2026-11-13 and added the iOS-reference decision later that day
 ("Decisions" at the end). The first code is a vertical slice whose measurements decide whether the migration goes on;
-its workspace and Android host replay have landed, and the three-platform binding work remains.
+its workspace and Android host replay have landed. The three client bindings now have host evidence of different
+depths, but only HarmonyOS's Agents-list sort uses the core in production; the other domains and platforms remain at
+their binding, adapter or DEBUG-shadow stages.
 
 **Who it serves**: everyone who uses the phone apps, indirectly. Nothing the user sees changes. They get the same
 counts and the same chat on every phone, fixes that reach every client at once, and less per-chunk work while a
@@ -278,7 +280,7 @@ What never crosses the boundary:
 | 1 | Workspace, toolchain, runtime thread, codec generator, the three bindings, CI lane, and `continuity` (decision 3) end to end on all three clients | Every client replays the continuity fixtures through its binding; the go / no-go table is filled in |
 | 2 | The chat's item list driven by `continuity` patches, raw transport bytes decoded in Rust, then `sync`; iOS's native adapter and shadow run come first | Patches drive the real chat list on each client within the performance budgets, with the same iOS behavior and measured reference on each |
 | 3 | The domains with the most drift, one issue each: `needs-you` / `attention` / `entries` once #5974 settles the definition, `lines` and `answer` (turn folding, the answer across wakes), `sort` / `recents`, `wire` (tolerant decoding, D5), streaming assembly (#4044) | Each domain: shadow run, then old code deleted |
-| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4) | Cold launch draws from the snapshot before any sync |
+| 4 | Storage in the core: the per-hub caches and the snapshot that launch draws from (D6), files first (decision 4). Design: `docs/plans/plan-rust-core-phase4-storage.md` (#9085) | Cold launch draws from the snapshot before any sync |
 
 Every phase after 0 opens its own issue under #6793. Markdown parsing is not on the list: iOS renders markdown text with
 MarkdownUI, and moving a syntax tree across FFI for every streamed chunk is a cost to measure before proposing it.
@@ -290,9 +292,9 @@ Phase 1 (#6871) lands in several PRs.
 - **First PR.**
   - `native/app-core` with `persona-core`'s `continuity`, the runtime, the C and JNI entry points and the Kotlin codecs.
   - `cargo test` replays all 38 continuity cases (94 steps), directly and through the runtime.
-  - The iOS-alignment follow-up corrects the initial port's repeated-item, immediate-fill, opened-fold and promotion
-    behavior, including the previously missing adjacency cases. iOS's own XCTest replay remains required; passing
-    these shared fixtures is not a substitute for it.
+  - The iOS-alignment follow-up corrected the initial port's repeated-item, immediate-fill, opened-fold and promotion
+    behavior, including the previously missing adjacency cases. The native-Store XCTest replay below is the separate
+    check of iOS behavior; passing the shared Rust fixtures alone was not a substitute for it.
   - Android's `:core:rustcore` replays them through the real JNI binding on a host build.
   - The new `core` CI lane runs these checks.
   - Size, for orientation only: the stripped x86_64 release library is 678 KB (322 KB gzipped). The go / no-go numbers
@@ -312,7 +314,7 @@ Phase 1 (#6871) lands in several PRs.
   - Per-ABI stripped/package increments are 651,600 B (arm64-v8a) and 713,952 B (x86_64), with stripped gzip sizes
     323,071 B and 343,371 B. These are not store download deltas. Emulator performance exceeded the p99 budgets:
     dispatch 13,100.597 µs and drain+decode+apply 17,271.624 µs over 1,000 samples, so performance is not accepted.
-  - **Android boundary profiling, no production optimization yet.** The original optimized span and 100 warm-up +
+  - **Android boundary profiling before the later optimization pass (#7274).** The original optimized span and 100 warm-up +
     1,000-sample protocol now retain raw nanosecond samples and explicit 50 µs / 1 ms assertions. On the same owned,
     software-accelerated x86_64 API 35 / 4 KiB-kernel emulator, the final repeat run measured dispatch p99 883.312 µs
     and drain+decode+apply p99 3,414.419 µs (p50 126.169 / 761.306 µs): both still fail. Earlier raw runs reached
@@ -328,9 +330,10 @@ Phase 1 (#6871) lands in several PRs.
     A low-overhead control with the original two-loop order still failed both budgets (dispatch 2,112.881 µs,
     frame 3,989.433 µs); its lock/JNI-free CPU loop had a 1,012.698 µs maximum despite 0.662 µs p50 (an earlier control
     reached 10,099.827 µs). This supports instrumentation and software-emulator scheduling as important contributors,
-    not a claim that the original failure is waived or that physical arm64 meets a budget. There is no evidence-backed
-    production codec/allocation/synchronization correction from these emulator runs; those implementations and
-    continuity behavior remain unchanged. Physical arm64 / 16 KiB measurements remain required.
+    not a claim that the original failure is waived or that physical arm64 meets a budget. These runs did not
+    establish a production codec/allocation/synchronization correction; continuity behavior remains unchanged. The
+    subsequent lock-free dispatch / JNI hand-off pass is recorded separately below. Physical arm64 / 16 KiB
+    measurements remain required.
   - **Android string decode and failing-report capture, after #7274.** Kotlin's generated `BinaryDeserializer` now
     decodes a bounds-checked string range directly, retaining strict UTF-8 validation and cursor behavior while avoiding
     its temporary `ByteArray`. Typegen owns the change and checks an independent Rust/bincode golden plus malformed,
@@ -338,6 +341,30 @@ Phase 1 (#6871) lands in several PRs.
     benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
     the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
     not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
+  - **Lock-free dispatch and zero-copy JNI hand-off (#9048).** The previous dispatch path held `queue: Mutex<Queue>`
+    on the caller only to do `pending += 1` and check `stopping`, and `Runtime::dispatch(&[u8])` always copied the
+    action bytes a second time even when the caller already owned them. `Shared.pending` and `Shared.stopping` are
+    now an `AtomicU64` and an `AtomicBool`; the worker decrements with `fetch_sub` and only takes a mutex when the
+    queue becomes empty and a `flush` waiter needs waking. The stop flag's Acquire/Release pairs with the channel
+    send so an action accepted before shutdown still precedes Stop. A new `Runtime::dispatch_owned(Vec<u8>)` moves
+    the encoded bytes straight into the worker's channel; the JNI `NativeBridge.dispatch` uses it so the
+    `convert_byte_array` `Vec<u8>` is no longer cloned into a second buffer. The C ABI `persona_core_dispatch` keeps
+    its borrowed-slice signature and routes through `dispatch(&[u8])` (one copy, same as before). The diagnostics
+    `pending_lock*` counters stay at zero and only the patch-lock span is measured. Same host, same protocol (100
+    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), `:core:rustcore:boundaryCostTest`
+    on `47d9e8468d` base versus the optimized branch:
+    - dispatch p50 across 4 base runs 1.63–2.85 µs (mean 2.27) and 6 optimized runs 1.84–2.97 µs (mean 2.35);
+      p99 base 3.29–5.04 µs (mean 4.37) and optimized 3.48–7.43 µs (mean 4.78); max base ≤ 14.13 µs, optimized
+      ≤ 20.22 µs. **The two distributions overlap**: this change is a structural simplification, not a measurable
+      host speedup. Both sides already sit far below the 50 µs budget on this host.
+    - drain+decode+apply p50 base 3.76–4.20 µs, optimized 3.47–4.99 µs; p99 base 16.25–32.08 µs, optimized
+      16.16–38.22 µs; max base 80.82–472.32 µs, optimized 53.25–302.50 µs. Same overlap; the 1 ms budget is met
+      on host by both.
+    All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
+    `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
+    reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
+    x86_64 emulator A/B data was not collected on this run (no KVM on the build machine; the owned software-emulator boot
+    stalled and was stopped). The go / no-go row's status is unchanged.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
@@ -352,8 +379,9 @@ Phase 1 (#6871) lands in several PRs.
     NAPI code is compiled by CI for the first time. Nothing is linked and no SDK is used.
   - `build-ohos.sh` now exports `OHOS_NDK_HOME`, without which the binding's build script panicked before compiling.
     Checked with a stub SDK layout only: the release closure compiles and the build stops at the link step.
-  - Still open in #7414: the NAPI callbacks pass a leading error argument and effects as a number array, which the
-    ArkTS declaration and adapter do not expect. The Node tests' fake hides it; it would fail on a device.
+  - The callback mismatch initially found here was fixed by #7713: callee-unhandled callbacks, byte-buffer effects,
+    the two-argument targeted wake and generated-declaration drift checks now match. Its Node checks remain host
+    evidence; no device execution proved that contract.
 - **ArkTS codec against the real core on the host (#7450, #7485).**
   - A host replay drives the real runtime through `persona-core-ohos`'s registry with the generated ArkTS codec
     encoding actions and decoding effects and patches: all 38 cases / 94 steps, plus 35 independently built values
@@ -382,8 +410,8 @@ Phase 2 lands in several PRs.
     `http_latest` steps without `has_more` are not wire pages; the decoder refuses them, as iOS's `ItemsResponse`
     would. The refusal rules rest on the crate's unit tests, which try every key a decoder reads with every kind of
     wrong value.
-  - At the time of that PR no boundary action carried bytes; the follow-up below adds them. Each client still
-    decodes natively in production.
+  - At the time of that PR no boundary action carried bytes; the follow-up below adds them. Clients continued to decode
+    natively in production; current raw-transport adoption remains unchanged.
   - Not full parity: envelope keys only other events use and nested structs the core does not read are not
     checked, and whole numbers must be integer literals, the only spelling the hub writes
     (`native/app-core/README.md`, "Transport decoding").
@@ -404,8 +432,9 @@ Phase 2 lands in several PRs.
   - Also fixed here: `ItemError`'s message quoted serde's error text, which repeats the offending value, so a
     malformed cached item could put message text into diagnostics. It now carries a context and a line/column
     position only, with a test.
-  - Still not done: no production client sends bytes; the Swift XCTest replay needs macOS and follows #7401; the
-    on-device cells stay blocked: no physical device.
+  - At this stage no production client sends bytes. The C ABI's later Envelope-subset replay does not replay the full
+    wire corpus through SwiftPM; Swift continuity replay is not evidence of raw-transport parity. On-device cells stay
+    blocked: no physical device.
 
 - **The core boundary's missing contracts (#7554).**
   - `ChatPatch.verified` carries whether the chat's items are known complete, the rule Android used to derive per
@@ -418,9 +447,41 @@ Phase 2 lands in several PRs.
   - The three codecs are regenerated; the existing 38-case / 94-step corpus still passes, with new tests for the
     verified rule, hub-changed input, acknowledgement and two folds completing in either order. The Android host
     JNI and ArkTS host replays cover the new fields.
-  - Not done: no production client uses these contracts yet; the adapters (#7366, #7448) consume them next.
+  - The Android adapter (#7448) consumes these contracts behind its native production default and DEBUG shadow. The
+    other clients have not adopted the runtime continuity contracts in production.
+
+- **The `sync` domain's survey and fixtures-first design (#9230), documentation only.**
+  - `docs/plans/plan-rust-core-sync.md` surveys iOS's chat-sync layer with file/line citations (socket lifecycle,
+    reconnect/backoff, the event-resume cursor, per-chat subscription, gap-to-request, stalled catch-up, background
+    prefetch, the catch-up barrier and foreground/background), defines the `spec/fixtures/sync-driver` fixture
+    inventory with explicit clock/network injection, and carves out the first pure `SyncDriver` state-machine slice
+    (lifecycle/network results in → request/reconnect/backoff/catch-up effects out, no real socket or persistence).
+  - Nothing is implemented; no production network, client or core behavior changed, and no device claim is made.
 
 Phase 3 lands in several PRs.
+
+- **Nested-item Envelope fallback removal (#9187).**
+  - After #9082, an independent reviewer found that a valid `items` array could let a different bad scalar bypass the
+    shared Envelope gate and become `Frame::Other`. Production now refuses the shared error before Other routing;
+    there is no `NestedItems` shortcut and no additional full `ServerEvent` implementation.
+  - Mixed bad-scalar / malformed-history inputs assert the source-required refusal, with the exact Foundation error
+    priority marked `source-undetermined`. Isolated `rows` has `wrong_type: rows` from `Envelope.rows: Int?`;
+    `args:1e999` is `malformed_json` from `JSONValue` / swift-foundation's non-finite-number rejection, never a
+    payload-bearing error string. Expectations come from Swift sources, not from Rust output.
+  - Existing 17 accepted wire cases, 38 / 94 continuity steps, #8955's 64 source-derived cases, real host JNI,
+    ArkTS and independent C ABI replay all pass. This is host evidence only, not Swift/iOS or production-client proof.
+
+- **Production shared-envelope scalar checks (#8995).**
+  - `persona_core::transport::decode_frame` now validates the current iOS shared Envelope's scalar, list-shape and
+    raw-JSON keys before routing: a wrong-typed known key drops the frame even when another event owns it. Unknown
+    event types remain `Frame::Other`, and accepted items keep their original JSON and exact `bad_item` locations.
+  - The unchanged #8955 source-derived fixture drives the production replay. Full Item, Machine, Session, interaction
+    and Fleet nested models, number-spelling / encoding migration and non-items event routing are outside this slice.
+  - The 17 accepted wire cases and the continuity corpus's 38 cases / 94 steps pass unchanged. Real host Kotlin/JNI,
+    ArkTS and an independently compiled C11 client replay shared-scalar refusals and Other routing through the real
+    production decoder / runtime. This is host evidence only, not Swift, device or production-client migration proof.
+  - Android's current #7448 adapter maps its existing inputs to `Action.Chat`; it does not dispatch raw `WirePayload`
+    frames in production, so this decoder change does not alter its default inputs or the debug shadow's comparison.
 
 - **Source-derived WebSocket envelope tolerance (#8955).**
   - `spec/fixtures/wire-envelope` holds 64 hand-derived current-iOS cases covering unknown types, missing/null and
@@ -432,7 +493,8 @@ Phase 3 lands in several PRs.
   - Rust and real host Kotlin/JNI replay compare every complete expected object against the same fixture, preserving
     duplicate-key input bytes and checking malformed input and wrong expectations. This is host evidence only; no
     Swift, production adapter, simulator or physical-device claim is made. Full nested models, numeric literal
-    compatibility, subscription pre-routing and C/NAPI/Swift bindings stay out of this slice.
+    compatibility and subscription pre-routing stay out of this diagnostic slice. The later C ABI covers only the
+    production Envelope gate's subset, not this complete projection; no SwiftPM or real-NAPI replay exists for it.
 
 - **Agents list sort, recents and state decoding (#7579).**
   - `persona_core::sort` projects the Agents list from a JSON input: rank, grouping (state / machine / space),
@@ -450,13 +512,21 @@ Phase 3 lands in several PRs.
     (all pure JSON functions, no runtime handle). ArkTS host replay covers all 30 agents_list projection cases
     through the real Rust core. The core lane's ArkTS host tests include `sort.test.mjs`.
   - Stripped x86_64 host library: 1,423,872 B (up from 741,032 B; the sort/recents/state modules add ~683 KB).
-  - Not done: no production client calls these functions yet; Swift codec generation is typegen-only; device-side
-    NAPI linking and ArkTS runtime behavior remain blocked: no physical device.
+  - HarmonyOS production uses `coreProjectSort` through `CoreAgentListAdapter` (#8957, #8966, final integration PR
+    #9066), with iOS
+    state/machine/space groups, pinned/quiet/folded rows, filters and ranks. The temporary native sorter and debug
+    shadow are deleted after the unchanged fixture corpus matches 30/30. `spec/README.md` names the core as this
+    domain's reference. A native failure retains the last usable projection and exposes failure; there is no second
+    release sorter. Device-side NAPI linking, HAP and physical-device execution remain blocked: no physical device.
+  - iOS and Android remain native by default. Android has an opt-in DEBUG-only sort shadow (#8954 / PR #9067); iOS's
+    adapter and DEBUG shadow remain separate, unmerged work in #9058. `recents` and the standalone state projections
+    have cargo evidence, and state also has ArkTS host replay, but no production migration or separate C/SwiftPM replay.
 
 - **Turn grouping and wake-aware answer selection (#8218).**
-  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build` and
-    `Turn.pickAnswerAcrossWakes`. It handles raw-item frozen cuts, entry-based user pictures, tool pairing,
-    compaction, supervision provenance, recap reopening and pending wakes; it does not project rendered `ChatLine`s.
+  - `persona_core::turns` projects the static corpus's rows into turns, following current iOS `ChatBlock.build`.
+    It handles raw-item frozen cuts, entry-based user pictures, tool pairing, compaction, supervision provenance and
+    the wake of an idle agent, which opens a turn of its own since #9140 (until then: recap reopening and pending
+    wakes inside the turn before it); it does not project rendered `ChatLine`s.
   - All 57 static turn cases compare complete `turns` arrays after applying the checked-in current-iOS overlay
     (`spec/fixtures/lines/ios/differences.json`, #8429). The independent maintainer's macOS replay passed the 59
     executable content cases and its properties; this Rust PR does not run Swift or claim that replay itself.
@@ -471,6 +541,16 @@ Phase 3 lands in several PRs.
     burst replacement through the standalone `replace` branch against the same expected checkpoint. Malformed input
     and a deliberately wrong checkpoint are rejected. This is runtime-operation and turn consistency, not the
     incremental ChatStore rebuild algorithm or its timing evidence.
+  - ArkTS host replay (#9235) adds `coreProjectTurns` and a pure `turns` JSON entry to the existing
+    `persona-core-ohos` host helper, with generated declaration drift coverage. `turns.test.mjs` compares all 57
+    unchanged static cases (62 complete post-overlay turn objects and three empty arrays), and uses the generated
+    ArkTS codec plus existing dispatch/flush/drain commands for all 10 operation checkpoints (13 complete turn
+    objects) and the standalone replacement. The real runtime requests the original fold range before the helper
+    supplies it. Exact manifests, malformed/wrong-shaped input and deliberately wrong expectations are checked;
+    fixture expectations and turn semantics remain unchanged.
+  - This is ArkTS host helper evidence only. It does not execute the NAPI export or load a Linux NAPI addon, and
+    does not replace #8808's separate real loader work. No HAP/HDC, physical-device, production adapter, rendered
+    ChatLine/layout, incremental ChatStore rebuild or performance result is established.
   - `persona_core::task_index` covers the fixture-facing `TaskIndex.build` fields (#8842): started calls, notice/call
     association, descriptions, UTC start times and per-call status sequences. Real Kotlin/JNI replay compares all five
     existing task-index expected objects, plus a background receipt whose notices/statuses are empty but whose original
@@ -494,20 +574,28 @@ Phase 3 lands in several PRs.
     source-derived folded object, including path/size identities and array order. It rejects malformed input, no-image
     no-line and deliberately wrong expected objects, and the header/export check covers the new function. This is
     Linux C ABI evidence, not Swift, Apple ABI, NAPI or device acceptance.
-  - The two source-order layout cases, rendered lines, incremental rebuilds, production adapters and turn C/NAPI/Swift
-    boundaries are outside this slice. Both turn comparisons deliberately ignore rendered `lines`
-    and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
+  - The two source-order layout cases, rendered lines, incremental rebuilds and production adapters are outside this
+    slice. Static turns now have C ABI and macOS SwiftPM replay (#8912, #8952), but no real-NAPI replay; viewed images
+    have C ABI replay (#9017) and macOS SwiftPM replay of 28 complete objects plus eight no-line boundaries (#9237 /
+    #9246), but no ArkTS host projection. Both turn comparisons deliberately ignore
+    rendered `lines` and `task_index` even where an overlay replaces them. No physical-device or performance claim is made.
     `spec/README.md` continues to name the shared corpus, not Rust, as the reference until migration.
 
 - **Question answers and recommendation labels (#8460).**
   - `persona_core::answer` constructs the `ios_current` synchronous question answers and display-only recommendation
-    labels, with 15 + 8 complete fixture comparisons and Apple/CoreFoundation-derived whitespace boundaries.
+    labels. The current corpus has 15 question + 9 recommendation complete fixture comparisons (#9233 adds the
+    newline / NBSP / TAB trimming case) and Apple/CoreFoundation-derived whitespace boundaries.
   - `AnswerBindingFixtureTest` drives `projectAnswer` and `displayAnswer` through real host-JNI string boundaries
-    (#8838). All 15 + 8 cases compare complete expected objects from the unchanged fixtures, including conditional
-    next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
+    (#8838). The current corpus's 15 question + 9 recommendation cases compare complete expected objects, including
+    conditional next-page, multi-select picks and display fields. Invalid pages/options, malformed input and a deliberately wrong
     expectation are rejected, and the U+200B boundary is exercised. This is synchronous host-JNI evidence, not UI
     timing, hub delivery or production Android integration. The current SwiftUI multi-question review confirmation
-    remains separately #8483; C/NAPI/Swift bindings, transport and physical-device evidence are not included.
+    remains separately #8483. The later C ABI, macOS SwiftPM and ArkTS host replays are recorded below; they do not
+    execute the real NAPI boundary, transport or a physical device.
+  - The draft a click leaves (#9238): a single choice empties its question's Other entry and keeps the key, as iOS's
+    `QuestionForm.pick` does, and Advance and Submit change neither map. The core follows iOS; Android's builder removes the
+    key, so the answer shadow reports `other-state` until its adapter drops emptied entries
+    (`native/app-core/README.md`, "Android answer adapter and shadow (#9143)").
 
 - **Streaming block boundaries (#8607).**
   - `persona_core::stream_chunks` projects only `StreamChunks.split` and its direct fence recognition. Its 21
@@ -517,8 +605,25 @@ Phase 3 lands in several PRs.
     boundary (#8827). All 21 complete `{done, tail}` expected objects come from the unchanged checked-in fixture;
     malformed input and a deliberately wrong expectation are rejected. Reconstruction is a secondary invariant, not
     the expected oracle. This is host-JNI evidence, not production Android integration or executed Swift.
-  - `StreamRepair`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the #4044
-    performance goal remain open.
+  - `persona_core::stream_repair` adds the open-fence repair and code/text end projection (#9051), with real
+    Kotlin/JNI replay of 21 complete source-derived repaired strings and six explicit code/text end cases from
+    `StreamRepairTests`. It preserves
+    opener marker/indent, holds unfinished opener/closer lines and reports a closing line as code until its newline.
+    The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
+    with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
+    are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline repair
+    (#9286) adds 51 explicit Apple assertions plus source-derived boundary controls through that same real JNI
+    boundary. It also replays all 342 Unicode-scalar prefixes of Apple's mixed reply through real stream-chunks JNI
+    into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
+    follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math recognition prevents inline repair there. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair`
+    ArkTS host projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus the JNI digit, leading-blank-line and delimiter boundaries as 22 fence + 19 marker/boundary + 39
+    table/boundary complete `{repaired, end}` objects. Both surfaces reject malformed input and wrong `end`, wrong
+    `repaired` and extra-field expectations; they do not replay the complete inline or mixed-reply corpora. The NAPI
+    export `coreProjectStreamRepair` is committed in the generated ArkTS declaration and covered by the drift check.
+    The `.math` end state, `plainOpenFence`, visual gaps, timing, rendering, SwiftPM binding, production adapters and
+    the #4044 performance goal remain open. These repair slices have cargo, real host-JNI, C ABI and ArkTS host
+    evidence; real NAPI / SwiftPM projection is not yet covered.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**
   - `persona-core-ohos` exports `core_project_answer`, `core_display_answer`, `core_project_stream_chunks` and
@@ -527,8 +632,9 @@ Phase 3 lands in several PRs.
     declaration and exact export drift checks are committed. These declarations compile with the `ohos` feature, but
     no Linux addon is loaded and no real NAPI argument conversion is claimed.
   - `harmony/tests/core-host/projections.test.mjs` calls the real Rust functions through the existing host helper and
-    compares all 15 + 8 answer/display, 21 stream-chunk and five complete task-index expectations from unchanged
-    fixtures, plus the background receipt. It pins exact case names and rejects malformed input and deliberately wrong
+    compares the current 15 + 9 answer/display, 21 stream-chunk and five complete task-index expectations from the
+    checked-in fixtures (#9233 added the ninth recommendation), plus the background receipt. It pins exact case names
+    and rejects malformed input and deliberately wrong
     expected objects for each projection. The core lane includes this replay; a missing helper fails rather than skips.
   - This is ArkTS host evidence only, not a HAP or physical-device result. No production adapter, turns, StreamRepair,
     UI timing, hub delivery or background execution is exercised. #8808 retains the separate turn NAPI loader work.
@@ -541,8 +647,8 @@ Phase 3 lands in several PRs.
     buffer. `display_answer` takes a bare JSON string (the option label), as its JNI counterpart does. The checked-in
     `include/persona_core.h` declares all five; the existing dynamic-export drift check covers them (13 exports).
   - The #8560 independently compiled C11 client now replays the unchanged fixtures through the real release library on
-    Linux: answer 15 question + 8 recommendation cases (complete conditional expected objects, invalid page/option,
-    the U+200B trim boundaries), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
+    Linux: answer 15 question + 9 recommendation cases (complete conditional expected objects, invalid page/option,
+    the U+200B trim boundaries, and #9233's newline / NBSP / TAB trimming case), stream_chunks all 21 complete `{done, tail}` objects, turns all 57 static cases with
     the checked-in `spec/fixtures/lines/ios/differences.json` overlay applied by the client (54 cases hold 62 complete
     turn objects; three compare empty arrays only), and task_index all five complete expected objects plus the
     background receipt boundary. Both sides are parsed and compared canonically (sorted object keys, exact array order
@@ -550,8 +656,9 @@ Phase 3 lands in several PRs.
     dropped or renamed case; malformed input returns an empty buffer per domain and a deliberately wrong expected
     object is rejected per domain. The core lane's `Independent C ABI client` step runs all of this; a missing fixture,
     client source or release library fails rather than skips.
-  - This is Linux host C ABI evidence only: no Swift importer, Apple ABI, NAPI, production adapter, physical-device or
-    performance claim. The Swift adapters and their real-C replay are covered by #8952; the
+  - This is Linux host C ABI evidence only: no NAPI, production adapter, physical-device or performance claim. It was
+    followed by the Swift wrappers and macOS SwiftPM replay below; this step itself did not execute the Swift importer
+    or Apple ABI. The Swift adapters and their real-C replay are covered by #8952; the
     turn operation checkpoints, rendered lines and StreamRepair stay out of this slice.
 
 - **The six pure projections reach the Swift C binding (#8952).**
@@ -561,7 +668,8 @@ Phase 3 lands in several PRs.
     every result with `persona_core_bytes_free`; an empty C result is an explicit error. There is no core handle,
     production caller or worker. These synchronous calls stay off the main actor when their input is sizable.
   - macOS `swift test` replays the unchanged fixtures through the real C XCFramework: all 30 `agents_list` sort cases,
-    answer 15 question + 8 recommendation cases (conditional expected objects, invalid page/option and U+200B), all 21
+    answer 15 question + 9 recommendation cases (conditional expected objects, invalid page/option and U+200B; the
+    ninth recommendation is #9233), all 21
     complete stream-chunk `{done, tail}` objects, all 57 static turn cases with the checked-in current-iOS overlay
     applied by the test caller (54 cases hold 62 complete turn objects; three compare empty arrays), and all five
     complete task-index objects plus the background receipt. Comparisons retain object keys, array order and exact
@@ -622,13 +730,14 @@ and D1 stays. Filling in this table does not itself close #6871 or approve produ
    Its reported measurements are therefore existing evidence, not merged or completed physical-device acceptance.
    All iOS simulator values below use arm64 iPhone 17 Pro / iOS 27.0 simulators, Xcode 27.1 / Swift 6.4 /
    Rust 1.98.0, optimized Debug (`-O`, wholemodule, `PERF_SIGNPOST`), not a store Release or Xcode 26.0.
-2. **[Retained iOS evidence readme, PR #7639 head](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/README.md)** —
+2. **Retained iOS evidence readme, PR #7639 head** (`README.md` in docs/archive/apple/reference-measurements-6871/ at the head commit
+   [`5eefe3cf0d1b`](https://github.com/nwverse/persona/commit/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8), which `main` does not contain; the reports below are in its `raw/`) —
    exact run identities, raw files and limitations. Binding/lifecycle source base `84a5a314c553` with the recorded
    uncommitted run-identity changes, simulator `58B70B19-21DA-4051-B017-0D828579958A`, 100 warm-ups + 1,000 samples.
-   [Dispatch raw report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-boundary.json)
+   Dispatch raw report (`raw/core-boundary.json`)
    includes generated Swift bincode encoding + handle lock + C queue, not worker/flush time.
-   [100-item drain report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-large-page.json)
-   covers drain/bincode decode/string-list apply, not a presented frame. [Lifecycle report](https://github.com/nwverse/persona/blob/5eefe3cf0d1b31ad05c5339bf3295b21e5b824f8/docs/archive/apple/reference-measurements-6871/raw/core-lifecycle.json)
+   100-item drain report (`raw/core-large-page.json`)
+   covers drain/bincode decode/string-list apply, not a presented frame. Lifecycle report (`raw/core-lifecycle.json`)
    has one warmup and ten cycles; `phys_footprint` 62,851,952 → 62,868,336 B. The native-memory report's
    `resident_size` is 628,326,400 → 632,455,168 B. Launch and native UI records predate final run/trace metadata and
    are explicitly not final acceptance. The package comparison used unsigned generic-iOS Release + `PERF_SIGNPOST`

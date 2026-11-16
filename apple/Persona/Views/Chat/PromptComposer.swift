@@ -550,7 +550,7 @@ final class Dictation {
 
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
-            // Answered on a background queue: `@Sendable` keeps the block off the main actor (BackgroundCallbackTests).
+            // Answered on a background queue: `@Sendable` keeps the block off the main actor (test_apple_background_callbacks.py).
             SFSpeechRecognizer.requestAuthorization { @Sendable in c.resume(returning: $0) }
         }
         guard speech == .authorized else { return false }

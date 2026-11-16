@@ -40,6 +40,7 @@ import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JTag
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.firstBaselineAligned
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
@@ -199,10 +200,10 @@ internal fun ToolArguments(arguments: List<ToolNaming.Argument>) {
             arguments.forEach { argument ->
                 Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     DisableSelection {
-                        Text(argument.label, Modifier.width(column).alignByBaseline(), style = type.micro, color = palette.ink2,
+                        Text(argument.label, firstBaselineAligned(Modifier.width(column)), style = type.micro, color = palette.ink2,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Text(argument.value, Modifier.weight(1f).alignByBaseline(), style = if (argument.code) type.code else type.caption,
+                    Text(argument.value, firstBaselineAligned(Modifier.weight(1f)), style = if (argument.code) type.code else type.caption,
                         color = palette.ink, maxLines = argument.lines, overflow = TextOverflow.Ellipsis)
                 }
             }

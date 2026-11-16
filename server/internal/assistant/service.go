@@ -265,6 +265,8 @@ type Service struct {
 	hubTr     hubRuns
 	sockets   sync.Once
 	socketMux *http.ServeMux
+	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
+	navMu sync.Mutex
 }
 
 var _ Handler = (*Service)(nil)
@@ -310,6 +312,7 @@ func New(o Options) *Service {
 	s.skillRoutes()
 	s.workoutRoutes()
 	s.scheduleRoutes()
+	s.scheduleGrantRoutes()
 	s.placeRoutes()
 	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
 	s.repositoryRoutes()
@@ -320,6 +323,7 @@ func New(o Options) *Service {
 	s.todoRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
+	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
 	s.companionRoutes()
 	s.kbInit(o.KB)
@@ -596,6 +600,8 @@ type startParams struct {
 	Origin         string               `json:"origin,omitempty"`  // where it comes from (origins.go); "" is the user's
 	OriginRef      string               `json:"origin_ref,omitempty"`
 	Source         *proto.MessageSource `json:"source,omitempty"`
+	// NewSessionID starts the conversation under this id (a Claude Code one; another agent picks its own).
+	NewSessionID string `json:"new_session_id,omitempty"`
 }
 
 // kbReady: there is a knowledge base (kb.go; on, opened or about to).
@@ -692,9 +698,6 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	picks, ok := s.modelPicksSet()
 	snap.Partial = snap.Partial || !ok
 	for id, p := range picks {
-		if id != cfg.Main { // only the main conversation has a per-conversation pick (#6911); older side picks stay in the book, unpublished
-			continue
-		}
 		view(id, p.MachineID).ModelPick = p.wire()
 	}
 	directions, ok := s.directionViews(ctx)
@@ -742,6 +745,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 // of conversations.
 func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.agentDecisionSpoke(ctx, r, time.Now())
 	s.ownerHeard(r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

@@ -45,8 +45,9 @@ func (s *Service) getUrgentRules(ctx context.Context) (string, error) {
 	} else {
 		b.WriteString("Urgent calls are off (the owner turns them on in Settings › Urgent calls). The rules would be (id: rule):\n")
 	}
+	language := s.urgentLanguage(ctx)
 	for _, r := range set.Rules {
-		fmt.Fprintf(&b, "- %s: %s\n", r.ID, urgentRuleText(r))
+		fmt.Fprintf(&b, "- %s: %s\n", r.ID, urgentRuleText(r, language))
 	}
 	return b.String(), nil
 }
@@ -65,6 +66,7 @@ func (s *Service) changeUrgentRules(ctx context.Context, action string, raw json
 	if err != nil {
 		return nil, err
 	}
+	language := s.urgentLanguage(ctx) // the built-in rules' words, as the owner reads them
 	at := slices.IndexFunc(set.Rules, func(r urgentRule) bool { return r.ID == v.ID })
 	switch action {
 	case "add", "update":
@@ -77,7 +79,7 @@ func (s *Service) changeUrgentRules(ctx context.Context, action string, raw json
 		if len(set.Rules) >= urgentRulesMax {
 			return nil, fmt.Errorf("the list already has %d rules: remove one first", urgentRulesMax)
 		}
-		if slices.ContainsFunc(set.Rules, func(r urgentRule) bool { return strings.EqualFold(urgentRuleText(r), v.Text) }) {
+		if slices.ContainsFunc(set.Rules, func(r urgentRule) bool { return strings.EqualFold(urgentRuleText(r, language), v.Text) }) {
 			return &ownChange{summary: "That rule is already in the list."}, nil
 		}
 		id := "r_" + randomHex(3)
@@ -92,7 +94,7 @@ func (s *Service) changeUrgentRules(ctx context.Context, action string, raw json
 		if at < 0 {
 			return nil, fmt.Errorf("no rule %q: get lists them", v.ID)
 		}
-		old := urgentRuleText(set.Rules[at])
+		old := urgentRuleText(set.Rules[at], language)
 		if action == "update" {
 			return &ownChange{cardText: func(l i18n.Lang) string {
 				return i18n.T(l, "assistant-urgent_call.rule_update", i18n.Args{"old": old, "text": v.Text})

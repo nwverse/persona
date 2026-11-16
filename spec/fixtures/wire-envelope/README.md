@@ -2,7 +2,7 @@
 
 本目录记录当前 iOS `ServerEvent.decode` 的一个窄切片：共享 `Envelope` 的标量键、原始 JSON 键、`mesh` 与 `fleet` 的宽容边界，以及 `hello`、`inbox`、`items`、`fleet`、`screen`、`sessions_list` 和未知事件的路由条件。规则来自阅读 Apple 源码，不由 Rust 或其他被测实现生成；本次没有在 iOS、模拟器或真机上执行 Swift。
 
-本目录独立于 `spec/fixtures/wire/` 的 Go golden 样本，不修改现有 17 条 continuity transport 用例，也不替换 production 客户端或现有 `persona_core::transport::decode_frame` 的行为。
+本目录独立于 `spec/fixtures/wire/` 的 Go golden 样本，不修改现有 17 条 continuity transport 用例。#8955 的诊断投影不改变客户端行为；#8995 随后把同一批源码推导的共享标量 / raw JSON 规则接入 production `persona_core::transport::decode_frame`。production 对合法其他事件仍返回 `Frame::Other`，不会变成完整 `ServerEvent` 路由实现。
 
 ## JSON 结构与比较
 
@@ -38,13 +38,17 @@
 
 Rust 和真实 host Kotlin/JNI 使用同一份未修改的 `frames.json`，检查精确 case 清单和完整 `expected` 对象。Rust 回放从源码读取 `input` 的 `RawValue`，Kotlin 用测试专用 cursor 取同一 `input` 的原始文本；两者都不会先解析再序列化输入。
 
+#8995 另有 production 回放（`persona-core/tests/transport_envelope_production.rs`、Android `TransportBindingFixtureTest`、ArkTS `transport.test.mjs` 和独立 C11 ABI 客户端），均走 `decode_frame` / `Action.WirePayload`，而不是用 `wire_envelope` 诊断投影代替 production。它使用本目录相同的 dropped key 期望，不由 Rust 生成。
+
+production 只覆盖共享 Envelope 标量、字符串数组、数组/对象形状和原始 JSONValue 规则。`items_unprojected_number_never_panics` 是诊断 Value 投影的特例，不约束 production 保留原始 Item 的行为。`inbox_fleet_*` 的 dropped 用例属于 Fleet 内部模型；`fleet_requires_fleet_payload`、`screen_missing_session_id_drops_event`、`sessions_list_requires_revision` 属于非 items 的事件级路由，均不是本 issue 的 production 范围。其余非 items 的 accepted / ignored 输入必须为 `Frame::Other`，不会将未实现的事件误当成已支持。C11 精确清单覆盖 20 条适用的 dropped 用例及 `expected.key`；新增共享标量拒绝用例若未放入生产或 C 回放，测试会失败。
+
 ```sh
 cargo test --manifest-path native/app-core/Cargo.toml -p persona-core --test wire_envelope_projection
 cd android && ./gradlew :core:rustcore:test --tests 'persona.core.rustcore.WireEnvelopeBindingFixtureTest'
 scripts/ci/core.sh
 ```
 
-期望值手工来自上述 Swift 源码；`derived: true` 不表示已在 Apple 运行时执行。host JNI 结果不证明 Swift、NAPI、HAP、生产 Android adapter、模拟器、真机或性能行为。现有 transport 的已知差异（数字写法、编码、未读嵌套结构、其他 Envelope 键未接入 continuity 解码器）保持不变。
+期望值手工来自上述 Swift 源码；`derived: true` 不表示已在 Apple 运行时执行。host JNI 结果不证明 Swift、NAPI、HAP、生产 Android adapter、模拟器、真机或性能行为。现有 transport 的数字写法、编码和未读嵌套结构差异保持不变；#8995 仅把共享 Envelope 标量 / raw JSON 校验接入 continuity 解码器。
 
 ## 范围外与新增用例
 

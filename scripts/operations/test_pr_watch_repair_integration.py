@@ -13,6 +13,13 @@ sys.path.insert(0, str(HERE))
 import pr_watch_repair
 
 
+def real_dir(directory):
+    """directory with its symlinks resolved, as the repair copy the watcher hands the worker is (repair_repository_copy):
+    the sandbox mounts the checkout where it really is, so a path under a temp dir reached through a link is not there
+    (#9204)."""
+    return Path(directory).resolve()
+
+
 class RepairIntegrationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="pr-watch-repair-")
@@ -316,7 +323,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_conflict_sandbox_only_exposes_conflict_files_for_writing(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             (root / "other.txt").write_text("keep\n")
             (root / "home").mkdir()
@@ -331,7 +338,7 @@ class RepairIntegrationTests(unittest.TestCase):
                              [argv[i:i + 3] for i in range(len(argv) - 2)])
     def test_large_mount_vector_reaches_the_worker_without_execve_overflow(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             (root / "conflicted.txt").write_text("conflict\n")
             for index in range(6000):
                 path = root / ("directory-%04d" % index) / "nested" / "deeper" / ("a-much-longer-file-name-%04d.txt" % index)
@@ -422,7 +429,7 @@ class RepairIntegrationTests(unittest.TestCase):
 
     def test_nested_conflict_directory_stays_writable_in_real_bwrap(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = real_dir(directory)
             nested = root / "src" / "deep"
             nested.mkdir(parents=True)
             (nested / "file.txt").write_text("base\n")

@@ -232,8 +232,58 @@ onRuntimeChanges((upsert, remove) => {
   const known = new Set(Object.values(state.sessions).flat().map(runtimeIdentity));
   const updates = runtimeSessions.isSummary() ? [] : upsert.filter((row) => known.has(runtimeIdentity(row)));
   applyCompleteSessions(updates, remove);
+  followConversations(upsert);
   keepTaskRows(upsert, remove.map(runtimeRemoval));
 });
+
+/** What a summary row (`waiting` present) says by leaving a field out: none (docs/protocol/protocol.md "Summary rows"). */
+const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
+  "turn_error", "turn_error_kind", "turn_error_code", "turn_error_resets_at", "turn_error_resumes"] as const;
+
+/** `row` as a changed list row says it is now: a complete row is the row; a summary row goes over the fields it
+ *  carries (state, last words, markers), and the details it never carries (items' arrays, queued) stay. */
+function listedOver(row: Session, listed: Session): Session {
+  if (typeof listed.waiting !== "boolean") return sameValue(listed, row) ? row : listed;
+  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting };
+  for (const key of SUMMARY_FLAGS) if (!(key in listed)) delete next[key];
+  return sameValue(next, row) ? row : next;
+}
+
+/** The assistant's conversations follow the list's changed rows (#9049). A socket in list mode (`sessions_list`) gets
+ *  hints, never `sessions` / `sessions_delta`, so nothing else moves them: the Persona sidebar and All chats kept the
+ *  state of the last /assistant read, and a conversation read mid-turn kept spinning after its turn had ended until a
+ *  reload, a send or opening it. Its row in the conversations and the detail kept of it (which those lists lay over
+ *  them) both take the change; no other row is made or kept. */
+function followConversations(upsert: Session[]) {
+  const a = state.assistant;
+  if (!a || !upsert.length) return;
+  const changed = new Map<string, Session>();
+  for (const row of upsert) if (row.machine_id === a.machine_id) changed.set(row.session_id, row);
+  if (!changed.size) return;
+  const ids = new Set(a.conversations.map((c) => c.session_id));
+  let moved = false;
+  const conversations = a.conversations.map((c) => {
+    const row = changed.get(c.session_id);
+    const next = row ? listedOver(c, row) : c;
+    if (next !== c) moved = true;
+    return next;
+  });
+  // A complete list's rows went to the kept details already (applyCompleteSessions above).
+  const kept = state.sessions[a.machine_id];
+  let keptMoved = false;
+  const nextKept = !kept || !runtimeSessions.isSummary() ? kept : kept.map((s) => {
+    const row = changed.get(s.session_id);
+    if (!row || !(s.assistant || ids.has(s.session_id))) return s;
+    const next = listedOver(s, row);
+    if (next !== s) keptMoved = true;
+    return next;
+  });
+  if (!moved && !keptMoved) return;
+  set({
+    ...(moved ? { assistant: { ...a, conversations } } : {}),
+    ...(keptMoved && nextKept ? { sessions: { ...state.sessions, [a.machine_id]: nextKept } } : {}),
+  });
+}
 
 /** The runtime identities of the open tasks' agents. */
 function openTaskAgents(): Set<string> {
@@ -845,7 +895,8 @@ function onMessage(msg: Record<string, unknown>) {
       if (!isResumed(msg)) {
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
-        if (agentsMode && usedAgentsList) runtimeAgents.invalidate();
+        // at once, not in a hint's window: a reconnect may have missed any number of changes (docs/lessons/web.md, #6362)
+        if (agentsMode && usedAgentsList) void runtimeAgents.load().catch(() => {});
         void refreshAgentSessions();
         void refreshAgentPrefs();
       }

@@ -50,7 +50,9 @@ private struct RecordingLiveSheetPresenter: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $presented) { RecordingLiveSheet() }
+            // The meeting room is the whole screen (#8731 v2): a meeting app's, not a sheet over the page. Over the tabs, as
+            // the sheet was: nothing in it leaves the tabs' switch room.
+            .fullScreenCover(isPresented: $presented) { RecordingLiveSheet().overTabSwitch() }
             // A hidden shell page never gets onDisappear: the tab-aware pair keeps one host presenting at a time.
             .onTabVisibility(appear: {
                 visible = true
@@ -113,8 +115,8 @@ struct RecordingLiveSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
         }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        // Dark while the meeting records (E1: as meeting apps are), the app's own look once it ended.
+        .preferredColorScheme(wrapUp ? nil : .dark)
         .onChange(of: capture.state, initial: true) { old, new in follow(from: old, to: new) }
         .onChange(of: capture.error, initial: true) { if capture.state != .idle { liveError = capture.error } }
         .onChange(of: ask.exchanges) { mirror() }

@@ -8,7 +8,7 @@ import { t } from "../i18n";
 import { BREATHING, connStatus, phaseTone, type ConnPhase } from "../lib/connection";
 import { chooseManager, pickedName, useChosenManager, useShownIdentity, useShownManager } from "../lib/manager-choice";
 import { useManagerBadges } from "../lib/manager-attention";
-import { loadRoster, managerError, managerOf, managerOrder, multiManager, renewCode, statusLine, switcherLine, useRoster, type InstallCode, type Manager, type Tone } from "../lib/managers";
+import { loadRoster, managerError, managerOf, managerOrder, multiManager, renewCode, statusLine, switcherLine, switcherManagers, useRoster, type InstallCode, type Manager, type Tone } from "../lib/managers";
 import { refreshReadiness } from "../lib/readiness";
 import { navigate, type Route } from "../lib/router";
 import { routeAfterSwitch } from "../lib/persona-nav";
@@ -115,7 +115,9 @@ function useAssistantList(route: Route, badges: Record<string, number>, open: bo
 
   const installed = roster ? managerOrder(roster) : [];
   const installing = roster ? roster.managers.filter((m) => m.installing) : [];
+  // the Default tag counts a hidden built-in too (it still runs); only its row is left out (#9055)
   const several = installed.length > 1;
+  const listed = roster ? switcherManagers(roster) : [];
   const row = (m: Manager): MenuItem => ({
     key: `assistant:${m.id}`,
     label: m.name,
@@ -132,7 +134,7 @@ function useAssistantList(route: Route, badges: Record<string, number>, open: bo
   });
   const items: MenuItem[] = roster
     ? [
-        ...[...installed, ...installing].map(row),
+        ...[...listed, ...installing].map(row),
         { key: "new-assistant", label: t("sidebar.new_assistant"), icon: "plus" as const, divider: true, onSelect: () => setCreating(true) },
         { key: "manage-assistants", label: t("sidebar.manage_assistants"), icon: "gear" as const, onSelect: () => navigate("/settings?tab=managers") },
       ]
