@@ -345,7 +345,7 @@ class Watcher:
         for attempt in range(2):
             try:
                 return self.prepare_worktree(repo, number, pr)
-            except WatchError as error:
+            except (WatchError, OSError) as error:
                 if attempt or "moved while preparing" in str(error):
                     raise
                 with self.git_lock:
@@ -798,10 +798,30 @@ class Watcher:
                     and not (old.get("outcome") in ("passed_with_findings", "passed") and not old.get("success_posted")) \
                     and not (old.get("outcome") == "findings" and old.get("semantic") == "findings" and config["merge"]) \
                     and old.get("outcome") != "repairing" \
-                    and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0):
+                    and not (old.get("outcome") == "passed_with_findings" and old.get("verification") in ("passed", "base_failure")) \
+                    and not (old.get("outcome") == "passed_with_findings" and old.get("merge_attempts", 0) > 0
+                             and not old.get("success_posted")):
+                return
+            if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
+                    and old.get("verification") in ("passed", "base_failure") and old.get("success_posted"):
+                if old.get("merge_attempts", 0) > 0 and old.get("retry_after", 0) > time.time():
+                    return
+                with self.merging(repo):
+                    current_pr = pr_snapshot(repo, number)
+                    if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
+                            or not self.mergeable(current_pr):
+                        return
+                    if not linked_issue(current_pr["body"], repo):
+                        raise WatchError("PR has no linked issue; not merged")
+                    self.finish_merge(config, current_pr, old)
                 return
             if old.get("outcome") in ("passed", "passed_with_base_failures", "passed_with_findings") \
                     and old.get("verification") in ("passed", "base_failure") and not old.get("success_posted"):
+                if old.get("findings") and not old.get("review_posted"):
+                    self.comment_findings(repo, number, pr, old["findings"])
+                    old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                         review_posted=True, published_findings=old["findings"],
+                                         published_fingerprint=old.get("review_fingerprint"))
                 with self.merging(repo):
                     current_pr = pr_snapshot(repo, number)
                     if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
