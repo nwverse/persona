@@ -30,6 +30,33 @@ final class TodoPageTextSizeTests: XCTestCase {
         }
     }
 
+    /// The bottom bar in the page's three states (#8958): with an Agent at work and a stage, with nothing yet, and done
+    /// (Reopen alone). Its buttons are as tall as the app's other buttons (not the large control size), and on a wide
+    /// page (an iPad) the row is no wider than `Theme.Size.readable`, centered. `bar-<state>.png` in PERSONA_SHOTS;
+    /// PERSONA_LANDSCAPE=1 turns the device first; PERSONA_BEFORE shoots and checks nothing.
+    @MainActor func testBottomBarInEachState() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py (PERSONA_MOCK_HUB)")
+        }
+        continueAfterFailure = true
+        let env = ProcessInfo.processInfo.environment
+        XCUIDevice.shared.orientation = env["PERSONA_LANDSCAPE"] == "1" ? .landscapeLeft : .portrait
+        for (state, name) in [("working", "天气 App 发 1.3 版"), ("open", "给 NAS 配自动备份"), ("done", "修复登录页在 Safari 上的样式问题")] {
+            launch(hub, "zh", "L", ["-openTodoTitled", name])
+            XCTAssertTrue(app.navigationBars.staticTexts[name].firstMatch.waitForExistence(timeout: 60), "\(state): the to-do's page")
+            let done = app.buttons["todo.toggleDone"].firstMatch
+            XCTAssertTrue(done.waitForExistence(timeout: 5), "\(state): the bottom bar")
+            shot("bar-\(state)")
+            guard env["PERSONA_BEFORE"] == nil else { continue }
+            let buttons = [done] + (state == "done" ? [] : [app.buttons["todo.handToAgent"].firstMatch])
+            for b in buttons {
+                XCTAssertLessThanOrEqual(b.frame.height, 50, "\(state): \(b.identifier) no taller than the app's buttons \(b.frame)")
+            }
+            let row = buttons.map(\.frame).reduce(buttons[0].frame) { $0.union($1) }
+            XCTAssertLessThanOrEqual(row.width, 561, "\(state): the row is no wider than a readable page \(row)")
+        }
+    }
+
     /// The mock's 「给 NAS 配自动备份」, known by its title in the bar.
     @MainActor private func page(_ hub: String, _ language: String, _ size: String, check: Bool) {
         let name = "给 NAS 配自动备份"
@@ -65,6 +92,15 @@ final class TodoPageTextSizeTests: XCTestCase {
                                "-AppleLanguages", languages, "-AppleLocale", locale,
                                "-UIPreferredContentSizeCategoryName", Self.sizes[size]!] + extra
         app.launchPinned()
+        dismissSystemAlerts()
+    }
+
+    /// SpringBoard's notification question, which a fresh simulator asks on some launches over the page.
+    @MainActor private func dismissSystemAlerts() {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 2) {
+            for label in ["允许", "Allow", "好", "OK"] where alert.buttons[label].exists { alert.buttons[label].tap(); break }
+        }
     }
 
     /// The screen once two shots in a row are the same, so a view still settling is not counted as a difference.

@@ -496,9 +496,14 @@ struct TodoDetailView: View {
     private func bottomBar(_ todo: TodoItem) -> some View {
         // Side by side while both labels fit whole, else one above the other, Hand to Agent first (#6151): side by side
         // they were cut to "Hand to A…" from xxLarge.
+        // The app's regular buttons, as tall as the sidebar's New Chat, and on a wide page (an iPad) no wider than a
+        // readable page, centered, as the Inbox's hand-off bar: at the large control size across the whole page they
+        // were taller and far wider than any other button and hid more of the notes (#8958).
         StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
             bottomButtons(todo)
         }
+        .frame(maxWidth: Theme.Size.readable)
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, Theme.Space.page)
         .padding(.vertical, Theme.Space.s)
         .background(Theme.pageBackground)
@@ -515,11 +520,10 @@ struct TodoDetailView: View {
                     // Its own string (#6151): the sheet's title keeps the longer Japanese, which the half-width button cut off.
                     Text("Hand to Agent [To-do Page Button]").buttonLabelLine()
                 }
-                .font(Theme.Font.heading)
-                .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+                .font(Theme.Font.bodyStrong)
+                .scaledFrame(maxWidth: .infinity)
             }
             .themedButton(prominent: true)
-            .controlSize(.large)
             .accessibilityIdentifier("todo.handToAgent")
         }
 
@@ -530,11 +534,10 @@ struct TodoDetailView: View {
                 ThemedIcon(todo.isDone ? Theme.Icon.undo : Theme.Icon.done)
                 Text(todo.isDone ? String(localized: "Reopen") : String(localized: "Done [Extension System Presentation c0b3fb]")).buttonLabelLine()
             }
-            .font(Theme.Font.heading)
-            .scaledFrame(maxWidth: .infinity, minHeight: Theme.Size.wellS)
+            .font(Theme.Font.bodyStrong)
+            .scaledFrame(maxWidth: .infinity)
         }
         .themedButton(prominent: false)
-        .controlSize(.large)
         .accessibilityIdentifier("todo.toggleDone")
     }
 }
