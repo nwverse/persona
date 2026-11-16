@@ -3,7 +3,10 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -59,7 +62,29 @@ type FileEntry struct {
 type KnowledgeBaseLocator struct {
 	Relative string `json:"relative,omitempty"`
 	External string `json:"external,omitempty"`
-	Present  bool   `json:"present"`
+	// Present records whether the install had a knowledge base. A manifest
+	// must state it (see UnmarshalJSON).
+	Present bool `json:"present"`
+}
+
+// UnmarshalJSON requires present: a manifest without it cannot say whether
+// the bundle has no knowledge base or was written without the record.
+func (l *KnowledgeBaseLocator) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Relative string `json:"relative"`
+		External string `json:"external"`
+		Present  *bool  `json:"present"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return err
+	}
+	if raw.Present == nil {
+		return errors.New("the manifest's knowledge_base does not say whether the bundle has a knowledge base (present); this bundle was not written by personad backup create, or by a version before the format was final")
+	}
+	*l = KnowledgeBaseLocator{Relative: raw.Relative, External: raw.External, Present: *raw.Present}
+	return nil
 }
 
 // Manifest is the versioned bundle identity. Key fingerprints are HMACs, not
@@ -121,10 +146,8 @@ type Result struct {
 	// PreviousExternalKB: where an approved external knowledge base's previous
 	// copy was kept (its own directory, beside the knowledge base).
 	PreviousExternalKB string
-	// MovedAside: what the bundle records as absent or empty (no knowledge
-	// base, an empty runtime directory) and restore therefore moved into the
-	// previous files with nothing (or an empty directory) in its place,
-	// relative to the runtime directory or, for an external knowledge base,
-	// absolute.
-	MovedAside []string
+	// Notes are printed after the result: for create, a knowledge base that
+	// was not there to collect; for restore, what the bundle records as absent
+	// or empty and restore left in place (see leftInPlaceNotes).
+	Notes []string
 }

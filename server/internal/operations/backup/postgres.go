@@ -194,15 +194,33 @@ func (b *postgresBackend) Quiesced(ctx context.Context, target Target, database 
 		return fmt.Errorf("%s database is missing or unreachable: %w", target.Part, err)
 	}
 	defer closeConn(ctx, conn)
-	var sessions int
-	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'`).Scan(&sessions); err != nil {
+	var sessions, hidden int
+	if err := conn.QueryRow(ctx, quiescedQuery).Scan(&sessions, &hidden); err != nil {
 		return targetError(target, "check that writes are stopped", err)
 	}
 	if sessions != 0 {
 		return fmt.Errorf("%s database still has %d other connection(s); stop the hub and built-in manager before using --writes-quiesced", target.Part, sessions)
 	}
+	if hidden != 0 {
+		return fmt.Errorf("%s database has %d session(s) of other roles whose kind this role may not see (pg_stat_activity hides it from a role without pg_read_all_stats), so it cannot be shown that writes are stopped. "+
+			"Stop them, or run the backup as a role that has pg_read_all_stats (GRANT pg_read_all_stats TO <role>) or is a superuser, then retry", target.Part, hidden)
+	}
 	return nil
 }
+
+// quiescedQuery counts the other sessions on the current database that may
+// write. A client backend is one. pg_stat_activity shows a role without
+// pg_read_all_stats only the database, pid, role and application name of
+// another role's session (backend_type and the rest are NULL), so such a row
+// cannot be told apart from a client and counts as hidden: the check fails
+// closed instead of seeing nothing. A row with no role either is not a client
+// (every client backend logs in as a role; autovacuum workers and the like
+// have none), so it is ignored, as visible non-client processes such as a
+// subscription's apply worker are.
+const quiescedQuery = `SELECT
+	count(*) FILTER (WHERE backend_type = 'client backend'),
+	count(*) FILTER (WHERE backend_type IS NULL AND usesysid IS NOT NULL)
+	FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()`
 
 func (b *postgresBackend) Create(ctx context.Context, target Target, name string) error {
 	conn, err := b.admin(ctx, target, name)

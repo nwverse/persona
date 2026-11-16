@@ -88,6 +88,102 @@ func TestPostgresBackendOverUnixSocket(t *testing.T) {
 	}
 }
 
+// pg_stat_activity shows a role without pg_read_all_stats another role's
+// session with backend_type NULL: the check run as such a role must not take
+// that session for "nothing connected" (chyroc's thread on postgres.go:198).
+func TestQuiescedSeesOtherRolesSessions(t *testing.T) {
+	base := os.Getenv("PERSONA_TEST_DATABASE_URL")
+	if base == "" {
+		skip(t, "set PERSONA_TEST_DATABASE_URL to a disposable superuser connection")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	id := randomSuffix(t)
+	database, owner, other := "pb_it_roles_"+id, "pb_it_owner_"+id, "pb_it_other_"+id
+	backend := newPostgresBackend()
+	admin, err := backend.connect(ctx, Target{Part: "hub", URL: base}, "postgres")
+	if err != nil {
+		fatal(t, err)
+	}
+	defer closeConn(ctx, admin)
+	roleURL := func(role, password string) string {
+		raw, err := withDatabase(base, database)
+		if err != nil {
+			fatal(t, err)
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			fatal(t, err)
+		}
+		parsed.User = url.UserPassword(role, password)
+		return parsed.String()
+	}
+	ownerPassword, otherPassword := randomSuffix(t), randomSuffix(t)
+	for _, statement := range []string{
+		`CREATE ROLE ` + owner + ` LOGIN NOSUPERUSER PASSWORD '` + ownerPassword + `'`,
+		`CREATE ROLE ` + other + ` LOGIN NOSUPERUSER PASSWORD '` + otherPassword + `'`,
+		`CREATE DATABASE ` + database + ` OWNER ` + owner,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			fatalf(t, "set up the roles: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+		defer stop()
+		if conn, err := backend.connect(cleanup, Target{Part: "hub", URL: base}, "postgres"); err == nil {
+			_, _ = conn.Exec(cleanup, `DROP DATABASE IF EXISTS `+database+` WITH (FORCE)`)
+			_, _ = conn.Exec(cleanup, `DROP ROLE IF EXISTS `+other)
+			_, _ = conn.Exec(cleanup, `DROP ROLE IF EXISTS `+owner)
+			closeConn(cleanup, conn)
+		}
+	})
+	target := Target{Part: "hub", URL: roleURL(owner, ownerPassword), Database: database}
+	if err := backend.Quiesced(ctx, target, database, false); err != nil {
+		fatalf(t, "an idle database must pass the check run as its unprivileged owner: %v", err)
+	}
+	session, err := backend.connect(ctx, Target{Part: "hub", URL: roleURL(other, otherPassword)}, database)
+	if err != nil {
+		fatal(t, err)
+	}
+	defer closeConn(ctx, session)
+	var hiddenType bool
+	monitor, err := backend.connect(ctx, target, database)
+	if err != nil {
+		fatal(t, err)
+	}
+	if err := monitor.QueryRow(ctx, `SELECT bool_and(backend_type IS NULL) FROM pg_stat_activity WHERE usename = $1`, other).Scan(&hiddenType); err != nil || !hiddenType {
+		fatalf(t, "precondition: the owner should see the other role's session with backend_type NULL (%v, %v)", hiddenType, err)
+	}
+	closeConn(ctx, monitor)
+	err = backend.Quiesced(ctx, target, database, false)
+	if err == nil || !strings.Contains(err.Error(), "pg_read_all_stats") {
+		fatalf(t, "another role's open session, invisible to the unprivileged owner, must fail the check and say why: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `GRANT pg_read_all_stats TO `+owner); err != nil {
+		fatal(t, err)
+	}
+	err = backend.Quiesced(ctx, target, database, false)
+	if err == nil || !strings.Contains(err.Error(), "1 other connection") {
+		fatalf(t, "with pg_read_all_stats the other role's session is a client and must block the check: %v", err)
+	}
+	closeConn(ctx, session)
+	if _, err := admin.Exec(ctx, `REVOKE pg_read_all_stats FROM `+owner); err != nil {
+		fatal(t, err)
+	}
+	// The server ends the closed session asynchronously.
+	poll := time.NewTicker(100 * time.Millisecond)
+	defer poll.Stop()
+	timeout := time.After(10 * time.Second)
+	for err = backend.Quiesced(ctx, target, database, false); err != nil; err = backend.Quiesced(ctx, target, database, false) {
+		select {
+		case <-poll.C:
+		case <-timeout:
+			fatalf(t, "once the other session is gone the check must pass again: %v", err)
+		}
+	}
+}
+
 func randomSuffix(t *testing.T) string {
 	t.Helper()
 	random := make([]byte, 6)

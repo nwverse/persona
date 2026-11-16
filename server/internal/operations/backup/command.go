@@ -146,9 +146,6 @@ func printResult(stdout io.Writer, command string, result Result) {
 		if result.PreviousExternalKB != "" {
 			fmt.Fprintf(stdout, "previous external knowledge base preserved in %s\n", result.PreviousExternalKB)
 		}
-		if len(result.MovedAside) > 0 {
-			fmt.Fprintf(stdout, "the bundle records no %s (or an empty one); this install's was moved into the previous files named above, with nothing (or an empty directory) in its place\n", strings.Join(result.MovedAside, ", "))
-		}
 		if result.KeptDockerPassword {
 			fmt.Fprintln(stdout, "kept this install's docker/db-password: the bundle's copy belongs to the database cluster it was taken from, not to this one")
 		}
@@ -156,5 +153,8 @@ func printResult(stdout io.Writer, command string, result Result) {
 		fmt.Fprintf(stdout, "created and verified %s\n", result.Bundle)
 	default:
 		fmt.Fprintf(stdout, "verified %s\n", result.Bundle)
+	}
+	for _, note := range result.Notes {
+		fmt.Fprintln(stdout, note)
 	}
 }

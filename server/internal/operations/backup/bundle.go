@@ -93,6 +93,9 @@ func (m *Manifest) validate() error {
 	}
 	seen := make(map[string]bool, len(m.Files))
 	for _, entry := range m.Files {
+		if !m.KnowledgeBase.Present && strings.HasPrefix(entry.Path, "kb/") {
+			return fmt.Errorf("the manifest records no knowledge base but lists the knowledge-base file %q", entry.Path)
+		}
 		if !validMemberName(entry.Path) || entry.Path == manifestPath || seen[entry.Path] || !validPayloadPath(entry.Path) {
 			return fmt.Errorf("invalid or duplicate payload path %q", entry.Path)
 		}

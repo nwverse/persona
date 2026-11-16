@@ -248,12 +248,11 @@ func TestRollbackNeverActsOnAConfusedPartsStage(t *testing.T) {
 	}
 }
 
-// What the manifest records as absent or empty is moved aside into the named
-// previous files, not left in place: a bundle with no knowledge base (Present
-// false), or a runtime directory it lists that held nothing. What it has no
-// record of (an optional file, a directory it does not list, a pending
-// rotation key) stays, as before.
-func TestRestoreMovesAsideWhatTheBundleRecordsAsAbsentOrEmpty(t *testing.T) {
+// What the manifest records as absent or empty (no knowledge base, a listed
+// runtime directory that held nothing) is not reproduced: restore leaves the
+// install's copy in place, untouched, and says so. (Moving it aside was
+// dropped pending a decision; see docs/server/server.md.)
+func TestRestoreLeavesWhatTheBundleRecordsAsAbsentInPlaceAndSaysSo(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	if err := os.RemoveAll(filepath.Join(fixture.home, "data")); err != nil {
 		fatal(t, err)
@@ -265,8 +264,12 @@ func TestRestoreMovesAsideWhatTheBundleRecordsAsAbsentOrEmpty(t *testing.T) {
 		fatal(t, err)
 	}
 	operator := fixture.operator()
-	if _, err := operator.Create(context.Background(), fixture.options()); err != nil {
+	created, err := operator.Create(context.Background(), fixture.options())
+	if err != nil {
 		fatal(t, err)
+	}
+	if len(created.Notes) != 1 || !strings.Contains(created.Notes[0], "warning: the knowledge base") || !strings.Contains(created.Notes[0], "does not exist") {
+		errorf(t, "create does not warn that the knowledge base is not there: %q", created.Notes)
 	}
 	manifest, _, err := readBundleManifest(fixture.output)
 	if err != nil {
@@ -275,42 +278,41 @@ func TestRestoreMovesAsideWhatTheBundleRecordsAsAbsentOrEmpty(t *testing.T) {
 	if manifest.KnowledgeBase.Present || !strings.Contains(strings.Join(manifest.RuntimeDirectories, ","), "extensions") {
 		fatalf(t, "fixture manifest: knowledge base %+v, runtime directories %v", manifest.KnowledgeBase, manifest.RuntimeDirectories)
 	}
-	writeFixtureFile(t, filepath.Join(fixture.home, "data", "facts", "later.md"), []byte("the previous owner's knowledge"))
-	writeFixtureFile(t, filepath.Join(fixture.home, "extensions", "later", "manifest.json"), []byte("an extension installed later"))
-	writeFixtureFile(t, filepath.Join(fixture.home, "skills", "s", "SKILL.md"), []byte("a skill (skills is not listed)"))
-	writeFixtureFile(t, filepath.Join(fixture.home, "apns.json"), []byte("an optional file the bundle lacks"))
+	kept := map[string][]byte{
+		filepath.Join("data", "facts", "later.md"):            []byte("knowledge written after the backup"),
+		filepath.Join("extensions", "later", "manifest.json"): []byte("an extension installed later"),
+		filepath.Join("skills", "s", "SKILL.md"):              []byte("a skill (skills is not listed)"),
+		"apns.json":                                           []byte("an optional file the bundle lacks"),
+	}
+	for name, content := range kept {
+		writeFixtureFile(t, filepath.Join(fixture.home, name), content)
+	}
 	fixture.mutate(t)
 	result, err := operator.Restore(context.Background(), Options{Home: fixture.home, Bundle: fixture.output, WritesQuiesced: true})
 	if err != nil {
 		fatal(t, err)
 	}
-	if _, err := os.Stat(filepath.Join(fixture.home, "data")); !errors.Is(err, os.ErrNotExist) {
-		errorf(t, "the knowledge base the bundle records as absent is still live: %v", err)
-	}
-	if entries, err := os.ReadDir(filepath.Join(fixture.home, "extensions")); err != nil || len(entries) != 0 {
-		errorf(t, "extensions, listed empty in the bundle, is not restored empty: %d entries, %v", len(entries), err)
-	}
-	for name, content := range map[string][]byte{
-		filepath.Join("data", "facts", "later.md"):            []byte("the previous owner's knowledge"),
-		filepath.Join("extensions", "later", "manifest.json"): []byte("an extension installed later"),
-	} {
-		first, rest, _ := strings.Cut(name, string(filepath.Separator))
-		kept := previousFilesHolding(t, fixture.home, first)
-		if len(kept) != 1 || !strings.HasPrefix(kept[0], result.PreviousFiles) {
-			errorf(t, "%s is not in the named previous files %q: %v", first, result.PreviousFiles, kept)
-			continue
+	for name, content := range kept {
+		assertFile(t, filepath.Join(fixture.home, name), content)
+		if moved := previousFilesHolding(t, fixture.home, strings.SplitN(name, string(filepath.Separator), 2)[0]); len(moved) != 0 {
+			errorf(t, "%s was moved to the previous files: %v", name, moved)
 		}
-		assertFile(t, filepath.Join(kept[0], rest), content)
 	}
-	if !strings.Contains(strings.Join(result.MovedAside, ","), "data") || !strings.Contains(strings.Join(result.MovedAside, ","), "extensions") {
-		errorf(t, "the result does not report what was moved aside with nothing in its place: %v", result.MovedAside)
+	notes := strings.Join(result.Notes, "\n")
+	if !strings.Contains(notes, "records no knowledge base") || !strings.Contains(notes, filepath.Join(fixture.home, "data")+" was left in place, untouched") ||
+		!strings.Contains(notes, "records an empty extensions; this install's extensions was left in place, untouched") || len(result.Notes) != 2 {
+		errorf(t, "the result does not name what was left in place: %q", result.Notes)
 	}
-	assertFile(t, filepath.Join(fixture.home, "skills", "s", "SKILL.md"), []byte("a skill (skills is not listed)"))
-	assertFile(t, filepath.Join(fixture.home, "apns.json"), []byte("an optional file the bundle lacks"))
+	var stdout bytes.Buffer
+	printResult(&stdout, "restore", result)
+	if !strings.Contains(stdout.String(), "note: the bundle records no knowledge base") {
+		errorf(t, "restore output = %q", stdout.String())
+	}
 }
 
-// A failed restore puts back what it moved aside with nothing in its place.
-func TestFailedRestorePutsBackWhatItMovedAside(t *testing.T) {
+// A failed restore leaves what the bundle records as absent where it was, and
+// no previous files.
+func TestFailedRestoreLeavesWhatTheBundleRecordsAsAbsent(t *testing.T) {
 	fixture := newBackupFixture(t, "persona_manager")
 	if err := os.RemoveAll(filepath.Join(fixture.home, "data")); err != nil {
 		fatal(t, err)
@@ -325,18 +327,27 @@ func TestFailedRestorePutsBackWhatItMovedAside(t *testing.T) {
 		fatal(t, "restore succeeded")
 	}
 	if got := readNote(t, fixture); got != "changed knowledge" {
-		errorf(t, "the knowledge base moved aside was not put back: %q", got)
+		errorf(t, "the knowledge base the bundle records as absent changed: %q", got)
 	}
 	if dirs := previousFilesDirectories(t, fixture.home); len(dirs) != 0 {
 		errorf(t, "previous files remain: %v", dirs)
 	}
 }
 
-// The command names what was moved aside with nothing in its place.
-func TestRestoreOutputNamesWhatWasMovedAside(t *testing.T) {
-	var stdout bytes.Buffer
-	printResult(&stdout, "restore", Result{Bundle: "b", Verified: true, Restored: true, PreviousFiles: "/r/.persona-backup-previous-1", MovedAside: []string{"data", "extensions"}})
-	if got := stdout.String(); !strings.Contains(got, "data, extensions") || !strings.Contains(got, "/r/.persona-backup-previous-1") {
-		errorf(t, "restore output = %q", got)
+// The command prints every note after the result, for create and restore.
+func TestCommandOutputPrintsTheNotes(t *testing.T) {
+	for _, result := range []Result{
+		{Bundle: "b", Verified: true, Restored: true, PreviousFiles: "/r/.persona-backup-previous-1", Notes: []string{"note: one", "note: two"}},
+		{Bundle: "b", Verified: true, Notes: []string{"note: one", "note: two"}},
+	} {
+		var stdout bytes.Buffer
+		command := "create"
+		if result.Restored {
+			command = "restore"
+		}
+		printResult(&stdout, command, result)
+		if got := stdout.String(); !strings.HasSuffix(got, "\nnote: one\nnote: two\n") {
+			errorf(t, "%s output = %q", command, got)
+		}
 	}
 }

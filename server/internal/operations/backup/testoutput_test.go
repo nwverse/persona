@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -28,7 +29,10 @@ var testOutputSecrets = []struct {
 	{regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`), "[REDACTED]"},
 	{regexp.MustCompile(`Bearer \S+`), "[REDACTED]"},
 	// URL userinfo (scheme://user[:password]@host): the scheme stays.
-	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/?#\s@]+@`), "${1}[REDACTED]@"},
+	// Up to the authority's last @, so an unencoded @ in a password is covered.
+	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/?#\s]*@`), "${1}[REDACTED]@"},
+	// A struct printed with %+v: {Password:hunter2 ...}.
+	{regexp.MustCompile(`(?i)\b[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSPHRASE|CREDENTIAL)[A-Z0-9_]*:[^\s,}\]]+`), "[REDACTED]"},
 	// A JSON field such as "token":"..." or "password": "...".
 	{regexp.MustCompile(`(?i)"[A-Z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSPHRASE|CREDENTIAL)[A-Z0-9_]*"\s*:\s*"[^"]*"`), "[REDACTED]"},
 }
@@ -145,6 +149,9 @@ func TestTestOutputFilterRedactsCredentials(t *testing.T) {
 		{"https://x-access-token:hunter2@github.com/nwverse/persona.git", "hunter2"},
 		{`{"database_url":"postgres://u@h/d","token":"hunter2"}`, "hunter2"},
 		{`map[string]string{"PGPASSWORD":"hunter2"}`, "hunter2"},
+		{"postgres://persona:hun@ter2@db.example/persona", "ter2"},
+		{"{User:persona Password:hunter2 Host:db}", "hunter2"},
+		{"&{SSLPassword:hunter2}", "hunter2"},
 	} {
 		got := redactTestOutput("failure: " + sample.text + " (end)")
 		// Never print the sample itself: that is what the filter is for.
@@ -160,6 +167,8 @@ func TestTestOutputFilterRedactsCredentials(t *testing.T) {
 		"postgres://db.example:5432/persona?sslmode=verify-full",
 		"the hub and built-in manager must have separate databases",
 		"secret.key is missing",
+		"read secret.key: no such file",
+		"set the env variable PGHOST",
 	} {
 		if got := redactTestOutput(kept); got != kept {
 			t.Errorf("redactTestOutput(%q) = %q, want it unchanged", kept, got)
@@ -235,64 +244,168 @@ func TestShownEnvironmentIsAllowListed(t *testing.T) {
 }
 
 // Every message a test here prints goes through the filter: no direct
-// t.Fatal/t.Error/t.Log/t.Skip (or fmt.Print) call outside this file, and no
-// test reads or prints the whole environment (os.Environ, syscall.Environ, or
-// an env/printenv command in a fake client script).
+// t.Fatal/t.Error/t.Log/t.Skip call outside this file (also through another
+// name for t, such as tt := t), no fmt.Print, log.Print/Fatal/Panic,
+// fmt.Fprint to os.Stdout or os.Stderr, or print/println builtin, and no test
+// reads or prints the whole environment (os.Environ, syscall.Environ, or an
+// env/printenv command in a fake client script). It is a lint, not a proof:
+// os.Stdout.Write, a writer kept in a variable, or a call through a helper in
+// another package would pass it.
 func TestPackageTestsPrintOnlyThroughTheFilter(t *testing.T) {
 	files, err := filepath.Glob("*_test.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("list the package tests: %v", err)
 	}
-	printing := map[string]bool{"Fatal": true, "Fatalf": true, "Error": true, "Errorf": true, "Log": true, "Logf": true, "Skip": true, "Skipf": true, "SkipNow": false}
-	envCommand := regexp.MustCompile(`(^|["\s;{|&(` + "`" + `])(env|printenv|export -p|declare -p)(\s|$|[|;)])`)
-	fileSet := token.NewFileSet()
 	for _, name := range files {
-		file, err := parser.ParseFile(fileSet, name, nil, parser.SkipObjectResolution)
+		source, err := os.ReadFile(name)
 		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
+			t.Fatalf("read %s: %v", name, err)
 		}
-		testingNames := map[string]bool{}
-		ast.Inspect(file, func(node ast.Node) bool {
-			var params *ast.FieldList
-			switch node := node.(type) {
-			case *ast.FuncDecl:
-				params = node.Type.Params
-			case *ast.FuncLit:
-				params = node.Type.Params
-			}
-			if params != nil {
-				for _, field := range params.List {
-					if typeName := types.ExprString(field.Type); typeName == "*testing.T" || typeName == "testing.TB" || typeName == "*testing.B" {
-						for _, ident := range field.Names {
-							testingNames[ident.Name] = true
-						}
+		for _, problem := range unfilteredOutput(name, source) {
+			t.Error(problem)
+		}
+	}
+}
+
+// envCommand matches env, printenv, export -p or declare -p where a shell
+// would run it as a command (at the start of the string or a line, or after
+// ; | & ( { or a backquote), not the word env in prose.
+var envCommand = regexp.MustCompile(`(^"|^` + "`" + `|\\n|\n|[;|&({` + "`" + `]|\$\()\s*(env|printenv|export -p|declare -p)(\s|$|[|;)"` + "`" + `]|\\n)`)
+
+// unfilteredOutput lists the calls in one test file that print without the
+// output filter.
+func unfilteredOutput(name string, source []byte) []string {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, name, source, parser.SkipObjectResolution)
+	if err != nil {
+		return []string{fmt.Sprintf("parse %s: %v", name, err)}
+	}
+	printing := map[string]bool{"Fatal": true, "Fatalf": true, "Error": true, "Errorf": true, "Log": true, "Logf": true, "Skip": true, "Skipf": true}
+	testingNames := map[string]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		var params *ast.FieldList
+		switch node := node.(type) {
+		case *ast.FuncDecl:
+			params = node.Type.Params
+		case *ast.FuncLit:
+			params = node.Type.Params
+		}
+		if params != nil {
+			for _, field := range params.List {
+				switch types.ExprString(field.Type) {
+				case "*testing.T", "testing.TB", "*testing.B", "*testing.F":
+					for _, ident := range field.Names {
+						testingNames[ident.Name] = true
 					}
 				}
 			}
-			return true
-		})
+		}
+		return true
+	})
+	// Another name for a testing value (tt := t, var tb testing.TB = t).
+	for changed := true; changed; {
+		changed = false
 		ast.Inspect(file, func(node ast.Node) bool {
+			var names []*ast.Ident
+			var values []ast.Expr
 			switch node := node.(type) {
-			case *ast.SelectorExpr:
-				receiver, ok := node.X.(*ast.Ident)
-				if !ok {
-					return true
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					ident, _ := lhs.(*ast.Ident)
+					names = append(names, ident)
 				}
-				position := fileSet.Position(node.Pos())
-				switch {
-				case (receiver.Name == "os" || receiver.Name == "syscall") && node.Sel.Name == "Environ":
-					t.Errorf("%s reads the whole environment (%s.Environ); print only allow-listed variables", position, receiver.Name)
-				case receiver.Name == "fmt" && strings.HasPrefix(node.Sel.Name, "Print"):
-					t.Errorf("%s prints with fmt.%s, bypassing the output filter", position, node.Sel.Name)
-				case name != "testoutput_test.go" && testingNames[receiver.Name] && printing[node.Sel.Name]:
-					t.Errorf("%s calls %s.%s directly; use %s so the output is filtered", position, receiver.Name, node.Sel.Name, strings.ToLower(node.Sel.Name[:1])+node.Sel.Name[1:])
-				}
-			case *ast.BasicLit:
-				if name != "testoutput_test.go" && node.Kind == token.STRING && envCommand.MatchString(node.Value) {
-					t.Errorf("%s runs a command that prints the environment", fileSet.Position(node.Pos()))
+				values = node.Rhs
+			case *ast.ValueSpec:
+				names, values = node.Names, node.Values
+			}
+			for i, value := range values {
+				if ident, ok := value.(*ast.Ident); ok && testingNames[ident.Name] && i < len(names) && names[i] != nil && !testingNames[names[i].Name] {
+					testingNames[names[i].Name] = true
+					changed = true
 				}
 			}
 			return true
 		})
+	}
+	var problems []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CallExpr:
+			position := fileSet.Position(node.Pos())
+			if ident, ok := node.Fun.(*ast.Ident); ok && (ident.Name == "print" || ident.Name == "println") {
+				problems = append(problems, fmt.Sprintf("%s prints with the %s builtin, bypassing the output filter", position, ident.Name))
+			}
+			if selector, ok := node.Fun.(*ast.SelectorExpr); ok && len(node.Args) > 0 {
+				if receiver, ok := selector.X.(*ast.Ident); ok && receiver.Name == "fmt" && strings.HasPrefix(selector.Sel.Name, "Fprint") {
+					if stream := types.ExprString(node.Args[0]); stream == "os.Stdout" || stream == "os.Stderr" {
+						problems = append(problems, fmt.Sprintf("%s prints to %s with fmt.%s, bypassing the output filter", position, stream, selector.Sel.Name))
+					}
+				}
+			}
+		case *ast.SelectorExpr:
+			receiver, ok := node.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			position := fileSet.Position(node.Pos())
+			switch {
+			case (receiver.Name == "os" || receiver.Name == "syscall") && node.Sel.Name == "Environ":
+				problems = append(problems, fmt.Sprintf("%s reads the whole environment (%s.Environ); print only allow-listed variables", position, receiver.Name))
+			case receiver.Name == "fmt" && strings.HasPrefix(node.Sel.Name, "Print"):
+				problems = append(problems, fmt.Sprintf("%s prints with fmt.%s, bypassing the output filter", position, node.Sel.Name))
+			case receiver.Name == "log" && (strings.HasPrefix(node.Sel.Name, "Print") || strings.HasPrefix(node.Sel.Name, "Fatal") || strings.HasPrefix(node.Sel.Name, "Panic")):
+				problems = append(problems, fmt.Sprintf("%s prints with log.%s, bypassing the output filter", position, node.Sel.Name))
+			case filepath.Base(name) != "testoutput_test.go" && testingNames[receiver.Name] && printing[node.Sel.Name]:
+				problems = append(problems, fmt.Sprintf("%s calls %s.%s directly; use %s so the output is filtered", position, receiver.Name, node.Sel.Name, strings.ToLower(node.Sel.Name[:1])+node.Sel.Name[1:]))
+			}
+		case *ast.BasicLit:
+			if filepath.Base(name) != "testoutput_test.go" && node.Kind == token.STRING && envCommand.MatchString(node.Value) {
+				problems = append(problems, fmt.Sprintf("%s runs a command that prints the environment", fileSet.Position(node.Pos())))
+			}
+		}
+		return true
+	})
+	return problems
+}
+
+// The guard catches each way around it it knows of, and not the word env.
+func TestOutputGuardCatchesBypasses(t *testing.T) {
+	for _, sample := range []struct{ body, want string }{
+		{`t.Fatalf("x")`, "calls t.Fatalf directly"},
+		{`tt := t; tt.Errorf("x")`, "calls tt.Errorf directly"},
+		{`var tb testing.TB = t; tb.Log("x")`, "calls tb.Log directly"},
+		{`log.Printf("x")`, "log.Printf"},
+		{`log.Fatal("x")`, "log.Fatal"},
+		{`fmt.Fprintln(os.Stdout, "x")`, "os.Stdout"},
+		{`fmt.Fprintf(os.Stderr, "x")`, "os.Stderr"},
+		{`println("x")`, "println builtin"},
+		{`fmt.Println("x")`, "fmt.Println"},
+		{`_ = os.Environ()`, "whole environment"},
+		{`_ = "env | grep PG"`, "prints the environment"},
+		{`_ = "#!/bin/sh\nprintenv\n"`, "prints the environment"},
+		{"_ = `echo; env`", "prints the environment"},
+		{`_ = "$(env)"`, "prints the environment"},
+	} {
+		source := "package backup\nimport (\"fmt\"; \"log\"; \"os\"; \"testing\")\nvar _, _, _ = fmt.Sprint, log.Print, os.Exit\nfunc TestX(t *testing.T) {\n" + sample.body + "\n}\n"
+		problems := strings.Join(unfilteredOutput("sample_test.go", []byte(source)), "\n")
+		if !strings.Contains(problems, sample.want) {
+			t.Errorf("the guard missed %s: %q", sample.body, problems)
+		}
+	}
+	fuzz := "package backup\nimport \"testing\"\nfunc FuzzX(f *testing.F) { f.Skip(\"x\") }\n"
+	if problems := unfilteredOutput("sample_test.go", []byte(fuzz)); len(problems) != 1 {
+		t.Errorf("the guard missed f.Skip on a *testing.F: %q", problems)
+	}
+	for _, body := range []string{
+		`_ = "set the env variable PGHOST"`,
+		`_ = "an environment"`,
+		`_ = "the client's env: only PG names"`,
+		`var b strings.Builder; fmt.Fprintf(&b, "x")`,
+		`errorf(t, "x")`,
+	} {
+		source := "package backup\nimport (\"fmt\"; \"strings\"; \"testing\")\nvar _, _ = fmt.Sprint, strings.Repeat\nfunc TestX(t *testing.T) {\n" + body + "\n}\n"
+		if problems := unfilteredOutput("sample_test.go", []byte(source)); len(problems) != 0 {
+			t.Errorf("the guard flags %s: %q", body, problems)
+		}
 	}
 }

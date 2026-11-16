@@ -41,6 +41,16 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 	if err := refuseOutputInsideCollectedTree(opts.Home, output); err != nil {
 		return Result{}, err
 	}
+	// The knowledge-base layout is checked before anything is staged or dumped
+	// (collectPayload checks it again): a bundle restore would refuse is not
+	// written.
+	if home, err := filepath.Abs(opts.Home); err != nil {
+		return Result{}, err
+	} else if _, kbDir, err := knowledgeBaseLocator(home); err != nil {
+		return Result{}, err
+	} else if err := refuseKnowledgeBaseOverlap(home, kbDir); err != nil {
+		return Result{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
 		return Result{}, err
 	}
@@ -89,7 +99,8 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 			return Result{}, fmt.Errorf("writes resumed during backup: %w", err)
 		}
 	}
-	if err := collectPayload(opts.Home, staging, manifest); err != nil {
+	notes, err := collectPayload(opts.Home, staging, manifest)
+	if err != nil {
 		return Result{}, err
 	}
 	if err := writeManifest(staging, manifest); err != nil {
@@ -104,7 +115,7 @@ func (o *Operator) Create(ctx context.Context, opts Options) (_ Result, err erro
 	if err := publishBundle(ctx, staging, output); err != nil {
 		return Result{}, err
 	}
-	return Result{Bundle: output, Verified: true}, nil
+	return Result{Bundle: output, Verified: true, Notes: notes}, nil
 }
 
 func (o *Operator) Verify(ctx context.Context, opts Options) (Result, error) {
@@ -218,7 +229,11 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err err
 		return Result{}, err
 	}
 	keptPassword := dockerPasswordKept(opts.Home, manifest) // before applyFiles installs the bundle's copy
-	previousFiles, previousKB, movedAside, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
+	notes, err := leftInPlaceNotes(opts.Home, staging, manifest, opts.AllowExternalKB)
+	if err != nil {
+		return Result{}, err
+	}
+	previousFiles, previousKB, rollbackFiles, err := applyFiles(ctx, opts.Home, staging, manifest, opts.AllowExternalKB, id)
 	if err != nil {
 		return Result{}, err
 	}
@@ -244,7 +259,7 @@ func (o *Operator) Restore(ctx context.Context, opts Options) (_ Result, err err
 		return Result{}, errors.Join(err, rollbackFiles())
 	}
 	previous := outcome.previous()
-	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB, MovedAside: movedAside}, nil
+	return Result{Bundle: bundle, Verified: true, Restored: true, PreviousHubDB: previous[0], PreviousManagerDB: previous[1], PreviousFiles: previousFiles, KeptDockerPassword: keptPassword, PreviousExternalKB: previousKB, Notes: notes}, nil
 }
 
 func nameOrNone(name string) string {
