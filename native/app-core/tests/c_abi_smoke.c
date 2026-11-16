@@ -1,8 +1,9 @@
-// An independently compiled C consumer of the checked-in C header (#8560, #8912).
+// An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
 // answer + display_answer (15 + 8 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
-// overlay applied here, never in the core) and task_index (5 complete expected objects plus the background receipt).
+// overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
+// viewed_images (ordinary post-overlay plus source-derived folded expected objects).
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
 // compact separators), so object key order is insignificant while every value, array order and Unicode string is exact.
 // Malformed inputs must return an empty buffer and a deliberately wrong expectation must be detected, per domain.
