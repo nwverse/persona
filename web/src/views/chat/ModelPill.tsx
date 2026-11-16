@@ -295,12 +295,12 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
       pickFast(false);
       return;
     }
-    const list = modelList(mid, setup.provider).list;
+    const list = modelList(mid, setup.provider, "assistant").list;
     if (!list) return;
     if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
   }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
-    if (mid) void readModels(mid, setup.provider, { first: true });
+    if (mid) void readModels(mid, setup.provider, { purpose: "assistant", first: true });
   }, [mid, setup.provider]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -309,14 +309,14 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   // every list again behind the one shown, once per opening
   useEffect(() => {
     if (!shown) return;
-    void readModels(mid, setup.provider, { again: true, first: true });
+    void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
-      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { again: true });
+      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, [shown, mid]);
   if (!mid) return null;
-  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider));
+  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider, "assistant"));
   const workflow = view.engine === "codex" && view.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
   return (
     <>

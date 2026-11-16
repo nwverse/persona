@@ -33,10 +33,11 @@ export interface ModelList {
 
 const lists = new Map<string, ModelList>();
 const machines = new Map<string, { launchers?: Launcher[]; loading?: boolean }>();
-const reads = new Map<string, Promise<void>>();
+const reads = new Map<string, { promise: Promise<void>; hidden: Set<string> }>();
 const machineReads = new Map<string, Promise<void>>();
-// the typed IDs whose Forget is still on its way, per list: a list read meanwhile doesn't bring them back
-const forgetting = new Map<string, Set<string>>();
+// Typed IDs belong to the launcher in both catalogs. Each read keeps the deletions it overlapped even after they finish.
+type ModelForget = { restore: Map<string, (now: LauncherModels) => LauncherModels>; promise: Promise<string> };
+const forgetting = new Map<string, Map<string, ModelForget>>();
 let version = 0;
 const subscribers = new Set<() => void>();
 const changed = () => {
@@ -47,14 +48,14 @@ const subscribe = (f: () => void) => {
   subscribers.add(f);
   return () => void subscribers.delete(f);
 };
-const listKey = (mid: string, launcher: string) => `${mid}/${launcher}`;
+const listKey = (mid: string, launcher: string, purpose?: "assistant") => `${mid}/${launcher}${purpose ? `\u0000${purpose}` : ""}`;
 
 /** Draws again whenever a list or a computer's launchers change. */
 export function useModelLists(): number {
   return useSyncExternalStore(subscribe, () => version, () => version);
 }
 
-export const modelList = (mid: string, launcher: string): ModelList => lists.get(listKey(mid, launcher)) ?? {};
+export const modelList = (mid: string, launcher: string, purpose?: "assistant"): ModelList => lists.get(listKey(mid, launcher, purpose)) ?? {};
 
 /** The launchers of `mid` as last read; undefined before the first answer. */
 export const machineLauncherList = (mid: string): Launcher[] | undefined => machines.get(mid)?.launchers;
@@ -117,19 +118,25 @@ function slot(first: boolean): Promise<() => void> {
 }
 
 /** Reads a launcher's list: once (the pill), or `again` behind the one shown (an opening, Retry). */
-export function readModels(mid: string, launcher: string, o: { again?: boolean; first?: boolean } = {}): Promise<void> {
-  const key = listKey(mid, launcher);
+export function readModels(mid: string, launcher: string, o: { again?: boolean; first?: boolean; purpose?: "assistant" } = {}): Promise<void> {
+  const key = listKey(mid, launcher, o.purpose);
   const reading = reads.get(key);
-  if (reading) return reading;
+  if (reading) return reading.promise;
   const had = lists.get(key);
   if (had?.list !== undefined && !o.again) return Promise.resolve();
   lists.set(key, { list: had?.list, loading: true });
   changed();
+  const sharedKey = listKey(mid, launcher);
+  const hidden = new Set(forgetting.get(sharedKey)?.keys());
   const read = slot(Boolean(o.first)).then(async (done) => {
     try {
-      const r = await launcherModels(mid, launcher);
-      const gone = forgetting.get(key);
-      lists.set(key, { list: r && gone?.size ? { ...r, models: r.models.filter((m) => !(m.custom && gone.has(m.id))) } : r });
+      const r = await launcherModels(mid, launcher, { purpose: o.purpose });
+      for (const id of hidden) {
+        if (r?.models.some((m) => m.id === id && m.custom)) {
+          forgetting.get(sharedKey)?.get(id)?.restore.set(key, withoutCustom(r, id).restore);
+        }
+      }
+      lists.set(key, { list: r && hidden.size ? { ...r, models: r.models.filter((m) => !(m.custom && hidden.has(m.id))) } : r });
     } catch (e) {
       // a list already shown stays (and says nothing): a newer one just didn't come
       const now = lists.get(key);
@@ -140,7 +147,7 @@ export function readModels(mid: string, launcher: string, o: { again?: boolean; 
       changed();
     }
   });
-  reads.set(key, read);
+  reads.set(key, { promise: read, hidden });
   return read;
 }
 
@@ -172,25 +179,47 @@ export function readForPanel(mid: string, own: string): void {
 }
 
 /** Forgets an ID typed before (#1644): off the list at once, back where it was when the hub says no. "": done; else why not. */
-export async function forgetModel(mid: string, launcher: string, id: string): Promise<string> {
-  const key = listKey(mid, launcher);
-  const before = lists.get(key)?.list;
-  if (!before) return "";
-  lists.set(key, { list: withoutCustom(before, id).list });
-  changed();
-  const gone = forgetting.get(key) ?? new Set<string>();
-  forgetting.set(key, gone.add(id));
-  try {
-    await forgetCustomModel(mid, launcher, id);
-    return "";
-  } catch (e) {
-    const now = lists.get(key)?.list;
-    lists.set(key, { list: now ? withoutCustom(before, id).restore(now) : before });
-    changed();
-    return t("composer.forget_failed", { id, error: errorText(e) });
-  } finally {
-    gone.delete(id);
+export async function forgetModel(mid: string, launcher: string, id: string, purpose?: "assistant"): Promise<string> {
+  const sharedKey = listKey(mid, launcher);
+  const pending = forgetting.get(sharedKey) ?? new Map<string, ModelForget>();
+  const existing = pending.get(id);
+  if (existing) return existing.promise;
+  if (!lists.get(listKey(mid, launcher, purpose))?.list) return "";
+  const keys = [sharedKey, listKey(mid, launcher, "assistant")];
+  const mutation: ModelForget = {
+    restore: new Map(),
+    promise: Promise.resolve().then(async () => {
+      try {
+        await forgetCustomModel(mid, launcher, id);
+        return "";
+      } catch (e) {
+        for (const key of keys) {
+          reads.get(key)?.hidden.delete(id);
+          const now = lists.get(key);
+          const restore = mutation.restore.get(key);
+          if (now?.list && restore) lists.set(key, { ...now, list: restore(now.list) });
+        }
+        changed();
+        return t("composer.forget_failed", { id, error: errorText(e) });
+      } finally {
+        pending.delete(id);
+        if (!pending.size) forgetting.delete(sharedKey);
+      }
+    }),
+  };
+  pending.set(id, mutation);
+  forgetting.set(sharedKey, pending);
+  for (const key of keys) {
+    const current = lists.get(key);
+    if (current?.list) {
+      const removed = withoutCustom(current.list, id);
+      mutation.restore.set(key, removed.restore);
+      lists.set(key, { ...current, list: removed.list });
+    }
+    reads.get(key)?.hidden.add(id);
   }
+  changed();
+  return mutation.promise;
 }
 
 // ── the session's model, from what was read ──────────────────────────────────
