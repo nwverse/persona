@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
 ## A transport made for one request opens a connection for one request (2026-11-16, #9202)
 
 The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
