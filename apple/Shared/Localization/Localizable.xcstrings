@@ -176399,6 +176399,28 @@
       },
       "extractionState" : "manual"
     },
+    "Topic %lld / %lld: %@ [Meeting Topic]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Topic %lld / %lld: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "議題 %lld/%lld：%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "议题 %lld/%lld：%@"
+          }
+        }
+      }
+    },
     "Topic Details" : {
       "localizations" : {
         "en" : {
@@ -176463,28 +176485,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "议题：%@"
-          }
-        }
-      }
-    },
-    "Topic: %@ · %lld / %lld [Meeting Topic]" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Topic: %@ · %lld / %lld"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "議題：%@ · %lld / %lld"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "议题：%@ · %lld / %lld"
           }
         }
       }

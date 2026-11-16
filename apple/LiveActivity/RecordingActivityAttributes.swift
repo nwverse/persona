@@ -35,7 +35,7 @@ nonisolated struct RecordingActivityAttributes: ActivityAttributes {
         /// the name. nil without the live view, before the room names one, or while Persona doesn't attend.
         var topic: String? = nil
         /// Where the current topic stands among the room's topics (#8731 V4): its place from 1 and how many there are
-        /// ("Topic: <topic> · 2 / 4"). nil beside no `topic`, and in a state from before.
+        /// ("Topic 2 / 4: <topic>"). nil beside no `topic`, and in a state from before.
         var topicNumber: Int? = nil
         var topicCount: Int? = nil
         /// The latest line of the meeting's live log (phase 2, at most 120 characters): what was said while Persona

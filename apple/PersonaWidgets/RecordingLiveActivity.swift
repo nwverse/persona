@@ -167,10 +167,11 @@ struct RecordingSubtitle: View {
         state.phase == .recording && state.persona != nil && state.topic?.isEmpty == false
     }
 
-    /// "Topic: <topic> · 2 / 4" (#8731 V4), or without its place where the state has none.
+    /// "Topic 2 / 4: <topic>" (#8731 V4), or without its place where the state has none. The place comes first, so a long
+    /// topic cut at the end of its lines keeps it.
     static func topicText(_ topic: String, _ state: RecordingActivityAttributes.ContentState) -> Text {
         if let number = state.topicNumber, let count = state.topicCount, count > 1 {
-            return Text("Topic: \(topic) · \(number) / \(count) [Meeting Topic]")
+            return Text("Topic \(number) / \(count): \(topic) [Meeting Topic]")
         }
         return Text("Topic: \(topic) [Meeting Topic]")
     }
@@ -204,6 +205,7 @@ struct RecordingSubtitle: View {
 /// - A meeting's End is a link that opens the meeting and asks "End the Meeting?" (`RecordingLink.end`). An ended meeting
 ///   can't go on recording, so a tap on the Lock Screen never ends it at once. Any other recording's Stop stops it there
 ///   (as a voice memo's).
+/// - The three share the row equally, so none is cut beside Talk's words.
 /// - Ask Persona comes only while Persona answers in the meeting (#2981). A room meeting with Talk (#3862 phase 4,
 ///   `talking` not nil) has Talk in its place: a tap opens a talk window, and while it's open the button reads Done and
 ///   ends it (each tap says which it was, `TalkInMeetingIntent.open`).
@@ -248,7 +250,6 @@ struct RecordingButtons: View {
         }
         .buttonStyle(.bordered)
         .tint(onDark ? .white : .primary)
-        .layoutPriority(1)
     }
 
     @ViewBuilder private var end: some View {

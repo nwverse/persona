@@ -34,7 +34,7 @@ final class MeetingLiveViewUITests: XCTestCase {
     }
 
     /// The room sets topics after a batch of the meeting's lines: the room's Highlights page (#8731 B1) shows them as
-    /// chips, the current one among them, as the hub has them; the Live Activity says "Topic: <topic> · n / m" on the
+    /// chips, the current one among them, as the hub has them; the Live Activity says "Topic n / m: <topic>" on the
     /// Lock Screen after the role (#8731 V4), within its height even for the longest topic beside an answer.
     @MainActor func testTopicsShowOnThePageAndTheLockScreen() throws {
         let hub = try mockHub()
