@@ -374,7 +374,10 @@ this by changing a locale, allowing an address or rearranging the generated plis
 
 A retained release worktree is not clean just because its source is unchanged: `release.sh` generates
 `apple/Persona.xcodeproj`, and an unignored generated project makes `testflight_action.py` reject its own next run.
-Ignore that generated directory, never delete an unrecognized untracked file to make the check pass. The action must
+Ignore that generated directory for future worktrees. An older immutable tag may still contain the old negated ignore
+rule, so the recovery tool must independently recognize only its five known generated files, reject any other file or
+symlink, then discard and regenerate them from the exact tag. Never trust the old generated content as source (#8933).
+The action must
 also recognize `PERSONA_OPERATION_LOCKS` as well as `PERSONA_OPERATION_RELEASE_LOCKED`; otherwise it nests the lock
 wrapper before doing any work. An `upload_started` checkpoint with no remote build means the upload did not complete
 or is not visible yet: retry that same commit and build number. An already visible build is only processed and checked,
