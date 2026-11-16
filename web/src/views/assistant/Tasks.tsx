@@ -339,7 +339,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
       </label>}
       {schedule && <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-0.5">
         <input id={grantId} type="checkbox" checked={scheduleGrant} onChange={(e) => setScheduleGrant(e.target.checked)} aria-describedby={`${grantId}-note`} className="accent-[var(--accent)]" />
-        <label htmlFor={grantId} className="cursor-pointer text-[12.5px] text-ink-2">{t("assistant-tasks.plan_schedule_grant", { name: schedule.name })}</label>
+        <label htmlFor={grantId} className="cursor-pointer text-label text-ink-2">{t("assistant-tasks.plan_schedule_grant", { name: schedule.name })}</label>
         <p id={`${grantId}-note`} className="col-start-2 text-label text-ink-3">{t("assistant-tasks.plan_schedule_grant_note")}</p>
       </div>}
       {/* Start stays in reach (#3822): a card taller than the tray it scrolls in (several tasks, an opened brief) keeps

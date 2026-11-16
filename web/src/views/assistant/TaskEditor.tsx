@@ -518,8 +518,8 @@ function StartGrantSection({ task, removing, onRemove }: { task: Task; removing:
           <div key={k.key} data-start-grant-kind className="flex items-center gap-3 px-3.5 py-2.5">
             <Icon name="folder" size={14} className="shrink-0 text-ink-3" />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] text-ink" title={place(k)}>{place(k)}</div>
-              <div className="text-[11.5px] text-ink-3">{t(k.readonly ? "settings-assistantsettings.trust_read" : "settings-assistantsettings.trust_edit")}</div>
+              <div className="truncate text-meta text-ink" title={place(k)}>{place(k)}</div>
+              <div className="text-submeta text-ink-3">{t(k.readonly ? "settings-assistantsettings.trust_read" : "settings-assistantsettings.trust_edit")}</div>
             </div>
             <Button
               tone="quiet"

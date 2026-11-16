@@ -263,8 +263,8 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 		if _, err := g.s.startPlan(scheduleGranting(ownerStart(context.Background())), id, nil, false); err != nil {
 			t.Fatal(err)
 		}
+		// The grant is added at admission, before the agent starts: once it started, it is settled.
 		waitFor(t, "the task's agent", func() bool { return fakeStarts(g.f) == 1 })
-		time.Sleep(50 * time.Millisecond)
 		if task, _ := taskByID(g.s, "deps"); task.StartGrant != nil {
 			t.Fatalf("a Start after the prompt changed granted the new prompt: %+v", task.StartGrant)
 		}
@@ -276,8 +276,8 @@ func TestScheduledRoundWithoutTheOwnersGrantWaits(t *testing.T) {
 		if _, err := g.s.startPlan(scheduleGranting(context.Background()), id, nil, false); err != nil {
 			t.Fatal(err)
 		}
+		// The grant is added at admission, before the agent starts: once it started, it is settled.
 		waitFor(t, "the task's agent", func() bool { return fakeStarts(g.f) == 1 })
-		time.Sleep(50 * time.Millisecond)
 		if task, _ := taskByID(g.s, "deps"); task.StartGrant != nil {
 			t.Fatalf("a Start that is not the owner's granted the schedule: %+v", task.StartGrant)
 		}
