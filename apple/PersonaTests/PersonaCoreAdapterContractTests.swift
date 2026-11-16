@@ -110,6 +110,8 @@ private actor AdapterReloadResponses {
 /// released so concurrent folds, overlapping reloads and subscription ownership do not depend on network timing.
 @MainActor
 struct PersonaCoreAdapterContractTests {
+    init() { ProductionContinuityShadow.shared.installForTests() }
+
     private func item(_ seq: Int, kind: ItemKind = .toolUse) -> Item {
         Item(id: "\(seq)#0", seq: seq, ts: nil, role: "assistant", kind: kind, text: "Synthetic adapter fixture",
              toolUseID: nil, toolName: nil, toolInput: nil, isError: nil, image: nil)
@@ -202,6 +204,7 @@ struct PersonaCoreAdapterContractTests {
         #expect(store.items.map(\.seq) == [3, 4])
         #expect(store.covered == 3)
         let shadow = try await ProductionContinuityShadow.shared.compare(store)
+        #expect(shadow.compared >= 3)
         #expect(shadow.mismatches == 0)
     }
 
@@ -228,6 +231,7 @@ struct PersonaCoreAdapterContractTests {
         #expect(sent.withLock { $0.filter { $0 == "subscribe" }.count } == 1)
         #expect(sent.withLock { !$0.contains("unsubscribe") })
         #expect(model.isSubscribed(key, by: second))
+        ProductionContinuityShadow.shared.close(model.chat(key))
         model.unsubscribe(key, by: second)
         #expect(sent.withLock { $0.filter { $0 == "unsubscribe" }.count } == 1)
     }

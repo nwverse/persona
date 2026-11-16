@@ -4,6 +4,8 @@ import Testing
 
 @MainActor
 struct ProductionContinuityShadowTests {
+    init() { ProductionContinuityShadow.shared.installForTests() }
+
     private func item(_ seq: Int, kind: ItemKind = .text) -> Item {
         Item(id: "\(seq)#0", seq: seq, ts: nil, role: "assistant", kind: kind, text: "Synthetic shadow fixture",
              toolUseID: nil, toolName: nil, toolInput: nil, isError: nil, image: nil)

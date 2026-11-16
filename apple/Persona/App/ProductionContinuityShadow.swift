@@ -27,6 +27,8 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     private struct Chat {
         var items: [Item] = []
+        var requests: Set<RequestKind> = []
+        var requestEvidence: [RequestKind: String] = [:]
         var compared = 0
         var mismatches = 0
         var failed = false
@@ -38,6 +40,10 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         let native: NativeContinuityResult
         let gap: ChatStore.Gap?
         let fold: Item?
+    }
+
+    private struct WeakChatStore {
+        weak var store: ChatStore?
     }
 
     private final class Effects: @unchecked Sendable {
@@ -53,7 +59,9 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
     private var enabled = true
     private var client: PersonaCoreClient?
     private var chats: [UInt: Chat] = [:]
-    private var generations: [UInt: UInt] = [:]
+    private var generations: [ObjectIdentifier: UInt] = [:]
+    private var stores: [ObjectIdentifier: WeakChatStore] = [:]
+    private var retired: Set<UInt> = []
     private var nextGeneration: UInt = 1
     private var reportSink: @Sendable (Report) -> Void
     private var mismatches = 0
@@ -64,12 +72,21 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
 
     @MainActor func install() {
         #if os(iOS)
-        guard UserDefaults.standard.object(forKey: "showContinuityShadow") as? Bool ?? true else {
-            enabled = false
+        install(enabled: UserDefaults.standard.object(forKey: "showContinuityShadow") as? Bool ?? true)
+        #else
+        install(enabled: true)
+        #endif
+    }
+
+    /// Production adapter tests explicitly require a real comparison; they do not inherit the simulator's A/B opt-out.
+    @MainActor func installForTests() { install(enabled: true) }
+
+    @MainActor private func install(enabled: Bool) {
+        self.enabled = enabled
+        guard enabled else {
+            enqueue { [weak self] in self?.removeAllChats() }
             return
         }
-        enabled = true
-        #endif
         ChatStore.installContinuityShadowForTests { [weak self] store, input, observation in
             self?.accept(input, into: store, snapshot: observation.snapshot, native: observation.native, gap: observation.gap)
         }
@@ -86,15 +103,24 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         let id = generation(for: store)
         let value = Input(snapshot: snapshot, value: input, native: native, gap: gap, fold: input.fold)
         // Encoding copies the immutable items before the next native mutation, but never runs on the caller.
-        enqueue { [weak self] in self?.process(id, input: value) }
+        // A failed or still-unclosed chat keeps no new transcript copies on this queue.
+        enqueue { [weak self] in
+            guard let self, !self.retired.contains(id), self.chats[id]?.failed != true else { return }
+            self.process(id, input: value)
+        }
     }
 
     private func generation(for store: ChatStore) -> UInt {
-        let pointer = UInt(bitPattern: ObjectIdentifier(store))
-        if let existing = generations[pointer] { return existing }
+        let pointer = ObjectIdentifier(store)
+        if let id = generations[pointer], stores[pointer]?.store === store { return id }
+        if let old = generations.removeValue(forKey: pointer) {
+            retired.insert(old)
+            if chats[old] != nil { removeChat(old) }
+        }
         let id = nextGeneration
         nextGeneration += 1
         generations[pointer] = id
+        stores[pointer] = WeakChatStore(store: store)
         return id
     }
 
@@ -113,13 +139,12 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         let id = generation(for: store)
         let snapshot = store.nativeSnapshot()
         enqueue { [weak self] in
-            guard let self else { return }
+            guard let self, !self.retired.contains(id), self.chats[id]?.failed != true else { return }
             do {
-                if self.chats[id] == nil {
-                    self.chats[id] = Chat()
-                    try self.core().dispatch(.openChat(chat: self.chatID(id), snapshot: Self.snapshot(snapshot)))
-                }
+                try self.start(id, snapshot: snapshot)
                 try self.core().dispatch(.chat(chat: self.chatID(id), event: .loadOlder))
+                try self.core().flush(timeoutMilliseconds: 16)
+                try self.compareQueued(id, shape: "kind=loadOlder items=0")
             } catch { self.fail(id, rule: "older-request", shape: "kind=loadOlder items=0") }
         }
     }
@@ -134,17 +159,36 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         default: .rangeFailed(fold_id: fold?.id)
         }
         enqueue { [weak self] in
-            guard let self else { return }
+            guard let self, !self.retired.contains(id), self.chats[id]?.failed != true else { return }
             do {
                 try self.start(id, snapshot: snapshot)
                 try self.core().dispatch(.chat(chat: self.chatID(id), event: event))
+                try self.core().flush(timeoutMilliseconds: 16)
+                try self.compareQueued(id, shape: "kind=\(kind.rawValue) items=0")
             } catch { self.fail(id, rule: "failed-input", shape: "kind=\(kind.rawValue) items=0") }
         }
     }
     @MainActor func close(_ store: ChatStore) {
         guard enabled else { return }
-        let id = generation(for: store)
-        enqueue { [weak self] in self?.removeChat(id) }
+        let pointer = ObjectIdentifier(store)
+        enqueue { [weak self] in
+            guard let self else { return }
+            guard let id = self.generations.removeValue(forKey: pointer) else { return }
+            self.retired.insert(id)
+            self.removeChat(id)
+        }
+    }
+
+    @MainActor func closeAll() {
+        enqueue { [weak self] in self?.removeAllChats() }
+    }
+
+    private func removeAllChats() {
+        for (_, id) in generations { retired.insert(id); removeChat(id) }
+        for id in chats.keys { removeChat(id) }
+        generations.removeAll()
+        stores.removeAll()
+        effects.values.withLock { $0.removeAll() }
     }
 
     func compare(_ store: ChatStore) async throws -> (compared: Int, mismatches: Int) {
@@ -152,6 +196,10 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         return try await withCheckedThrowingContinuation { resume in
             enqueue { [weak self] in
                 guard let self else { resume.resume(throwing: PersonaCoreError.closed); return }
+                guard self.chats[id]?.failed != true else {
+                    resume.resume(throwing: PersonaCoreError.invalidPatch)
+                    return
+                }
                 do {
                     try self.core().flush()
                     self.drainChanged(id)
@@ -232,27 +280,18 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
             if patch.loadedOnce != expected.loadedOnce { report(id, rule: "loaded-once", shape: shape) }
             switch input.gap {
             case .fill where input.value.kind == .latest || input.value.kind == .pushed:
-                if !effects.values.withLock({ $0.contains { $0.id == id && Self.isAfter($0.effect) } }) {
-                    report(id, rule: "immediate-fill", shape: shape)
+                if !requestExists(id, .after) {
+                    recordRequest(id, .after, shape)
                 }
             case .reload where input.value.kind == .latest || input.value.kind == .pushed:
-                if !effects.values.withLock({ $0.contains { $0.id == id && Self.isLatest($0.effect) } }) {
-                    report(id, rule: "reload-request", shape: shape)
+                if !requestExists(id, .latest) {
+                    recordRequest(id, .latest, shape)
                 }
             default: break
             }
-            if input.value.kind == .older,
-               !effects.values.withLock({ $0.contains { $0.id == id && Self.isOlder($0.effect) } }) {
-                report(id, rule: "older-request", shape: shape)
-            }
-            if input.value.kind == .reconnected,
-               !effects.values.withLock({ $0.contains { $0.id == id && Self.isSubscribe($0.effect) } }) {
-                report(id, rule: "reconnect-request", shape: shape)
-            }
-            if input.value.kind == .openFold,
-               !effects.values.withLock({ $0.contains { $0.id == id && Self.isRange($0.effect) } }) {
-                report(id, rule: "fold-request", shape: shape)
-            }
+            if input.value.kind == .older { recordRequest(id, .older, shape) }
+            if input.value.kind == .reconnected { recordRequest(id, .subscribe, shape) }
+            if input.value.kind == .openFold { recordRequest(id, .range, shape) }
         }
         let pending = effects.values.withLock { current in
             let mine = current.filter { $0.id == id || $0.id == nil }
@@ -261,6 +300,26 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
         for entry in pending {
             if case .rejected = entry.effect { report(id, rule: "core-rejected", shape: shape) }
+            if Self.isAfter(entry.effect) { chats[id]?.requests.insert(.after) }
+            if Self.isLatest(entry.effect) { chats[id]?.requests.insert(.latest) }
+            if Self.isOlder(entry.effect) { chats[id]?.requests.insert(.older) }
+            if Self.isSubscribe(entry.effect) { chats[id]?.requests.insert(.subscribe) }
+            if Self.isRange(entry.effect) { chats[id]?.requests.insert(.range) }
+        }
+        if let pending = chats[id]?.requestEvidence[.after], !requestExists(id, .after) {
+            report(id, rule: "immediate-fill", shape: pending)
+        }
+        if let pending = chats[id]?.requestEvidence[.latest], !requestExists(id, .latest) {
+            report(id, rule: "reload-request", shape: pending)
+        }
+        if let pending = chats[id]?.requestEvidence[.older], !requestExists(id, .older) {
+            report(id, rule: "older-request", shape: pending)
+        }
+        if let pending = chats[id]?.requestEvidence[.subscribe], !requestExists(id, .subscribe) {
+            report(id, rule: "reconnect-request", shape: pending)
+        }
+        if let pending = chats[id]?.requestEvidence[.range], !requestExists(id, .range) {
+            report(id, rule: "fold-request", shape: pending)
         }
         if (chats[id]?.compared ?? 0).isMultiple(of: 10) {
             Self.logger.debug("continuity shadow compared=\(self.chats[id]?.compared ?? 0, privacy: .public) mismatches=\(self.mismatches, privacy: .public)")
@@ -287,12 +346,31 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         }
     }
 
+    /// A repeated scheduling event is allowed to be coalesced with an existing in-flight core request. Retain only
+    /// this evidence, never request parameters or fold IDs. A genuinely absent first request is still a mismatch.
+    private enum RequestKind: Sendable { case after, latest, older, subscribe, range }
+
+    private func requestExists(_ id: UInt, _ kind: RequestKind) -> Bool {
+        chats[id]?.requests.contains(kind) == true
+    }
+
+    private func recordRequest(_ id: UInt, _ kind: RequestKind, _ shape: String) {
+        if requestExists(id, kind) {
+            chats[id]?.requestEvidence.removeValue(forKey: kind)
+        } else {
+            chats[id]?.requestEvidence[kind] = shape
+        }
+    }
+
     private func removeChat(_ id: UInt) {
         generations = generations.filter { $0.value != id }
         effects.values.withLock { $0.removeAll { $0.id == id || $0.id == nil } }
-        guard chats.removeValue(forKey: id) != nil else { return }
+        let started = chats.removeValue(forKey: id) != nil
+        // Always close: an absent local chat may mean a partially started core, and this also invalidates stale state.
         do { try core().dispatch(.closeChat(chat: chatID(id))) }
-        catch { fail(id, rule: "core-close", shape: "kind=close items=0") }
+        catch {
+            if started { fail(id, rule: "core-close", shape: "kind=close items=0") }
+        }
         Self.logger.debug("continuity shadow closed mismatches=\(self.mismatches, privacy: .public)")
     }
 
@@ -300,6 +378,7 @@ nonisolated final class ProductionContinuityShadow: @unchecked Sendable {
         guard chats[id]?.failed == false else { return }
         chats[id]?.failed = true
         report(id, rule: rule, shape: shape)
+        removeChat(id)
     }
 
     private func report(_ id: UInt, rule: String, shape: String) {

@@ -62,9 +62,9 @@ nonisolated protocol ChatContinuityAdapting: AnyObject {
 }
 
 extension ChatStore: ChatContinuityAdapting {
+    #if DEBUG
     @ObservationIgnored private static var shadowHook: (@MainActor (ChatStore, NativeContinuityInput, NativeContinuityObservation) -> Void)?
 
-    #if DEBUG
     /// Installed only by the iOS app's DEBUG shadow. Shared/ still has no PersonaCore dependency, so the watch,
     /// widgets and Vision keep their existing native path and cannot link the core through this adapter.
     @MainActor static func installContinuityShadowForTests(_ hook: (@MainActor (ChatStore, NativeContinuityInput, NativeContinuityObservation) -> Void)?) {
@@ -76,41 +76,59 @@ extension ChatStore: ChatContinuityAdapting {
     @MainActor func setContinuityShadowEnabledForFixtureReplay(_ enabled: Bool) {
         continuityShadowEnabled = enabled
     }
-    #endif
 
     private func shadow(_ input: NativeContinuityInput, gap: ChatStore.Gap? = nil) {
-        guard continuityShadowEnabled else { return }
+        guard let hook = Self.shadowHook, continuityShadowEnabled else { return }
         let snapshot = initialContinuitySnapshot
         let result = nativeResult()
         initialContinuitySnapshot = nativeSnapshot()
-        Self.shadowHook?(self, input, .init(snapshot: snapshot, native: result, gap: gap))
+        hook(self, input, .init(snapshot: snapshot, native: result, gap: gap))
     }
+
+    /// A caller outside the production adapter keeps the DEBUG shadow's cache baseline without mirroring its input.
+    func updateContinuitySnapshotForNativeMutation() {
+        guard Self.shadowHook != nil, continuityShadowEnabled else { return }
+        initialContinuitySnapshot = nativeSnapshot()
+    }
+    #endif
 
     func apply(_ input: NativeContinuityInput) -> ChatStore.Gap? {
         switch input.kind {
         case .latest, .pushed:
             let gap = applyNative(input.items, span: input.span, backlog: input.backlog,
                                   hasMore: input.hasMore, moreAfter: input.moreAfter)
+            #if DEBUG
             shadow(input, gap: gap)
+            #endif
             return gap
         case .after:
             let gap = applyNative(input.items, span: input.span, moreAfter: input.moreAfter)
+            #if DEBUG
             shadow(input, gap: gap)
+            #endif
             return gap
         case .reloaded:
             replaceNative(with: input.items, hasMore: input.hasMore ?? false, span: input.span)
+            #if DEBUG
             shadow(input)
+            #endif
             return nil
         case .older:
             prependNative(input.items, hasMore: input.hasMore ?? false)
+            #if DEBUG
             shadow(input)
+            #endif
             return nil
         case .range:
             if let fold = input.fold { unfoldNative(fold, into: input.items) }
+            #if DEBUG
             shadow(input)
+            #endif
             return nil
         case .openFold, .reconnected, .loadOlder, .fillFailed, .olderFailed, .rangeFailed:
+            #if DEBUG
             shadow(input)
+            #endif
             return nil
         }
     }

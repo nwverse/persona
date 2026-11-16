@@ -899,6 +899,9 @@ final class AppModel {
 
     /// What the demo's conversations left behind: drafts, and cached chats (a new demo starts over).
     private func forgetDemoChats() {
+        #if DEBUG
+        ProductionContinuityShadow.shared.closeAll()
+        #endif
         let demo = DemoHub.shared.sessionKeys
         drafts = drafts.filter { !demo.contains($0.key) }
         heldAttachments = heldAttachments.filter { !demo.contains($0.key) }
@@ -924,6 +927,9 @@ final class AppModel {
         pairingEngineMachine = nil
         checklistPending = false
         if isDemo { leaveDemo() }
+        #if DEBUG
+        ProductionContinuityShadow.shared.closeAll()
+        #endif
         for link in links { link.live.disconnect() }
         closeAllTunnels() // no hub left to route through a tunnel (also drops HubTransport's routes)
         PortForwarder.shared.closeAll() // no hub left for a forwarded port to reach

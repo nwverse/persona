@@ -5,6 +5,11 @@ import PersonaCoreTestSupport
 
 @MainActor
 final class PersonaCoreContinuityTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        ProductionContinuityShadow.shared.installForTests()
+    }
+
     func testEveryContinuityFixtureThroughRealCBinding() throws {
         let result = try ContinuityBindingReplay.replayAll()
         XCTAssertEqual(result.cases, 39)
@@ -40,7 +45,7 @@ final class PersonaCoreContinuityTests: XCTestCase {
         let model = AppModel(stateFolder: folder)
         model.linksUpForTests = false
         let store = model.chat(key)
-        store.setContinuityShadowEnabledForFixtureReplay(false)
+        store.setContinuityShadowEnabledForFixtureReplay(true)
         XCTAssertEqual(store.covered, 1)
         let requests = Mutex<[String]>([])
         model.linkHooksForTests = (
@@ -70,6 +75,7 @@ final class PersonaCoreContinuityTests: XCTestCase {
         for _ in 0..<200 where store.covered != 2 { try await Task.sleep(for: .milliseconds(5)) }
         XCTAssertEqual(store.covered, 2)
         let shadow = try await ProductionContinuityShadow.shared.compare(store)
+        XCTAssertGreaterThan(shadow.compared, 0)
         XCTAssertEqual(shadow.mismatches, 0)
     }
 }

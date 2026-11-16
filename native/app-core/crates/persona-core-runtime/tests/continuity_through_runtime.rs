@@ -275,6 +275,77 @@ fn drain_commits_one_complete_patch_instead_of_mixing_state_with_old_ops() {
 }
 
 #[test]
+fn drained_state_suppresses_noop_publishes_and_wakes() {
+    let host = Arc::new(Recorder::default());
+    let runtime = Runtime::new(host.clone());
+    assert!(runtime.dispatch(&wire::encode(&Action::OpenChat {
+        chat: "a".into(),
+        snapshot: ChatSnapshot {
+            items_json: r#"[{"id":"1#0","seq":1,"role":"assistant","kind":"text","text":"cached"}]"#.into(),
+            history: Some("h".into()),
+            covered: 1,
+            has_more: Some(false),
+            loaded_once: true,
+        },
+    })));
+    assert!(runtime.flush(Duration::from_secs(5)));
+    let initial: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+    assert_eq!(initial.ops.len(), 1);
+    host.changes.lock().unwrap().clear();
+    let verified: ChatPatch;
+    loop {
+        assert!(runtime.dispatch(&wire::encode(&Action::Chat {
+            chat: "a".into(),
+            event: ChatEvent::Latest {
+                batch: WireBatch {
+                    items_json: "[]".into(),
+                    history: Some("h".into()),
+                    to_seq: Some(1),
+                    backlog: true,
+                    has_more: Some(false),
+                    ..WireBatch::default()
+                },
+            },
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+        if host.changes.lock().unwrap().is_empty() {
+            verified = patch;
+            break;
+        }
+        // The first latest page verifies this restored chat. Its changed state must be drained before testing no-ops.
+        assert!(patch.verified);
+        assert!(patch.ops.is_empty());
+        host.changes.lock().unwrap().clear();
+    }
+    for _ in 0..3 {
+        assert!(runtime.dispatch(&wire::encode(&Action::Chat {
+            chat: "a".into(),
+            event: ChatEvent::Latest {
+                batch: WireBatch {
+                    items_json: "[]".into(),
+                    history: Some("h".into()),
+                    to_seq: Some(1),
+                    backlog: true,
+                    has_more: Some(false),
+                    ..WireBatch::default()
+                },
+            },
+        })));
+        assert!(runtime.flush(Duration::from_secs(5)));
+        assert!(
+            host.changes.lock().unwrap().is_empty(),
+            "an unchanged drained chat must stay asleep"
+        );
+        let patch: ChatPatch = wire::decode(&runtime.drain("a")).unwrap();
+        assert_eq!(patch.version, verified.version);
+        assert!(patch.ops.is_empty());
+        assert_eq!(patch.covered, 1);
+        assert!(patch.loaded_once);
+    }
+}
+
+#[test]
 fn appending_to_one_cached_item_does_not_duplicate_it() {
     let host = Arc::new(Recorder::default());
     let runtime = Runtime::new(host);

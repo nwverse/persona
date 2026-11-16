@@ -437,9 +437,11 @@ nonisolated extension Item {
 final class ChatStore {
     let key: SessionKey
     @ObservationIgnored private let cacheFolder: URL?
+    #if DEBUG
     @ObservationIgnored var initialContinuitySnapshot = NativeContinuitySnapshot(
         items: [], covered: 0, history: nil, hasMore: false, loadedOnce: false)
     @ObservationIgnored var continuityShadowEnabled = true
+    #endif
     private(set) var items: [Item] = []
     private(set) var rows: [ChatRow] = []
     private(set) var blocks: [ChatBlock] = []
@@ -568,8 +570,10 @@ final class ChatStore {
             blocks = ChatBlock.build(rows)
             tasks = TaskIndex.build(items)
             version += 1
+            #if DEBUG
             initialContinuitySnapshot = NativeContinuitySnapshot(items: items, covered: covered, history: history,
                                                                  hasMore: hasMore, loadedOnce: loadedOnce)
+            #endif
         }
     }
 
@@ -651,9 +655,13 @@ final class ChatStore {
     func merge(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
         // Legacy merges keep the native reducer and the shadow's previous snapshot in lockstep. Production adapter
         // inputs arrive through applyNative; this path only prevents direct native callers from creating a stale base.
-        initialContinuitySnapshot = nativeSnapshot()
+        #if DEBUG
+        updateContinuitySnapshotForNativeMutation()
+        #endif
         mergeNative(new, backlog: backlog, hasMore: hasMore)
-        initialContinuitySnapshot = nativeSnapshot()
+        #if DEBUG
+        updateContinuitySnapshotForNativeMutation()
+        #endif
     }
 
     private func mergeNative(_ new: [Item], backlog: Bool = false, hasMore: Bool? = nil) {
