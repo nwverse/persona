@@ -70,23 +70,25 @@ fun JShellDrawer(
     val close = stringResource(R.string.designsystem_close)
     BoxWithConstraints(modifier.fillMaxSize().background(sidebarBackground())) {
         val drawerWidth = (maxWidth * HomeTokens.drawerFraction).coerceAtMost(HomeTokens.drawerMaximum)
-        if (opened || progress > 0f) {
-            Box(Modifier.width(drawerWidth).fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
-                androidx.compose.runtime.CompositionLocalProvider(LocalHomeDrawer provides (PersonaTheme.style == AppStyle.Glass)) { drawer() }
+        HardwareShortcutHost(Modifier.fillMaxSize()) {
+            if (opened || progress > 0f) {
+                Box(Modifier.width(drawerWidth).fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
+                    androidx.compose.runtime.CompositionLocalProvider(LocalHomeDrawer provides (PersonaTheme.style == AppStyle.Glass)) { drawer() }
+                }
             }
-        }
-        Box(Modifier.fillMaxSize().graphicsLayer {
-            translationX = with(density) { drawerWidth.toPx() } * progress
-            this.shape = shape
-            clip = progress > 0f
-            shadowElevation = with(density) { HomeTokens.drawerShadow.toPx() } * progress
-            ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-            spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
-        }.then(if (progress > 0f) Modifier.border(Tokens.Space.Standard.xxs / 2, palette.line, shape) else Modifier)) {
-            Box(Modifier.fillMaxSize().focusProperties { canFocus = !opened }
-                .then(if (opened) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
-            if (opened || progress > 0f) Box(Modifier.fillMaxSize().background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
-                .clickable(enabled = opened, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                translationX = with(density) { drawerWidth.toPx() } * progress
+                this.shape = shape
+                clip = progress > 0f
+                shadowElevation = with(density) { HomeTokens.drawerShadow.toPx() } * progress
+                ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
+                spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
+            }.then(if (progress > 0f) Modifier.border(Tokens.Space.Standard.xxs / 2, palette.line, shape) else Modifier)) {
+                Box(Modifier.fillMaxSize().focusProperties { canFocus = !opened }
+                    .then(if (opened) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
+                if (opened || progress > 0f) Box(Modifier.fillMaxSize().background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
+                    .clickable(enabled = opened, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
+            }
         }
     }
 }

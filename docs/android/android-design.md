@@ -265,15 +265,19 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
 | Window | Navigation | List and detail |
 | --- | --- | --- |
 | compact (phone, folded foldable; a phone on its side too) | Assistant / Agents at the top; the shared sidebar is a drawer | One pane; a phone on its side at least 760dp wide has two, as before |
-| regular (≥ 600dp wide and ≥ 480dp tall: open foldable, tablet) | The same top switcher; the shared sidebar is a column beside the Assistant page | Two panes: Agents, Inbox and Settings |
+| regular (≥ 600dp wide and ≥ 480dp tall: open foldable, tablet) | The same top switcher; the shared sidebar stays beside the Assistant stack | Agents and Settings use two panes; Inbox and the other Assistant secondary pages use one right-hand stack |
 
 - Window width changes the list-detail presentation and where the sidebar sits, never the primary navigation destinations: Assistant and Agents stay the only two,
   Settings still opens from the sidebar, and there is no rail and no layout setting (`docs/SUPER_RULES.md`, rule 3). The old expanded rail is removed.
-- **Sidebar column** (`JSidebarColumn`, `besideAssistant` in `Root.kt`): in a regular window the shared sidebar stands to the left of the Assistant page, as the open Duo's and the iPad's
-  sidebar column does, and the Assistant page draws no list of its own. The avatar at the page's top left hides and shows it (it slides; the page widens), like the Duo's sidebar button;
-  it starts shown and keeps that choice through rotation and folding (`rememberSaveable`). Its width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
-  with a hairline toward the page. It lives inside the Assistant root page, so a page opened over the Assistant page (Inbox, To-dos, Computers, an extension page, the knowledge base) slides in over
-  the column and keeps the whole width: Inbox keeps its own list beside its detail, which a third column would not leave room for on a foldable. On Agents the left column is the Agents list,
+- **Sidebar column** (`JSidebarColumn`, one `AssistantPaneFrame` outside Persona's `NavDisplay` in `Root.kt`): in a regular window the shared sidebar stands to the left of the visible
+  Assistant-stack page, as on iPad. The sidebar has one composition owner outside the entry stack, so root → Inbox → detail → Back keeps its non-saveable
+  conversation history, local operations, running effects and list anchor. It remains beside Inbox, To-dos, Computers, Knowledge and extension `nav_page` destinations;
+  their lists initially fill the right column and their details push onto the same Assistant back stack. Back returns from detail
+  to list and then to the main conversation without changing tabs or replacing the stack. Inbox never inserts a third list-detail
+  column. This supersedes #3041's full-window secondary-page choice under the user's 2026-11 large-window parity decision.
+  The avatar at the Assistant root hides and shows the column; it starts shown and keeps that choice through rotation and folding
+  (`rememberSaveable`). Its width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
+  with a hairline toward the page. On Agents the left column is the Agents list,
   as in the Duo's Agents tab; the avatar there still opens the sidebar as the drawer, so Settings stays one sidebar away from both pages. Folding turns the column back into the drawer (closed)
   and unfolding back into the column; unfolding with the drawer open over the Assistant page shows the column instead. The drawer and the column keep separate saveable state (`shared-sidebar`, `shared-sidebar-column`):
   the Assistant page stays composed behind Agents, so both can be composed at once.
@@ -282,12 +286,14 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   manager search (`assistant_search`) the sidebar uses. A row opens that chat beside the column and closes the search; Close and system Back close it too. Compact (folded) windows keep today's
   drawer search unchanged. The two-scope (Chats | Agents) version belongs to the Sidebar layout and is not part of this.
 - Two panes use Navigation 3's list-detail scene (`rememberListDetailSceneStrategy`); the shell centrally assigns list and detail roles (`paneMetadata` in `Root.kt`):
-  Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); Inbox list | Lark conversation / email; settings categories | settings subpage (all settings subpages therefore use navigation).
-  Persona's main chat does not split. An unselected right pane shows a placeholder. A detail with no list under it (Computers or an extension page opened from the sidebar over the Assistant page)
-  is a page of its own: the scene finds one pane to show and leaves it to the single-pane scene.
-- **Settings** opens in its sheet (`JSettingsSheet`, which fills the window), and in a regular window the sheet holds its own list-detail scene:
-  the list of settings with Close on the left, the opened page on the right, its row marked; the divider can be dragged but is not kept. On a phone it is one stack, as before.
-- Agents and Inbox split in every regular window, from 600dp, where they used to wait for 760dp (an open foldable upright was one pane). A phone on its side at least 760dp wide keeps its two panes.
+  Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); settings categories | settings subpage (all settings subpages therefore use navigation).
+  On a wide phone Inbox retains its list | Lark conversation / email / event roles. In a regular window `AssistantPanePolicy` instead selects `directive.onePane()` and removes Inbox's parallel pane roles,
+  so the shared sidebar remains while only the top Assistant destination occupies the right column. Machines, Knowledge, To-dos and extension pages follow the same right stack;
+  their internal details push there too. Persona's main chat does not split. An unselected right pane shows a placeholder where list-detail remains active.
+  A detail with no list under it is a page of its own: the scene finds one pane to show and leaves it to the single-pane scene.
+- **Settings** opens in its sheet: compact and wide-phone windows keep the full-window sheet, while a regular window presents a centered page-sized card.
+  The card holds the same list-detail scene: the list of settings with Close on the left, the opened page on the right, its row marked; the divider can be dragged but is not kept. On a phone it is one stack, as before, and the existing directive also falls back to one pane when the card cannot fit two readable panes.
+- Agents split in every regular window, from 600dp, where they used to wait for 760dp (an open foldable upright was one pane). A phone on its side at least 760dp wide keeps Agents and Inbox in two panes; regular Inbox deliberately uses the Assistant's single right stack instead.
 - Panes share the shell's single background layer (section 3), without separate backing panels.
   Only an 8dp gap (`horizontalPartitionSpacerSize`) separates panes, with no divider line or second backing layer; right-pane placeholders draw the same background.
 - In two-pane mode, the item currently displayed on the right is highlighted in its card on the left (`LocalDetailKey` + the component's `selected`), calculated by the shell from the route (`detailOf`). Left-pane taps, deep links, notifications, debug entries and back all stay synchronized; switching between one and two panes uses the same back stack and retains selection.
@@ -303,9 +309,11 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   the sidebar column ends at the fold and the Assistant page starts past it (`sidebarSplit`), as the half-folded Duo keeps both columns clear of its crease.
 - Tabletop posture (horizontal half-fold): every page avoids the hinge. Pages with bottom overlays (chat, terminal) keep content above the hinge and the input field / key bar below it; pages without one keep all interactive content above it (`PageFrame`, section 3.1.1). The sidebar column runs the full height.
 - Not taken from iOS, because Android has no matching system behavior: the Duo's vertical side bars and the shell's side rail (`ShellSideRail`; the system moves iOS bars to the screen's edge on the outer screen and inner landscape,
-  Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
+  Android never does) and the cross-fade between pages under those bars.
   The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
-- Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
+- Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch. Hardware-input affordances read `LocalLargeWindowInput`: the root provides the same `regular` window decision (true at ≥600dp × ≥480dp), false for compact and wide-phone windows and by default in isolated previews and tests.
+- Composer hardware input (`LargeWindowComposer`, `LocalLargeWindowInput`): only regular / expanded windows add Ctrl / Meta+Return Send and full-page-editor Escape. Ordinary / Shift Return, IME composition, unrelated shortcuts and terminal keys pass through. The expanded editor reads `LocalComposerHardware`; its default null preserves standalone, preview and phone behavior. The small composer also uses `hardwareShortcutTextInput` outside IME composition so Ctrl+/ reaches the same help host without consuming text or other control chords. Compact and wide-phone windows have no new key handling or drop target; the neutral outer identity stays stable across window-flag changes so an in-flight upload is not cancelled.
+- Composer file drop: the same large-window wrapper accepts readable Files / Photos URIs only while the chat is writable. `ComposerDropTargetFrame` adds a non-layout-changing accent outline using style shapes and existing size / motion tokens, with localized hover / importing accessibility states. Upload, progress, failure and retry remain the existing attachment components; compact and wide-phone windows do not draw or register the target.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
 
 ### 3.1.1 Tabletop pages
@@ -317,6 +325,21 @@ Tabletop layout is selected only from the window's horizontal separating hinge, 
 - **Fallback:** a missing or zero-height hinge, an upper side that cannot hold the measured top bar plus `Tokens.MinTouch.android` of content, or a lower side that cannot hold the measured dock uses the ordinary flat single-page layout and its system insets. A short lower side is allowed when there is no dock because it is only background. Returning between flat and tabletop reuses the same content slot, scroll state, draft, selection and focus; it does not navigate or recreate a ViewModel.
 
 Acceptance covers Glass in light and dark and samples Brief and Board in both appearances. Generic Fold's real book posture can provide real `FoldingFeature` evidence. A fake tabletop supplied through `debug.posture` is visual and layout evidence only; the real tabletop posture still needs device verification. No frame-rate, memory or power improvement is claimed without measurement.
+
+### 3.2 Message pointer menus
+
+- In a regular or expanded window, a mouse or trackpad secondary press on a message opens `JPointerMenu` beside the pointer. The shell supplies `LocalLargeWindowInput`; the message menu does not measure the window or infer a device type. Compact and wide-phone secondary clicks retain the bottom `JActionSheet`.
+- Touch long press and TalkBack More actions always use `JActionSheet`, including on tablets. Swipe to quote, message dimming, link taps and the chat reading anchor are unchanged. There is no message lift, blurred preview or hover-only command.
+- Both presentations receive the same `messageMenuActions` list and callback, including order, icons, disabled reasons and destructive actions. Dismissing the pointer menu clears only its presentation anchor; Rewind's second confirmation, Select's reader and Share's page keep their existing state and can open and return.
+- `JPointerMenu` reuses `JMenu` rows and tokens. It grows right/down from the pointer, flips when the opposite direction fits, clamps the measured menu to the safe physical window (left and right insets are not exchanged again in RTL), scrolls long actions and closes once on Escape. Verification uses real `BUTTON_SECONDARY` instrumentation or a hardware mouse, not adb hover / console success messages.
+
+### 3.3 Page-sized Settings and hardware shortcuts
+
+`JSettingsSheet` reads only `LocalLargeWindowInput`; it does not duplicate the window breakpoints. On a large window `JSettingsPresentationFrame` centers a card within the safe drawing area. `SettingsPageSizing` names its maximum width and height (both aliases of `ReadingWidth`) and minimum window margin (`Tokens.Space.xl`), so expanded windows retain visible margins and a minimum regular window can be nearly full. One `JSheet`, one presentation frame, one content invocation and one window scrim stay mounted; only the transparent container and card geometry change, preserving non-saveable state and running effects as well as the fixed-key saveable holder. `focusRestorer` returns to the previously focused field after a presentation transfer; an existing focus is never replaced, and the outer blank-tap callback explicitly disables restoration when the user dismisses the keyboard. Root Close and child Back keep their existing meanings, and the existing list-detail directive degrades to one pane when necessary.
+
+`HardwareShortcutHost` is attached to the large-window shell and the Settings dialog. When a window becomes large, the shell host uses public focus state to request its own focus only when that window has none; an already-large resize does not request focus again. Settings disables host auto-focus because its dialog content owns the focused field. Sheets, dialogs, full-text reading, message sharing and chat search register their existing close actions in LIFO order. Escape reaches these listeners only after the focused child declines it, closes at most one layer, and is a no-op when nothing transient is open. Shared text inputs handle only Ctrl+/ before the editor consumes it; terminal and other child keys are never intercepted by a parent preview handler. Expanded composer and pointer menus keep their own Escape handling; a focused terminal keeps its consumed control, navigation and Escape keys.
+
+Ctrl+/ opens a centered, scrollable shortcut-help dialog above the current layer. The help lists only working send/newline, close, help and terminal keys in English, Simplified Chinese and Japanese. It leaves drafts, selection and terminal state alone, and Close stays on one line. Compact and wide-phone windows keep the same content parent but receive no controller or key modifier, so they do not register the new behavior.
 
 ## 4. Screenshots and verification
 
