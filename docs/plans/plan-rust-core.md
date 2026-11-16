@@ -618,7 +618,7 @@ Phase 3 lands in several PRs.
     into stream-repair JNI, retaining every completed prefix; a finished reply remains unchanged. The inline scanner
     follows scalar-based flanking, code-span, link/image, escape, URL and inline-formula rules; display-math
     recognition prevents inline repair there. Math end (#9395) independently replays all six explicit Apple math
-    assertions and 46 source-derived display/inline/math-boundary controls through real Kotlin/JNI, including
+    assertions and 57 source-derived display/inline/math-boundary controls through real Kotlin/JNI, including
     `MathMarkdown.display`'s extended-grapheme predicate, open/closed blocks, code spans, money, CJK prose and
     trailing indentation. The C ABI projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host
     projection (#9241) replay the existing fence/table/marker inputs, including inherited inline expectations, plus

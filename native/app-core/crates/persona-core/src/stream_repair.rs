@@ -606,11 +606,10 @@ fn find_math_pair(graphemes: &[(usize, &str)], start: usize, first: &str, second
         .find(|index| graphemes[*index].1 == first && graphemes[*index + 1].1 == second)
 }
 
-/// Foundation `.whitespaces`: Unicode Zs plus the ASCII whitespace/newline characters. `Character.isWhitespace`
-/// additionally includes NEL and the Unicode line/paragraph separators; keep those predicates distinct.
+/// Foundation `.whitespaces` contains Unicode Zs and tab, unlike the inline scanner's broader
+/// `Character.isWhitespace` or Rust's `char::is_whitespace`. Keep these two Apple predicates separate.
 fn is_math_whitespace(character: char) -> bool {
-    matches!(character, '\t'..='\r')
-        || unicode_general_category::get_general_category(character) == GeneralCategory::SpaceSeparator
+    character == '\t' || unicode_general_category::get_general_category(character) == GeneralCategory::SpaceSeparator
 }
 
 fn is_math_character_whitespace(character: char) -> bool {
