@@ -641,7 +641,9 @@ The brief box (web, #3822; `web/src/views/assistant/TaskBrief.tsx`) shows what a
 - sections **Running** and **Completed**, 11 px medium headings in `--ink-3`;
 - rows of a 20 px round kind mark on the chip fill, a 13 px status mark and the 13 px title, with an 11 px meta line ("status · n/m Agent · duration · tokens · tool uses"); only a failure is red; only rows that open something are buttons;
 - the loop as the first Running row (Persona's own; cindy lists none), its Stop confirmed inline;
-- a run's detail: Back, the run's mark and name, then the run's card.
+- a run's detail: Back, the run's mark and name, then the run's card;
+- a command's title, status and mono command line share one rounded hover / focus target (#9169). The independent Copy command icon appears on hover, keyboard focus and touch, without opening the output;
+- a command's output opens inside the same panel (`BackgroundCommandDetail.tsx`), reusing the run's Back bar and existing Button / IconButton controls. Back restores list scroll and row focus; Escape returns to the list first, then closes, except while a menu, dialog or IME owns it. Read-only text follows new output until scrolled up, says **No output yet** while running empty, and retains the last good output with Retry on a failed read. A command removed from the running list says **Not listed as running**, without an inferred outcome or a still-ticking clock. **Copy command** and **Open as file** remain secondary actions. Why a command-specific detail: the file viewer does not follow running output or preserve the Background tasks list; a generic panel-history stack is unnecessary here.
 
 The status words are the task cards' (`taskStatusWord`), and the count on the top bar's button is the running background tasks and runs (`backgroundCount`), the same number the panel's Running section shows without the loop.
 

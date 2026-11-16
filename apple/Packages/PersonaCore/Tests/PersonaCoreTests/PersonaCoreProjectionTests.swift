@@ -12,7 +12,7 @@ final class PersonaCoreProjectionTests: XCTestCase {
     func testEveryAnswerFixtureThroughTheRealCBinding() throws {
         let counts = try ProjectionBindingReplay.answers()
         XCTAssertEqual(counts.questions, 15)
-        XCTAssertEqual(counts.recommendations, 8)
+        XCTAssertEqual(counts.recommendations, 9)
         print("PersonaCore Swift/C answer: \(counts.questions) question + \(counts.recommendations) recommendation cases")
     }
 
