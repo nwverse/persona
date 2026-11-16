@@ -334,6 +334,7 @@ private struct SiblingList: View {
             }
         }
         .listStyle(.plain)
+        .tabSwitchListRoom()  // its end clear of the open Duo's floating tabs' switch (#4231)
         .scrollContentBackground(.hidden)
         .scrollBounceBehavior(.basedOnSize)
         .disabled(stopping != nil)

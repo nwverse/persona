@@ -340,6 +340,9 @@
     <string name="chat_tasks_interrupt_all_handled">→ すべて対応済み</string>
     <string name="chat_tasks_quick_reminder">リマインダーを追加しました</string>
     <string name="chat_tasks_quick_calendar">カレンダーに追加しました</string>
+    <string name="chat_tasks_quick_undo">取り消す</string>
+    <string name="chat_tasks_quick_undone">取り消しました</string>
+    <string name="chat_tasks_quick_undo_failed">取り消せませんでした</string>
     <string name="chat_today_done_one">完了：%1$s</string>
     <plurals name="chat_today_done_many">
         <item quantity="other">%1$d件のタスクが完了</item>

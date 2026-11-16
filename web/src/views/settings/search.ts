@@ -40,6 +40,8 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
+  { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
+  { tab: "general", group: t("settings.start_page_open_on"), hint: t("settings.start_page_main"), anchor: "open-on" },
   { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
   // General › Translation (its language and what it translates show once it is on)
   { tab: "general", group: t("settings-nav.tab_translate"), anchor: "settings-translation" },
@@ -50,7 +52,6 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.agent_preferences"), hint: words(t("terminal-full.mode_group"), t("settings.sidebar_terminals")), anchor: "agent-preferences" },
   { tab: "general", group: t("settings-agentopen.label"), hint: words(t("settings-agentopen.panel"), t("settings-agentopen.page")), anchor: "agent-open" },
   { tab: "general", group: t("context.details"), anchor: "agent-details" },
-  { tab: "general", group: t("context.as_used"), anchor: "context-as-used" },
   // General › hubs, this browser, about
   { tab: "general", group: t("hubs.group_title"), hint: t("hubs.add_hub"), anchor: "hubs" },
   { tab: "general", group: t("settings.this_browser"), hint: words(t("settings.hub"), t("settings.linked_hubs")), anchor: "this-browser" },

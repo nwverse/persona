@@ -98,6 +98,8 @@ func main() {
 		err = address(args)
 	case "name":
 		err = nameCmd(e, args)
+	case "plugin":
+		err = pluginCmd(e, args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		if slices.Contains(args, "-v") {
@@ -143,7 +145,7 @@ var errUsage = errors.New("usage")
 // helpTopics are the subcommands `<sub> -h` answers for (supervise is not for people: its -h shows the whole usage).
 var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "discover": true, "install": true,
 	"uninstall": true, "status": true, "reconnect": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
-	"address": true, "name": true}
+	"address": true, "name": true, "plugin": true}
 
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
 func wantsHelp(args []string) bool {

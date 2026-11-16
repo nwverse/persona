@@ -433,7 +433,7 @@ export function MachineDetail({ mid, onToggleSidebar }: { mid: string; onToggleS
         <Heading title={t("machines-machinedetail.system")} />
         <div className="overflow-hidden rounded-card bg-surface shadow-card">
           <dl className="-mb-px grid grid-cols-1 md:grid-cols-2">
-            {systemFacts(system, m, Date.now() / 1000, tz).map(([k, v, mono]) => (
+            {systemFacts(system, m, Date.now() / 1000).map(([k, v, mono]) => (
               <div key={k} className="flex items-baseline gap-3 border-b border-line px-4 py-2 md:odd:border-r">
                 <dt className="w-[84px] shrink-0 whitespace-nowrap text-[12px] text-ink-3">{k}</dt>
                 <dd className={cx("min-w-0 flex-1 text-[12.5px] break-words text-ink-2 select-text", mono && "font-mono text-[12px]")}>{v}</dd>

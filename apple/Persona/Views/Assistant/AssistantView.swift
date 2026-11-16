@@ -46,6 +46,7 @@ struct AssistantView: View {
     /// The path this page's pages are pushed on: the page beside the sidebar's in the Sidebar layout, its own otherwise.
     private var navPath: Binding<NavigationPath> { hostPath ?? $path }
     #else
+    private var unified: UnifiedSidebar? { nil } // no Sidebar layout here (#9310)
     private var embedded: Bool { false }
     private var drawerPage: Bool { false }
     private var navPath: Binding<NavigationPath> { $path }

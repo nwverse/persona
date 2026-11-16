@@ -1,5 +1,9 @@
 # Lessons: hub / node and networking
 
+## Validate the APNs signing curve before a push (#9438)
+
+ES256 needs a P-256 key, not just any EC private key. A P-384 or P-521 key loads successfully but its signature does not fit the fixed-width token and can panic on the first push; P-224 yields an invalid ES256 token. Reject unsupported curves when loading configuration and guard in-memory signing too. Test generated keys and verify the P-256 signature without using real credentials.
+
 ## A transport made for one request opens a connection for one request (2026-11-16, #9202)
 
 The hub relayed each request to a manager through an `http.Transport` built for it with `DisableKeepAlives`. Locally that costs nothing,
@@ -1447,7 +1451,7 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 - **Headers must travel the whole chain**: nginx `proxy_protocol on;` without headers from the preceding tunnel writes the tunnel client's `127.0.0.1` as source, still appearing local to hub.
   Hub logs once when "loopback upstream claims loopback source"; make the preceding layer send headers too, using nginx `listen … proxy_protocol` + `set_real_ip_from`.
 - **Don't read headers in Accept**: one silent connection stalls all connections. Read in the connection's goroutine on first Read / Write / RemoteAddr
-  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Preserve any earlier caller read deadline and restore it afterward, never overwrite or clear it permanently.
+  (`http.Server` calls `RemoteAddr()` first in each connection goroutine), with its own 5-second deadline. Apply caller deadline changes to a pending header read using the earlier of the caller's deadline and the fixed header limit, then restore the caller's current deadline on success. A header timeout still refuses and closes that connection; extending it later cannot retry the header (#9445).
 - **Don't enable it for loopback on plaintext ports**: `hub pair`, `hub admin`, and plugins connect over loopback plaintext without headers. If `from` includes loopback and `listeners` includes `http`, refuse startup.
 - **Tests mustn't assume Accept returns their own connection**: other developer-machine processes scan loopback ports (a test once accepted an unfamiliar connection starting `GET`, causing intermittent failures).
   Identify the dialed connection by its socket peer address.
@@ -1930,6 +1934,8 @@ Compare the original CSV decimal with the exact decimal written by the 15-signif
 
 `strconv.ParseFloat` accepts `NaN` and infinity without an error. Reject them when coercing formula text so existing `#VALUE!` and `IFERROR` behavior works instead of caching non-finite numbers. Verify generated workbook values, with numeric text, range references and lazy branches as controls.
 
+Cached spreadsheet formula ranges can expand millions of absent cells from a tiny input. Bound both each range and the aggregate work across a workbook, check coordinates before arithmetic, and leave the formula uncached for Excel to recalculate when the budget is exceeded. Test the generated file and normal aggregate results as well as the bound.
+
 ## Decimal rounding scales can overflow before the result does (#1335)
 
 `ROUND` can have a finite result even when its power of ten or scaled intermediate overflows. Bound places by the float64 range, split large positive scales for tiny inputs, and retain numbers whose rounding place is already below their precision. Only a genuinely overflowing rounded result becomes `#NUM!`. Test emitted XLSX caches, including subnormal values, large finite results, 15-digit ties and `IFERROR`.
@@ -2278,7 +2284,7 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 ## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
 
 On TestFlight 224 an extension's **Review** spun for two minutes and then failed. The operations list (`GET /api/v1/extensions/-/operations`) told the story the access log could not: the settings page's synchronous `catalog/preview` was downloading a 13 MB package at about 33 KB/s from the hub machine; the app's 120 s request timeout closed the request, the hub's relay to the manager closed with it, and the preview's context (the request's) took the download down at 4.5 MB (`context canceled`). Tapping again on the reopened page started a second download of the same package beside the first, which got nothing for 30 s (`download_stalled`, `400 invalid_plugin`). A read-only preview with no client timeout then showed the deeper problem: the download kept moving and was cut at 10.1 MB by `Download`'s fixed five-minute budget, so on that link it could never succeed, synchronous or not.
-- A long download must not belong to one request. The manager now has one download per package at a time (by cache and sha256, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for.
+- A long download must not belong to one request. The manager now has one download per package at a time (by cache, sha256 and declared size, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for. Keep size in the sharing key: equal digests with conflicting declared sizes must be validated independently, regardless of which request arrived first (#9400).
 - Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
 - When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
 - Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.

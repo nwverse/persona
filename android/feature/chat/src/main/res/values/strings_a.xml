@@ -359,6 +359,9 @@
     <string name="chat_tasks_interrupt_all_handled">→ all handled</string>
     <string name="chat_tasks_quick_reminder">Reminder added</string>
     <string name="chat_tasks_quick_calendar">Added to calendar</string>
+    <string name="chat_tasks_quick_undo">Undo</string>
+    <string name="chat_tasks_quick_undone">Undone</string>
+    <string name="chat_tasks_quick_undo_failed">Couldn\'t undo</string>
     <string name="chat_today_done_one">Done: %1$s</string>
     <plurals name="chat_today_done_many">
         <item quantity="one">%1$d task done</item>

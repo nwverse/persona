@@ -93,6 +93,7 @@ struct PersonalAgentSessionView: View {
             }
         }
         .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+        .tabSwitchRoom() // beside the open Duo's floating tabs' switch (#4231)
         .background(.bar)
     }
 

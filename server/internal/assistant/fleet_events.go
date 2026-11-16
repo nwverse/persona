@@ -17,6 +17,12 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 	if err := s.conversationParamsAvailable(context.Background(), machine, params); err != nil {
 		return false
 	}
+	var hook map[string]any
+	if event == "hook.event" && json.Unmarshal(params, &hook) == nil {
+		if sid, _ := hook["session_id"].(string); sid != "" {
+			s.agentDecisionPrompt(machine, sid, hook)
+		}
+	}
 	if !s.fleetOn() {
 		return true
 	}
@@ -66,8 +72,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 		s.syncCodexInteractions(machine, params)
 		return false
 	case "hook.event":
-		var p map[string]any
-		if json.Unmarshal(params, &p) == nil {
+		if p := hook; p != nil {
 			if sid, _ := p["session_id"].(string); sid != "" {
 				// A report-only hook (node/globalhooks.go) is not Persona's hooks running in the session: it asks for
 				// no card, so it must not hold the screen's back (hasHooks). Its Stop still counts for stopDuplicate.

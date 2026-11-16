@@ -356,3 +356,9 @@ fun JPersonaButton(state: PersonaState, contentDescription: String, onClick: () 
         contentAlignment = Alignment.Center,
     ) { PersonaFace(state, size = if (LocalHomeChrome.current != null && PersonaTheme.style == AppStyle.Glass) HomeTokens.homeFaceSize else 40.dp) }
 }
+
+/** Empty room the same size as [JPersonaButton], kept while the sidebar column is out so the switcher stays put. */
+@Composable
+fun JPersonaButtonRoom(modifier: Modifier = Modifier) {
+    Box(modifier.size(Tokens.MinTouch.android))
+}
