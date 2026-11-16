@@ -13,6 +13,8 @@ but leave its confirmation and carry-summary copy with the dialog. The build's l
 no first-screen caller loses a phrase; narrowing catalog prefixes does not rename keys or change the dialog.
 The same applies to the expanded composer's Collapse caption, history's Sidebar caption and a detail's Latest
 report caption: include their callers in the first-screen audit rather than keeping their entire namespace eager.
+The repository status link and Inbox's Lark label are also cold callers; retain their hot neighbors, not their whole
+namespaces. Reuse the shared time parser and existing minimum-width token rather than adding duplicate startup code or CSS.
 On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
 on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
 

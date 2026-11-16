@@ -1,4 +1,5 @@
 import type { ParkContact, ParkEvidence, TaskReview } from "./supervision";
+import { timeMs } from "./times";
 import type { Todo } from "./todos";
 
 /** Rendering a source never turns an unchecked URL into an executable link. */
@@ -14,7 +15,7 @@ export function waitSource(raw?: string): string | undefined {
 }
 
 function past(raw: string | undefined, now: number): number | undefined {
-  const ms = raw ? Date.parse(raw) : NaN;
+  const ms = timeMs(raw);
   return ms > 0 && ms <= now ? ms : undefined;
 }
 
