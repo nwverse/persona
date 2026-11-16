@@ -150,5 +150,16 @@ class LiveRepliesShotsTest {
         run++
         rule.waitForIdle()
         capture("$language-glass-light-error")
+
+        // A change that fails on both computers: one line each, named, under the switch.
+        api.failRead = false
+        api.failWrite = true
+        api.liveOn = true
+        run++
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("live-replies").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("live-replies").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("live-replies").assertIsOn()
+        capture("$language-glass-light-save-error")
     }
 }

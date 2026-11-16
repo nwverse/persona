@@ -112,13 +112,20 @@ internal fun ClaudeSettingsPage(sessions: SessionsRepository, management: Machin
                 }
             }
         }
-        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !liveRepliesState.unsupported) {
-            val others = if (state.applyAll) online.filter { it.id != state.machineId } else emptyList()
-            liveRepliesSection(
-                liveRepliesState,
-                onToggle = { next -> scope.launch { liveReplies.set(next, others)?.let { feedback?.notice(it.resolve(res)) } } },
-                onRetry = { scope.launch { liveReplies.load(state.machineId) } },
-            )
+        if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank()) {
+            // A frame can pass between picking another computer and its read starting: until it does, the section reads
+            // this computer's own state, or it would show - and a tap would write - the computer shown before (iOS
+            // draws the section only when `live.ref == ref`).
+            val live = liveRepliesState.forMachine(state.machineId)
+            if (!live.unsupported) {
+                val others = if (state.applyAll) online.filter { it.id != state.machineId } else emptyList()
+                val shownName = online.firstOrNull { it.id == state.machineId }?.displayName
+                liveRepliesSection(
+                    live,
+                    onToggle = { next -> scope.launch { liveReplies.set(next, others, shownName)?.let { feedback?.notice(it.resolve(res)) } } },
+                    onRetry = { scope.launch { liveReplies.load(state.machineId) } },
+                )
+            }
         }
         if (kind == AgentSettingsKind.Claude && state.machineId.isNotBlank() && !dirsState.unsupported) claudeDirsSection(dirsState, dirInput, { dirInput = it },
             onRetry = { scope.launch { dirs.load(state.machineId) } }, onSave = { blocked, key, done -> saveDirs(blocked, key, done) })

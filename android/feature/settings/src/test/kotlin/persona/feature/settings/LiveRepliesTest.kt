@@ -121,11 +121,11 @@ class LiveRepliesTest {
         }
         val model = LiveRepliesModel(api)
         model.load("box")
-        val notice = model.set(false)
+        val notice = model.set(false, shownName = "Box")
         assertNull(notice)
         assertEquals(true, model.state.value.on)
         assertFalse(model.state.value.saving)
-        assertEquals("没改成：写不进设置", model.state.value.error?.resolve(res))
+        assertEquals("没有全部保存：\nBox：写不进设置", model.state.value.error?.resolve(res))
     }
 
     @Test fun applyToAllWritesOtherMachinesAndReportsIndividualFailures() = runBlocking {
@@ -142,7 +142,7 @@ class LiveRepliesTest {
         assertNull(partialFailure)
         assertEquals(listOf("box" to false, "studio" to false), api.writes)
         assertEquals(false, model.state.value.on)
-        assertEquals("Studio：离线", model.state.value.error?.resolve(res))
+        assertEquals("没有全部保存：\nStudio：离线", model.state.value.error?.resolve(res))
 
         // When every machine succeeds, the notice names how many were updated.
         api.writes.clear()
@@ -152,6 +152,59 @@ class LiveRepliesTest {
         assertEquals(true, model.state.value.on)
         assertNull(model.state.value.error)
         assertEquals("已应用到 2 台机器", allSaved?.resolve(res))
+    }
+
+    @Test fun aReadingOfThePreviousComputerDoesNotArriveOverTheOnePickedNext() = runBlocking {
+        val held = CompletableDeferred<Boolean?>()
+        val api = FakeApi().apply { readResult = { if (it == "box") held.await() else false } }
+        val model = LiveRepliesModel(api)
+        val slow = launch { model.load("box") }
+        while (api.reads.isEmpty()) kotlinx.coroutines.yield()
+
+        // The owner picked another computer before the first one answered, then the first answer lands.
+        model.load("studio")
+        assertEquals("studio", model.state.value.machineId)
+        assertEquals(false, model.state.value.on)
+        held.complete(true)
+        slow.join()
+        assertEquals("studio", model.state.value.machineId)
+        assertEquals(false, model.state.value.on)
+        assertFalse(model.state.value.loading)
+        assertNull(model.state.value.loadError)
+    }
+
+    @Test fun aSaveOnThePreviousComputerFinishingLateDoesNotArriveOverTheOnePickedNext() = runBlocking {
+        val held = CompletableDeferred<Boolean>()
+        val api = FakeApi().apply {
+            readResult = { it == "box" }
+            writeResult = { id, on -> if (id == "box") held.await() else on }
+        }
+        val model = LiveRepliesModel(api)
+        model.load("box")
+        val saving = launch { model.set(false) }
+        while (!model.state.value.saving) kotlinx.coroutines.yield()
+
+        // Another computer is picked while the first one's write is still out; its answer must not move this switch.
+        model.load("studio")
+        assertEquals("studio", model.state.value.machineId)
+        held.complete(true)
+        saving.join()
+        assertEquals("studio", model.state.value.machineId)
+        assertEquals(false, model.state.value.on)
+        assertFalse(model.state.value.saving)
+        assertNull(model.state.value.error)
+    }
+
+    @Test fun anotherComputersReadingIsDrawnAsThisOneStillReading() {
+        val boxState = LiveRepliesUiState(machineId = "box", on = true, saving = true, error = ResText.of(R.string.settings_src_saved))
+        assertEquals(boxState, boxState.forMachine("box"))
+        val picked = boxState.forMachine("studio")
+        assertEquals("studio", picked.machineId)
+        assertNull(picked.on)
+        assertTrue(picked.loading)
+        assertFalse(picked.saving)
+        assertNull(picked.error)
+        assertFalse(picked.unsupported)
     }
 
     @Test fun olderHubHidesSwitchAndIgnoresSet() = runBlocking {
