@@ -356,9 +356,9 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // en 477,818 B, ja 480,947 B, zh-Hans 478,637 B, so the budget accounts for that overage.
 // Paseo workspace pins (#9300), after sharing the pin comparator and reusing sorted subtree summaries, add 39 B:
 // en 477,857 B, ja 480,986 B, zh-Hans 478,676 B. The budget accounts for this measured feature delta.
-// Agent-only task-row status and separate to-do chips (#6492), measured against main 694bc1aa6a in the same environment:
-// en 478,156 -> 478,584 B, ja 481,274 -> 481,705 B, zh-Hans 478,969 -> 479,414 B. Ja's 431 B delta uses the existing
-// 238 B of room; the budget takes only the remaining 193 B, with no extra room.
+// Agent-only task-row status and separate to-do chips (#6492), measured against main 2b81cbc72b in the same environment:
+// en 478,168 -> 478,596 B, ja 481,286 -> 481,717 B, zh-Hans 478,981 -> 479,426 B. The budget adds only ja's measured
+// 431 B feature delta, preserving main's existing 226 B of room rather than adding any new room.
 // #9283: an extension's sidebar entries and an open page's header drawn from the last places list at first paint
 // (lib/extension-slots.ts keeps it under lib/feed-cache.ts's hub and sign-in scope; it is read at startup, so it is
 // first-screen code, in the shared chunk that holds extension-slots) add 178 B in each language, measured in one
@@ -373,7 +373,7 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // to 481,274 B; en 477,808 B to 478,156 B, zh-Hans 478,621 B to 478,969 B): an opening at the root address goes to the
 // chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
 // when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk. Main's room is kept on top.
-export const FIRST_SCREEN_BUDGET = 481_705;
+export const FIRST_SCREEN_BUDGET = 481_943;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
