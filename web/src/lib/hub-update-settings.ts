@@ -67,4 +67,3 @@ export function dockerSteps(s: HubUpdateStatus): { headline?: string; steps: { t
   }
   return { steps: [{ text: t("lib-hub-update.docker_how"), copy: DOCKER_COMMAND }] };
 }
-
