@@ -16,8 +16,7 @@ use diagnostics::{Diagnostics, scheduler_switches};
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-#[cfg(any(target_os = "android", feature = "test-support"))]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
@@ -46,19 +45,26 @@ enum Message {
     Stop,
 }
 
+/// Tracks waiters so `flush` can sleep on a condition variable when it needs to wait. The dispatch fast path never
+/// touches this mutex: pending accounting and the stop flag live in atomics instead.
 #[derive(Default)]
-struct Queue {
-    pending: u64,
-    stopping: bool,
+struct Idle {
+    waiters: Mutex<u64>,
+    wake: Condvar,
 }
 
 #[derive(Default)]
 struct Shared {
     patches: Mutex<Patches>,
-    /// Pending accounting, the stop flag and action sends share one lock. An action accepted before shutdown is
-    /// processed before Stop; no later action can be accepted into an abandoned queue.
-    queue: Mutex<Queue>,
-    idle: Condvar,
+    /// Number of actions accepted but not yet fully applied by the worker. Incremented lock-free on dispatch;
+    /// decremented on the worker. Reading zero means no in-flight actions remain.
+    pending: AtomicU64,
+    /// Set once on shutdown. After this is true no new action is accepted. The flag is read with Acquire on dispatch
+    /// so an action accepted before shutdown is still processed before the Stop message that follows.
+    stopping: AtomicBool,
+    /// Sleepers waiting for the queue to drain. The dispatch fast path never takes this lock; only `flush` and the
+    /// worker's "queue became empty" notification touch it.
+    idle: Idle,
     /// Once-lock means ordinary dispatch/drain only read a null pointer; all instrumentation is opt-in.
     #[cfg(any(target_os = "android", feature = "test-support"))]
     diagnostics: std::sync::OnceLock<Arc<Diagnostics>>,
@@ -103,38 +109,38 @@ impl Runtime {
         }
     }
 
-    /// Queues an encoded `wire::Action`. Never blocks on the worker.
+    /// Queues an encoded `wire::Action`. Never blocks on the worker and never takes a mutex: pending accounting and
+    /// the stop check are atomic, and the only heap allocation is the byte copy needed to move the action across.
     pub fn dispatch(&self, action: &[u8]) -> bool {
+        self.dispatch_owned(action.to_vec())
+    }
+
+    /// Same as [Runtime::dispatch], but takes ownership of the encoded action. Lets JNI hand over its already-owned
+    /// `Vec<u8>` instead of paying for a second copy.
+    pub fn dispatch_owned(&self, action: Vec<u8>) -> bool {
+        // Acquire pairs with the worker's Release when it observes this pending count, and with `stop`'s Release so
+        // an action accepted before shutdown still precedes Stop in the channel.
+        if self.shared.stopping.load(Ordering::Acquire) {
+            return false;
+        }
         #[cfg(any(target_os = "android", feature = "test-support"))]
         let sent = if self.shared.diagnostics.get().is_some() {
             let mut sent = Err(std::sync::mpsc::SendError(Message::Stop));
             diagnostics::measure_queue(&self.shared, || {
-                let mut queue = diagnostics::timed_lock(&self.shared, &self.shared.queue, false);
-                if queue.stopping {
-                    return;
-                }
-                queue.pending += 1;
+                self.shared.pending.fetch_add(1, Ordering::AcqRel);
                 diagnostics::measure_send(&self.shared, || {
-                    sent = self.sender.send(Message::Action(action.to_vec()));
+                    sent = self.sender.send(Message::Action(action));
                 });
             });
             sent
         } else {
-            let mut queue = lock(&self.shared.queue);
-            if queue.stopping {
-                return false;
-            }
-            queue.pending += 1;
-            self.sender.send(Message::Action(action.to_vec()))
+            self.shared.pending.fetch_add(1, Ordering::AcqRel);
+            self.sender.send(Message::Action(action))
         };
         #[cfg(not(any(target_os = "android", feature = "test-support")))]
         let sent = {
-            let mut queue = lock(&self.shared.queue);
-            if queue.stopping {
-                return false;
-            }
-            queue.pending += 1;
-            self.sender.send(Message::Action(action.to_vec()))
+            self.shared.pending.fetch_add(1, Ordering::AcqRel);
+            self.sender.send(Message::Action(action))
         };
         if sent.is_ok() {
             return true;
@@ -185,29 +191,39 @@ impl Runtime {
     /// Waits until every queued action is applied, up to `timeout`. Zero checks once without waiting. For tests and
     /// shutdown; never on a main thread.
     pub fn flush(&self, timeout: Duration) -> bool {
+        if self.shared.pending.load(Ordering::Acquire) == 0 {
+            return true;
+        }
         if timeout.is_zero() {
-            return self
-                .shared
-                .queue
-                .try_lock()
-                .map(|queue| queue.pending == 0)
-                .unwrap_or(false);
+            return false;
         }
         let deadline = Instant::now() + timeout;
-        let mut queue = lock(&self.shared.queue);
-        while queue.pending > 0 {
+        let mut waiters = lock(&self.shared.idle.waiters);
+        loop {
+            // Register interest before re-reading pending so we cannot miss a transition to zero.
+            *waiters += 1;
+            let pending = self.shared.pending.load(Ordering::Acquire);
+            if pending == 0 {
+                *waiters -= 1;
+                return true;
+            }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                *waiters -= 1;
                 return false;
             }
-            queue = self
+            let (guard, _) = self
                 .shared
                 .idle
-                .wait_timeout(queue, left)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+                .wake
+                .wait_timeout(waiters, left)
+                .unwrap_or_else(PoisonError::into_inner);
+            waiters = guard;
+            *waiters -= 1;
+            if self.shared.pending.load(Ordering::Acquire) == 0 {
+                return true;
+            }
         }
-        true
     }
 
     /// Same wait as [flush], with opt-in caller timing outside the original benchmark spans.
@@ -275,7 +291,7 @@ impl Runtime {
     /// Mark that a client registry has already requested shutdown. Ordinary borrowed calls may finish their operation,
     /// but only the close path may wait for the worker and release its host.
     pub fn shutdown_requested(&self) -> bool {
-        lock(&self.shared.queue).stopping
+        self.shared.stopping.load(Ordering::Acquire)
     }
 
     fn join_worker(&self) {
@@ -294,18 +310,20 @@ impl Runtime {
     }
 
     fn stop(&self) {
-        let mut queue = lock(&self.shared.queue);
-        if !queue.stopping {
-            queue.stopping = true;
+        // Release pairs with the dispatch Acquire so any action accepted before shutdown precedes Stop in the
+        // channel; the swap also ensures only one caller sends Stop.
+        if !self.shared.stopping.swap(true, Ordering::AcqRel) {
             let _ = self.sender.send(Message::Stop);
         }
     }
 
     fn done(&self, count: u64) {
-        let mut queue = lock(&self.shared.queue);
-        queue.pending = queue.pending.saturating_sub(count);
-        if queue.pending == 0 {
-            self.shared.idle.notify_all();
+        let previous = self.shared.pending.fetch_sub(count, Ordering::AcqRel);
+        if previous == count {
+            // Queue just became empty; wake any sleepers. The waiters mutex only needs to be held long enough to
+            // prevent a lost wakeup against the increment-before-recheck dance in `flush`.
+            let _waiters = lock(&self.shared.idle.waiters);
+            self.shared.idle.wake.notify_all();
         }
     }
 }
@@ -358,10 +376,10 @@ impl Worker {
                 Ok(Message::Stop) | Err(_) => return,
                 Ok(Message::Action(bytes)) => {
                     self.guarded(|worker| worker.action(&bytes));
-                    let mut queue = lock(&self.shared.queue);
-                    queue.pending = queue.pending.saturating_sub(1);
-                    if queue.pending == 0 {
-                        self.shared.idle.notify_all();
+                    let previous = self.shared.pending.fetch_sub(1, Ordering::AcqRel);
+                    if previous == 1 {
+                        let _waiters = lock(&self.shared.idle.waiters);
+                        self.shared.idle.wake.notify_all();
                     }
                 }
             }
@@ -826,10 +844,8 @@ mod tests {
         }
         assert!(!runtime.flush(Duration::ZERO));
         assert!(runtime.flush(Duration::from_secs(5)));
-        // A contended pending lock must not turn a zero-duration probe into an unbounded wait.
-        let guard = lock(&runtime.shared.queue);
-        assert!(!runtime.flush(Duration::ZERO));
-        drop(guard);
+        // The zero-duration probe is lock-free: it never waits on any mutex, so it stays nonblocking even when other
+        // threads are mid-flight with their own actions.
         assert!(runtime.flush(Duration::ZERO));
         runtime.shutdown();
     }
@@ -859,5 +875,55 @@ mod tests {
         released_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("worker host release must complete without joining itself");
+    }
+
+    #[test]
+    fn concurrent_dispatches_all_complete_before_shutdown() {
+        struct NoopHost;
+        impl Host for NoopHost {
+            fn changed(&self, _version: u64) {}
+            fn run(&self, _effect: &[u8]) {}
+        }
+        let runtime = Arc::new(Runtime::new(Arc::new(NoopHost)));
+        let action = Arc::new(wire::encode(&Action::OpenChat {
+            chat: "probe".into(),
+            snapshot: ChatSnapshot::default(),
+        }));
+        // Multiple producer threads dispatching into the same runtime: the lock-free pending counter must still
+        // reach zero once the worker has drained them.
+        let producers: Vec<_> = (0..8)
+            .map(|_| {
+                let runtime = runtime.clone();
+                let action = action.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..64 {
+                        assert!(runtime.dispatch(&action));
+                    }
+                })
+            })
+            .collect();
+        for producer in producers {
+            producer.join().expect("producer thread");
+        }
+        assert!(runtime.flush(Duration::from_secs(5)));
+        assert_eq!(runtime.shared.pending.load(Ordering::Acquire), 0);
+        runtime.shutdown();
+        assert!(runtime.shutdown_requested());
+        // After shutdown the runtime refuses new actions.
+        assert!(!runtime.dispatch(&action));
+    }
+
+    #[test]
+    fn flush_returns_immediately_when_queue_is_empty() {
+        struct NoopHost;
+        impl Host for NoopHost {
+            fn changed(&self, _version: u64) {}
+            fn run(&self, _effect: &[u8]) {}
+        }
+        let runtime = Runtime::new(Arc::new(NoopHost));
+        // No dispatches at all: flush must not wait for a notification that will never come.
+        assert!(runtime.flush(Duration::ZERO));
+        assert!(runtime.flush(Duration::from_millis(50)));
+        runtime.shutdown();
     }
 }

@@ -338,6 +338,23 @@ Phase 1 (#6871) lands in several PRs.
     benchmark span/budget changed. The runner preserves the real nonzero JUnit output before enforcing its failure;
     the physical arm64 / 16 KiB cells remain **blocked: no physical device** by the maintainer's 2026-11-14 decision,
     not passes. Raw emulator A/B evidence and its limits belong in the linked PR, not a claim of device acceptance.
+  - **Lock-free dispatch and zero-copy JNI hand-off (#9048).** The previous dispatch path held `queue: Mutex<Queue>`
+    on the caller only to do `pending += 1` and check `stopping`, and `Runtime::dispatch(&[u8])` always copied the
+    action bytes a second time even when the caller already owned them. `Shared.pending` and `Shared.stopping` are
+    now an `AtomicU64` and an `AtomicBool`; the worker decrements with `fetch_sub` and only takes a mutex when the
+    queue becomes empty and a `flush` waiter needs waking. The stop flag's Acquire/Release pairs with the channel
+    send so an action accepted before shutdown still precedes Stop. A new `Runtime::dispatch_owned(Vec<u8>)` moves
+    the encoded bytes straight into the worker's channel; the JNI `NativeBridge.dispatch` uses it so the
+    `convert_byte_array` `Vec<u8>` is no longer cloned into a second buffer. The C ABI `persona_core_dispatch` keeps
+    its borrowed-slice signature and routes through `dispatch(&[u8])` (one copy, same as before). The diagnostics
+    `pending_lock*` counters stay at zero and only the patch-lock span is measured. Same host, same protocol (100
+    warm-ups + 1,000 samples, raw nanoseconds, `PERSONA_MEASUREMENT_DIAGNOSTICS=0`), four optimized runs of
+    `:core:rustcore:boundaryCostTest` against main: dispatch p50 1.87–2.75 µs / p99 3.72–7.43 µs / max 11.37–20.22 µs;
+    drain+decode+apply p50 3.60–4.73 µs / p99 16.16–38.22 µs / max 53.25–302.50 µs; raw reports retained per run.
+    All 38 continuity cases / 94 steps, 17 wire cases, the close-safe lifetime suite and the host-JNI replay pass;
+    `scripts/ci/core.sh` is green. **This is host-only evidence**: it does not move the emulator cells, does not
+    reach a physical device, and the physical arm64 / 16 KiB cells stay **blocked: no physical device**. Packaged
+    x86_64 emulator A/B data, if a same-machine emulator run completes, is recorded beside the host data.
 - **HarmonyOS binding, with device acceptance pending.**
   - `persona-core-ohos` provides one ohos-rs NAPI library with a close-safe runtime registry and thread-safe callbacks.
     The generated ArkTS codec has actual Node 24 round-trip tests; the adapter's fake-NAPI tests are not device proof.
