@@ -44,7 +44,7 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 `tests/c_abi_smoke.c` as a separate C11 client against the checked-in header, dynamically links it to the exact release
 `libpersona_core.so`, and checks that the header's declared functions have dynamic exports. The client replays the
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
-`persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
+`persona_core_display_answer` for all 15 question + 9 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
 `{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 21 fence + 14 marker + 22 table repairs
 plus 6 fence-end and 15 table/text end expectations stated independently from the Apple Swift test source,
@@ -79,7 +79,7 @@ partial markers and malformed/wrong-expected controls. The final-marker hold-bac
 assertions from Apple's table-related tests, including half-written rows, early delimiter rows, list indentation and
 lazy-line exclusion. Inline markup, math and `plainOpenFence` are not implemented.
 The answer replay (#8838) calls `projectAnswer` and `displayAnswer` through real Kotlin/JNI for all 15 question and
-8 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
+9 recommendation cases. It compares complete existing expected objects with their conditional fields and checks invalid
 input, a wrong expectation and the U+200B boundary. This does not execute Swift, send a resolution to the hub, measure
 UI timing or connect a production Android adapter. The TaskIndex replay (#8842) covers the fixture-facing fields from
 `TaskIndex.build`: five existing complete expected objects and a background receipt with empty notices/statuses. It
