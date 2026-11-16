@@ -303,6 +303,7 @@ object MachineManagementModule {
         override suspend fun newCode(id: String) = api().newCode(id)
         override suspend fun rename(id: String, name: String) = api().rename(id, name)
         override suspend fun makeDefault(id: String) = api().makeDefault(id)
+        override suspend fun setHide(id: String, hide: Boolean) = api().setHide(id, hide)
         override suspend fun delete(id: String) = api().delete(id)
     }
 

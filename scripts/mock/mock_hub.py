@@ -4306,6 +4306,7 @@ def minutes_markdown(m, body, lang, ov=None):
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
 # one still installing. MOCK_MANAGER_COMMANDS=1 adds the install commands to a new code's answer; MOCK_MANAGERS=0 is a
 # hub from before the roster (404); MOCK_MANAGERS=1 only the hub's own (one manager: a one-row switcher without Default, no grouping).
+# MOCK_MANAGER_HIDDEN=1: 工作 is the default and has every computer, and the hub's own is kept out of the switcher (#9055).
 def _managers_seed():
     if os.environ.get("MOCK_MANAGERS") == "1":
         return [{"id": "assistant", "name": "助手", "online": True, "builtin": True, "host": "server", "os": "linux", "arch": "amd64",
@@ -4329,7 +4330,26 @@ def _managers_seed():
     ] if os.environ.get("MOCK_MANAGER_EXPIRED") == "1" else [])
 
 
-MANAGERS = {"list": _managers_seed(), "default": "assistant"}
+MANAGER_HIDDEN = os.environ.get("MOCK_MANAGER_HIDDEN") == "1"
+MANAGERS = {"list": _managers_seed(), "default": "m-3fa21c" if MANAGER_HIDDEN else "assistant", "hide": MANAGER_HIDDEN}
+
+
+def builtin_owns_machine():
+    """A computer is the hub's own assistant's: one no other manager has (MANAGED_MACHINES)."""
+    return any(MANAGED_MACHINES.get(m["id"], "assistant") == "assistant" for m in MACHINES)
+
+
+def roster_entry(m, needs_you=None):
+    """A manager as the roster has it: default, its inbox's Needs you count, and for the built-in one whether the user
+    asked to keep it out of the switcher (hide) and whether that is in effect (hidden: not the default, no computer,
+    nothing in its inbox that needs the user; hub/managers.go, #9055)."""
+    out = dict(m, **({"default": True} if m["id"] == MANAGERS["default"] else {}),
+               **({"inbox_needs_you": needs_you[m["id"]]} if needs_you and m["id"] in needs_you else {}))
+    if m.get("builtin") and MANAGERS.get("hide"):
+        out["hide"] = True
+        waiting = (out.get("inbox_needs_you") or 0) > 0  # something in its inbox needs the user: shown
+        if m["id"] != MANAGERS["default"] and not waiting and not builtin_owns_machine(): out["hidden"] = True
+    return out
 
 
 # What belongs to the other managers (docs/protocol/protocol.md「Per-manager routing」): the hub's merged lists stamp every item
@@ -4339,6 +4359,7 @@ MANAGERS = {"list": _managers_seed(), "default": "assistant"}
 # A computer of an offline manager is offline with the hub's words for it (devices_reports.go offlineLocal): so 家里 has
 # none by default, and the computers the other screenshots count stay as they were.
 MANAGED_MACHINES = {"macbook": "m-3fa21c", **({"nas": "m-8b04d2"} if os.environ.get("MOCK_MANAGER_NAS") == "1" else {})}
+if MANAGER_HIDDEN: MANAGED_MACHINES.update({m["id"]: "m-3fa21c" for m in MACHINES if m["id"] not in MANAGED_MACHINES})
 # With the NAS 家里's, the agent it had: the hub keeps an offline manager's sessions, in state unknown (stamp_row).
 NAS_BACKUP = "0b4c0e5a-0000-4000-8000-000000000001"
 if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not any(x["machine_id"] == "nas" for x in SESSIONS):
@@ -4575,8 +4596,7 @@ def managers_route(h, method, p):
     ms, dflt = MANAGERS["list"], MANAGERS["default"]
     if p == "/api/v1/managers" and method == "GET":
         needs_you = inbox_needs_you()
-        out = [dict(m, **({"default": True} if m["id"] == dflt else {}),
-                    **({"inbox_needs_you": needs_you[m["id"]]} if m["id"] in needs_you else {})) for m in ms]
+        out = [roster_entry(m, needs_you) for m in ms]
         out.sort(key=lambda m: (m["id"] != dflt, bool(m.get("installing"))))
         reply = {"managers": out, "default": dflt}
         if os.environ.get("MOCK_SHARED_BOTS") == "1":
@@ -4610,6 +4630,11 @@ def managers_route(h, method, p):
     if method == "PATCH":
         if m.get("installing"):
             return h.send_json({"error": "this manager is not installed yet", "code": "installing"}, 409) or True
+        if "hide" in body:
+            if not m.get("builtin"):
+                return h.send_json({"error": "only the built-in assistant can be hidden"}, 400) or True
+            if body["hide"] is True and (m["id"] == MANAGERS["default"] or body.get("default") is True or builtin_owns_machine()):
+                return h.send_json({"error": "the built-in assistant is the default or has a computer", "code": "builtin_in_use"}, 409) or True
         if "name" in body:
             name = str(body.get("name") or "").strip()
             if not name or len(name) > 40:
@@ -4618,8 +4643,9 @@ def managers_route(h, method, p):
         if body.get("default") is True: MANAGERS["default"] = m["id"]
         elif body.get("default") is False:
             return h.send_json({"error": "make another manager the default instead"}, 400) or True
+        if "hide" in body: MANAGERS["hide"] = body["hide"] is True
         _managers_changed()
-        return h.send_json({"manager": dict(m, default=True) if m["id"] == MANAGERS["default"] else m}) or True
+        return h.send_json({"manager": roster_entry(m)}) or True
     if method == "DELETE":
         if m.get("builtin"):
             return h.send_json({"error": "the hub runs this manager itself", "code": "builtin_manager"}, 409) or True
@@ -4662,6 +4688,7 @@ def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
         (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_live_view"] if meeting_live_view_on() else []) + \
         (["meeting_highlights"] if meeting_highlights_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["meeting_notes"] if meeting_live_view_on() and os.environ.get("MOCK_MEETING_NOTES") != "0" else []) + \
         (["meeting_transcription"] if meeting_transcription_on() else []) + \
         (["recording_day"] if RECORDING_DAY["on"] else [])
 
@@ -17576,6 +17603,21 @@ if os.environ.get("MOCK_RICH") == "1":
 
 参考：https://en.wikipedia.org/wiki/Weather_(disambiguation)。"""
     ITEMS[RICH] = [it("user", "text", 5, text="还有哪些要我拍板？"), it("assistant", "text", 2, text=_rich)]
+
+# MOCK_TABLE_CHIPS=1: a reply whose two-column table has a sentence with code chips in its second column (#9146): on a
+# wide column it takes the room it needs and wraps at a reading length; a short chip is never broken across lines.
+TABLE_CHIPS = "a1f3c2d4-0000-4000-8000-000000009146"
+if os.environ.get("MOCK_TABLE_CHIPS") == "1":
+    SESSIONS.append(sess("macbook", TABLE_CHIPS, "Check the MCP endpoint", "/Users/me/code/weather", "done", "unread", "weather", 1, "mcp", 5, 2,
+                         "The endpoint works."))
+    _chips = """The endpoint works:
+
+| Item | Result |
+| --- | --- |
+| Service | Runs `1.2.3`, the `/mcp` endpoint on port 8080 accepts `Bearer` tokens; without a token it answers 401 `invalid_token` |
+| Tools | Only two: `list_items`, `list_item_details` |
+| Config | Reads `~/.config/weather/mcp-endpoint-settings.json` and falls back to the defaults when it is missing |"""
+    ITEMS[TABLE_CHIPS] = [it("user", "text", 5, text="Does the MCP endpoint work?"), it("assistant", "text", 2, text=_chips)]
 
 # MOCK_WIDE=1: an Agents chat whose reply has a table that fits, one that does not and a code block with a long line,
 # then a short reply in a turn of its own (SwipeWideContentTests, #5737: a drag to the left scrolls what scrolls sideways, else quotes).

@@ -1,7 +1,7 @@
 // An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
-// answer + display_answer (15 + 8 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
+// answer + display_answer (15 + 9 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
@@ -782,6 +782,7 @@ static const char *const question_manifest[] = {
 
 static const char *const recommended_manifest[] = {
     "recommended_case_sensitive", "recommended_chinese_ascii", "recommended_chinese_fullwidth",
+    "recommended_corefoundation_boundary",
     "recommended_suffix_only", "recommended_spaced", "recommended_trailing_space",
     "recommended_trims_prefix_space", "recommended_unspaced",
 };
@@ -1254,6 +1255,24 @@ static void check_transport_envelope(const char *fixtures) {
     }
     if (replayed != sizeof(expected) / sizeof(expected[0]))
         fail("transport", "manifest", "every named shared-scalar case must replay");
+    const char *mixed = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\",\"history\":\"\\ud83d\"}";
+    PersonaCoreBytes mixed_result = persona_core_transport_frame((const uint8_t *)mixed, strlen(mixed));
+    JValue *mixed_decoded = mixed_result.data && mixed_result.length ? json_parse(mixed_result.data, mixed_result.length) : NULL;
+    // Source-undetermined: the mixed rows/history input must be refused, never silently Other. Exact Foundation
+    // error priority is not asserted here; rows in isolation below has an unambiguous wrong_type expectation.
+    const char *mixed_code = jstr(jget(jget(mixed_decoded, "error"), "code"));
+    if (!mixed_code) fail("transport", "nested_malformed_scalar", "valid items must not hide another bad scalar");
+    jfree(mixed_decoded);
+    persona_core_bytes_free(mixed_result);
+    const char *rows = "{\"type\":\"hello\",\"items\":[],\"rows\":\"bad\"}";
+    PersonaCoreBytes rows_result = persona_core_transport_frame((const uint8_t *)rows, strlen(rows));
+    JValue *rows_decoded = rows_result.data && rows_result.length ? json_parse(rows_result.data, rows_result.length) : NULL;
+    const char *rows_code = jstr(jget(jget(rows_decoded, "error"), "code"));
+    const char *rows_detail = jstr(jget(jget(rows_decoded, "error"), "detail"));
+    if (!rows_code || strcmp(rows_code, "wrong_type") != 0 || !rows_detail || strcmp(rows_detail, "rows") != 0)
+        fail("transport", "rows_type", "rows is Int? in LiveConnection.swift's Envelope");
+    jfree(rows_decoded);
+    persona_core_bytes_free(rows_result);
     const char *other = "{\"type\":\"future_event\",\"unknown\":1.5}";
     PersonaCoreBytes result = persona_core_transport_frame((const uint8_t *)other, strlen(other));
     JValue *decoded = result.data && result.length ? json_parse(result.data, result.length) : NULL;
@@ -1407,7 +1426,7 @@ int main(int argc, char **argv) {
     check_sort(argv[1]);
     check_stream(argv[1]);
     check_answer_file(argv[1], "questions.json", 0, 15);
-    check_answer_file(argv[1], "recommended.json", 1, 8);
+    check_answer_file(argv[1], "recommended.json", 1, 9);
     check_answer_boundaries();
     check_turns(argv[1]);
     check_task_index(argv[1]);
@@ -1417,6 +1436,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+9, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }

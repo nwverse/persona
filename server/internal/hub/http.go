@@ -707,29 +707,28 @@ const sessionsFlushAt = 32 << 10
 // bytes writeJSON gives for the stamped lists put together, encoded a session at a time and written out every
 // sessionsFlushAt bytes, so neither a copy of the lists nor the whole answer is held. A session that fails to encode
 // is left out, as a push leaves it out (encodeRows). The lists are only read.
+//
+// Each row goes out bounded (sessions_list.go legacyListCut): long texts cut and the task arrays left out — a fleet
+// of hundreds of agents made the whole-list answer hundreds of KB a pull, and a row's whole detail stays in the chat
+// routes. The scratch copy keeps the kept list unchanged.
 func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	var buf bytes.Buffer
 	buf.Grow(sessionsFlushAt + 8<<10)
 	buf.WriteString(`{"sessions":[`)
 	enc := json.NewEncoder(&buf) // escapes HTML, as writeJSON does
-	var scratch *proto.Session
+	var scratch proto.Session
 	n := 0
 	for _, l := range lists {
 		for i := range l.list {
-			s := &l.list[i]
-			if s.Manager != l.manager {
-				if scratch == nil {
-					scratch = new(proto.Session)
-				}
-				*scratch = *s
-				scratch.Manager, s = l.manager, scratch
-			}
+			scratch = l.list[i] // a plain struct copy: the slices point into the kept list, only nilled here
+			scratch.Manager = l.manager
+			legacyListCut(&scratch)
 			mark := buf.Len()
 			if n > 0 {
 				buf.WriteByte(',')
 			}
-			if enc.Encode(s) != nil {
+			if enc.Encode(&scratch) != nil {
 				buf.Truncate(mark)
 				continue
 			}

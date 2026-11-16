@@ -38,7 +38,7 @@ fn project(projection: unsafe extern "C" fn(*const u8, usize) -> PersonaCoreByte
 #[test]
 fn c_abi_answer_replays_questions_and_recommendations_and_rejects_bad_input() {
     let mut replayed = BTreeSet::new();
-    for (file, recommended, count) in [("questions.json", false, 15), ("recommended.json", true, 8)] {
+    for (file, recommended, count) in [("questions.json", false, 15), ("recommended.json", true, 9)] {
         let document: Value = serde_json::from_slice(&fs::read(fixtures().join("answer").join(file)).unwrap()).unwrap();
         let cases = document["cases"].as_array().unwrap();
         assert_eq!(cases.len(), count, "{file}: exact case count");
@@ -72,7 +72,7 @@ fn c_abi_answer_replays_questions_and_recommendations_and_rejects_bad_input() {
             assert!(replayed.insert(name), "duplicate answer case");
         }
     }
-    assert_eq!(replayed.len(), 23, "15 question + 8 recommendation cases");
+    assert_eq!(replayed.len(), 24, "15 question + 9 recommendation cases");
     assert!(call(persona_core_project_answer, b"{\"invalid\":true}").is_none());
     assert!(call(persona_core_project_answer, b"not JSON").is_none());
     assert!(call(persona_core_project_answer, &[0xff]).is_none());
