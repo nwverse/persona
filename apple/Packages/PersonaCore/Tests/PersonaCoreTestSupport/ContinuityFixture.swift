@@ -7,7 +7,7 @@ import PersonaCore
 public enum ContinuityJSON: Equatable, Sendable {
     case null
     case bool(Bool)
-    case number(Decimal)
+    case number(String)
     case string(String)
     case array([ContinuityJSON])
     case object([String: ContinuityJSON])
@@ -16,9 +16,10 @@ public enum ContinuityJSON: Equatable, Sendable {
     public var array: [ContinuityJSON]? { if case .array(let value) = self { value } else { nil } }
     public var string: String? { if case .string(let value) = self { value } else { nil } }
     public var int: Int? {
-        guard case .number(let value) = self else { return nil }
-        // Integer-only fixture readers do not accept fractions or out-of-range values as valid indices.
-        guard let exact = Int(exactly: NSDecimalNumber(decimal: value)) else { return nil }
+        guard case .number(let text) = self else { return nil }
+        // Only an integral decimal inside the platform Int range is a valid fixture index.
+        guard let decimal = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")),
+              let exact = Int(exactly: NSDecimalNumber(decimal: decimal)) else { return nil }
         return exact
     }
     public var bool: Bool? { if case .bool(let value) = self { value } else { nil } }
@@ -33,7 +34,7 @@ public enum ContinuityJSON: Equatable, Sendable {
         switch value {
         case is NSNull: .null
         case let value as NSNumber where CFGetTypeID(value) == CFBooleanGetTypeID(): .bool(value.boolValue)
-        case let value as NSNumber: .number(value.decimalValue)
+        case let value as NSNumber: try jsonNumber(value)
         case let value as Bool: .bool(value)
         case let value as String: .string(value)
         case let value as [Any]: .array(try value.map(from))
@@ -43,8 +44,18 @@ public enum ContinuityJSON: Equatable, Sendable {
     }
 
     public func encoded() throws -> String {
+        if case .number(let text) = self {
+            guard isExactJSONNumber(text) else {
+                throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
+            }
+            return text
+        }
         // Foundation otherwise rejects fragments with an Objective-C exception rather than a Swift error. Only
         // display_answer's bare JSON string is a C input; other scalar values here are diagnostic renderings.
+        // Check before Foundation can raise an Objective-C exception for a non-finite or non-JSON scalar.
+        guard JSONSerialization.isValidJSONObject(foundation) else {
+            throw ContinuityFixtureError.invalidFixture("cannot encode a non-finite JSON number")
+        }
         let options: JSONSerialization.WritingOptions = [.fragmentsAllowed]
         let data = try JSONSerialization.data(withJSONObject: foundation, options: options)
         return String(decoding: data, as: UTF8.self)
@@ -54,11 +65,24 @@ public enum ContinuityJSON: Equatable, Sendable {
         switch self {
         case .null: NSNull()
         case .bool(let value): value
-        case .number(let value): NSDecimalNumber(decimal: value)
+        case .number(let value): value
         case .string(let value): value
         case .array(let values): values.map(\.foundation)
         case .object(let values): values.mapValues(\.foundation)
         }
+    }
+
+    private static func jsonNumber(_ value: NSNumber) throws -> ContinuityJSON {
+        let text = value.stringValue
+        guard isExactJSONNumber(text) else {
+            throw ContinuityFixtureError.invalidFixture("non-finite or out-of-range JSON number")
+        }
+        return .number(text)
+    }
+
+    private static func isExactJSONNumber(_ text: String) -> Bool {
+        guard let decimal = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return false }
+        return NSDecimalNumber(decimal: decimal).stringValue == text
     }
 }
 
@@ -177,16 +201,16 @@ public extension Request {
         var object: [String: ContinuityJSON]
         switch self {
         case let .fetchAfter(after_seq: after):
-            object = ["kind": .string("fetch_after"), "after_seq": .number(Decimal(after))]
+            object = ["kind": .string("fetch_after"), "after_seq": .number(String(after))]
         case let .fetchLatest(fold_work: fold):
             object = ["kind": .string("fetch_latest"), "fold_work": .bool(fold)]
         case let .subscribe(since_seq: since, fold_work: fold):
             object = ["kind": .string("subscribe"), "fold_work": .bool(fold)]
-            if let since { object["since_seq"] = .number(Decimal(since)) }
+            if let since { object["since_seq"] = .number(String(since)) }
         case let .fetchOlder(before_seq: before, fold_work: fold):
-            object = ["kind": .string("fetch_older"), "before_seq": .number(Decimal(before)), "fold_work": .bool(fold)]
+            object = ["kind": .string("fetch_older"), "before_seq": .number(String(before)), "fold_work": .bool(fold)]
         case let .fetchRange(fold_id: _, from_seq: from, through_seq: through):
-            object = ["kind": .string("fetch_range"), "from_seq": .number(Decimal(from)), "through_seq": .number(Decimal(through))]
+            object = ["kind": .string("fetch_range"), "from_seq": .number(String(from)), "through_seq": .number(String(through))]
         }
         return .object(object)
     }

@@ -46,11 +46,21 @@ final class PersonaCoreProjectionTests: XCTestCase {
         )
         let original = try ProjectionFixture.decode("9007199254740993", "encoded integer")
         XCTAssertEqual(try original.encoded(), "9007199254740993")
-        let negative = try ProjectionFixture.decode("-9007199254740993", "encoded negative integer")
-        XCTAssertNotEqual(negative, try ProjectionFixture.decode("-9007199254740992", "adjacent negative integer"))
+        let negative = try ProjectionFixture.decode("-9007199254740992", "adjacent negative integer")
+        XCTAssertNotEqual(negative, try ProjectionFixture.decode("-9007199254740991", "another negative integer"))
+        try ProjectionFixture.assertWrongExpectationIsRejected(
+            .bool(true), wrong: .number(1), label: "JSON booleans are not numbers"
+        )
+        try ProjectionFixture.assertWrongExpectationIsRejected(
+            .bool(false), wrong: .number(0), label: "JSON false is not zero"
+        )
+        // Programmatic invalid numeric text must throw rather than reach Foundation's non-finite exception.
+        XCTAssertThrowsError(try ContinuityJSON.number("nan").encoded())
+        let exponent = try ProjectionFixture.decode("1e1000", "out-of-range exponent")
+        XCTAssertThrowsError(try exponent.encoded())
     }
 
-    func testInvalidUTF8ResultIsNotAccepted() throws {
+    func testMalformedInputMapsToTheCErrorResult() throws {
         // Every malformed-input path must reach the adapter's explicit C failure mapping, not a JSON decoder's nil.
         for projection in [
             PersonaCoreProjections.sort,

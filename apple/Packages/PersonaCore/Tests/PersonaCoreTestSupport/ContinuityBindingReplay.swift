@@ -28,10 +28,13 @@ public struct ContinuityBindingReplay: Sendable {
             loadedOnce: initial.flag("loaded_once")
         )
         try client.dispatch(.openChat(chat: chat, snapshot: snapshot))
-        var list: [String] = []
+        var list: [(id: String, json: String)] = []
         var patches = 0
-        _ = try step(client, chat: chat, list: &list, label: "\(name) initial")
+        let initialPatch = try step(client, chat: chat, list: &list, label: "\(name) initial")
         patches += 1
+        // The opening patch is real evidence too: verify the item identity and initial continuity metadata before any
+        // later event can hide a bad Insert/Update or a missing initial state.
+        try compare(initialPatch, list, initial, "\(name) initial", actions: .array([]))
         recorder.effects.withLock { $0.removeAll() }
         for (index, event) in `case`.events.enumerated() {
             let label = "\(name) step \(index)"
@@ -58,19 +61,23 @@ public struct ContinuityBindingReplay: Sendable {
                 }
             }
             let expected = `case`.expected[index]
-            let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.utf8))) })
-            try equal(actualItems, expected["items"], "\(label) items")
-            try equal(.array(list.map { json in
-                let item = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
-                return item["id"] ?? .null
-            }), expected["item_ids"], "\(label) item_ids")
-            try equal(.number(Decimal(patch.covered)), expected["covered"], "\(label) covered")
-            try equal(patch.history.map(ContinuityJSON.string) ?? .null, expected["history"], "\(label) history")
-            try equal(patch.hasMore.map(ContinuityJSON.bool) ?? .null, expected["has_more"], "\(label) has_more")
-            try equal(.bool(patch.loadedOnce), expected["loaded_once"], "\(label) loaded_once")
-            try equal(.array(requests), expected["actions"], "\(label) actions")
+            try compare(patch, list, expected, label, actions: .array(requests))
         }
         return patches
+    }
+
+    private static func compare(
+        _ patch: ChatPatch, _ list: [(id: String, json: String)], _ expected: ContinuityJSON,
+        _ label: String, actions: ContinuityJSON
+    ) throws {
+        let actualItems = ContinuityJSON.array(try list.map { try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data($0.json.utf8))) })
+        try equal(actualItems, expected["items"], "\(label) items")
+        try equal(.array(list.map { .string($0.id) }), expected["item_ids"], "\(label) item_ids")
+        try equal(.number(String(patch.covered)), expected["covered"], "\(label) covered")
+        try equal(patch.history.map(ContinuityJSON.string) ?? .null, expected["history"], "\(label) history")
+        try equal(patch.hasMore.map(ContinuityJSON.bool) ?? .null, expected["has_more"], "\(label) has_more")
+        try equal(.bool(patch.loadedOnce), expected["loaded_once"], "\(label) loaded_once")
+        try equal(actions, expected["actions"], "\(label) actions")
     }
 
     public static func replayAll(in directory: URL = ContinuityCase.repositoryDirectory) throws -> ContinuityBindingReplay {
@@ -84,7 +91,7 @@ public struct ContinuityBindingReplay: Sendable {
         return ContinuityBindingReplay(cases: cases.count, steps: steps, patches: patches)
     }
 
-    private static func step(_ client: PersonaCoreClient, chat: String, list: inout [String], label: String) throws -> ChatPatch {
+    private static func step(_ client: PersonaCoreClient, chat: String, list: inout [(id: String, json: String)], label: String) throws -> ChatPatch {
         try client.flush()
         let patch = try client.drain(chat: chat)
         for operation in patch.ops {
@@ -92,12 +99,20 @@ public struct ContinuityBindingReplay: Sendable {
             case let .remove(index: index):
                 guard index < list.count else { throw ContinuityFixtureError.invalidFixture("\(label): remove index") }
                 list.remove(at: Int(index))
-            case let .insert(index: index, id: _, json: json):
+            case let .insert(index: index, id: id, json: json):
                 guard index <= list.count else { throw ContinuityFixtureError.invalidFixture("\(label): insert index") }
-                list.insert(json, at: Int(index))
-            case let .update(index: index, id: _, json: json):
+                let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                guard object["id"] == .string(id) else {
+                    throw ContinuityFixtureError.invalidFixture("\(label): insert id differs from its JSON")
+                }
+                list.insert((id, json), at: Int(index))
+            case let .update(index: index, id: id, json: json):
                 guard index < list.count else { throw ContinuityFixtureError.invalidFixture("\(label): update index") }
-                list[Int(index)] = json
+                let object = try ContinuityJSON.from(try JSONSerialization.jsonObject(with: Data(json.utf8)))
+                guard object["id"] == .string(id), list[Int(index)].id == id else {
+                    throw ContinuityFixtureError.invalidFixture("\(label): update id differs from its JSON or replaced item")
+                }
+                list[Int(index)] = (id, json)
             }
         }
         return patch
