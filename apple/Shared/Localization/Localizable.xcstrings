@@ -5935,6 +5935,40 @@
         }
       }
     },
+    "%lld people" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld person"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld people"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 人"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 人"
+          }
+        }
+      }
+    },
     "%lld Picked" : {
       "localizations" : {
         "en" : {
@@ -13716,6 +13750,28 @@
       },
       "extractionState" : "manual"
     },
+    "A meeting starts with only you. Invite Persona on the Meetings page when you need it; the minutes and highlights come either way." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A meeting starts with only you. Invite Persona on the Meetings page when you need it; the minutes and highlights come either way."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議はあなただけで始まります。必要なときに会議ページで Persona を招待してください。議事録と要点はどちらでも作られます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议开始时只有你。需要时在会议页邀请 Persona；纪要和要点照常会有。"
+          }
+        }
+      }
+    },
     "A SOCKS5 proxy that another app on this device provides, such as a VPN-like client that serves 127.0.0.1 instead of taking the system VPN slot. Persona's traffic to the hub, this device's credential included, goes through it unencrypted, even for an https hub: you're trusting whatever app holds that port." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -15518,6 +15574,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "允许"
+          }
+        }
+      }
+    },
+    "Answers on Screen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Answers on screen"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画面で回答"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "屏幕回答"
           }
         }
       }
@@ -30472,6 +30550,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Cloud · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloud · %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クラウド · %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "云端 · %@"
+          }
+        }
+      }
     },
     "Connecting…" : {
       "localizations" : {
@@ -61953,6 +62053,28 @@
       },
       "extractionState" : "manual"
     },
+    "Every meeting starts with Persona in it, answering on screen. Remove it from a meeting on the Meetings page." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every meeting starts with Persona in it, answering on screen. Remove it from a meeting on the Meetings page."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どの会議も Persona が参加した状態で始まり、画面で回答します。会議から外すには会議ページで操作します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每场会议开始时 Persona 都在会里，在屏幕上回答。要在某场会里移出它，去会议页。"
+          }
+        }
+      }
+    },
     "Every Run" : {
       "localizations" : {
         "en" : {
@@ -76234,6 +76356,50 @@
         }
       }
     },
+    "Invite Persona" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite Persona"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona を招待"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "邀请 Persona"
+          }
+        }
+      }
+    },
+    "Invite Persona Automatically" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invite Persona Automatically"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議に Persona を自動で招待"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开会时自动邀请 Persona"
+          }
+        }
+      }
+    },
     "Isolated preview: scripts and network are off. Turn them on in ⋯" : {
       "localizations" : {
         "en" : {
@@ -84802,6 +84968,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "MCP 服务器：%1$@"
+          }
+        }
+      }
+    },
+    "Meeting Options" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meeting Options"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議のオプション"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会议选项"
           }
         }
       }
@@ -105409,6 +105597,28 @@
       },
       "extractionState" : "manual"
     },
+    "On Now [Upcoming Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "On the same Wi-Fi or Tailscale as your computer, the screen comes straight from it, faster and steadier. Turned off, it always goes through your hub." : {
       "localizations" : {
         "en" : {
@@ -120115,6 +120325,28 @@
       },
       "extractionState" : "manual"
     },
+    "Quick Start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quick Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "クイックスタート"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快速开始"
+          }
+        }
+      }
+    },
     "Quiet Hours" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -120435,6 +120667,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Remove from Meeting" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Meeting"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会議から外す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移出会议"
+          }
+        }
+      }
     },
     "Reports contain measurement cards, heart-rate and pace charts when data is available, a comparison with your recent workouts of the same kind, and a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted." : {
       "extractionState" : "manual",
@@ -143717,6 +143971,28 @@
       },
       "extractionState" : "manual"
     },
+    "Start [Upcoming Meeting]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
+          }
+        }
+      }
+    },
     "Start Agent" : {
       "localizations" : {
         "en" : {
@@ -162388,6 +162664,28 @@
       },
       "extractionState" : "manual"
     },
+    "This iPhone [Meeting Transcription]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机 iPhone"
+          }
+        }
+      }
+    },
     "This iPhone can take urgent calls." : {
       "localizations" : {
         "en" : {
@@ -162450,6 +162748,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "这台 iPhone 还没登记来电。稍后重新打开 Persona；在那之前 Persona 会改发通知。"
+          }
+        }
+      }
+    },
+    "This iPhone · the hub can't transcribe now" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This iPhone · the hub can't transcribe now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この iPhone · 今はハブで文字起こしできません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本机 iPhone · 云端现在用不了"
           }
         }
       }
@@ -168680,6 +169000,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Title [Meeting Start]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Title"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タイトル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        }
+      }
     },
     "Title, e.g. “Morning briefing”" : {
       "localizations" : {
@@ -175671,6 +176013,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最新バージョンです"
+          }
+        }
+      }
+    },
+    "Upcoming Meetings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Upcoming Meetings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今後の会議"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接下来的会议"
           }
         }
       }
@@ -186882,6 +187246,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "You [Meeting People]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あなた"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你"
+          }
+        }
+      }
     },
     "You asked to be called" : {
       "localizations" : {

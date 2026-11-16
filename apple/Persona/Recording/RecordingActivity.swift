@@ -168,7 +168,8 @@ import OSLog
         let keep = recording && previous?.phase == .recording
         let since = recording ? (keep ? previous?.runningSince : nil) ?? now.timeIntervalSince1970 - elapsed : nil
         let attended = MeetingAsk.canAsk(entry, roomMissing: roomMissing)
-        let liveView = attended && entry.attendance?.liveView == true
+        // The topic and the latest line come while the room follows the meeting, Persona in it or not (#8851).
+        let liveView = entry.attended && !roomMissing && entry.attendance?.liveView == true
         let answer = attended ? Self.cut(answer, Self.answerLength) : nil
         let hubLines = transcribed?.shown.hubLines == true
         let line = liveView ? Self.cut(hubLines ? transcribed?.hubLine : entry.attendance?.live.last?.text, Self.lineLength) : nil

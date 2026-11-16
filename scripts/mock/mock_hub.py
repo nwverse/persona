@@ -4662,6 +4662,7 @@ def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
         (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_live_view"] if meeting_live_view_on() else []) + \
         (["meeting_highlights"] if meeting_highlights_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["meeting_notes"] if meeting_live_view_on() and os.environ.get("MOCK_MEETING_NOTES") != "0" else []) + \
         (["meeting_transcription"] if meeting_transcription_on() else []) + \
         (["recording_day"] if RECORDING_DAY["on"] else [])
 
