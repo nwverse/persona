@@ -91,20 +91,26 @@ public enum ProjectionBindingReplay {
         var expectedOther = originalOther
         // The checked-in expected object intentionally selects only some Transition fields. Assert the remainder from
         // the fixture's own input and documented cases, never from the Rust output, so state outside that object is
-        // still covered: single-select clears free text; multi-select toggles one option; other actions preserve both.
+        // still covered: single-select replaces one question's picks and clears its free text; multi-select toggles
+        // one option; other actions preserve both. Other questions' state is never discarded.
         if operation.text("action") == "pick_option" {
+            let key = try ProjectionFixture.require(question.text("question"), "question")
+            let optionIndex = try ProjectionFixture.require(operation.number("option_index"), "option_index")
+            let options = try ProjectionFixture.require(question["options"]?.array, "options")
+            let option = try ProjectionFixture.require(options[safe: optionIndex], "option index")
+            let label = try ProjectionFixture.require(option.text("label"), "label")
+            var picks = try ProjectionFixture.require(originalPicks.object, "picks object")
             if question.boolean("multi_select") == true {
-                let key = try ProjectionFixture.require(question.text("question"), "question")
-                let optionIndex = try ProjectionFixture.require(operation.number("option_index"), "option_index")
-                let options = try ProjectionFixture.require(question["options"]?.array, "options")
-                let option = try ProjectionFixture.require(options[safe: optionIndex], "option index")
-                let label = try ProjectionFixture.require(option.text("label"), "label")
                 var selected = Set(originalPicks[key]?.array?.compactMap(\.string) ?? [])
                 if selected.remove(label) == nil { selected.insert(label) }
-                expectedPicks = .object([key: .array(selected.sorted().map(ContinuityJSON.string))])
+                picks[key] = .array(selected.sorted().map(ContinuityJSON.string))
             } else {
-                expectedOther = .object([try ProjectionFixture.require(question.text("question"), "question"): .string("")])
+                picks[key] = .array([.string(label)])
+                var other = try ProjectionFixture.require(originalOther.object, "other object")
+                other[key] = .string("")
+                expectedOther = .object(other)
             }
+            expectedPicks = .object(picks)
         }
         try ProjectionFixture.assertEqual(
             try ProjectionFixture.require(transition["page"], "page"),
