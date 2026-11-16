@@ -145,7 +145,7 @@
     <string name="assistant_settings_places_use_current">現在地を使用</string>
     <string name="assistant_settings_places_search_nothing">「%1$s」に一致する場所が見つかりません。</string>
     <string name="assistant_settings_places_search_failed">場所を検索できませんでした。接続を確認して、もう一度お試しください。</string>
-    <string name="assistant_settings_places_geocoder_missing">この端末では住所を調べられません。しばらくしてから再試行してください。</string>
+    <string name="assistant_settings_places_geocoder_missing">この端末では住所を調べられません。現在地を使うか、しばらくしてから再試行してください。</string>
     <string name="assistant_settings_places_location_denied">「設定 › アプリ › Persona › 権限」で Persona に位置情報の使用を許可するか、住所を検索してください。</string>
     <string name="assistant_settings_places_location_failed">現在地を取得できませんでした。屋外でもう一度試すか、住所を検索してください。</string>
     <string name="assistant_settings_places_radius">通知の範囲</string>

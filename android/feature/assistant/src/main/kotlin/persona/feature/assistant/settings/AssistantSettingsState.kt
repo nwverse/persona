@@ -416,12 +416,13 @@ internal class AssistantSettingsState(
     /** Adds or updates a place; null when the hub refused (busy, duplicate name, …). Trims name and address first. */
     suspend fun savePlace(place: SavedPlace): SavedPlace? {
         if (state.value.busy) return null
-        var draft = place.copy(
+        val draft = place.copy(
             name = place.name.trim(),
             address = place.address.trim(),
         )
         var saved: SavedPlace? = null
-        val ok = perform(SettingsText(R.string.assistant_settings_save_failed)) {
+        // Prefer the hub's reason (409 name taken, 400 too long / 50 places) over the generic save-failed text (#9293 R1).
+        val ok = perform(SettingsText(R.string.assistant_settings_save_failed), preferMessage = true) {
             val result = api.savePlace(draft)
             saved = result
             set {
@@ -437,7 +438,8 @@ internal class AssistantSettingsState(
 
     /** Optimistic: the row goes at once; a failure reports and reloads what the hub has. */
     suspend fun deletePlace(place: SavedPlace): Boolean {
-        if (place.id.isBlank()) return false
+        // Busy first: otherwise an optimistic remove rolls back with a reload and no message (#9293 R7).
+        if (place.id.isBlank() || state.value.busy) return false
         val before = state.value.places.entries
         set { copy(places = places.copy(entries = places.entries?.filterNot { it.id == place.id })) }
         val deleted = perform(SettingsText(R.string.assistant_settings_delete_failed)) {
@@ -453,12 +455,22 @@ internal class AssistantSettingsState(
 
     private fun done(text: SettingsText) = set { copy(notice = SettingsNotice(text, error = false)) }
 
-    private suspend fun perform(failure: SettingsText, block: suspend () -> Unit): Boolean {
+    private suspend fun perform(
+        failure: SettingsText,
+        preferMessage: Boolean = false,
+        block: suspend () -> Unit,
+    ): Boolean {
         if (state.value.busy) return false
         set { copy(busy = true, notice = null) }
         return try { block(); true }
         catch (error: CancellationException) { throw error }
-        catch (_: Exception) { set { copy(notice = SettingsNotice(failure, error = true)) }; false }
+        catch (error: Exception) {
+            val text = if (preferMessage) {
+                error.message?.trim()?.takeIf { it.isNotEmpty() }?.let(SettingsText::plain) ?: failure
+            } else failure
+            set { copy(notice = SettingsNotice(text, error = true)) }
+            false
+        }
         finally { set { copy(busy = false) } }
     }
 

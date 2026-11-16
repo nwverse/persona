@@ -19,8 +19,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
 import java.util.Locale
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /** One hit from a forward geocode (address search). */
 internal data class SavedPlaceSearchHit(
@@ -47,8 +49,8 @@ internal object SavedPlaceLocation {
     )
 
     /**
-     * A current fix, or null when permission is missing, services are off, or nothing arrived in time.
-     * Callers show the same wording as iOS for those cases.
+     * A current fix, or null when permission is missing, services are off, nothing arrived in time, or the
+     * last-known fix is older than [LAST_KNOWN_MAX_AGE_MILLIS] (#9293 rework R5).
      */
     @Suppress("MissingPermission")
     suspend fun currentFix(context: Context): Location? {
@@ -79,9 +81,11 @@ internal object SavedPlaceLocation {
                 }
             }
         }
-        return fresh
-            ?: enabled.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
-                .maxByOrNull { it.time }
+        if (fresh != null) return fresh
+        val last = enabled.mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
+            .maxByOrNull { it.time } ?: return null
+        val age = System.currentTimeMillis() - last.time
+        return last.takeIf { age in 0..LAST_KNOWN_MAX_AGE_MILLIS }
     }
 
     suspend fun reverseGeocode(context: Context, latitude: Double, longitude: Double): String {
@@ -94,7 +98,7 @@ internal object SavedPlaceLocation {
 
     /**
      * Forward geocode. Returns null when the device has no Geocoder; empty list when nothing matched;
-     * throws only for unexpected failures the caller treats as [SavedPlaceText.SearchOutcome.Failed].
+     * throws on Geocoder errors and timeouts so the caller shows the failure text (#9293 rework R4).
      */
     suspend fun forwardGeocode(context: Context, query: String, max: Int = 5): List<SavedPlaceSearchHit>? {
         if (!Geocoder.isPresent()) return null
@@ -102,7 +106,7 @@ internal object SavedPlaceLocation {
         if (trimmed.isEmpty()) return emptyList()
         val places = withTimeoutOrNull(GEOCODE_TIMEOUT_MILLIS) {
             lookupName(context, trimmed, max)
-        } ?: return emptyList()
+        } ?: throw IOException("Geocoder timed out")
         return places.map { place ->
             SavedPlaceSearchHit(
                 name = place.featureName?.takeIf { it.isNotBlank() } ?: trimmed,
@@ -137,7 +141,11 @@ internal object SavedPlaceLocation {
                     if (continuation.isActive) continuation.resume(addresses.toList())
                 }
                 override fun onError(errorMessage: String?) {
-                    if (continuation.isActive) continuation.resume(emptyList())
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(
+                            IOException(errorMessage?.takeIf { it.isNotBlank() } ?: "Geocoder failed"),
+                        )
+                    }
                 }
             })
         } else runInterruptible(Dispatchers.IO) {
@@ -166,5 +174,6 @@ internal object SavedPlaceLocation {
     }
 
     private const val FIX_TIMEOUT_MILLIS = 15_000L
-    private const val GEOCODE_TIMEOUT_MILLIS = 3_000L
+    private const val GEOCODE_TIMEOUT_MILLIS = 10_000L
+    private const val LAST_KNOWN_MAX_AGE_MILLIS = 2 * 60 * 1000L
 }

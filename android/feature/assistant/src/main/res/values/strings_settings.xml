@@ -151,7 +151,7 @@
     <string name="assistant_settings_places_use_current">Use Current Location</string>
     <string name="assistant_settings_places_search_nothing">No places found for “%1$s”.</string>
     <string name="assistant_settings_places_search_failed">Couldn\'t search for places. Check the connection and try again.</string>
-    <string name="assistant_settings_places_geocoder_missing">This phone can\'t look up addresses. Enter coordinates by searching elsewhere, or try again later.</string>
+    <string name="assistant_settings_places_geocoder_missing">This phone can\'t look up addresses. Use your current location, or try again later.</string>
     <string name="assistant_settings_places_location_denied">Allow Persona to use your location in Settings › Apps › Persona › Permissions, or search for the address.</string>
     <string name="assistant_settings_places_location_failed">Couldn\'t get your location. Try again outdoors, or search for the address.</string>
     <string name="assistant_settings_places_radius">Reminder Radius</string>

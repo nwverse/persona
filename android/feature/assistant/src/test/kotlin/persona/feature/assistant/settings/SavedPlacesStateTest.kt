@@ -1,7 +1,10 @@
 package persona.feature.assistant.settings
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -31,6 +34,8 @@ class SavedPlacesStateTest {
         var failSave = false
         var failDelete = false
         var saveDelayCalls = 0
+        var saveError: String? = null
+        var holdSave: CompletableDeferred<Unit>? = null
 
         override suspend fun config() = config
         override suspend fun updateConfig(update: AssistantConfigUpdate) = config
@@ -42,6 +47,8 @@ class SavedPlacesStateTest {
             return places
         }
         override suspend fun savePlace(place: SavedPlace): SavedPlace {
+            holdSave?.await()
+            saveError?.let { throw Exception(it) }
             check(!failSave) { "save refused" }
             saveDelayCalls++
             val out = if (place.id.isBlank()) place.copy(id = "p${places.size + 1}") else place
@@ -108,13 +115,20 @@ class SavedPlacesStateTest {
         assertTrue(state.state.value.notice?.error == true)
     }
 
+    @Test fun saveShowsHubMessageOn409() = runTest {
+        val reason = "There is already a place called \"Home\"."
+        val api = FakeApi().apply { saveError = reason }
+        val state = AssistantSettingsState(api, Zone())
+        state.loadPlaces()
+        assertNull(state.savePlace(SavedPlace(name = "Home", latitude = 1.0, longitude = 2.0)))
+        assertTrue(state.state.value.notice?.error == true)
+        assertEquals(SettingsText.plain(reason), state.state.value.notice?.text)
+    }
+
     @Test fun noDoubleSaveWhileBusy() = runTest {
         val api = FakeApi()
         val state = AssistantSettingsState(api, Zone())
         state.loadPlaces()
-        // First call sets busy; a concurrent call while busy returns null without another POST.
-        // Simulate by failing mid-flight isn't available; assert busy gate: start one that fails after busy is set
-        // via a second call during the first — with FakeApi sync, busy clears before return. Gate still:
         assertFalse(state.state.value.busy)
         state.savePlace(SavedPlace(name = "A", latitude = 1.0, longitude = 2.0))
         assertEquals(1, api.saveDelayCalls)
@@ -130,12 +144,23 @@ class SavedPlacesStateTest {
 
         api.failDelete = true
         api.places = listOf(SavedPlace("p2", "Office", "2 Work Rd", 1.0, 2.0, 300))
-        // Reload baseline then fail delete
         state.loadPlaces()
         assertFalse(state.deletePlace(SavedPlace("p2", "Office", "2 Work Rd", 1.0, 2.0, 300)))
-        // After failure, reload restores hub's list (still has p2 since delete threw before mutating hub... wait,
-        // FakeApi delete throws before filter — so places still has p2; loadPlaces restores it.
         assertEquals(listOf("Office"), state.state.value.places.entries?.map { it.name })
+    }
+
+    @Test fun deleteWhileBusyLeavesListAlone() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val api = FakeApi().apply { holdSave = gate }
+        val state = AssistantSettingsState(api, Zone())
+        state.loadPlaces()
+        val saving = async { state.savePlace(SavedPlace(name = "A", latitude = 1.0, longitude = 2.0)) }
+        while (!state.state.value.busy) yield()
+        assertFalse(state.deletePlace(SavedPlace("p1", "Home", "1 Main St", 31.23, 121.47)))
+        assertEquals(listOf("Home", "Office"), state.state.value.places.entries?.map { it.name })
+        assertTrue(api.deleted.isEmpty())
+        gate.complete(Unit)
+        saving.await()
     }
 
     @Test fun canSaveAndRadiiMatchIos() {
@@ -146,6 +171,11 @@ class SavedPlacesStateTest {
         assertEquals(listOf(100, 150, 250, 300, 500, 1000, 2000), SavedPlaceText.radiiWith(250))
         assertEquals("150 m", SavedPlaceText.radius(150, Locale.US))
         assertEquals("1 km", SavedPlaceText.radius(1000, Locale.US))
+        assertTrue(
+            "zh radius should use a localized meter unit, got ${SavedPlaceText.radius(150, Locale.SIMPLIFIED_CHINESE)}",
+            SavedPlaceText.radius(150, Locale.SIMPLIFIED_CHINESE).contains("150") &&
+                !SavedPlaceText.radius(150, Locale.SIMPLIFIED_CHINESE).endsWith(" m"),
+        )
         assertEquals(
             "1 Main St",
             SavedPlaceText.detail(SavedPlace(address = "1 Main St", latitude = 1.0, longitude = 2.0)),
@@ -154,5 +184,37 @@ class SavedPlacesStateTest {
             "1.00000, 2.00000",
             SavedPlaceText.detail(SavedPlace(latitude = 1.0, longitude = 2.0)),
         )
+    }
+
+    @Test fun sameEditIgnoresTimestamps() {
+        val base = SavedPlace("p1", "Home", "1 Main St", 31.23, 121.47, 150)
+        val withTimes = base.copy(createdAt = "2026-01-01T00:00:00Z", updatedAt = "2026-01-02T00:00:00Z")
+        assertTrue(SavedPlaceText.sameEdit(base, withTimes))
+        assertFalse(SavedPlaceText.sameEdit(base, base.copy(name = "Office")))
+        assertFalse(SavedPlaceText.sameEdit(base, base.copy(radiusMeters = 300)))
+        assertFalse(SavedPlaceText.sameEdit(base, base.copy(latitude = 0.0)))
+    }
+
+    @Test fun editorReadyNeedsLoadedPlace() {
+        assertTrue(SavedPlaceText.editorReady(null, null))
+        assertTrue(SavedPlaceText.editorReady(null, emptyList()))
+        assertFalse(SavedPlaceText.editorReady("p1", null))
+        assertFalse(SavedPlaceText.editorReady("p1", emptyList()))
+        assertTrue(SavedPlaceText.editorReady("p1", listOf(SavedPlace("p1", "Home"))))
+        assertFalse(SavedPlaceText.editorReady("missing", listOf(SavedPlace("p1", "Home"))))
+    }
+
+    @Test fun saveWithPlaceIdUpdatesInsteadOfPostingDuplicate() = runTest {
+        val api = FakeApi()
+        val state = AssistantSettingsState(api, Zone())
+        state.loadPlaces()
+        // After process death the list may not be loaded yet in the UI, but the draft still carries placeId.
+        val updated = state.savePlace(
+            SavedPlace("p1", "Home", "New addr", 31.23, 121.47, 150, createdAt = null, updatedAt = null),
+        )
+        assertEquals("p1", updated?.id)
+        assertEquals(1, api.saved.size)
+        assertEquals("p1", api.saved.single().id)
+        assertEquals(2, state.state.value.places.entries?.size)
     }
 }

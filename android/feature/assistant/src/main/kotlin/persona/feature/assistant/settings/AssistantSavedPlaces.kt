@@ -48,6 +48,7 @@ import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.currentLocale
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.pagePadding
 import persona.feature.assistant.R
@@ -64,6 +65,7 @@ internal fun PlacesPart(
 ) {
     val places = state.places
     val entries = places.entries.orEmpty()
+    val locale = currentLocale
     var pendingDelete by remember { mutableStateOf<SavedPlace?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(previewDelete, entries) {
@@ -84,9 +86,6 @@ internal fun PlacesPart(
             )
         },
     ) {
-        if (entries.isNotEmpty()) item("intro") {
-            Caption(stringResource(R.string.assistant_settings_places_footer))
-        }
         if (places.failed && entries.isEmpty()) item("failed") {
             JEmptyState(
                 stringResource(R.string.assistant_settings_places_load_failed_title),
@@ -118,7 +117,7 @@ internal fun PlacesPart(
                     place.name,
                     subtitle = SavedPlaceText.detail(place),
                     leadingIcon = PersonaIcons.place,
-                    value = SavedPlaceText.radius(place.radiusMeters),
+                    value = SavedPlaceText.radius(place.radiusMeters, locale),
                     titleLines = 1,
                     chevron = true,
                     onClick = { onOpen(place.id) },
@@ -126,6 +125,10 @@ internal fun PlacesPart(
                     modifier = Modifier.testTag("saved-place-${place.id}"),
                 )
             }
+        }
+        // Section footer below the card (same place as iOS List section footer; #9293 S1).
+        if (entries.isNotEmpty()) item("footer") {
+            Caption(stringResource(R.string.assistant_settings_places_footer))
         }
     }
     pendingDelete?.let { place ->
@@ -156,9 +159,12 @@ internal fun SavedPlaceEditorPart(
 ) {
     val resources = LocalResources.current
     val context = LocalContext.current
+    val locale = currentLocale
     val scope = rememberCoroutineScope()
     val existing = placeId?.let { id -> state.places.entries?.firstOrNull { it.id == id } }
     val creating = placeId == null
+    val awaitingPlace = placeId != null && existing == null && state.places.entries == null
+    val missingPlace = placeId != null && existing == null && state.places.entries != null
     var name by rememberSaveable(placeId) { mutableStateOf(existing?.name.orEmpty()) }
     var address by rememberSaveable(placeId) { mutableStateOf(existing?.address.orEmpty()) }
     var latitude by rememberSaveable(placeId) { mutableStateOf(existing?.latitude ?: Double.NaN) }
@@ -176,17 +182,18 @@ internal fun SavedPlaceEditorPart(
         existing ?: SavedPlace(radiusMeters = SavedPlace.DEFAULT_RADIUS)
     }
     val located = !latitude.isNaN() && !longitude.isNaN()
+    // Use placeId (not existing?.id) so a restore after process death still PUTs (#9293 R2).
     val draft = SavedPlace(
-        id = existing?.id.orEmpty(),
+        id = placeId.orEmpty(),
         name = name,
         address = address,
         latitude = if (located) latitude else 0.0,
         longitude = if (located) longitude else 0.0,
         radiusMeters = radius,
     )
-    val dirty = creating || draft.copy(name = draft.name.trim(), address = draft.address.trim()) !=
-        opened.copy(name = opened.name.trim(), address = opened.address.trim())
-    val canSave = SavedPlaceText.canSave(draft, located) && dirty && !state.busy
+    val dirty = creating || !SavedPlaceText.sameEdit(draft, opened)
+    val canSave = SavedPlaceText.editorReady(placeId, state.places.entries) &&
+        SavedPlaceText.canSave(draft, located) && dirty && !state.busy
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { granted ->
@@ -196,6 +203,18 @@ internal fun SavedPlaceEditorPart(
             } }
         } else {
             locationHint = resources.getString(R.string.assistant_settings_places_location_denied)
+        }
+    }
+
+    // After process death the id is restored but fields may still be empty until the list loads.
+    LaunchedEffect(existing) {
+        val place = existing ?: return@LaunchedEffect
+        if (name.isEmpty() && address.isEmpty() && latitude.isNaN()) {
+            name = place.name
+            address = place.address
+            latitude = place.latitude
+            longitude = place.longitude
+            radius = place.radiusMeters
         }
     }
 
@@ -240,6 +259,7 @@ internal fun SavedPlaceEditorPart(
         latitude = hit.latitude
         longitude = hit.longitude
         address = hit.address.ifBlank { hit.name }
+        if (name.trim().isEmpty()) name = hit.name.take(40)
         search = ""
         hits = emptyList()
         searchNote = null
@@ -263,17 +283,6 @@ internal fun SavedPlaceEditorPart(
         title = if (creating) stringResource(R.string.assistant_settings_places_new)
         else existing?.name ?: stringResource(R.string.assistant_settings_places),
         onBack = onBack,
-        actions = {
-            if (!creating && existing != null) {
-                JIconButton(
-                    PersonaIcons.delete,
-                    stringResource(R.string.assistant_settings_places_delete),
-                    { deleting = true },
-                    enabled = !state.busy,
-                    tint = PersonaTheme.palette.danger.text,
-                )
-            }
-        },
         bottomBar = {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s),
@@ -294,6 +303,16 @@ internal fun SavedPlaceEditorPart(
             }
         },
     ) {
+        if (awaitingPlace) item("awaiting") {
+            JLoading(text = stringResource(R.string.assistant_settings_loading))
+        }
+        if (missingPlace) item("missing") {
+            JNotice(
+                stringResource(R.string.assistant_settings_places_load_failed_text),
+                Modifier.padding(top = Tokens.Space.m),
+                status = Status.NeedsYou,
+            )
+        }
         state.notice?.takeIf { it.error }?.let { notice ->
             item("notice") {
                 JNotice(notice.text.resolve(resources), Modifier.padding(top = Tokens.Space.m), status = Status.NeedsYou)
@@ -307,7 +326,7 @@ internal fun SavedPlaceEditorPart(
                     { name = it },
                     Modifier.fillMaxWidth().testTag("saved-place-name"),
                     placeholder = stringResource(R.string.assistant_settings_places_name_placeholder),
-                    enabled = !state.busy,
+                    enabled = !state.busy && !awaitingPlace && !missingPlace,
                     singleLine = true,
                 )
             }
@@ -342,9 +361,9 @@ internal fun SavedPlaceEditorPart(
                     search,
                     { search = it },
                     Modifier.fillMaxWidth().testTag("saved-place-search"),
-                    label = stringResource(R.string.assistant_settings_places_search),
+                    // Placeholder only — a label duplicates the same text and clips in Glass (#9293 S2).
                     placeholder = stringResource(R.string.assistant_settings_places_search),
-                    enabled = !state.busy && !locating,
+                    enabled = !state.busy && !locating && !awaitingPlace && !missingPlace,
                     singleLine = true,
                     trailing = if (search.isNotEmpty()) ({
                         JIconButton(PersonaIcons.close, stringResource(R.string.assistant_settings_places_clear_search), { search = "" })
@@ -358,7 +377,7 @@ internal fun SavedPlaceEditorPart(
                     stringResource(R.string.assistant_settings_places_use_current),
                     leadingIcon = PersonaIcons.place,
                     chevron = false,
-                    enabled = !state.busy && !locating,
+                    enabled = !state.busy && !locating && !awaitingPlace && !missingPlace,
                     onClick = { requestCurrent() },
                     modifier = Modifier.testTag("saved-place-current"),
                 )
@@ -395,10 +414,10 @@ internal fun SavedPlaceEditorPart(
             item("radius-$meters") {
                 JGroupItem(GroupPosition.of(index, choices.size)) {
                     JRow(
-                        SavedPlaceText.radius(meters),
+                        SavedPlaceText.radius(meters, locale),
                         leading = { JRadio(selected = meters == radius, onClick = null) },
                         chevron = false,
-                        enabled = !state.busy,
+                        enabled = !state.busy && !awaitingPlace && !missingPlace,
                         onClick = { radius = meters },
                     )
                 }
@@ -406,6 +425,7 @@ internal fun SavedPlaceEditorPart(
         }
         item("radius-caption") { Caption(stringResource(R.string.assistant_settings_places_radius_caption)) }
 
+        // Delete only as a button at the end (iOS has no top-bar trash; #9293 S3).
         if (!creating && existing != null) item("delete") {
             Row(
                 Modifier.fillMaxWidth().padding(top = Tokens.Space.l),

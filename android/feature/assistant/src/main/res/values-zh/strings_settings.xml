@@ -145,7 +145,7 @@
     <string name="assistant_settings_places_use_current">使用当前位置</string>
     <string name="assistant_settings_places_search_nothing">没有找到「%1$s」。</string>
     <string name="assistant_settings_places_search_failed">没能搜索地点，检查连接后再试。</string>
-    <string name="assistant_settings_places_geocoder_missing">这台手机没法查地址。请稍后再试，或用别的方式记下坐标。</string>
+    <string name="assistant_settings_places_geocoder_missing">这台手机没法查地址。请使用当前位置，或稍后再试。</string>
     <string name="assistant_settings_places_location_denied">请在「设置 › 应用 › Persona › 权限」里允许 Persona 使用你的位置，或者直接搜索地址。</string>
     <string name="assistant_settings_places_location_failed">没拿到你的位置。到室外再试一次，或者直接搜索地址。</string>
     <string name="assistant_settings_places_radius">提醒范围</string>
