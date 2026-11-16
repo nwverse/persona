@@ -239,6 +239,26 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTurns<'a>(
     .unwrap_or_default()
 }
 
+/// Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamChunks<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_chunks::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_chunks::split(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
 #[cfg(any(target_os = "android", feature = "test-support"))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_persona_core_rustcore_NativeDiagnostics_enableDiagnostics(

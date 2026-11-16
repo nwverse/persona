@@ -102,6 +102,18 @@ Tests need the system row followed by a real-shaped synthetic assistant error, p
 an out-of-window record. A new error code alone does not change old clients' error buttons: document that client work
 and the item-cache version bump separately.
 
+Behind a gateway the switch itself was the failure (#7319): Claude Code picks the fallback model's ID on its own, so a
+gateway without it answers 404 after two requests that cannot succeed. A gateway-shaped managed provider whose model
+list lacks one of Claude Code's fallback models (`refusalFallbackModels`, `node/launcherenv.go`) now launches with
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1`, and the refusal ends the turn instead: a `system/model_refusal_no_fallback`
+row and a synthetic `stop_reason: "refusal"` reply. Keep both endings tested: the no-fallback one must stay a
+safeguards refusal for the assistant's recovery whether the reply carries `isApiErrorMessage`, an error code or neither,
+and must not become `model_fallback_unavailable` (no fallback row); the fallback 404 must stay
+`model_fallback_unavailable`, the user's, for every start that keeps the switch: Anthropic's own API, gateways whose list
+has every fallback model, unmanaged launchers, providers from before #2455, providers with no model list and providers
+that turn the switch back on. The fallback IDs are Claude Code's and change with its versions: when a transcript's
+`fallbackModel` names one the constant does not have, update the constant and its test.
+
 ## Subagent peer reports are nonterminal tool output (#3378)
 
 A peer display name such as `general-purpose` does not prove a subagent relationship. Associate `origin.from` /
