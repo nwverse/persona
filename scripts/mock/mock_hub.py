@@ -4675,6 +4675,9 @@ def managers_route(h, method, p):
 # modes, every recording's live log and its asks; POST /mock/recording_minutes forgets them too.
 MEETING_ATTENDANCE = os.environ.get("MOCK_NO_MEETING_ATTENDANCE") != "1"
 MEETING_ROLES = ("off", "listener", "participant")
+# A room meeting's roles (#8851): the three, and the note-taker, which follows the meeting and answers nothing. The hub
+# takes notes on a room's upload, on the hub-transcription timeline and on the audio socket; never as the default.
+ROOM_ROLES = MEETING_ROLES + ("notes",)
 MEETING_MODE = {"feed": os.environ.get("MOCK_MEETING_FEED", "ok"), "answer": os.environ.get("MOCK_MEETING_ANSWER", "ok"),
                 "answer_seconds": float(os.environ.get("MOCK_MEETING_ANSWER_SECONDS", "3")), "kb_read_only": False}
 MEETING_LIVE = {}  # recording id → its role, session, live log, fed count and asks (meeting_live)
@@ -4911,7 +4914,7 @@ def meeting_ask(h, st, body, rec):
             now = meeting_ask_now(st, stored)
             return h.send_json({"ask": now}, 202 if now["state"] == "pending" else 200) or True
     if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "知识库是只读的", "code": "kb_read_only"}, 403) or True
-    if st["role"] == "off": return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
+    if st["role"] in ("off", "notes"): return h.send_json({"error": "这条录音没有参会", "code": "not_attending"}, 409) or True
     room = room_of(st["id"])
     if room is not None and room.get("state") in ("ended", "deleted"):
         return h.send_json({"error": "The meeting has ended: ask in its follow-up.", "code": "meeting_ended"}, 409) or True
@@ -5111,13 +5114,13 @@ def meeting_event_flush(rid):
 
 
 def room_role(body):
-    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the three,
-    unknown_role; a role on a recording that is not a meeting not_meeting."""
+    """The role an upload's room asks for and what was wrong with it (kb.roomRole): not a string, or not one of the room's
+    roles (notes too, #8851), unknown_role; a role on a recording that is not a meeting not_meeting."""
     att = body["room"].get("attendance")
     if att is not None and not isinstance(att, str): return "", "unknown_role"
     role = (att or "").strip().lower()
     if role in ("", "off"): return "", None
-    if role not in ("listener", "participant"): return "", "unknown_role"
+    if role not in ("notes", "listener", "participant"): return "", "unknown_role"
     if recording_kind(body) != "meeting": return "", "not_meeting"
     return role, None
 
@@ -5197,7 +5200,9 @@ def conv_start(rid, part, origin, items):
 
 def room_header(rec, role):
     started = rec.get("started_at", "")
-    say = "participant: answers may be said aloud" if role == "participant" else "listener: answers are shown on screen only"
+    say = ("participant: answers may be said aloud" if role == "participant"
+           else "notes: you keep the topics and highlights only, and nobody asks you anything until the role changes" if role == "notes"
+           else "listener: answers are shown on screen only")
     return meeting_source_text(rec, f'The meeting is starting. Write nothing now.\n\n<persona-context kind="context" title="{meeting_name(rec)}" url="">\n'
                                     f"Title: {meeting_name(rec)}\nStarted: {started}\nLanguage: {rec.get('language') or 'en'}\nRole: {say}\n</persona-context>")
 
@@ -5404,7 +5409,7 @@ def room_end(rid):
     if state == "ready" and r.get("attendance"):
         rec = RECORDINGS.get(rid) or {}
         conv_append(r["machine_id"], r["session_id"], [conv_item("user", meeting_source_text(rec,
-            f'"{meeting_name(rec)}", the meeting you attend as a {r["attendance"]}, has ended. Write nothing in reply.'),
+            f'"{meeting_name(rec)}", the meeting you attend as {"the note-taker" if r["attendance"] == "notes" else "a " + r["attendance"]}, has ended. Write nothing in reply.'),
             source={"kind": "meeting", "title": meeting_name(rec)})])
     if state in ("ready", "starting", "unavailable"):
         r.update(state="ended", problem="")
@@ -6534,7 +6539,7 @@ def transcription_timeline(t, raw):
     if not isinstance(raw, dict): return
     roles, spans = raw.get("roles", []), raw.get("speaking", [])
     if not isinstance(roles, list) or not isinstance(spans, list) or len(roles) > 100 or len(spans) > 1000: return
-    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in MEETING_ROLES for r in roles): return
+    if any(not isinstance(r, dict) or not transcription_number(r.get("at")) or r.get("attendance") not in ROOM_ROLES for r in roles): return
     if any(not isinstance(sp, dict) or not transcription_number(sp.get("start")) or not transcription_number(sp.get("end"))
            or sp["start"] > sp["end"] or not isinstance(sp.get("text", ""), (str, type(None))) for sp in spans): return
     spans = [{"start": sp["start"], "end": sp["end"], **({"text": spoken_cut(sp["text"])} if sp.get("text") else {})} for sp in spans]
@@ -7120,7 +7125,7 @@ def transcription_socket(h, rid):
                     state["at"] = at
                     state["sentence"] = max(at, t["held"][-1][1] if t["held"] else 0)
                 elif kind == "role":
-                    if msg.get("attendance") not in MEETING_ROLES: fail("bad_frame"); break
+                    if msg.get("attendance") not in ROOM_ROLES: fail("bad_frame"); break
                     transcription_timeline(t, {"roles": [{"at": at, "attendance": msg["attendance"]}]})
                 elif kind == "speaking":
                     if type(msg.get("on")) is not bool or not isinstance(msg.get("text", ""), (str, type(None))): fail("bad_frame"); break
