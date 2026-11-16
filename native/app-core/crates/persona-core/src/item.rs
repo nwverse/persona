@@ -4,12 +4,13 @@
 //! what the hub sent and nothing is lost in a round trip through the core.
 
 mod head;
+mod supervision;
 
 use std::borrow::Cow;
 
 use serde_json::value::RawValue;
 
-use self::head::{CacheHead, CacheItemHead, CacheSeen, FoldValue, ItemFold, ItemHead, fold_value};
+use self::head::{CacheHead, CacheItemHead, CacheSeen, ItemFold, ItemHead, fold_value};
 use crate::transport::seen::{KeyFault, opens_object};
 
 /// The closed range of work a fold item stands for, from the fold's own position through `through_seq` /
@@ -90,26 +91,16 @@ impl Item {
                     supervision_user,
                     ..
                 },
-            positional_fold,
         } = serde_json::from_str(raw.get()).map_err(|e| ItemError::at("item", &e))?;
         let id = match id {
             CacheSeen::Value(id) => id,
             CacheSeen::Missing => unreachable!("the cache reader requires id"),
         };
-        // Resolve fold: object form uses Raw (consistent recursion depth with wire),
-        // positional form uses the legacy FoldValue.
-        let fold_value_opt = if let Some(pf) = positional_fold {
-            // Positional form: fold was already deserialized as FoldValue.
-            match pf {
-                FoldValue::Absent => None,
-                FoldValue::Value(v) => Some(v),
-            }
-        } else {
-            // Object form: parse the raw fold JSON separately, matching wire recursion depth.
-            match raw_fold.0.map(RawValue::get) {
-                None | Some("null") => None,
-                Some(fold_json) => fold_value(fold_json).map_err(|e| ItemError::at("item", &e))?,
-            }
+        // Fold remains in the full-item cache parse. Its errors therefore retain whole-item positions and the
+        // historical recursion budget; RawValue-shaped cache folds retain their serde decoding as well.
+        let fold_value_opt = match raw_fold.into_option().and_then(|fold| fold.0) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) => Some(value),
         };
         let (fold, fold_supervision_user) = match fold_value_opt {
             None => (None, false),
@@ -245,7 +236,7 @@ impl Item {
         // avoid normalizing duplicate keys. For positional (legacy) items the raw JSON is not patched (it uses
         // an array format), but supervision evidence is still available through has_supervision_evidence().
         let json = self.raw.get().to_owned();
-        if let Some(updated) = patch_supervision(&json)
+        if let Some(updated) = supervision::patch(&json)
             && let Ok(raw) = RawValue::from_string(updated)
         {
             self.raw = raw;
@@ -297,199 +288,6 @@ impl Item {
 
 pub(crate) fn part(id: &str) -> i64 {
     id.rsplit_once('#').and_then(|(_, n)| n.parse().ok()).unwrap_or(0)
-}
-
-/// Patches `"supervision_user":true` into a raw JSON object string, preserving all original bytes except the
-/// targeted value. For the top-level object and the first `"fold"` object (if any), the first occurrence of
-/// `supervision_user` is replaced or the key is inserted. Duplicate keys later in the object are left untouched.
-fn patch_supervision(json: &str) -> Option<String> {
-    let result = patch_key_bool(json, "supervision_user", true)?;
-    // Also patch inside the first "fold" object if present.
-    if let Some(fold_val_start) = find_first_key_value_start(&result, "fold") {
-        let after_colon = skip_ws(&result, fold_val_start);
-        if after_colon < result.len() && result.as_bytes()[after_colon] == b'{' {
-            let fold_end = matching_brace(&result, after_colon)?;
-            let fold_str = &result[after_colon..=fold_end];
-            let patched_fold = patch_key_bool(fold_str, "supervision_user", true)?;
-            let mut out = String::with_capacity(result.len() + patched_fold.len() - fold_str.len());
-            out.push_str(&result[..after_colon]);
-            out.push_str(&patched_fold);
-            out.push_str(&result[fold_end + 1..]);
-            return Some(out);
-        }
-    }
-    Some(result)
-}
-
-/// Replaces or inserts `"key":bool_val` in the first occurrence at the top level of a JSON object string.
-fn patch_key_bool(json: &str, key: &str, bool_val: bool) -> Option<String> {
-    let trimmed = json.trim();
-    if !trimmed.starts_with('{') {
-        return None;
-    }
-    let replacement = format!("\"{key}\":{bool_val}");
-
-    // Find the first occurrence of the key at depth 1.
-    if let Some((key_pos, val_end)) = find_first_key_value_range(trimmed, key) {
-        let mut out = String::with_capacity(trimmed.len() + 16);
-        out.push_str(&trimmed[..key_pos]);
-        out.push_str(&replacement);
-        out.push_str(&trimmed[val_end..]);
-        return Some(out);
-    }
-    // Key not found; insert right after the opening brace.
-    let insert_pos = 1; // after '{'
-    let mut out = String::with_capacity(trimmed.len() + replacement.len() + 1);
-    out.push_str(&trimmed[..insert_pos]);
-    out.push_str(&replacement);
-    // Only add comma if there's more content after the brace.
-    let rest = trimmed[insert_pos..].trim_start();
-    if !rest.starts_with('}') {
-        out.push(',');
-    }
-    out.push_str(&trimmed[insert_pos..]);
-    Some(out)
-}
-
-/// Finds the first `"key":value` at depth 1 in a JSON object string.
-/// Returns (key_start, value_end) positions.
-fn find_first_key_value_range(json: &str, key: &str) -> Option<(usize, usize)> {
-    let needle = format!("\"{key}\"");
-    let mut search_from = 0;
-    loop {
-        let found = json[search_from..].find(&needle)? + search_from;
-        if json_depth_at(json, found) != 1 {
-            search_from = found + needle.len();
-            continue;
-        }
-        let after_key = skip_ws(json, found + needle.len());
-        if after_key >= json.len() || json.as_bytes()[after_key] != b':' {
-            search_from = found + needle.len();
-            continue;
-        }
-        let val_start = skip_ws(json, after_key + 1);
-        let val_end = json_value_end(json, val_start)?;
-        return Some((found, val_end));
-    }
-}
-
-/// Finds the position right after `"key":` at depth 1 in a JSON object string.
-fn find_first_key_value_start(json: &str, key: &str) -> Option<usize> {
-    let needle = format!("\"{key}\"");
-    let mut search_from = 0;
-    loop {
-        let found = json[search_from..].find(&needle)? + search_from;
-        if json_depth_at(json, found) != 1 {
-            search_from = found + needle.len();
-            continue;
-        }
-        let after_key = skip_ws(json, found + needle.len());
-        if after_key >= json.len() || json.as_bytes()[after_key] != b':' {
-            search_from = found + needle.len();
-            continue;
-        }
-        return Some(after_key + 1);
-    }
-}
-
-/// Returns the brace/bracket depth at `pos` in a JSON string (0 = top level).
-fn json_depth_at(json: &str, pos: usize) -> usize {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escape = false;
-    for (i, b) in json.bytes().enumerate() {
-        if i >= pos {
-            break;
-        }
-        if escape {
-            escape = false;
-            continue;
-        }
-        match b {
-            b'\\' if in_string => escape = true,
-            b'"' => in_string = !in_string,
-            b'{' | b'[' if !in_string => depth += 1,
-            b'}' | b']' if !in_string => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    depth
-}
-
-fn skip_ws(json: &str, mut pos: usize) -> usize {
-    while pos < json.len() && json.as_bytes()[pos].is_ascii_whitespace() {
-        pos += 1;
-    }
-    pos
-}
-
-/// Finds the end position of a JSON value starting at `pos`.
-fn json_value_end(json: &str, pos: usize) -> Option<usize> {
-    if pos >= json.len() {
-        return None;
-    }
-    match json.as_bytes()[pos] {
-        b'{' | b'[' => {
-            let close = if json.as_bytes()[pos] == b'{' { b'}' } else { b']' };
-            matching_close(json, pos, close).map(|p| p + 1)
-        }
-        b'"' => {
-            let mut i = pos + 1;
-            while i < json.len() {
-                if json.as_bytes()[i] == b'\\' {
-                    i += 2;
-                } else if json.as_bytes()[i] == b'"' {
-                    return Some(i + 1);
-                } else {
-                    i += 1;
-                }
-            }
-            None
-        }
-        _ => {
-            // Scalar: true, false, null, number.
-            let end = json[pos..]
-                .find(|c: char| c == ',' || c == '}' || c == ']' || c.is_whitespace())
-                .unwrap_or(json.len() - pos);
-            Some(pos + end)
-        }
-    }
-}
-
-/// Finds the matching closing brace.
-fn matching_brace(json: &str, pos: usize) -> Option<usize> {
-    matching_close(json, pos, b'}')
-}
-
-fn matching_close(json: &str, pos: usize, close: u8) -> Option<usize> {
-    let open = json.as_bytes()[pos];
-    let mut depth = 1;
-    let mut i = pos + 1;
-    let mut in_string = false;
-    while i < json.len() {
-        let b = json.as_bytes()[i];
-        if in_string {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'"' {
-                in_string = false;
-            }
-        } else {
-            match b {
-                b'"' => in_string = true,
-                b if b == open => depth += 1,
-                b if b == close => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(i);
-                    }
-                }
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 #[cfg(test)]
@@ -698,34 +496,94 @@ mod tests {
         let json = format!(r#"{{"id":"a","unknown":{deep},"unknown":1,"seq":0,"seq":{deep}}}"#);
         let item = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
         assert_eq!(item.json(), json, "deep ignored values are skipped without recursion");
-        // The selected fold is the one bounded tree, as it was before this shared reader.
-        // Note: error positions are now relative to the fold JSON string (parsed separately via fold_value),
-        // not the full item JSON. This matches the wire path's error behavior.
+        // The cache reader reports positions in the complete item, including the fold's offset and the item's own
+        // contribution to the recursion budget.
         let deep = format!("{}{}", "[".repeat(128), "]".repeat(128));
         let json = format!(r#"{{"id":"a","fold":{{"x":{deep}}}}}"#);
         let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
-        assert_eq!(error.to_string(), "item: line 1 column 132");
+        assert_eq!(error.to_string(), "item: line 1 column 148");
         let json = format!(r#"{{"id":"a","fold":{deep}}}"#);
         let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
-        assert_eq!(error.to_string(), "item: line 1 column 128");
+        assert_eq!(error.to_string(), "item: line 1 column 144");
+
+        let deep = format!("{}{}", "[".repeat(127), "]".repeat(127));
+        let json = format!(r#"{{"id":"a","fold":{deep}}}"#);
+        let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
+        assert_eq!(error.to_string(), "item: line 1 column 144");
     }
 
     #[test]
-    fn cache_and_wire_share_fold_recursion_depth() {
-        // Find the exact boundary where wire and cache diverge.
-        for depth in 120..130 {
+    fn supervision_lexer_only_patches_actual_top_level_keys() {
+        let json = r#"{"id":"a#0","seq":1,"role":"assistant","kind":"fold","a\"supervision_user":false,"supervision_user":false}"#;
+        let item = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
+        let promoted = item.with_supervision();
+        let expected = r#"{"id":"a#0","seq":1,"role":"assistant","kind":"fold","a\"supervision_user":false,"supervision_user":true}"#;
+        assert_eq!(promoted.json(), expected);
+        assert!(Item::list_from_json(&format!("[{}]", promoted.json())).unwrap()[0].supervision_user);
+
+        let json = r#"{"id":"a#0","seq":1,"role":"assistant","kind":"fold","x\"fold":{"q":1},"fold":{"items":1,"tools":0,"thoughts":0,"through_seq":2,"through_id":"x#1"}}"#;
+        let item = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
+        let promoted = item.with_supervision();
+        let expected = r#"{"supervision_user":true,"id":"a#0","seq":1,"role":"assistant","kind":"fold","x\"fold":{"q":1},"fold":{"supervision_user":true,"items":1,"tools":0,"thoughts":0,"through_seq":2,"through_id":"x#1"}}"#;
+        assert_eq!(promoted.json(), expected);
+        let restored = Item::list_from_json(&format!("[{}]", promoted.json()))
+            .unwrap()
+            .remove(0);
+        assert!(restored.has_supervision_evidence());
+        assert!(restored.fold_supervision_user);
+    }
+
+    #[test]
+    fn cache_fold_errors_use_whole_item_positions() {
+        for (json, expected) in [
+            (r#"{"id":"a","fold":{"x":1e400}}"#, "item: line 1 column 27"),
+            ("{\"id\":\"a\",\n\"fold\":{\"x\":1e400}}", "item: line 2 column 17"),
+        ] {
+            let error = Item::list_from_json(&format!("[{json}]")).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{json}");
+        }
+    }
+
+    #[test]
+    fn cache_raw_value_shaped_fold_keeps_its_endpoint() {
+        let json = r#"{"id":"a","fold":{"$serde_json::private::RawValue":"{\"through_seq\":5}"}}"#;
+        let item = Item::list_from_json(&format!("[{json}]")).unwrap().remove(0);
+        assert_eq!(item.fold.as_ref().unwrap().through_seq, 5);
+        assert_eq!(item.json(), json);
+    }
+
+    #[test]
+    #[ignore = "run this host release-performance regression explicitly"]
+    fn supervision_promotion_is_linear_for_large_valid_tool_input() {
+        let entries = r#"{"supervision_user":0},"#.repeat(80_000);
+        let json = format!(
+            r#"{{"id":"a#0","seq":1,"role":"assistant","kind":"tool_use","tool_input":[{entries}{{"supervision_user":0}}],"fold":{{"items":1,"tools":0,"thoughts":0,"through_seq":2,"through_id":"x#1"}}}}"#
+        );
+        let item = Item::from_wire(&RawValue::from_string(json).unwrap()).unwrap();
+        let start = std::time::Instant::now();
+        let promoted = item.with_supervision();
+        let elapsed = start.elapsed();
+        assert!(promoted.has_supervision_evidence());
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "80,000 entries took {elapsed:?}; the old implementation took about 39 ms"
+        );
+    }
+
+    #[test]
+    fn cache_fold_recursion_includes_the_item_context() {
+        for depth in [125, 126] {
             let deep = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
             let json = format!(
                 r#"{{"id":"a","seq":1,"role":"assistant","kind":"fold","fold":{{"items":0,"tools":0,"thoughts":0,"through_seq":1,"through_id":"b","x":{deep}}}}}"#
             );
             let wire = Item::from_wire(&RawValue::from_string(json.clone()).unwrap());
             let cache = Item::list_from_json(&format!("[{json}]"));
+            assert!(wire.is_ok(), "the separately parsed wire fold accepts depth {depth}");
             assert_eq!(
-                wire.is_ok(),
                 cache.is_ok(),
-                "depth={depth}: wire={}, cache={}",
-                wire.is_ok(),
-                cache.is_ok(),
+                depth == 125,
+                "the legacy whole-item cache parser includes its outer object at depth {depth}"
             );
         }
     }

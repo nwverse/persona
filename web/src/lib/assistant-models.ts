@@ -1,13 +1,13 @@
 // What a Persona chat's model pill says (#5033, docs/web/web.md "Model pill and model panel"; docs/assistant/model-config.md
 // "A conversation's own model"): the launcher, model and effort its next message runs on, and where that comes from.
 // A Persona chat switches models freely: its own pick is kept on the hub (`model_pick`, feature `assistant_model_pick`)
-// and holds from the next message on every device; without one the main chat follows Model configuration › Main chat
-// and another chat keeps what it started with. On an older hub a pick lasts for this page and goes with each message
+// and holds from the next message on every device, for every Persona chat (#9248); without one the main chat, a leader
+// and the background supervisor follow Model configuration › Main chat and another chat keeps what it started with. On an older hub a pick lasts for this page and goes with each message
 // (lib/assistant-chat.ts), as before; the new-conversation page's pick goes with the conversation's start. First-screen
 // code: the panel's own data is lib/assistant-panel.ts, loaded with the panel.
 import { agentId, sessionAgent } from "./agent-kind";
 import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel } from "./assistant-chat";
-import { modelName, modelSupportsFast } from "./launcher-models";
+import { modelName, modelSupportsFast, type LauncherDefault } from "./launcher-models";
 import { providerTitle } from "./provider-names";
 import { currentModelRow, modelLabel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
@@ -23,6 +23,12 @@ export interface AssistantChat {
   /** Absent: the new-conversation page. */
   session?: Session;
   isMain: boolean;
+  /** Without a pick, the next message runs on Model configuration › Main chat rather than on what the conversation ran
+   *  before: the main conversation, a leader and the background supervisor (hub: sendModel). Absent: the main one only. */
+  followsDefault?: boolean;
+  /** The default it follows when that is not Main chat's: the background supervisor's own model purpose (`assistant.supervise`,
+   *  which follows Main chat until it is set apart). Absent: the one `?purpose=assistant` gave. */
+  def?: LauncherDefault | null;
   /** The hub keeps picks (ASSISTANT_MODEL_PICK_FEATURE). */
   kept: boolean;
   /** The assistant's own launcher (AssistantInfo.launcher), for when nothing else says. */
@@ -94,8 +100,8 @@ export function assistantSetup(c: AssistantChat, info: AssistantLaunchers | unde
   if (pick) return { provider: pick.launcher, model: pick.model, effort: pick.effort ?? s?.effort, ...(fast ? { fast: true } : {}), source: "pick" };
   const mismatch = mainChatAgentMismatch(c, info);
   if (s && mismatch) return { provider: mismatch.actualLauncher, model: s.model, effort: s.effort, ...(fast ? { fast: true } : {}), source: "own" };
-  const def = info?.def;
-  if (!s || c.isMain) {
+  const def = c.def === undefined ? info?.def : c.def;
+  if (!s || (c.followsDefault ?? c.isMain)) {
     const provider = def?.provider || c.config || s?.launcher || "claude";
     return { provider, model: def?.model || (s?.launcher === provider ? s.model : undefined), effort: s?.effort ?? (def?.effort || undefined), ...(fast ? { fast: true } : {}), source: "default" };
   }

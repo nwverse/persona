@@ -5,6 +5,7 @@
   "no_release": "ハブと同じバージョンの{os}/{arch}用nodeプログラムがなく、nodeプログラムの取得先にもリリースがありません。同じバージョンの{name}をbin/nodesフォルダーに置くか、hub.jsonでnode_packages.urlを設定してください（docs/operations/docker.md「Node builds」）",
   "package_unreachable": "{os}/{arch}用のnodeプログラムを取得するリリースに接続できませんでした：{err}。ハブのインターネット接続かhub.jsonのnode_packages.proxyを確認するか、プログラムをbin/nodesフォルダーに置いてください（docs/operations/docker.md「Node builds」）",
   "package_bad": "リリースから取得した{os}/{arch}用のnodeプログラムが検証に通らなかったため、使用しませんでした：{err}",
+  "package_moved": "{os}/{arch}用のnodeプログラムのダウンロード中に新しいバージョン{version}が公開されたため、ダウンロードしたものは使用しませんでした。もう一度試すと新しいバージョンから取得します",
   "install_failed": "インストールできませんでした：{err}",
   "minutes_other": "{count}分",
   "seconds_other": "{count}秒",
