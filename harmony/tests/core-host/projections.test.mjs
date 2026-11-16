@@ -32,6 +32,7 @@ const expectedNames = new Map([
     'recommended_spaced', 'recommended_unspaced', 'recommended_chinese_fullwidth', 'recommended_chinese_ascii',
     'recommended_trims_prefix_space', 'recommended_case_sensitive', 'recommended_suffix_only',
     'recommended_trailing_space',
+    'recommended_corefoundation_boundary',
   ]],
   ['stream-chunks/split.json', [
     'cuts_after_blank_line_once_next_block_starts', 'blank_line_at_end_is_not_cut_yet',
@@ -127,8 +128,8 @@ test('ArkTS host replays all answer and display_answer expectations', options, a
         count++;
       }
     }
-    assert.equal(count, 23);
-    console.log('  answer/display_answer host replay: 15 + 8 complete expected objects');
+    assert.equal(count, 24);
+    console.log('  answer/display_answer host replay: 15 + 9 complete expected objects');
   });
 });
 

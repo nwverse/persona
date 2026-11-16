@@ -278,6 +278,7 @@ func TestTaskStateSetInResumedSessionReadsCurrentTurnKey(t *testing.T) {
 	prompt := func(task Task) proto.Item {
 		return proto.Item{Role: "user", Kind: proto.KindText, Text: hubRunPrompt(task.stateRunKey, "")}
 	}
+	node.pageTurns = true // the page starts at the last prompt the node counts, which a scheduled one is not
 	node.setItems(prompt(previous), proto.Item{Role: "assistant", Kind: proto.KindText, Text: "done"}, prompt(task))
 
 	stale, _ := json.Marshal(map[string]string{"run_key": previous.stateRunKey, "text": "stale"})

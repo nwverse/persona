@@ -358,6 +358,7 @@
     <string name="settings_ready_needs_confirm">手動での確認が必要</string>
     <string name="settings_ready_skipped_note">スキップしました。いつでも戻って設定できます</string>
     <string name="settings_ready_open">設定を開く</string>
+    <string name="settings_ready_allow_notifications">許可</string>
     <string name="settings_ready_open_failed">システムの設定を開けません。スマートフォンの設定からPersonaのアプリ情報を開いてください。</string>
     <string name="settings_ready_undo_confirm">確認を取り消し</string>
     <string name="settings_ready_mark_done">完了にする</string>

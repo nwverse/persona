@@ -16,9 +16,10 @@ import { onModelPicker, sessionLauncher } from "../../lib/model-switch";
 import { modelSupportsFast } from "../../lib/launcher-models";
 import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
+import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
 import {
-  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, sessionSwitches, useModelLists, currentModelRow, type PillSetup,
+  agentCatalogScope, assistantCatalogScope, assistantLaunchers, modelList, pendingView, pillView, readAssistantLaunchers, readForPanel, readModels, readSuperviseDefault, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
 import { hubHas, useStore } from "../../lib/store";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
@@ -242,19 +243,9 @@ const AssistantModelPanel = lazyOverlay(() => import("./AssistantModelPanel").th
 
 /** A Persona chat's pill (#5033): the launcher, model and effort its next message runs on (its own pick, the default, or
  *  what it started with: lib/assistant-models.ts), opening the unified panel (scope "assistant"). `session` absent: the
- *  new-conversation page, whose pick goes with the start. Persona chats switch whatever their state: the hub applies a
- *  pick from the next message. */
+ *  new-conversation page, whose pick goes with the start. Every Persona chat has one (#9248) and switches whatever its
+ *  state: the hub applies a pick from the next message. */
 export const AssistantModelPill = memo(function AssistantModelPill({ session }: { session?: Session }) {
-  const main = useStore((s) => s.assistant?.main);
-  // Only the main conversation has a per-conversation model pick (#6911): a leader, the background supervisor or
-  // another assistant conversation shows no pill and follows the default or what it started with. No session is the
-  // new-main-chat page, whose pick goes with the main conversation's start. Mounting the inner pill here, rather than
-  // returning from it below, keeps its hook count constant when the hub names another main conversation (#7070).
-  if (session && main !== session.session_id) return null;
-  return <AssistantModelPillInner session={session} />;
-});
-
-function AssistantModelPillInner({ session }: { session?: Session }) {
   const version = useModelLists();
   const scope = assistantCatalogScope();
   const assistant = useStore((s) => s.assistant);
@@ -262,7 +253,11 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   const startServiceTier = useStore((s) => hubHas(s.features, ASSISTANT_START_SERVICE_TIER_FEATURE));
   const mid = session?.machine_id ?? assistant?.machine_id ?? "";
   const isMain = Boolean(session && assistant?.main === session.session_id);
-  const chat: AssistantChat = { session, isMain, kept, config: assistant?.launcher };
+  // Without a pick, what the next message runs on is a default: Main chat's for the main conversation, a leader and a
+  // scheduled task's own conversation (origin "task"); the supervisor's own model purpose for the background supervisor.
+  const supervisor = Boolean(session && isBackgroundSupervisor(assistant, session.session_id));
+  const followsDefault = isMain || supervisor || Boolean(session && (assistant?.leaders?.includes(session.session_id) || session.origin === "task"));
+  const chat: AssistantChat = { session, isMain, followsDefault, kept, config: assistant?.launcher, ...(supervisor ? { def: superviseDefault(mid) } : {}) };
   const key = assistantPickKey(chat);
   // this page's picks (an older hub, the new-conversation page) draw it again
   const picked = usePickedLauncher(key);
@@ -272,8 +267,10 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   const { info } = assistantLaunchers(mid);
   // the computer's default and what can run a Persona chat: once for the pill, again behind it on each opening
   useEffect(() => {
-    if (mid) void readAssistantLaunchers(mid);
-  }, [mid, scope]);
+    if (!mid) return;
+    void readAssistantLaunchers(mid);
+    if (supervisor) void readSuperviseDefault(mid);
+  }, [mid, scope, supervisor]);
   // A long-open page must still show the effective Main chat model after a hub-side change (#6542): a push that bumps
   // this conversation's revision re-reads the picker, so the pill can't keep an old model the hub no longer resolves.
   const lastRev = useRef<number | undefined>(session?.rev);
@@ -281,7 +278,8 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
     if (!mid || session?.rev === undefined || session.rev === lastRev.current) return;
     lastRev.current = session.rev;
     void readAssistantLaunchers(mid, { again: true });
-  }, [mid, scope, session?.rev]);
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
+  }, [mid, scope, session?.rev, supervisor]);
   // a pick of this page's that the list no longer offers (gone, or it can't run the assistant) goes back to the default,
   // its model and effort with it: on the new-conversation page they would otherwise go with the start
   useEffect(() => {
@@ -314,6 +312,7 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
   useEffect(() => {
     if (!shown) return;
     void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;
       for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
@@ -329,4 +328,4 @@ function AssistantModelPillInner({ session }: { session?: Session }) {
       {shown && anchor && <AssistantModelPanel chat={chat} mid={mid} anchor={anchor} onClose={close} />}
     </>
   );
-}
+});

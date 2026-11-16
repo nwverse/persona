@@ -228,11 +228,11 @@ describe("Agent context usage", () => {
       captured.session = { ...was, agent: "claude", context_tokens: 78000, context_window: 200000 };
       const html = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
       const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
-      expect(header).not.toContain("61%");
+      expect(header).not.toContain("上下文 39%");
       expect(html).toContain('data-composer-usage');
-      expect(html).toContain('aria-valuenow="61"');
+      expect(html).toContain('aria-valuenow="39"');
       expect(html.indexOf('data-testid="composer"')).toBeLessThan(html.indexOf("data-composer-usage"));
-      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="61"'));
+      expect(html.indexOf("data-composer-source")).toBeLessThan(html.indexOf('aria-valuenow="39"'));
       captured.session = { ...was, agent: "claude", context_tokens: undefined, context_window: undefined };
       const unknown = renderToStaticMarkup(<ChatView mid="hub" sid="c1" />);
       expect(unknown).toContain("data-composer-source");

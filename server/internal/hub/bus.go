@@ -502,6 +502,7 @@ func (h *Hub) busEnded(c *busConn) {
 	h.bus.mu.Unlock()
 	// Each of its connections, a replaced one too: a token its manager dropped while this one went could not be told.
 	h.dropLeftManager(c.ident.ID)
+	h.retireRelays(c.ident.ID, c) // its idle relay streams (extensions_relays.go)
 	if current {
 		h.extLost.lost(c.ident.ID, time.Now()) // its extensions may still call for a while (extensions_proof.go)
 		h.logf("bus: [%s] disconnected", c.ident.ID)

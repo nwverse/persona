@@ -1,5 +1,17 @@
 # Bounded Agents list verification
 
+## Paseo workspace pins
+
+```sh
+node web/e2e/paseo-workspace-pins.mjs <loopback-web-origin> <artifact-directory> [Chromium-executable]
+```
+
+Uses the real Agents page and sidebar against an owned local web server, with all hub HTTP and WebSocket requests
+answered by synthetic data. Checks a pinned empty workspace ahead of its main sibling and an unrelated repository,
+refreshes an unpin, and verifies that selection, disclosure and Persona's separate session pin survive. Covers desktop
+and phone widths, light and dark, and standard and large text. No preference or Agent writes are allowed. Screenshots
+and `results.json` are written outside the repository; a 180-second watchdog bounds the run.
+
 ## Direct completion of a decision task
 
 ```sh
@@ -27,7 +39,7 @@ Opens the real app on an Agent's session page against a loopback web server (Vit
 ## Chat content: sent lines, tables, bubble actions, model pill, runtime line, long folds
 
 ```sh
-MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+MOCK_TASKS=1 MOCK_MARKDOWN=1 MOCK_EXCHANGES=1 MOCK_MANAGERS=1 MOCK_RICH=1 MOCK_TASKS_SENT=1 MOCK_TABLE_CHIPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
 (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
 node web/e2e/chat-content.mjs <loopback-web-origin> <artifact-directory> [--big] [Chromium executable]
 ```
@@ -40,11 +52,88 @@ the browser, whose place and harness Settings › Assistant shows instead (item 
 a 600 px composer and a phone keeps the 64 px tile and chevron (item 50); in a 390 px window with a pointer, Tab reaches
 your bubble's first action inside the window, the bar under the bubble stays while the pointer goes down to it and takes
 no clicks once hidden, and in a 1440 px window the bar stays beside the bubble (item 73); on a 390 px phone a "#" column is at most 40 px and the table copy button
-covers no header words of a table that fits (item 77). `--big` runs against the mock started with `MOCK_BIG=1` instead
+covers no header words of a table that fits (item 77); in a 1440 px window a table with a sentence in its second column
+takes the room it needs up to the column, wider than the old 18em cell cap, each long cell on at most two lines, and at
+both widths no short code chip in a cell is broken across lines (#9146). `--big` runs against the mock started with `MOCK_BIG=1` instead
 (item 90): opening the "worked 1 h 10 min" fold, no animation frame draws more than 60 rows at once, all 650 rows are
 drawn after it with the header where it was tapped, and a search for `make step-600` lands on that row inside the closed
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
+
+## Start page (#9071)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off as well
+node web/e2e/start-page.mjs <loopback-web-origin> <artifact-directory> --old-hub [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English. It checks that a fresh hub opens on the main chat, that
+Settings › General › Start page lists the main chat first and selected, then Overview and the made-up extension's Today;
+that choosing Today saves it to the hub (`PUT /api/v1/navigation`) and a new tab opens on Today while the Persona row and a
+reload stay on the main chat; that a second browser (another device) opens on the main chat the first time, reads the
+choice at its hello and opens on Today from its next opening; and that a Today the hub's extension list leaves out opens
+from the browser's copy and then gives way to the main chat, the choice kept and the setting saying why. `--old-hub`
+checks that a hub answering 404 leaves the choice in the browser and the setting says so. Light and dark screenshots of
+the setting and of the app opened on Today (Today moved first with Sidebar pages' ↑, as that setting already allows) at
+1440 × 900 and 390 × 844, and `results.json`, go to the artifact directory. The run sets the mock's start page and puts it
+back to the default; a 240-second watchdog ends it, and the last line is the verdict.
+
+## An extension's dashboard page: UI version 8's columns layout (#9158)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-columns.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+extension's "Today" page and checks what jsdom cannot lay out: at 1440 × 900 the five cards are in reading order in two columns,
+the "Needs me" card spans the row with its four rows two a line, Calendar | Lark today and WeChat | Running Agents sit side by side,
+each pair as tall as its taller card (the shorter list's card is stretched, not as tall by chance), a card's head has its icon and
+its link, the "Calendar ›" link pushes the card's page and Back comes back to the grid; at 390 × 844 there is one column, every card
+the grid's width one under another, and the "Needs me" rows one a line; with Settings › Appearance's Large text, the same columns
+at both widths and no card's content wider than the card. Only the mock's own requests leave the browser. Screenshots
+(the window, and the whole page at the same width) and `results.json` go to the artifact directory; a 180-second watchdog ends the
+run, and the last line is the verdict.
+
+## Extension pages on reload: the last places and view at first paint (#9283)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-first-paint.mjs <loopback-web-origin> <artifact directory> [--shots-only] [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in English, light and dark, 1440 × 900. Every request the hub would
+relay to the manager (`/api/v1/extensions…`) is held for a second in the browser, as a far hub takes. The made-up "Today"
+page is loaded three times in one profile. The first load has kept nothing: its sidebar entry and header title come only
+after the first relayed answer. The second draws the sidebar's entry, the header's title and icon and the page's last view
+(marked as updating, inert) before the first relayed answer, and the extension's drawing then replaces it. The third's first
+paint is photographed while every relayed request is still held (`first-paint-after-<theme>.png`). `--shots-only` takes only
+that photograph (`first-paint-before-<theme>.png`), for a build without the cache. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line
+is the verdict.
+
+## An extension's quota card: UI version 9's gauge (#9337)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_GAUGE=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/extension-gauge.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server (Vite or `vite preview`), in English, light and dark. It opens a made-up
+gateway's "Quota" page and checks what jsdom cannot lay out: the three rings in order, each read out as "title: value unit, N%"
+(a meter, or a button for the one with an action), its arc filled to the ratio in the named color the browser resolves, its value
+centred in the ring and not cut, its title below, the ring inside its tile, and the reset times under the rings; at 1440 × 900 the
+four status tiles in one row above three rings side by side of one width, and pressing the low ring answers its toast; at 390 × 844
+two rings a line; with Settings › Appearance's Large text the values still whole and centred at both widths; with Reduce Motion the
+arc does not ease. It waits for the page's finite animations to end, never for a fixed time. Only the mock's own requests leave the
+browser. Screenshots and `results.json` go to the artifact directory; a 180-second watchdog ends the run, and the last line is the
+verdict.
 
 ## User-input navigation acceptance
 

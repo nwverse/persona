@@ -1,3 +1,4 @@
+import { IconActions } from '../design/IconActions';
 import { ColorMetrics, LengthMetrics } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
 import { CapsuleSegmentButtonV2, SegmentButtonV2Items } from '@kit.ArkUI';
@@ -7,14 +8,21 @@ import { ResourceRow, Wire } from '../models/Wire';
 import { BoundRow, reconcileBoundRows } from '../models/RowBinding';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
-import { ButtonStyles } from '../design/Controls';
+import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Symbols } from '../design/Symbols';
 import { tr } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
 
-const QUICK_FILTERS: string[] = ['all', 'needs_you', 'working', 'unread'];
+const QUICK_FILTERS: string[] = ['all', 'needsYou', 'working', 'unread', 'backgroundWaiting'];
+const QUICK_LABELS: string[] = ['all', 'needs_you', 'working', 'unread', 'agent_group_background'];
+const GROUPINGS: string[] = ['state', 'machine', 'space'];
+const GROUP_LABELS: Record<string, string> = {'state': 'agent_group_state', 'machine': 'agent_filter_machine', 'space': 'agent_group_space'};
+const STATE_LABELS: Record<string, string> = {'pinned': 'agent_group_pinned', 'state/needs': 'needs_you',
+  'state/unread': 'agent_group_unread', 'state/awaiting': 'agent_group_awaiting', 'state/working': 'working',
+  'state/background': 'agent_group_background', 'state/waiting': 'agent_group_waiting', 'state/muted': 'agent_group_muted',
+  'state/idle': 'agent_group_idle'};
 
 @ObservedV2
 class AgentRowPresentation {
@@ -72,9 +80,9 @@ export struct AgentListPage {
   @Event onVisible: (row: ResourceRow, ratio: number) => void = () => {};
   @Param workspace: AgentWorkspace = new AgentWorkspace();
   @Local look: DeviceLook = deviceLook;
-  @Local flatRowBindings: BoundAgentRow[] = [];
   @Local groupBindings: BoundAgentGroup[] = [];
   @Local mixedMachines: boolean = false;
+  @Local filterWidth: number = 0;
   private rowBindingOwner: Object | undefined;
   private rowBindingScope: string = '';
   private groupBindingSequence: number = 0;
@@ -134,10 +142,6 @@ export struct AgentListPage {
     this.mixedMachines = new Set(this.workspace.visibleRows().map((row: ResourceRow) => JSON.stringify([row.group, row.manager, row.machine]))).size > 1;
     const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
     const sameOwnerScope = this.rowBindingOwner === this.model && this.rowBindingScope === scope;
-    const flatRows = reconcileBoundRows(this.flatRowBindings.map((binding: BoundAgentRow) => binding.bound), this.workspace.visibleRows(),
-      (row: ResourceRow) => row.key(), this.rowBindingOwner, this.model, this.rowBindingScope, scope);
-    const flatMode = this.workspace.groupingMode === 'flat';
-    this.flatRowBindings = this.bindAgentRows(sameOwnerScope ? this.flatRowBindings : [], flatRows, flatMode);
     const previous = sameOwnerScope ? this.groupBindings : [];
     const available = new Map<string, BoundAgentGroup[]>();
     previous.forEach((binding: BoundAgentGroup) => {
@@ -157,12 +161,12 @@ export struct AgentListPage {
         binding = existing; binding.value = group;
         const groupRows = reconcileBoundRows(binding.rows.map((rowBinding: BoundAgentRow) => rowBinding.bound), group.rows,
           (row: ResourceRow) => row.key(), this.model, this.model, scope, scope);
-        binding.rows = this.bindAgentRows(binding.rows, groupRows, !flatMode);
+        binding.rows = this.bindAgentRows(binding.rows, groupRows, true);
       } else {
         this.groupBindingSequence++;
         binding = new BoundAgentGroup(identity, 'agent-group-binding.' + String(this.groupBindingSequence), group);
         const groupRows = reconcileBoundRows([], group.rows, (row: ResourceRow) => row.key(), undefined, this.model, '', scope);
-        binding.rows = this.bindAgentRows([], groupRows, !flatMode);
+        binding.rows = this.bindAgentRows([], groupRows, true);
       }
       next.push(binding);
     });
@@ -247,12 +251,12 @@ export struct AgentListPage {
   }
 
   private groupingIndex(): number {
-    const index = ['flat', 'machine', 'repository', 'worktree'].indexOf(this.workspace.groupingMode);
+    const index = GROUPINGS.indexOf(this.workspace.groupingMode);
     return index < 0 ? 0 : index;
   }
 
   private selectGrouping(index: number): void {
-    this.workspace.setGroupingMode(['flat', 'machine', 'repository', 'worktree'][index] || 'flat');
+    this.workspace.setGroupingMode(GROUPINGS[index] || 'state');
   }
 
   private openRow(row: ResourceRow): void {
@@ -324,14 +328,36 @@ export struct AgentListPage {
 
   @Builder groupHeader(binding: BoundAgentGroup) {
     Column({ space: Tokens.fine }) {
-      if (binding.value.showMachine) Text(binding.value.machineName || binding.value.machineId).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
-        .fontColor(Colors.secondary).width('100%')
-      if (binding.value.showRepository) Text(binding.value.repositoryName || tr('agent_filter_repository')).fontSize(Tokens.meta)
-        .fontColor(Colors.secondary).width('100%')
-      if (binding.value.showWorktree) Text(binding.value.branch || binding.value.worktreeName || tr('agent_filter_worktree')).fontSize(Tokens.meta)
-        .fontWeight(FontWeight.Medium).fontColor(Colors.secondary).width('100%')
+      if (binding.value.parent === 'quiet') {
+        Text(tr('agent_group_quiet_spaces')).fontSize(Tokens.body).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      }
+      Row({ space: Tokens.gap }) {
+        Column({ space: Tokens.fine }) {
+          Text(tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName).fontSize(Tokens.meta).fontWeight(FontWeight.Medium)
+            .fontColor(Colors.secondary).maxLines(2)
+          Text(this.groupCounts(binding.value)).fontSize(Tokens.caption).fontColor(Colors.secondary)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(binding.value.folded ? Symbols.down : Symbols.up).fontSize(Tokens.symbolFont).fontColor([Colors.link])
+        }.attributeModifier(ButtonStyles.icon)
+          .accessibilityText((tr(STATE_LABELS[binding.value.id] || '') || binding.value.machineName) + ' ' +
+            tr(binding.value.folded ? 'agent_expand' : 'agent_collapse'))
+          .onClick(() => this.workspace.toggleFold(binding.value.id)).id('agents.group.toggle.' + binding.value.id)
+      }.width('100%').alignItems(VerticalAlign.Center)
     }.alignItems(HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine }).width('100%')
+  }
+
+  private groupCounts(group: AgentWorkspaceGroup): string {
+    const values: string[] = [];
+    const labels: Record<string, string> = {'needs_you': 'needs_you', 'working': 'working', 'unread': 'agent_group_unread',
+      'idle': 'agent_group_idle', 'unknown': 'unknown'};
+    ['needs_you', 'working', 'unread', 'idle', 'unknown'].forEach((key) => {
+      const count = Wire.number(group.stateCounts, key);
+      if (count) values.push(String(count) + ' ' + tr(labels[key]));
+    });
+    if (group.totalRowCount > group.rows.length) values.push(String(group.totalRowCount - group.rows.length) + ' ' + tr('agent_group_more_idle'));
+    return values.join(' · ');
   }
 
   private rowStatus(presentation: AgentRowPresentation): string {
@@ -357,28 +383,31 @@ export struct AgentListPage {
   }
 
   @Builder filterSheet() {
-    Column({ space: Tokens.section }) {
-      Column({ space: Tokens.fine }) {
-        Text(tr('agent_filter_machine')).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
+    Column() {
+      Row({ space: Tokens.page }) {
+        Text(tr('agent_filter_machine')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
         Select(this.machineSelectOptions()).selected(this.machineIndex()).value(this.machineLabel())
-          .constraintSize({ minHeight: Tokens.touch }).onSelect((index: number) => this.selectMachine(index)).id('agents.machine_filter')
-      }.alignItems(HorizontalAlign.Start).width('100%')
+          .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
+          .onSelect((index: number) => this.selectMachine(index)).id('agents.machine_filter')
+      }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
+      Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
       if (this.workspace.historySupported()) {
-        Row({ space: Tokens.gap }) {
+        Row({ space: Tokens.page }) {
           Text(tr('agent_history')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
           Toggle({ type: ToggleType.Switch, isOn: this.workspace.history })
             .onChange((value: boolean) => this.workspace.setHistory(value))
             .accessibilityText(tr('agent_history')).id('agents.history')
-        }.width('100%').alignItems(VerticalAlign.Center).constraintSize({ minHeight: Tokens.touch })
+        }.width('100%').alignItems(VerticalAlign.Center).constraintSize({ minHeight: Tokens.header })
+        Divider().strokeWidth(Tokens.hairline).color(Colors.divider)
       }
-      Column({ space: Tokens.fine }) {
-        Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).width('100%')
-        Select([{ value: tr('agent_group_flat') }, { value: tr('agent_filter_machine') },
-          { value: tr('agent_filter_repository') }, { value: tr('agent_filter_worktree') }])
-          .selected(this.groupingIndex()).value(tr(['agent_group_flat', 'agent_filter_machine', 'agent_filter_repository', 'agent_filter_worktree'][this.groupingIndex()]))
-          .constraintSize({ minHeight: Tokens.touch }).onSelect((index: number) => this.selectGrouping(index)).id('agents.grouping')
-      }.alignItems(HorizontalAlign.Start).width('100%')
-    }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset + this.filterInset }).width('100%')
+      Row({ space: Tokens.page }) {
+        Text(tr('grouping')).fontSize(Tokens.body).fontColor(Colors.ink).layoutWeight(1)
+        Select(GROUPINGS.map((key) => ({ value: tr(GROUP_LABELS[key]) } as SelectOption)))
+          .selected(this.groupingIndex()).value(tr(GROUP_LABELS[GROUPINGS[this.groupingIndex()]]))
+          .attributeModifier(SelectStyles.inline).constraintSize({ minHeight: Tokens.touch, maxWidth: '68%' })
+          .onSelect((index: number) => this.selectGrouping(index)).id('agents.grouping')
+      }.width('100%').constraintSize({ minHeight: Tokens.header }).alignItems(VerticalAlign.Center)
+    }.alignItems(HorizontalAlign.Start).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.page + this.filterInset }).width('100%')
       .id(this.filterNodeId).onAreaChange(() => this.measureFilters())
   }
 
@@ -426,31 +455,50 @@ export struct AgentListPage {
       .onChange((value: string) => this.workspace.setSearch(value)).id('agents.search')
   }
   @Builder filterControl() {
-    Button(tr('agent_filter_button')).attributeModifier(ButtonStyles.quiet).accessibilityText(tr('agent_filter_button'))
+    Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.filter).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }.attributeModifier(ButtonStyles.chrome).accessibilityText(tr('agent_filter_button'))
       .onClick(() => this.filterSheetOpen = true).id('agents.filter')
   }
+  private quickFilterUsesSelect(): boolean {
+    if (this.environment.fontScale >= 1.5 || this.filterWidth <= 0) return true;
+    const context = this.getUIContext();
+    let labelWidth = 0;
+    QUICK_LABELS.forEach((key: string) => {
+      labelWidth = Math.max(labelWidth, context.px2vp(context.getMeasureUtils().measureText({
+        textContent: tr(key), fontSize: String(Tokens.meta) + 'fp', fontWeight: FontWeight.Medium
+      })));
+    });
+    const slotWidth = Math.max(Tokens.touch, labelWidth + Tokens.inset * 2);
+    return this.filterWidth - Tokens.page * 2 - Tokens.fine * 2 < slotWidth * QUICK_FILTERS.length;
+  }
+
   @Builder filters() {
     if (!this.rail) Column({ space: Tokens.gap }) {
       if (this.environment.fontScale >= 1.5) {
         this.searchControl()
         this.filterControl()
-        Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') }])
-          .selected(this.quickIndex()).value(tr(QUICK_FILTERS[this.quickIndex()])).font({ size: Tokens.body })
-          .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
       } else {
         Row({ space: Tokens.gap }) {
           Row() { this.searchControl() }.layoutWeight(1)
           this.filterControl()
         }.width('100%')
+      }
+      if (this.quickFilterUsesSelect()) {
+        Select([{ value: tr('all') }, { value: tr('needs_you') }, { value: tr('working') }, { value: tr('unread') },
+          { value: tr('agent_group_background') }])
+          .selected(this.quickIndex()).value(tr(QUICK_LABELS[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
+          .onSelect((index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index])).id('agents.quick')
+      } else {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items([
-          { text: tr('all') }, { text: tr('needs_you') }, { text: tr('working') }, { text: tr('unread') }
+          { text: tr('all') }, { text: tr('needs_you') }, { text: tr('working') }, { text: tr('unread') }, { text: tr('agent_group_background') }
         ]), selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.workspace.setQuickFilter(QUICK_FILTERS[index]),
           itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
           itemFontColor: ColorMetrics.resourceColor(Colors.secondary), buttonBackgroundColor: ColorMetrics.resourceColor(Colors.control),
           itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta),
-          itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
+          itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), itemPadding: { start: LengthMetrics.vp(Tokens.inset), end: LengthMetrics.vp(Tokens.inset) },
+          buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
       }
     }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap }).width('100%')
+      .onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.filterWidth = width; })
   }
 
   @Builder renameForm() {
@@ -460,10 +508,9 @@ export struct AgentListPage {
       TextInput({ text: this.renameTab, placeholder: tr('agent_tab_name') }).onChange((value: string) => this.renameTab = value)
         .id('agents.rename_tab')
       Row({ space: Tokens.gap }) {
-        Button(tr('cancel')).attributeModifier(ButtonStyles.quiet).layoutWeight(1).onClick(() => this.editorOpen = false)
-        Button(tr('save')).attributeModifier(ButtonStyles.primary).layoutWeight(1).enabled(!this.workspace.busy)
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('save')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('save', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('save')).bindTips(tr('save')).enabled(!this.workspace.busy)
           .onClick(() => this.saveRename()).id('agents.rename_save')
-      }.width('100%')
+      }.width('100%').justifyContent(FlexAlign.End)
       if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta)
         .fontColor($r('app.color.persona_danger')).width('100%')
     }.padding(Tokens.page).width('100%')
@@ -478,17 +525,21 @@ export struct AgentListPage {
       Refresh({ refreshing: $$this.refreshing }) {
       List() {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
-        if (this.workspace.groupingMode === 'flat') {
-          ForEach(this.flatRowBindings, (binding: BoundAgentRow) => this.agentRow(binding), (binding: BoundAgentRow) =>
-            binding.key)
-        } else {
-          ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
+        ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
               ForEach(binding.rows, (rowBinding: BoundAgentRow) => this.agentRow(rowBinding), (rowBinding: BoundAgentRow) =>
                 rowBinding.key)
             }.id('agents.group.' + binding.value.id)
+            if (binding.value.totalRowCount > binding.value.rows.length && !binding.value.folded) ListItem() {
+              Button() {
+                Row({ space: Tokens.gap }) {
+                  Text(String(binding.value.totalRowCount - binding.value.rows.length) + ' ' + tr('agent_group_more_idle')).fontSize(Tokens.meta).fontColor(Colors.link).layoutWeight(1)
+                  SymbolGlyph(Symbols.down).fontSize(Tokens.symbolFont).fontColor([Colors.link])
+                }.width('100%').padding(Tokens.page).constraintSize({ minHeight: Tokens.touch })
+              }.type(ButtonType.Normal).buttonStyle(ButtonStyleMode.TEXTUAL).backgroundColor(Color.Transparent).width('100%')
+                .onClick(() => this.workspace.toggleIdleRows(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
+            }
           }, (binding: BoundAgentGroup) => binding.key)
-        }
         if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {
           Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).padding(Tokens.page).width('100%')
         }.id('agents.empty')

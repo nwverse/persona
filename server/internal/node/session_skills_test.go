@@ -79,7 +79,7 @@ func TestOrdinaryClaudeSkillsCatalogAndSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	writes := o.Writes()
-	if len(writes) == 0 || !strings.Contains(writes[0].Text, "Instruction file:") || !strings.Contains(writes[0].Text, file) || !strings.Contains(writes[0].Text, catalog.Skills[0].ID) || strings.Contains(writes[0].Text, "never-run") {
+	if len(writes) == 0 || !strings.Contains(writes[0].Text, "Instruction file:") || !strings.Contains(writes[0].Text, resolved(t, file)) || !strings.Contains(writes[0].Text, catalog.Skills[0].ID) || strings.Contains(writes[0].Text, "never-run") {
 		t.Fatalf("missing exact-file intent: %+v", writes)
 	}
 	if err := os.Remove(file); err != nil {
