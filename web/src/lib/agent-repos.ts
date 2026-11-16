@@ -1,7 +1,7 @@
 import { byAttention, stateOf } from "./format";
 import { summaryState, type ChildStates } from "./herdr-tree";
 import type { Machine, Session } from "./types";
-import { workspaceKey, workspacePinTime, workspaceTarget, type HostWorkspace, type WorkspaceTarget } from "./workspace-catalog";
+import { byWorkspacePin, workspaceKey, workspacePinTime, workspaceTarget, type HostWorkspace, type WorkspaceTarget } from "./workspace-catalog";
 import { sessionHost } from "./agent-groups";
 
 /** Where a session's cwd sits: the repository it belongs to and the working tree inside it. */
@@ -444,8 +444,7 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
   }
   // Keep a pin inside its real ancestry, but lift that branch and repository ahead of ordinary ones. Only visible
   // descendants contribute: a pin hidden by the current search or filter cannot reorder the remaining tree.
-  const pinTime = (w: RepoWorktree) => w.latestPinTime ?? -Infinity;
-  const order = (a: RepoWorktree, b: RepoWorktree) => pinTime(b) - pinTime(a)
+  const order = (a: RepoWorktree, b: RepoWorktree) => byWorkspacePin(a, b)
     || Number(b.main) - Number(a.main) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
   const query = options.search?.trim().toLocaleLowerCase();
   const fill = (node: RepoWorktree): boolean => {
@@ -458,7 +457,7 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
       node.directSessions = node.directSessions!.filter((s) => `${s.title} ${s.cwd} ${s.branch ?? ""}`.toLocaleLowerCase().includes(query!));
     }
     node.children = node.children.filter(fill).sort(order);
-    const pinned = Math.max(workspacePinTime(w) ?? -Infinity, ...node.children.map(pinTime));
+    const pinned = Math.max(workspacePinTime(w) ?? -Infinity, node.children[0]?.latestPinTime ?? -Infinity);
     if (Number.isFinite(pinned)) node.latestPinTime = pinned;
     node.tree = [...node.sessions, ...node.children.flatMap((c) => c.tree)];
     node.navigationTree = [...node.directSessions!, ...node.children.flatMap((c) => c.navigationTree ?? [])];
@@ -478,18 +477,19 @@ function catalogRepos(sessions: Session[], machineId: string, options: RepoCatal
     let repo = repos.get(key);
     if (!repo) {
       repo = { key, machineId, name: w.project_name || baseName(w.project_path || "") || root.name, repo: w.project_path || `${w.source}:${project}`, count: 0, worktrees: [] };
+      // Roots are already ordered by pin, so the first member holds this repository's newest one.
+      if (root.latestPinTime !== undefined) repo.latestPinTime = root.latestPinTime;
       repos.set(key, repo);
     }
     repo.worktrees.push(root);
     repo.count += root.tree.length;
-    if (root.latestPinTime !== undefined) repo.latestPinTime = Math.max(repo.latestPinTime ?? -Infinity, root.latestPinTime);
   }
   const unmatched = query ? loose.filter((s) => `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)) : loose;
   const groupedNavigation = new Set([...nodes.values()].flatMap((node) => node.directSessions!));
   const navigation = options.navigationSessions?.filter((s) => !groupedNavigation.has(s)
     && (!query || `${s.title} ${s.cwd}`.toLocaleLowerCase().includes(query)));
   return [...repos.values(), ...legacyNavigationRepos(unmatched, machineId, { ...options, navigationSessions: navigation })]
-    .sort((a, b) => (b.latestPinTime ?? -Infinity) - (a.latestPinTime ?? -Infinity) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+    .sort((a, b) => byWorkspacePin(a, b) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 
 export function buildRepoMachineTree(all: Session[], machines: Machine[], options?: RepoCatalogOptions): RepoMachine[] {

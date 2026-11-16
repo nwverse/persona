@@ -18,9 +18,13 @@ export interface HostWorkspace {
 
 /** A valid host pin's time; an old hub or an unpinned workspace has no timestamp. */
 export function workspacePinTime(workspace?: Pick<HostWorkspace, "pinned_at">): number | undefined {
-  const time = typeof workspace?.pinned_at === "string" ? Date.parse(workspace.pinned_at) : NaN;
+  const time = Date.parse(workspace?.pinned_at ?? "");
   return Number.isFinite(time) ? time : undefined;
 }
+
+/** A workspace branch or repository follows its newest visible host pin before its ordinary sort order. */
+export const byWorkspacePin = (a: { latestPinTime?: number }, b: { latestPinTime?: number }) =>
+  (b.latestPinTime ?? -Infinity) - (a.latestPinTime ?? -Infinity);
 /** Discovered targets always carry their credential/manager partition and human label. */
 export interface WorkspaceTarget extends RuntimeWorkspaceTarget {
   owner: string;
