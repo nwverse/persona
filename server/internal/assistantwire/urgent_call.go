@@ -5,6 +5,11 @@ package assistantwire
 // every phone registered for calls, and answers once APNs or the relay took or refused each one.
 const MethodCallRing = "call.ring"
 
+// EventToolsChanged is assistant.tools_changed (one way, a manager → the hub): its MCP tools changed (urgent_call comes
+// and goes with the owner's switch), so the hub asks for them again. Conversations started after that list the new
+// ones.
+const EventToolsChanged = "assistant.tools_changed"
+
 // CallRing is one ring of an urgent call. The phone gets it sealed and names the call from it.
 type CallRing struct {
 	ID             string `json:"id"`              // the call's id: the phone asks the manager for the matter by it
@@ -34,3 +39,17 @@ const (
 	CallNoPhone = "no_phone"
 	CallRefused = "refused"
 )
+
+// urgentCallRoutes are the urgent calls' routes (docs/assistant/urgent-call.md): the settings, a test call, and a
+// call as the phone reads and reports it. The manager keeps them; the hub relays them like Routes. The apps learn where
+// a call is from the urgent_call message (ws.broadcast).
+var urgentCallRoutes = []string{
+	"GET /api/v1/assistant/urgent-call",
+	"PUT /api/v1/assistant/urgent-call",
+	"POST /api/v1/assistant/urgent-call/test",
+	"GET /api/v1/assistant/calls",
+	"GET /api/v1/assistant/calls/{id}",
+	"POST /api/v1/assistant/calls/{id}/state",
+}
+
+func init() { Routes = append(Routes, urgentCallRoutes...) }

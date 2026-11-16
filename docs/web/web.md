@@ -1201,6 +1201,10 @@ In a Persona conversation, **⋯ › Session info › Always allowed in this con
 
 Permission cards state the actual scope before approval: Claude Bash covers every command in this conversation; directory-scoped Read/Edit keys cover that directory. Unscoped file tools say every call to the tool. Other runtimes keep their own scope description; unknown key formats get a neutral scope statement. These strings ship in English, Simplified Chinese and Japanese.
 
+A server card with `editable_text` also offers **Edit text** and **Deny with note…**, both collapsed initially. Allow remains the primary action and the initial body stays read-only. Only an actual change sends `edited_text`; an unchanged Allow and cards without the field use the ordinary resolution, and Always disappears once the text differs. Blank replacement text disables Allow. A non-empty denial note is trimmed and sent as the ordinary denial `message`. Drafts reset for a new interaction and survive a failed submission. This round is web-only: iOS and Android retain ordinary Allow/Deny, while Codex/runtime and ineligible Lark cards never show the editor. `MOCK_EDITABLE=1` supplies the synthetic editable Lark fixture.
+
+An edited send in **Records sent as you** carries an **Edited** pill. Its detail shows **Original text** (`let_through.edited_from`) and **Sent text** (the row's actual `text`) separately, each with its own copy action; rows without an edit are unchanged.
+
 For browser checks, run the mock hub with `MOCK_ALWAYS_SCOPE=1`. It adds a Bash permission card and two saved grants to the main conversation, with a working per-row DELETE endpoint. Native permission-management screens remain follow-up work.
 
 ### Main conversation on browser reload (#5025)
