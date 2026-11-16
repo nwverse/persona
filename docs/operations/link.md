@@ -96,6 +96,46 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 
 **On the hub side**: active-mode computers are kind `link` in hub.json; passive-mode ones are kind `service` (the hub side implemented in #435; paste the link in admin **Computers › Add Computer › Hub connects**).
 
+## Claude Code plugin
+
+The Persona plugin for Claude Code (`integrations/claude-code-plugin`) lets the owner's own messages reach a Claude Code session Persona has no terminal for, such as a Code session in Claude's desktop app, the way typed input does. The resident node carries the plugin of its own build and keeps it installed; Persona Link shows it and switches it. Implementation: `server/internal/claudeplugin`, wired into the node in `server/internal/node/claudeplugin.go`.
+
+**Where it comes from.** The plugin's files are packed into personad and persona-node at build time (`go generate ./internal/runtimepkg`, which `scripts/deploy/deploy.sh`, `scripts/release/publish.sh`, the `Dockerfile` and `scripts/app/mac-link.sh` run; `runtimepkg.Assets`), so the installed plugin is always the node's own version. A node built without that step (a plain `go build`) reports `unavailable`. Updating the node, by Redeploy ([node-update.md](node-update.md)) or a new Link install, brings a new plugin, which the node puts in place at its next check.
+
+**How it is installed.** Only with Claude Code's own CLI, never by editing Claude Code's files, and every command names this plugin or its marketplace alone:
+
+```sh
+claude plugin marketplace add ~/.persona/claude-code-plugin      # the folder is the plugin's own marketplace, "persona"
+claude plugin install persona@persona --scope user                # an update: claude plugin update persona@persona --scope user
+```
+
+The node writes the plugin to `~/.persona/claude-code-plugin` (under `PERSONA_HOME` when that is set): a stable folder that Link and node updates keep. A plugin from a folder marketplace is read from that folder, so an update is new files there plus `claude plugin update`. The commands run with `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1`, in the data directory (never a project), and with `--json`; their results, not their wording, are read.
+
+**Which Claude Code.** The newest of the CLI the node finds (`PATH`, `~/.local/bin` and the other places it looks for `claude`) and the desktop app's own copy (`<app data>/Claude*/claude-code/<version>/…`). Without either, or without a config directory, nothing is installed: the state is `claude_missing`.
+
+**Which config directories.** The user's `~/.claude`, which the desktop app's Code sessions use whatever the environment says, and the directory the node's own `CLAUDE_CONFIG_DIR` names when that is another one outside the data directory. Commands for `~/.claude` run with `CLAUDE_CONFIG_DIR` unset, never set to `~/.claude` ([lessons/agents.md](../lessons/agents.md) "Claude Code plugins from a folder marketplace"). Persona's own profiles and the throwaway directories other claudes were seen with are left alone, and a directory that does not exist yet is never created.
+
+**When.** The resident node checks about 20 seconds after it starts, then every hour; a check that failed is tried again after 1, 5 and 15 minutes, then hourly. A check runs `claude --version` and `claude plugin list --json` for each directory (a few seconds) and installs or updates only when something differs. Checks never overlap: the node and the commands below take `~/.persona/claude-plugin.lock`.
+
+**Your choices win.**
+
+- The automatic install is on by default on macOS and Windows, where the desktop app runs, and off on Linux until `persona-link plugin on`. The choice is the computer's, kept in `~/.persona/claude-plugin.json` (`"auto": false` turns it off).
+- A plugin turned off in Claude Code (`claude plugin disable`, or **+ › Plugins** in the desktop app) stays off and is not updated; the state is `disabled`. Turned on again there, it is kept up to date again.
+- A plugin removed in Claude Code after the node installed it is not put back (`opted_out: uninstalled`). `persona-link plugin install`, `persona-link plugin on` or the desktop toggle undo either choice.
+
+**Running sessions.** Claude Code loads plugins when a session starts. After an install or update, new sessions (terminal and desktop app alike) have it, and sessions already open keep what they loaded until they restart or run `/reload-plugins`. Nothing is restarted for it; `changed: true` in the status says a check installed or updated it.
+
+| Command | What it does |
+| --- | --- |
+| `persona-link plugin status [--json]` | Checks now and says how it stands in each config directory |
+| `persona-link plugin install` | Installs or updates it now, turns it back on where it was turned off in Claude Code, forgets earlier opt-outs and turns the automatic install on |
+| `persona-link plugin uninstall` | Removes it and its marketplace from every config directory, deletes `~/.persona/claude-code-plugin` and turns the automatic install off |
+| `persona-link plugin on` / `off` | Turns only the automatic install on (and checks now) or off (what is installed stays, without updates) |
+
+`persona-link plugin` runs the resident node's program (`personad claude-plugin <op>` or `persona-node claude-plugin <op>`, which print the status as JSON) and needs a node on the computer; a node from before this says to update it. `persona-link status` shows the last check without running anything (`claude-plugin.status.json`). The Electron setup window's **Run Agents on this computer** section shows the state and a **Keep the Persona plugin for Claude Code installed** toggle, which calls `plugin install` / `plugin uninstall`; it receives the state words only, never paths. `persona-link uninstall --purge` removes the connector, not the node or its plugin: run `persona-link plugin uninstall` first to take the plugin out of Claude Code too.
+
+**Status to the hub.** `node.info` carries `claude_plugin` and the node sends a `claude.plugin` notification when it changes ([protocol.md](../protocol/protocol.md) "Node handshake"); the manager puts it on the machine as `claude_plugin` (`proto.ClaudePlugin`): `state` (`installed`, `outdated`, `disabled`, `not_installed`, `error`, `claude_missing`, `unavailable`), `auto`, `version`, `bundled`, `claude_version`, `config_dirs` (`path`, `state`, `version`, `opted_out`, `error`), `changed`, `error`, `checked_at`, `next_check`. The hub forwards it; no client shows it yet, and there is no per-machine switch in the apps.
+
 ## Responsibilities
 
 - **persona-link** (`server/cmd/persona-link`, also reachable as `server/cmd/persona-link`; `server/internal/link`): a separate small program doing only these things:

@@ -3451,6 +3451,10 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
 - `home_real` in `node.info` (#8095): `home` with its links followed, sent only when that is another path (a home reached through a
   symlink). The hub hands it to the assistant with the machine (`devices.list`'s `home_real`), which compares a remembered kind's directory
   with a task's in either spelling (`docs/assistant/unified-entry.md`). Old nodes, and homes that are no link, leave it out.
+- `claude_plugin` in `node.info`: the Persona plugin for Claude Code on that computer as its resident node last checked it (`proto.ClaudePlugin`:
+  `state`, `auto`, `version`, `bundled`, `claude_version`, `config_dirs`, `changed`, `error`, `checked_at`, `next_check`); the node also sends it as a
+  `claude.plugin` notification whenever it changes, and the manager puts it on the machine as `claude_plugin`. Old nodes, and nodes that have not
+  checked, send neither ([link.md](../operations/link.md) "Claude Code plugin").
 - `herdr_running` / `herdr_running_known` in `node.info`: whether the classic herdr server answers right now, and whether the node can tell (a machine using herdr-core
   has no such socket and sends neither). Old nodes send neither; the hub uses this to tell "not running" from "unknown" (`docs/integrations/engines.md`).
 - `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage", "iphone"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`; iphone, #3450, answers only `plugin.node.call`: `status`, `call`, `pair`, `forget`, `cancel`; `call` takes `IPhoneCall {device?, session?, op: status|look|do, args?, approved?, confirm?, self_apps?, self_names?, timeout_ms?}` and answers `IPhoneResult {output?, text?, image?, needs_approval?, approval_summary?, approval_id?}`, `approval_summary` being the core's approval as an object (`proto.IPhoneApproval`); a failed call is an RPC error with `data: {"sent": "no" | "unknown"}`; see `docs/extensions/iphone-pairing.md` ("The node program `iphone` (#3450)")). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;

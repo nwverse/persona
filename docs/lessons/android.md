@@ -845,3 +845,7 @@ An HTTP success may still carry per-machine discovery errors alongside useful ca
 status through service wrappers: merge returned rows into the prior list by machine/source/source ID, keeping missing
 prior rows until a complete refresh. Translate the identities in partial results just as in successful ones. A malformed
 or missing workspace list is a failure, not evidence that every workspace disappeared.
+
+## The NDK prebuilt host directory follows the OS (#9327)
+
+Choose `darwin-x86_64` on macOS and `linux-x86_64` on Linux for the release `llvm-readelf` check and the Gradle `ndkHost` / `ndkTools` inputs; NDK 29 has no `linux-x86_64` tree on a Mac, so a hard-coded path fails that check after the libraries build.
