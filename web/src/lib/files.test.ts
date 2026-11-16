@@ -140,6 +140,7 @@ describe("diff", () => {
     ["a\x07\b\v\f\r\x1b\x7fb.ts", String.raw`"b/a\a\b\v\f\r\033\177b.ts"`],
     ["café.ts", String.raw`"b/caf\303\251.ts"`],
     ["你好\t.ts", String.raw`"b/你好\t.ts"`],
+    ['\uFEFFsay"hello.ts', String.raw`"b/\357\273\277say\"hello.ts"`],
     ["literal\\141.ts", String.raw`"b/literal\\141.ts"`],
   ])("keeps the exact chunk for Git-quoted path %j", (path, target) => {
     const chunk = `diff --git a/before.ts ${target}\n--- a/before.ts\n+++ ${target}\n@@ -1 +1 @@\n-before\n+after\n`;

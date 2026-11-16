@@ -286,7 +286,7 @@ function unquoteGitPath(path: string): string | null {
       bytes.push(byte);
     }
   }
-  return new TextDecoder().decode(new Uint8Array(bytes));
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(bytes));
 }
 
 /** A multi-file diff (git show) cut into one diff per file, keyed by the new path. */
