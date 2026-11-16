@@ -429,7 +429,7 @@ function DetailBody({ item }: { item: SentItem }) {
       )}
       <section>
         <div className="mb-1.5 flex items-center gap-2">
-          <h3 className="flex-1 text-[12px] font-medium text-ink-3">{t("settings-sent.d_text")}</h3>
+          <h3 className="flex-1 text-[12px] font-medium text-ink-3">{t(item.let_through.edited_from ? "settings-sent.d_sent_text" : "settings-sent.d_text")}</h3>
           {item.text && (
             <Button tone="quiet" icon="copy" onClick={() => void copyText(item.text)}>
               {t("settings-sent.copy_text")}

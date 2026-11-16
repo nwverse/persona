@@ -42,6 +42,7 @@
   "d_extension": "Extension",
   "d_message": "Message ID",
   "d_original": "Original text",
+  "d_sent_text": "Sent text",
   "d_text": "Text",
   "edited": "Edited",
   "copy_text": "Copy text",

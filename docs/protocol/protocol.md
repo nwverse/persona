@@ -1164,6 +1164,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                "options":[{"label":"…","description":"…"}]}],   // question
  "plan":"markdown",                                              // plan
  "tool_input":{...}, "summary":"rm -rf build",                   // permission
+ "editable_text":"the current outgoing text",                    // permission, node → clients only on an eligible Claude Code Lark send/reply; absent everywhere else
  "screen":"visible terminal text",                                // screen (TUI dialogs hooks can't cover)
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
  "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
@@ -1176,12 +1177,19 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"approve":true,"mode":"bypassPermissions|acceptEdits|default"}               // plan approved
 {"approve":false,"feedback":"Change it to…"}                                  // plan sent back
 {"allow":true,"always":false} / {"allow":false,"message":"…"}                // permission
+{"allow":true,"edited_text":"replacement text"}                             // permission, only on the card's editable_text and with no other resolution field
 {"keys":["down","enter"],"text":""}                                         // screen: keys / text sent to the pane
 {"dismiss":true}                                                            // any: give up, hand back to the computer's TUI
 {"dismiss":true,"reason":"replied_in_chat"}                                  // the assistant's ask_user taken back because the user wrote in the chat (#9)
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```
+
+### Editable Lark approval text
+
+Only the Claude Code Bash `PreToolUse` gate declares `editable_text`, and only for one static, proxy-authenticated Lark message send/reply whose JSON object has a non-empty top-level `text`. Codex, agent runtimes, lark-cli, file-backed or dynamic bodies, multi-call commands and non-message routes keep the ordinary permission card. The field carries the current text alone: no route, method, query, recipient, mention or tool argument is editable.
+
+`edited_text` is valid only as `{"allow":true,"edited_text":"…"}` on that card. The manager rejects it with Always, Deny, dismiss, cancel, answers, fields, action, reason, remembered or any other resolution field; an answer-only device cannot submit it. After a plain edited Allow, the node retires the original card's one-use grant by interaction id, splices only that body word, classifies and checks the new command through the same gate, and grants only the edited call once. Method, path, query, gate and every other body field must remain identical, including JSON numbers too large for float64. Claude receives `updatedInput` with every original tool-input field and only `command` replaced. A denial note remains `{"allow":false,"message":"…"}` and becomes the denied call's tool result.
 
 ### Always allow
 

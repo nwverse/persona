@@ -42,6 +42,7 @@
   "d_extension": "扩展",
   "d_message": "消息 ID",
   "d_original": "原始正文",
+  "d_sent_text": "实际发送正文",
   "d_text": "正文",
   "edited": "已编辑",
   "copy_text": "复制正文",

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +51,7 @@ func (n *Node) larkGateWithEdit(ctx context.Context, in hookInput, ix proto.Inte
 	}
 	input["command"] = updated
 	out := preToolDecision("allow", reason).(map[string]any)
-	out["updatedInput"] = input
+	out["hookSpecificOutput"].(map[string]any)["updatedInput"] = input
 	return out, nil
 }
 
@@ -64,7 +66,7 @@ func (n *Node) editableLarkCall(cfg proto.AssistantLark, command, cwd string) (l
 		return larkCall{}, larkBodySpan{}, "", false
 	}
 	c := v.calls[0]
-	if c.CLI || c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil || c.relBody {
+	if c.CLI || c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil || c.relFile {
 		return larkCall{}, larkBodySpan{}, "", false
 	}
 	if kind, _, _ := larkMessageTarget(c); kind == "" {
@@ -80,8 +82,11 @@ func (n *Node) editableLarkCall(cfg proto.AssistantLark, command, cwd string) (l
 	}
 	var spans []larkBodySpan
 	syntax.Walk(tree.Stmts[0], func(node syntax.Node) bool {
-		if w, ok := node.(*syntax.Word); ok && w.Lit() == c.Body {
-			spans = append(spans, larkBodySpan{int(w.Pos().Offset()), int(w.End().Offset())})
+		if w, ok := node.(*syntax.Word); ok {
+			value, dynamic := executionWord(w)
+			if !dynamic && value == c.Body {
+				spans = append(spans, larkBodySpan{int(w.Pos().Offset()), int(w.End().Offset())})
+			}
 		}
 		return true
 	})
@@ -127,7 +132,7 @@ func editableTextFields(body string) (map[string]json.RawMessage, string, bool) 
 }
 
 func (n *Node) applyLarkEdit(ctx context.Context, cfg proto.AssistantLark, session, id, command, cwd string, old larkCall, span larkBodySpan, edited string) (string, error) {
-	if err := n.takeOriginalGrant(cfg, session, old); err != nil {
+	if err := n.takeOriginalGrant(cfg, session, id, old); err != nil {
 		return "", err
 	}
 	_, originalText, ok := editableTextFields(old.Body)
@@ -152,7 +157,7 @@ func (n *Node) applyLarkEdit(ctx context.Context, cfg proto.AssistantLark, sessi
 		return "", fmt.Errorf("the edited command is no longer one standalone gated call")
 	}
 	c := v.calls[0]
-	if c.Gate != old.Gate || c.Method != old.Method || c.Path != old.Path || c.Query != old.Query || c.CLI || c.relBody {
+	if c.Gate != old.Gate || c.Method != old.Method || c.Path != old.Path || c.Query != old.Query || c.CLI || c.relFile {
 		return "", fmt.Errorf("the edited command changed its tool, method, path or query")
 	}
 	if kind, _, _ := larkMessageTarget(c); larkDecision(cfg, c) == "deny" || kind == "" {
@@ -182,21 +187,53 @@ func editableSplice(command string, old larkCall, span larkBodySpan, body string
 		return "", false
 	}
 	segment := command[span.start:span.end]
-	if segment != old.Body && segment != "'"+old.Body+"'" && segment != `"`+old.Body+`"` {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(segment), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return "", false
+	}
+	stmt := tree.Stmts[0]
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || stmt.Background || stmt.Coprocess || stmt.Negated || len(stmt.Redirs) != 0 || len(call.Assigns) != 0 || len(call.Args) != 1 {
+		return "", false
+	}
+	value, dynamic := executionWord(call.Args[0])
+	if dynamic || value != old.Body {
 		return "", false
 	}
 	return command[:span.start] + shellQuote(body) + command[span.end:], true
 }
 
-func (n *Node) takeOriginalGrant(cfg proto.AssistantLark, session string, c larkCall) error {
+func (n *Node) takeOriginalGrant(cfg proto.AssistantLark, session, id string, c larkCall) error {
 	if c.Gate < 0 || c.Gate >= len(cfg.Gates) || cfg.Gates[c.Gate].Auth == nil {
 		return fmt.Errorf("the original command has no authenticated gate")
 	}
-	key := gateKey{command: cfg.Gates[c.Gate].Command, session: session, health: n.gates().healthSession(session)}
-	if _, ok := n.gates().take(key, strings.ToUpper(c.Method), c.Path, []byte(c.Body), true); !ok {
-		return fmt.Errorf("the original grant could not be retired")
+	var body any
+	parsed := json.Unmarshal([]byte(c.Body), &body) == nil
+	p := n.gates()
+	key := gateKey{command: cfg.Gates[c.Gate].Command, session: session, health: p.healthSession(session)}
+	query := gateQueryKey(c.Query)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pruneLocked()
+	for i, g := range p.grants {
+		// The interaction id distinguishes this approval from another outstanding card for the same route and body.
+		if g.through.Kind != proto.LarkThroughCard || g.through.InteractionID != id ||
+			g.command != key.command || g.method != strings.ToUpper(c.Method) || g.path != c.Path || g.query != query {
+			continue
+		}
+		if key.health && (key.session == "" || g.session != key.session) {
+			continue
+		}
+		if g.session != "" && key.session != "" && g.session != key.session {
+			continue
+		}
+		if g.body != nil && (!parsed || !reflect.DeepEqual(g.body, body)) {
+			continue
+		}
+		p.grants = slices.Delete(p.grants, i, i+1)
+		return nil
 	}
-	return nil
+	return fmt.Errorf("the original grant could not be retired")
 }
 
 // grantEdited always pins the exact JSON body, including when the edited text contains '$'. The ordinary grant path's
@@ -206,10 +243,12 @@ func (n *Node) grantEdited(cfg proto.AssistantLark, session string, c larkCall, 
 		return fmt.Errorf("the edited command has no authenticated gate")
 	}
 	var body any
-	if err := json.Unmarshal([]byte(c.Body), &body); err != nil {
+	dec := json.NewDecoder(strings.NewReader(c.Body))
+	dec.UseNumber()
+	if err := dec.Decode(&body); err != nil {
 		return err
 	}
-	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, body: body,
+	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), body: body, bodyUseNumber: true,
 		until: time.Now().Add(gateGrantFor), session: session, through: through}
 	p := n.gates()
 	p.mu.Lock()

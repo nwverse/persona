@@ -42,6 +42,7 @@
   "d_extension": "拡張機能",
   "d_message": "メッセージ ID",
   "d_original": "元の本文",
+  "d_sent_text": "送信された本文",
   "d_text": "本文",
   "edited": "編集済み",
   "copy_text": "本文をコピー",
