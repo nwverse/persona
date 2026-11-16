@@ -122,6 +122,7 @@
   "card_of_goal": "{done} {value} / Goal {goal}",
   "card_over": "Over",
   "card_other": "Other",
+  "omp_stopped": "This omp session has stopped. For now you can only continue it on the computer (omp --resume); messages can’t be sent to it from here yet.",
   "paseo_ui_card": "Card",
   "paseo_ui_columns_cut": "Showing {shown} of {total} columns",
   "paseo_ui_rows_cut": "Showing the first {shown} of {total} rows",

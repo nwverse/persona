@@ -293,6 +293,9 @@ var rpcFailureKeys = map[string]string{
 	"agent_stopped":      "rpc-errors.agent_stopped",
 	"resume_not_allowed": "rpc-errors.resume_not_allowed",
 	"stop_not_saved":     "rpc-errors.stop_not_saved",
+	// a message to an omp session the node cannot resume: one not running with no known file, or a stopped one listed
+	// from omp's session files (node/control.go, node/ompcalls.go)
+	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
 	// a start in a directory whose name can't be typed into a terminal (node/hostorca_launch.go)
 	proto.CodeDirectoryUntypable: "rpc-errors.directory_untypable",
 	// a running Agent's switch to another launcher, picked and carried out by the next message (node/launcher_switch.go)

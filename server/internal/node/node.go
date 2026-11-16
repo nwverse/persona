@@ -205,6 +205,10 @@ type Node struct {
 	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
 	share atomic.Pointer[switchShare]
 
+	// The pi family's panes listed by their fallback id, and omp's stopped sessions (pifamily.go, ompdisk.go).
+	familySeen map[string]familySeenPane // omp pane -> first seen (zero: there when the node started), last session
+	ompDisk    *ompDiskState
+
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
@@ -902,6 +906,10 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err // the runtime would take the message without the switch (launcher_switch.go)
 		}
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
+			return res, err
+		}
+	} else if _, ok := n.ompSession(p.SessionID); ok { // a stopped omp: a notice, no send (ompcalls.go)
+		if res, err, handled := n.ompOfflineCalls(method, p.SessionID); handled {
 			return res, err
 		}
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {

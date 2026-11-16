@@ -122,6 +122,7 @@
   "card_of_goal": "{done} {value} / 目標 {goal}",
   "card_over": "超過",
   "card_other": "その他",
+  "omp_stopped": "この omp セッションは停止しています。今はコンピューターでのみ続けられます（omp --resume）。ここからはまだメッセージを送れません。",
   "paseo_ui_card": "カード",
   "paseo_ui_columns_cut": "{total} 列のうち {shown} 列を表示",
   "paseo_ui_rows_cut": "{total} 行のうち最初の {shown} 行を表示",
