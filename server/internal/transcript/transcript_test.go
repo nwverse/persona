@@ -583,8 +583,9 @@ func TestDeveloperInfoAndQueueTags(t *testing.T) {
 	for i, l := range lines {
 		ParseLine(i+1, []byte(l), &m)
 	}
+	// The compaction after the reply leaves the context unknown until the next reply (#9207).
 	if m.GitBranch != "main" || m.Version != "2.1.310" || m.PermissionMode != "bypassPermissions" ||
-		m.ContextTokens != 1012 || m.OutputTokens != 50 || m.Compactions != 1 || m.Turns != 1 || m.StartedAt.IsZero() {
+		m.ContextTokens != 0 || !m.ContextCompacted || m.OutputTokens != 50 || m.Compactions != 1 || m.Turns != 1 || m.StartedAt.IsZero() {
 		t.Fatalf("meta = %+v", m)
 	}
 	if len(m.Queue) != 1 || m.Queue[0] != "语音输入" {

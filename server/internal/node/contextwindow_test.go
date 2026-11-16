@@ -150,6 +150,41 @@ func TestQuickMetaContextCarriedOver(t *testing.T) {
 	}
 }
 
+// A tail that compacted with no reply after it does not carry the size from before the compaction over: the context
+// is unknown until the next reply (#9207), and the next reply's stands.
+func TestQuickMetaContextAfterCompaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	user := `{"type":"user","cwd":"/tmp/x","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"hi"}}`
+	if err := os.WriteFile(path, []byte(user+"\n"+ctxReply("msg_1", 2, 960_000, 10_000)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	add := func(line string) {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString(line + "\n")
+		f.Close()
+	}
+	st, _ := os.Stat(path)
+	prev := readQuickMeta(path, st)
+	if prev.contextTokens != 970_002 {
+		t.Fatalf("before = %d", prev.contextTokens)
+	}
+	add(`{"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T00:00:02.000Z","compactMetadata":{"trigger":"auto","preTokens":970002,"postTokens":15000}}`)
+	st, _ = os.Stat(path)
+	m := readQuickMetaSince(path, st, prev)
+	var s proto.Session
+	if setContext(&s, m); m.contextTokens != 0 || s.ContextTokens != 0 || s.ContextWindow != 0 {
+		t.Fatalf("after the compaction: %d, session %d / %d", m.contextTokens, s.ContextTokens, s.ContextWindow)
+	}
+	add(ctxReply("msg_2", 2, 50_000, 12_000))
+	st, _ = os.Stat(path)
+	if m = readQuickMetaSince(path, st, m); m.contextTokens != 62_002 {
+		t.Fatalf("after the next reply = %d", m.contextTokens)
+	}
+}
+
 func TestQuickMetaContextCodex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	meta := `{"timestamp":"2026-01-01T00:00:00.000Z","type":"session_meta","payload":{"id":"t1","cwd":"/tmp/x"}}`
