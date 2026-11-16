@@ -1347,6 +1347,12 @@ final class VNCTests: XCTestCase {
         let (app, _) = try signedInMachinePage()
         let screen = app.descendants(matching: .any)["vnc-screen"].firstMatch
         XCTAssertTrue(screen.waitForExistence(timeout: 10))
+        let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
+        // The mode is kept per Mac: an earlier run may have left Phone Screen on. Mouse Mode first.
+        if sheet.waitForExistence(timeout: 3) { app.buttons["完成"].firstMatch.tap() }
+        app.buttons["vnc-more"].tap()
+        app.buttons["鼠标模式"].firstMatch.tap()
+        rest()
         shot(app, "phone-screen-0-mouse")
         app.buttons["vnc-more"].tap()
         let item = app.buttons["手机屏"].firstMatch
@@ -1355,11 +1361,11 @@ final class VNCTests: XCTestCase {
         item.tap()
 
         // The window list comes up by itself the first time, with the Mac's windows by app.
-        let sheet = app.descendants(matching: .any)["phone-screen-windows"].firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: 15), "the window list:\n\(app.debugDescription)")
-        let dev = app.staticTexts["build — npm run dev"].firstMatch
+        let rows = app.buttons.matching(identifier: "phone-screen-window")
+        let dev = rows.matching(NSPredicate(format: "label == %@", "build — npm run dev")).firstMatch
         XCTAssertTrue(dev.waitForExistence(timeout: 10), "the windows:\n\(app.debugDescription)")
-        XCTAssertTrue(app.staticTexts["已最小化"].exists, "a minimized window says so")
+        XCTAssertTrue(rows.matching(NSPredicate(format: "label CONTAINS %@", "已最小化")).firstMatch.exists, "a minimized window says so")
         rest()
         shot(app, "phone-screen-2-windows")
         hold("phone-screen-2-windows")

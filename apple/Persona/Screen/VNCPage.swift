@@ -89,7 +89,6 @@ struct VNCPage: View {
                 #if os(iOS) || os(visionOS)
                 if let f = fallback { fallbackBanner(f) }
                 if session?.askedForSmoothScrolling == true, model.screenInput(ref)?.granted != true { smoothScrollingLine }
-                if activeMode == .phone, let line = phoneLine { phoneStatusLine(line) }
                 #endif
                 #if os(iOS) && canImport(PersonaScreenKit)
                 if mobileDataCard || session?.video.askMobileData == true {
@@ -111,6 +110,14 @@ struct VNCPage: View {
                     Color.black
                     if let s = session { content(s) }
                     #if os(iOS) || os(visionOS)
+                    // Over the picture, not above it: a line that came and went would change the picture's shape, and
+                    // with it the display's on the Mac.
+                    if activeMode == .phone, let line = phoneLine {
+                        phoneStatusLine(line)
+                            .padding(.vertical, Theme.Space.xs)
+                            .background(Theme.Fill.scrim)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
                     if statsOn, let stats = currentStats {
                         ScreenStatsOverlay(stats: stats) { statsOn = false; ScreenStatsPref.set(false, for: ref) }
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -901,7 +908,6 @@ struct VNCPage: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Theme.Space.page)
-        .padding(.bottom, Theme.Space.xs)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("phone-screen-status")
     }

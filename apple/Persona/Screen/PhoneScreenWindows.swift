@@ -50,7 +50,7 @@ struct PhoneScreenWindows: View {
                 }
             }
         }
-        .task { await link.loadWindows() }
+        .task(id: link.phase) { await link.loadWindows() } // again once the display is up
         .accessibilityIdentifier("phone-screen-windows")
     }
 

@@ -48,7 +48,9 @@ final class PhoneScreenLink {
     func start(pair: String, size: CGSize) {
         let w = Int(size.width.rounded()), h = Int(size.height.rounded())
         guard w > 0, h > 0 else { return }
-        if let s = started, s.pair == pair, s.width == w, s.height == h, phase != .off { return }
+        // The same connection at nearly the same shape (a bar's line came or went): the display stays as it is.
+        if let s = started, s.pair == pair, phase != .off,
+           abs(Double(h) / Double(w) - Double(s.height) / Double(s.width)) < 0.05 * Double(s.height) / Double(s.width) { return }
         let fresh = started?.pair != pair
         started = (pair, w, h)
         if fresh { placed = nil; windows = [] }
