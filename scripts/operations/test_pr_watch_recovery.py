@@ -106,6 +106,14 @@ class RecoveryIntegrationTests(unittest.TestCase):
             pr_watch_recovery.remove_worktree(self.checkout, self.state, broken)
         self.assertFalse(broken.exists())
 
+    def test_successful_git_remove_with_a_remaining_directory_is_not_reclaimed(self):
+        remaining = self.worktrees / "persona-7-remaining"
+        remaining.mkdir()
+        with patch.object(pr_watch_recovery, "run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            with self.assertRaises(pr_watch_common.WatchError):
+                pr_watch_recovery.remove_worktree(self.checkout, self.state, remaining)
+        self.assertTrue(remaining.exists())
+
     def test_only_empty_loose_objects_and_old_temporary_packs_are_removed(self):
         loose = self.checkout / ".git/objects/ab"
         loose.mkdir(parents=True)

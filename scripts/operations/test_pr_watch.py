@@ -316,6 +316,7 @@ class WatcherTests(unittest.TestCase):
         exhausted = self.watcher.state.data["prs"]["example/one#8"]
         self.assertEqual(exhausted["repair_rounds"], 2)
         self.assertNotIn("repair_exhausted", exhausted)
+        self.assertEqual(exhausted["outcome"], "repair_comment_pending")
         self.assertTrue(exhausted["failure"])
         self.assertEqual(self.watcher.state.data["prs"]["example/one#9"]["outcome"], "merged")
         self.assertNotIn("base", self.watcher.state.data["prs"]["example/one#9"])
@@ -366,6 +367,19 @@ class WatcherTests(unittest.TestCase):
     def test_migrate_config_requires_an_exclusive_offline_invocation(self):
         with self.assertRaises(pr_watch_common.WatchError):
             pr_watch.main(["--config", str(self.root / "config.json"), "--migrate-config", "--dry-run"])
+
+    def test_migration_publishes_an_old_exhaustion_reason_before_allowing_another_round(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="repair_comment_pending",
+                               repair_rounds=2, failure="the exact last failure")
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(pr_watch, "semantic_review", return_value=[]), \
+                patch.object(pr_watch, "verify", return_value=[]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+        self.assertIn("the exact last failure", self.comments[0])
+        self.assertTrue(self.watcher.state.get("example/one", 7)["repair_comment_posted"])
 
     def test_state_migration_preserves_policy_and_rejects_unapproved_config_changes(self):
         digest = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", self.config)

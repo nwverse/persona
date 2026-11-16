@@ -239,7 +239,7 @@ class Watcher:
                 if item.get("repair_rounds", 0) < REPAIR_LIMIT:
                     item.pop("repair_exhausted", None)
                     if item.get("outcome") == "repair_exhausted":
-                        item["outcome"] = "retry"
+                        item["outcome"] = "repair_comment_pending"
                         item["retry_after"] = 0
             self.state.data["policy_migration"] = migration
             self.state.data["config_fingerprint"] = digest
@@ -665,7 +665,7 @@ class Watcher:
                 and old.get("verification_policy") != VERIFICATION_POLICY_VERSION
                 and old.get("verification") not in ("passed", "base_failure")
                 and not old.get("repair_exhausted")
-                and old.get("outcome") not in ("merged", "continuation", "findings")):
+                and old.get("outcome") not in ("merged", "continuation", "findings", "repair_comment_pending")):
             # A prerequisite failure is not evidence against this exact head.
             # Retry only its verification under the new policy. Completed gates,
             # published findings and exhausted repair budgets keep their meaning.
@@ -687,7 +687,16 @@ class Watcher:
             # The completed backoff permits a fresh independent attempt budget.
             old = self.state.put(repo, number, head, evidence_key=evidence_key,
                                  review_attempts=0, repair_attempts=0, retry_after=0)
-        if old.get("outcome") in ("continuation", "repair_published", "base_updated") \
+        if old.get("outcome") == "continuation":
+            return
+        if old.get("outcome") == "repair_comment_pending":
+            reason = old.get("failure") or "The previous repair budget was exhausted without a recorded diagnostic."
+            if not self.dry_run:
+                self.comment(repo, number, "The previous repair budget was exhausted. The last failure was:\n\n```text\n%s\n```\n\nThe new three-round budget permits one more repair attempt." % bounded(reason, 12000))
+            old = self.state.put(repo, number, head, evidence_key=evidence_key,
+                                 outcome="retry", retry_after=0, failure=None,
+                                 repair_comment_posted=True)
+        if old.get("outcome") in ("repair_published", "base_updated") \
                 and old.get("head") == head and old.get("evidence_key") == evidence_key:
             return
         if old.get("outcome") == "base_comment_pending":

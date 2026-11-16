@@ -103,6 +103,8 @@ def remove_worktree(checkout, state_file, path):
             if candidate.exists():
                 shutil.rmtree(str(candidate))
     run(["git", "worktree", "prune", "--expire", "now"], cwd=checkout, timeout=90)
+    if candidate.exists():
+        raise WatchError("Git returned success but the watcher-owned worktree still exists")
 
 
 def recover_object_debris(checkout):
