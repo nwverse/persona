@@ -24,6 +24,8 @@ import (
 // is done or accepted tells that group once. All ids are placeholders.
 
 const (
+	sourceReportDelay = 10 * time.Minute
+
 	askSrc  = "oc_src"  // the group the request is made in (not opted in)
 	askHome = "oc_home" // the home topic group
 )
@@ -31,13 +33,14 @@ const (
 // askEnv is a paired bot with a home topic group; the fake hub gives the messages the bot sends there an id and a topic.
 type askEnv struct {
 	*threadEnv
-	database *db.DB
-	home     string                    // the status's home_chat ("" for none)
-	thread   string                    // the topic the home group gives a new message ("" for none)
-	readable map[string]map[string]any // messages the bot can read back, by id
-	roots    int
-	dmRoots  int // new messages the bot sent into the owner's private chat
-	clock    *fakeClock
+	database    *db.DB
+	home        string                    // the status's home_chat ("" for none)
+	thread      string                    // the topic the home group gives a new message ("" for none)
+	readable    map[string]map[string]any // messages the bot can read back, by id
+	roots       int
+	reportDelay *int // nil emulates a Hub from before this setting
+	dmRoots     int  // new messages the bot sent into the owner's private chat
+	clock       *fakeClock
 }
 
 func newAskEnv(t *testing.T, database *db.DB) *askEnv {
@@ -71,7 +74,7 @@ func newAskEnv(t *testing.T, database *db.DB) *askEnv {
 			chats = append(chats, e.home)
 		}
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner", PairedAt: time.Unix(100, 0), Features: e.features, PublicURL: e.publicURL,
-			Chats: chats, HomeChat: e.home}, nil
+			Chats: chats, HomeChat: e.home, SourceReportDelayMinutes: e.reportDelay}, nil
 	})
 	e.f.answerApp(AppFeishu, FeishuText, func(p json.RawMessage) (any, error) {
 		var m map[string]any
@@ -707,6 +710,52 @@ func TestSourceReportWhenDone(t *testing.T) {
 			t.Fatalf("%d notices", len(got))
 		}
 	})
+}
+
+func TestSourceReportWithConfiguredDelay(t *testing.T) {
+	for _, minutes := range []int{0, 1} {
+		t.Run(fmt.Sprintf("%d_minutes", minutes), func(t *testing.T) {
+			forStores(t, func(t *testing.T, e *askEnv, database *db.DB) {
+				e.reportDelay = &minutes
+				e.ask(ownerAsk("om_configured", "/ai Check the release notes"))
+				id := onlyTodo(e.s).ID
+				e.outcome(id, "The release notes are ready.\nhttps://example.com/notes")
+				e.closeDone(id)
+
+				want := e.said("source_report_done")
+				if database != nil {
+					want = "The release notes are ready."
+				}
+				if minutes == 0 {
+					if got := e.notices(); len(got) != 0 {
+						t.Fatalf("immediate reply had a preview: %v", got)
+					}
+					e.clock.advance(0)
+				} else {
+					preview := e.said("source_report_notice", i18n.Args{"minutes": minutes, "text": want})
+					if got := textsTo(e.f, askHome); !slices.ContainsFunc(got, func(p map[string]any) bool { return p["text"] == preview }) {
+						t.Fatalf("no preview with the configured delay: %v", got)
+					}
+					// Changing the setting after preview does not shorten the announced time.
+					zero := 0
+					e.reportDelay = &zero
+					e.clock.advance(time.Duration(minutes)*time.Minute - time.Second)
+					if got := reportsTo(e.f, askSrc, "om_configured"); len(got) != 0 {
+						t.Fatalf("reported before the preview expired: %v", got)
+					}
+					e.clock.advance(time.Second)
+				}
+				got := reportsTo(e.f, askSrc, "om_configured")
+				if len(got) != 1 || got[0]["text"] != want {
+					t.Fatalf("reports at %d minutes: %v, want one saying %q", minutes, got, want)
+				}
+				e.clock.advance(sourceReportWait)
+				if got := reportsTo(e.f, askSrc, "om_configured"); len(got) != 1 {
+					t.Fatalf("reported again after the outcome timer: %v", got)
+				}
+			})
+		})
+	}
 }
 
 // A start that failed has no outcome to wait for: the notice comes after a moment, and what is told is only that it could

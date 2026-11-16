@@ -258,10 +258,15 @@ type FeishuStatus struct {
 	// NudgeAfter is the bot's setting nudge_after (#6084): minutes a card waits unanswered before the one nudge under it,
 	// 0 off. nil (a status from before the setting) is NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`
+	// SourceReportDelayMinutes is the preview window before replying to a source group. Zero skips the preview.
+	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
 }
 
 // NudgeAfterDefault is nudge_after when never set: minutes a card of the Lark bot waits before it is nudged.
 const NudgeAfterDefault = 60
+
+// SourceReportDelayDefault is the preview window, in minutes, when it has never been set.
+const SourceReportDelayDefault = 10
 
 // InteractionAnnounced is interaction.announced's params.
 type InteractionAnnounced struct {

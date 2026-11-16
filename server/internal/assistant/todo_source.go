@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
@@ -33,10 +34,6 @@ const (
 	// and asks a model; both have their own timeouts, together at most about two and a half minutes) before the report is
 	// planned with what there is. The outcome being written plans it at once.
 	sourceReportWait = 3 * time.Minute
-	// sourceReportDelay is the safety valve: the report is planned, the topic is shown its text and this time, and it is
-	// told to the original chat only when the time has come, so the owner can stop it ("/noreply") in between. The time is
-	// kept with the todo, so a restart does not shorten it or forget it.
-	sourceReportDelay = 10 * time.Minute
 	// sourceReportEvery is how often the todos are looked at for a report that is due, planned or lost with a timer; they
 	// are also looked at when the todos are loaded, sourceReportSweepWait after (the bot may not be connected yet).
 	sourceReportSweepWait = 30 * time.Second
@@ -229,24 +226,29 @@ func (s *Service) reportable(id string) bool {
 }
 
 // sourceReportSoon looks at the report of todo id after wait: the todo closed (or was accepted), or its plan is due. Several
-// calls for one todo before it runs are one. Nothing for a todo with nothing to report (no source, stopped, told).
+// calls for one todo keep the earliest timer, so a ready result can supersede the timer waiting for its outcome.
 func (s *Service) sourceReportSoon(id string, wait time.Duration) {
 	if !s.reportable(id) {
 		return
 	}
 	b := &s.todos
+	when := s.tposts.clock().Add(wait)
 	b.reportMu.Lock()
-	if b.reporting[id] {
+	if scheduled, ok := b.reporting[id]; ok && !when.Before(scheduled) {
 		b.reportMu.Unlock()
 		return
 	}
 	if b.reporting == nil {
-		b.reporting = map[string]bool{}
+		b.reporting = map[string]time.Time{}
 	}
-	b.reporting[id] = true
+	b.reporting[id] = when
 	b.reportMu.Unlock()
 	s.tposts.later(wait, func() {
 		b.reportMu.Lock()
+		if !b.reporting[id].Equal(when) {
+			b.reportMu.Unlock()
+			return
+		}
 		delete(b.reporting, id)
 		b.reportMu.Unlock()
 		s.sourceReportNow(id)
@@ -300,7 +302,7 @@ func (s *Service) sweepSourceReports() {
 	}
 }
 
-// sourceReportNow takes the next step of todo id's report back: plan it (show the topic the text and the time), or, when
+// sourceReportNow takes the next step of todo id's report back: plan it (with a preview when the delay is positive), or, when
 // the time has come, tell the source what came of it. Nothing for a todo that was reopened since, or done longer ago than
 // sourceReportKeep.
 func (s *Service) sourceReportNow(id string) {
@@ -324,13 +326,14 @@ func (s *Service) sourceReportNow(id string) {
 		return
 	}
 	// The bot must be there: with it away nothing is planned or claimed, so a later sweep still can.
-	st, err := s.feishuStatusKept(ctx)
+	// Read the current setting when planning; a saved plan keeps its announced deadline.
+	st, err := s.feishuStatus(ctx)
 	if err != nil || !st.Ready {
 		s.logf("todo %s: not reporting back yet: the bot is not ready (%v)", id, err)
 		return
 	}
 	if t.Source.ReportDueAt == "" {
-		s.showSourceReport(ctx, t, st, now)
+		s.prepareSourceReport(ctx, t, st, now)
 		return
 	}
 	due, err := time.Parse(time.RFC3339Nano, t.Source.ReportDueAt)
@@ -343,9 +346,8 @@ func (s *Service) sourceReportNow(id string) {
 		return
 	}
 	if t.Thread == nil && t.Source.Anchor == "" {
-		// Unbound from its topic since the notice: "/noreply" has nowhere to be said any more, so the report is cancelled.
-		// (A todo with an anchor was shown the notice in the owner's private chat, which it still is.)
-		s.logf("todo %s: not reporting back: it is no longer bound to the topic that was shown the notice", id)
+		// The owner can cancel in the topic or, for a todo with an anchor, in their private chat.
+		s.logf("todo %s: not reporting back: it is no longer bound to its topic", id)
 		return
 	}
 	src, attempts, ok := s.claimSourceReport(ctx, id)
@@ -380,24 +382,29 @@ func permanentReportError(err error) bool {
 	return !feishubot.Transient(err)
 }
 
-// showSourceReport plans the report of todo t and shows its topic the text and the time, in one line it can stop with
-// "/noreply" (a todo with no topic, taken in the owner's private chat: shows it there, under its first message, and the
-// line says to reply to it with "/noreply"). The line comes first: without a place to show it (the todo was unbound, or
-// nothing of it is known to reply under, or the bot may not write there) nothing is planned.
-func (s *Service) showSourceReport(ctx context.Context, t Todo, st FeishuStatus, now time.Time) {
+// prepareSourceReport previews delayed replies where the owner can cancel with "/noreply", then persists the
+// deadline and schedules delivery. A zero delay uses the same plan and send path without a preview.
+func (s *Service) prepareSourceReport(ctx context.Context, t Todo, st FeishuStatus, now time.Time) {
 	th := t.Thread
 	if t.Source.Anchor == "" && (th == nil || th.Channel != channel.Feishu || !slices.Contains(st.Chats, th.ChatID)) {
-		s.logf("todo %s: not reporting back: no topic to show the report in first", t.ID)
+		s.logf("todo %s: not reporting back: no eligible topic for the source report", t.ID)
 		return
 	}
 	text := s.sourceReportText(ctx, t)
-	due := now.Add(sourceReportDelay)
-	key := "source_report_notice"
-	if t.Source.Anchor != "" {
-		key = "source_report_notice_chat"
+	minutes := assistantwire.SourceReportDelayDefault
+	if st.SourceReportDelayMinutes != nil {
+		minutes = *st.SourceReportDelayMinutes
 	}
-	if !s.tellOwner(ctx, t, st, key, i18n.Args{"minutes": int(sourceReportDelay / time.Minute), "text": text}, "sn:"+t.ID+due.UTC().Format(time.RFC3339Nano)) {
-		return
+	delay := time.Duration(minutes) * time.Minute
+	due := now.Add(delay)
+	if delay > 0 {
+		key := "source_report_notice"
+		if t.Source.Anchor != "" {
+			key = "source_report_notice_chat"
+		}
+		if !s.tellOwner(ctx, t, st, key, i18n.Args{"minutes": minutes, "text": text}, "sn:"+t.ID+due.UTC().Format(time.RFC3339Nano)) {
+			return
+		}
 	}
 	planned, err := s.planSourceReport(ctx, t.ID, text, due)
 	if err != nil {
@@ -405,7 +412,7 @@ func (s *Service) showSourceReport(ctx context.Context, t Todo, st FeishuStatus,
 		return
 	}
 	if planned {
-		s.sourceReportSoon(t.ID, sourceReportDelay)
+		s.sourceReportSoon(t.ID, delay)
 	}
 }
 
@@ -462,7 +469,7 @@ func reportKey(parts ...string) string {
 // sourceReportText is what the todo came to, as one short line for a chat that is not the owner's own: the outcome note
 // of the todo (the first line of the "#o" row todo_outcome.go writes: the sentence, never its links), else only that it is
 // done, or, when it never started, only that it could not be done. Nothing else leaves the todo: not its decisions, the
-// Agents' replies, the judge's reason or the error of a start that failed; the owner sees the text in the topic first.
+// Agents' replies, the judge's reason or the error of a start that failed; by default the owner sees the text before it goes out.
 func (s *Service) sourceReportText(ctx context.Context, t Todo) string {
 	l := s.botLang(ctx)
 	if t.StartError != "" {
