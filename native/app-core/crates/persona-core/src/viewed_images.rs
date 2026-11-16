@@ -104,7 +104,10 @@ fn key(path: Option<&str>, image: &ImagePayload) -> Option<String> {
     if let Some(path) = path {
         return Some(format!("p:{path}"));
     }
-    if let (Some(size), Some(width), Some(height)) = (image.size, image.width, image.height)
+    let size = image
+        .size
+        .or_else(|| (!image.data.is_empty()).then_some(image.data.len() as i64 * 3 / 4));
+    if let (Some(size), Some(width), Some(height)) = (size, image.width, image.height)
         && size > 0
         && width > 0
         && height > 0
