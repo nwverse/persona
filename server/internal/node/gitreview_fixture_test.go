@@ -122,4 +122,3 @@ func normalizeReview(res *proto.GitReview) {
 		}
 	}
 }
-
