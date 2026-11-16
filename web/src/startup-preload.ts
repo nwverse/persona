@@ -360,7 +360,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // to 481,290 B; en 477,857 B to 478,161 B, zh-Hans 478,676 B to 478,980 B): an opening at the root address goes to the
 // chosen page before the first paint, the hub's choice is read at the hello, and the sidebar gives way to the main chat
 // when that page is not there (lib/start-page.ts). Its setting is in the Settings chunk.
-export const FIRST_SCREEN_BUDGET = 481_290;
+// #9071 groups add 703 B in each language, measured in one environment against the start page's branch at 52af780db
+// (ja 481,290 B to 481,993 B; en 478,161 B to 478,864 B, zh-Hans 478,980 B to 479,683 B): the sidebar draws each group
+// of pages as its own folding section (lib/sidebar-pages.ts arrangeSections, views/Sidebar.tsx PageGroup), and the
+// arrangement goes to and from the hub with the start page (lib/start-page.ts). The editor is in the Settings chunk.
+export const FIRST_SCREEN_BUDGET = 481_993;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
