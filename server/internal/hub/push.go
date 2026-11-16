@@ -59,6 +59,10 @@ type Pusher struct {
 	// fleet.clients, whether a phone would be pushed an MCP form). It may run under the Pusher's locks: it must not block.
 	devicesChanged func()
 
+	// sends counts the APNs and relay posts still on their way (sendBuiltWith, sendLiveActivity): each runs in its own
+	// goroutine and logs when it ends, so whoever closes what they post to (a test's fake APNs) waits for them first.
+	sends sync.WaitGroup
+
 	mu sync.Mutex
 	// sendMu lets maintenance skip an active transport instead of retiring a
 	// target whose acceptance is still in flight. Reads remain concurrent.
@@ -180,6 +184,7 @@ func (p *Pusher) register(d Device) error {
 		d.RelayError = ""
 	}
 	d.RelayError = clipRelayError(d.RelayError)
+	cleanVoIP(&d)
 	d.Features = cleanFeatures(d.Features)
 	p.mu.Lock()
 	cur := p.devices[d.DeviceID]

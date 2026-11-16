@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from persona_identity import CONTEXT_TAG_PATTERN, FILE_TAG_PATTERN
+
 PORT = int(os.environ.get("PORT", "18760"))
 # MOCK_CHILD_SESSIONS=1 (#5120) builds on the Paseo computer: its agent's created agents are its children.
 if os.environ.get("MOCK_CHILD_SESSIONS"):
@@ -57,7 +60,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -3384,6 +3387,10 @@ TODO_ORPHANED_SINCE = ago(hours=5)
 # seen by another team (two taps, no default). POST …/accept with `response` "explain_first" keeps the round open
 # with `response` set, as the hub does; any other response or an option ends it.
 MOCK_DECISIONS = os.environ.get("MOCK_DECISIONS") == "1"
+# MOCK_ACCEPT_DIALOG=1 (#7343, docs/assistant/todos.md): every answer to a decision is refused as the hub refuses one a
+# dialog in its Agent's terminal holds back (423 dialog_open, with the dialog's first line and that Agent), so the
+# decision row says so and offers its terminal; nothing is taken.
+MOCK_ACCEPT_DIALOG = os.environ.get("MOCK_ACCEPT_DIALOG") == "1"
 DECISION_RESPONSES = ["decide_yourself", "not_what_i_asked", "explain_first"]
 DECISION_FIELDS = {
     "todo_review": {
@@ -3668,6 +3675,15 @@ MINUTES_SHAPE_START = os.environ.get("MOCK_RECORDING_MINUTES_SHAPE", "legacy")
 if MINUTES_SHAPE_START not in MINUTES_SHAPES:
     sys.exit("mock hub: MOCK_RECORDING_MINUTES_SHAPE must be one of %s" % ", ".join(MINUTES_SHAPES))
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+# Titles (#8873, docs/assistant/meeting-minutes.md "Titles (#8873)"): MOCK_RECORDING_TITLES=1, or POST /mock/recording_titles
+# {"on": true}, names a recording nobody named (no title, no calendar title) once it has 40 characters of text, as the hub's
+# live title does: the subject before a colon in its first line with one (导出：… → 导出), else its first line, at most 15
+# characters. The answer to its uploads, GET /api/v1/recordings and its detail then carry name and name_source. Off by
+# default, so recordings keep the names other tests expect.
+RECORDING_TITLES = [os.environ.get("MOCK_RECORDING_TITLES") == "1"]
+# Names given on the web (#8877): PUT /api/v1/recordings/{id}/title keeps one per recording ("" clears it), first in the
+# name until an upload changes the recording's title, as the hub's rule.
+RECORDING_RENAMED = {}
 RECORDING_MINUTES_SHAPE = [MINUTES_SHAPE_START]
 RECORDING_MINUTES_ASKED = []
 # All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
@@ -3869,7 +3885,7 @@ def day_publish(rid, repair=False, regenerate=True):
     name = rec.get("title") or "Day · " + rec["day"]
     summary = recap["summary"] if recap else ""
     entry = {"kind": "recordings", "id": rid, "name": name, "relevance": 0, "tags": [], "one_line": summary,
-             "updated": rec["started_at"]}
+             "updated": rec["started_at"], "recording_kind": "day"}  # #8870
     KB["recordings"] = [e for e in KB.get("recordings", []) if e["id"] != rid] + [entry]
     meta = {k: v for k, v in rec.items() if k != "segments"}
     meta.update(name=name, chars=sum(len(s["text"]) for s in rec["segments"]))
@@ -4653,6 +4669,29 @@ def features():
 def meeting_live(rid):
     return MEETING_LIVE.setdefault(rid, {"id": rid, "role": "off", "session": None, "segments": [], "bytes": 0, "fed": 0, "full": False,
                                          "asks": [], "sent": {}, "due": {}, "asks_rev": 0})
+
+
+def recording_title(body, rid=None):
+    """What the hub calls an upload (a name given on the web, its title, its calendar's, a made-up live title) and where
+    that comes from (#8873, #8877); (None, None) while it is named only by when it started."""
+    if rid and RECORDING_RENAMED.get(rid): return RECORDING_RENAMED[rid], "renamed"
+    title = (body.get("title") or "").strip()
+    cal = ((body.get("calendar") or {}).get("title") or "").strip()
+    if title: return title, ("calendar" if title == cal else "title")
+    if cal: return cal, "calendar"
+    if not RECORDING_TITLES[0] or body.get("kind") == "day": return None, None
+    lines = [(x.get("text") or "").strip() for x in body.get("segments", []) if not x.get("echo")]
+    if sum(len(x) for x in lines) < 40: return None, None
+    for line in lines:
+        if m := re.match(r"([^：:]{1,15})[：:]", line): return m.group(1).strip(), "model"
+    return next((x for x in lines if x), "")[:15], "model"
+
+
+def recording_named(out, body, rid=None):
+    """out with the name and name_source of upload body, when it has a name."""
+    name, source = recording_title(body, rid)
+    if name: out.update(name=name, name_source=source)
+    return out
 
 
 def recording_kind(body):
@@ -7182,6 +7221,12 @@ def recordings_route_locked(h, method, p):
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
         return h.send_json({"mode": RECORDING_MINUTES[0], "shape": RECORDING_MINUTES_SHAPE[0]}) or True
+    if p == "/mock/recording_titles":
+        if method == "POST":
+            body = json.loads(h.last_body or b"{}")
+            if type(body.get("on")) is not bool: return h.send_json({"error": "on must be true or false"}, 400) or True
+            RECORDING_TITLES[0] = body["on"]
+        return h.send_json({"on": RECORDING_TITLES[0]}) or True
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED, "trimmed": sorted(RECORDINGS_TRIMMED)}) or True
@@ -7226,7 +7271,8 @@ def recordings_route_locked(h, method, p):
                                             "started_at": v["started_at"],
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
                                                if v.get("kind") == "day" else {}),
-                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {})}
+                                            **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {}),
+                                            **recording_named({}, v, k)}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
     if p.endswith("/segments"):
@@ -7271,12 +7317,30 @@ def recordings_route_locked(h, method, p):
             threading.Timer(3, recording_minutes_next, args=(rid,)).start()
         return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
+    if p.endswith("/title") and method == "PUT":  # the owner's name from the web (#8877)
+        if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+        if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音", "code": "recording_not_found"}, 404) or True
+        try: body = json.loads(h.last_body or b"{}")
+        except ValueError: body = None
+        title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(title, str) or "\n" in title or "\r" in title or len(title.strip()) > 200:
+            return h.send_json({"error": "A title must be one line of at most 200 characters."}, 400) or True
+        RECORDING_RENAMED[rid] = title.strip()
+        name, source = recording_title(RECORDINGS[rid], rid)
+        for e in kb:
+            if e["id"] == rid: e["name"] = name or "录音"
+        meta = (KB_DETAIL.get(("recordings", rid)) or {}).get("meta")
+        if meta is not None:
+            for k in ("name", "name_source", "renamed"): meta.pop(k, None)
+            if name: meta.update(name=name, name_source=source)
+            if RECORDING_RENAMED[rid]: meta["renamed"] = RECORDING_RENAMED[rid]
+        return h.send_json({"name": name, "name_source": source} if name else {}) or True
     if p.rstrip("/") != "/api/v1/recordings/" + p.split("/")[4]:  # a path below a recording that no route took
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         if (t := TRANSCRIPTIONS.pop(rid, None)) and t.get("socket"): t["socket"]["fail"]("recording_deleted")
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDING_UPLOADED.pop(rid, None); RECORDING_RENAMED.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -7305,23 +7369,29 @@ def recordings_route_locked(h, method, p):
     if have and have["revision"] > body["revision"]:
         # Nothing written. As the hub answers: the upload's revision and, on a hub that attends, the role in effect (the
         # stored one) and what was wrong with this upload's attendance fields, whatever the status.
-        out = {"id": rid, "revision": body["revision"], "status": "stale"}
+        out = recording_named({"id": rid, "revision": body["revision"], "status": "stale"}, have, rid)
         if MEETING_ATTENDANCE:
             out["attendance"] = meeting_live(rid)["role"]
             if room_of(rid) is None and (problem := meeting_attendance(body)[2]): out["attendance_problem"] = problem
             if (v := upload_room_view(rid, body)) is not None: out["room"] = v
         return h.send_json(transcription_upload_result(rid, body, out)) or True
     for seg in body.get("segments", []): seg.pop("source", None)
+    if have and RECORDING_RENAMED.get(rid) and (body.get("title") or "") != (have.get("title") or ""):
+        RECORDING_RENAMED.pop(rid)  # renamed on the phone since: the newer name wins (#8877)
     transcription_put(rid, body)
     RECORDINGS[rid] = {k: v for k, v in body.items() if k not in ("transcription", "timeline")}
     RECORDING_UPLOADED[rid] = time.time()
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
-    entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
-             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
+    name, name_source = recording_title(body, rid)
+    entry = {"kind": "recordings", "id": rid, "name": name or "录音", "relevance": 0, "tags": [],
+             "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"],
+             "recording_kind": kind}  # #8870
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
     detail = {"meta": {**{k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "calendar")}, "kind": kind,
                        "updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo"))},
+                       "chars": sum(len(x.get("text") or "") for x in body.get("segments", []) if not x.get("echo")),
+                       **({"name": name, "name_source": name_source} if name else {}),
+                       **({"ai_title": name, "ai_title_from": "summary" if body.get("complete") else "live"} if name_source == "model" else {})},
               "summary": text, "segments": body.get("segments", [])}
     # A meeting that completes with no text gets no minutes (attending uploads it first with none).
     silent = MEETING_ATTENDANCE and body.get("complete") and not any((x.get("text") or "").strip() for x in body.get("segments", []))
@@ -7329,7 +7399,7 @@ def recordings_route_locked(h, method, p):
         ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = None  # made from the photos as they are when the detail is stored, below
-    out = {"id": rid, "revision": body["revision"], "status": "stored"}
+    out = recording_named({"id": rid, "revision": body["revision"], "status": "stored"}, body, rid)
     room = None
     if MEETING_ATTENDANCE:
         role, session, problem = meeting_attendance(body)
@@ -9037,6 +9107,10 @@ def tasks_area(h, method, p, raw):
         expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
         if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
+        elif MOCK_ACCEPT_DIALOG:
+            h.send_json({"code": "dialog_open", "error": "终端正在等待选择，请先到终端处理。", "delivered": "none",  # i18n-ignore
+                         "retryable": False, "dialog": "Approaching rate limits", "machine_id": "macbook",
+                         "session_id": "a1f3c2d4-0000-4000-8000-000000000002"}, 423)
         elif MOCK_DECISIONS and sent.get("response") == "explain_first" and tid in TODO_ASKS:
             DECISION_KEPT[tid] = "explain_first"  # the round stays open, no longer taken by default (decision.go)
             h.send_json({"ok": True})
@@ -9517,6 +9591,22 @@ if os.environ.get("MOCK_ASSISTANT_CARDS"):
          "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件",
          "always_honored": False})  # the manager's own card: nothing keeps an Always (#3590)
 
+# MOCK_ASSISTANT_CARDS=run: Persona's main conversation instead asks to change six settings one after another, as a
+# run of `persona_settings set` approvals: the cards above its composer are one slot ("1 / 6"), each answer taking the
+# next one's place, and the answers fold into one line that goes a few seconds after the last.
+if os.environ.get("MOCK_ASSISTANT_CARDS") == "run":
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ("ix_assistant_bash", "ix_assistant_send")]
+    for _n, (_name, _to) in enumerate([("strong", "claude-opus-5-5 · high"), ("ops", "claude-opus-5-5 · high"),
+                                       ("quick", "claude-haiku-5-5 · low"), ("research", "claude-sonnet-5-5 · high"),
+                                       ("writer", "claude-sonnet-5-5 · medium"), ("review", "claude-opus-5-5 · xhigh")]):
+        INTERACTIONS.append(
+            {"id": "ix_settings_%d" % _n, "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+             "kind": "permission", "created_at": ago(minutes=(60 - _n) / 60), "expires_at": later(minutes=14),
+             "tool_name": "persona_settings", "tool_title": "改设置",
+             "tool_input": {"action": "set", "key": "model_profiles." + _name, "value": _to},
+             "summary": "性能 · %s：（无） → %s — 备用：主账号没额度时代替" % (_name, _to),
+             "always_honored": False})
+
 if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says needs approval (docs/extensions/iphone.md)
     INTERACTIONS.append(
         {"id": "ix_iphone_do", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
@@ -9915,6 +10005,52 @@ if os.environ.get("MOCK_SOURCES"):
          "cwd": "/Users/me/code/reports", "kind": "permission", "agent": "dsh", "agent_label": "DSH",
          "created_at": ago(minutes=2), "expires_at": later(minutes=28), "tool_name": "read_file",
          "summary": "读取 finance/2026-Q3.xlsx", "tool_input": {"path": "finance/2026-Q3.xlsx"}})
+
+# MOCK_CANT_ANSWER=1 (#6868): question cards the phone can't answer. A live Codex thread on a shared app-server not joined
+# yet (send and attach, no approve, like MOCK_SOURCES' CODEX_LIVE) asks one, as in the report: its chat says why under the
+# card and offers Attach Live, which flips approve (POST …/attach) and lets the card be answered. A subagent of it (send,
+# attach and approve off, as the node lists one its parent drives, codex_registry.go) asks another: only the computer can.
+# /mock/reset unjoins the thread again (CantAnswerCardTests).
+CODEX_ASKS = "c0de6868-1111-4000-8000-000000000001"
+CODEX_ASKS_SUB = "c0de6868-2222-4000-8000-000000000002"
+CANT_ANSWER_START = {}
+if os.environ.get("MOCK_CANT_ANSWER") == "1":
+    _thread = "019a6868-7d2e-7b10-9a55-3e8c1f2d4a6%d"
+    SESSIONS += [
+        sess("server", CODEX_ASKS, "整理部署脚本", "/home/me/code/deploy", "blocked", "needs_you", "", 0, "", 0, 1,
+             "变量合好了，部署前问你一个问题。", agent="codex", agent_name="codex-desk", pending=1,
+             source_kind="codex_app_server", source_thread_id=_thread % 0, source_instance_id="desk", attached=False,
+             capabilities={"read": True, "send": True, "interrupt": True, "approve": False, "terminal": False, "attach": True},
+             **NO_SPACE),
+        sess("server", CODEX_ASKS_SUB, "核对 staging 变量", "/home/me/code/deploy", "blocked", "needs_you", "", 0, "", 0, 1,
+             "staging 有两个变量和生产不一样。", agent="codex", agent_name="codex-desk", pending=1,
+             source_kind="codex_app_server", source_thread_id=_thread % 1, source_instance_id="desk",
+             parent_thread_id=_thread % 0, is_subagent=True, parent_session_id=CODEX_ASKS, root_session_id=CODEX_ASKS,
+             read_only_reason="仅查看：这个子 Agent 由父 Agent 驱动",
+             capabilities={"read": True, "send": False, "interrupt": False, "approve": False, "terminal": False, "attach": False},
+             **NO_SPACE),
+    ]
+    CANT_ANSWER_START = {x["session_id"]: copy.deepcopy(x) for x in SESSIONS[-2:]}
+    for _sid, _title, _id, _q, _opts in (
+            (CODEX_ASKS, "整理部署脚本", "cxq_deploy_target", "先部署到哪个环境？",
+             [("staging", "先在预发环境验证变量和迁移。"), ("production", "直接上线，跳过预发。")]),
+            (CODEX_ASKS_SUB, "核对 staging 变量", "cxq_staging_vars", "这两个变量按哪边的值？",
+             [("按生产的值", "和线上保持一致。"), ("保留 staging 的值", "只在预发环境不同。")])):
+        INTERACTIONS.append(
+            {"id": _id, "machine_id": "server", "session_id": _sid, "session_title": _title, "cwd": "/home/me/code/deploy",
+             # The subagent asked first: its card folds into the thread's chat too (#8010), under the thread's own
+             # (newest first once the cards scroll).
+             "kind": "question", "agent": "codex", "created_at": ago(minutes=1 if _sid == CODEX_ASKS else 2),
+             "expires_at": later(hours=24),
+             "tool_name": "request_user_input", "tool_use_id": "call_" + _id,
+             "questions": [{"question": _q, "header": "部署", "multi_select": False,
+                            "options": [{"label": l, "description": d} for l, d in _opts]}]})
+    # With MOCK_SIDE_SESSIONS=1 too, the /btw side session (#7944) is one the node reads outside Persona's panes (its
+    # outsideCapabilities: no approve): its card in the review's chat says which side it is from, and why it is greyed.
+    for _s in SESSIONS:
+        if _s["session_id"] == SIDE_BTW:
+            _s["capabilities"] = {"read": True, "send": False, "interrupt": False, "approve": False, "terminal": False,
+                                  "attach": False}
 
 if os.environ.get("MOCK_OPENCODE"):
     INTERACTIONS.append(
@@ -11107,6 +11243,7 @@ def _claude_dirs_state(mid):
 KEYS = []  # bodies of …/keys (the terminal's key bar and text field; GET /mock/keys)
 REWINDS = []  # bodies of …/rewind (#2436; GET /mock/rewinds)
 QUEUE_EDITS = []  # bodies of …/queue with the queue they pulled back (GET /mock/queue)
+SEND_NOWS = []  # "machine/session" of every …/queue/send-now, refused ones too (GET /mock/send_nows; #7169: one tap, one)
 UPLOADS = []  # files received (GET /mock/uploads)
 SENT = []  # bodies of sends, one per client_msg_id (GET /mock/sent)
 SENT_TO = []  # where each of them went: machine_id, session_id, client_msg_id, text (GET /mock/sent_to)
@@ -13634,6 +13771,27 @@ def fs_find(mid):
     return None
 
 
+def fs_convs():
+    """The Feishu page's chats with MOCK_LARK, plus the topic group when MOCK_LARK_TOPIC is on.
+    Only the perf inbox mock sets both; plain MOCK_LARK keeps FS_CONVS alone."""
+    rows = list(FS_CONVS)
+    have = {c["id"] for c in rows}
+    rows += [c for c in LARK_CHATS if c["id"] not in have]
+    return rows
+
+
+def fs_thread(mid, q):
+    """A topic thread from LARK_THREADS (MOCK_LARK_TOPIC), else the rich-page FS_THREADS."""
+    thread = LARK_THREADS.get(mid)
+    if thread and thread[0].get("thread_id"):
+        page = lark_window(thread[1:], q)
+        return dict(page, messages=thread[:1] + page["messages"])
+    if thread:
+        return lark_window(thread, q)
+    root = fs_find(mid)
+    return {"messages": ([root] if root else []) + FS_THREADS.get(mid, []), "has_older": False}
+
+
 def fs_get(h, p, q):
     """GET /api/v1/lark/… and /mock/lark with MOCK_LARK (True when handled; the rest falls through)."""
     # The unread switch must cross a whole read-only page, not filter just the first screen (#6553).
@@ -13684,17 +13842,32 @@ def fs_get(h, p, q):
     if p == "/api/v1/lark/conversations":
         # Optimized before/after list-scroll measurements use the same paginated synthetic workload (#6553).
         if os.environ.get("MOCK_LARK_LIST"):
-            rows = FS_CONVS + [dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
-                               for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
+            rows = (fs_convs() if os.environ.get("MOCK_LARK_TOPIC") else FS_CONVS) + [
+                dict(FS_CONVS[-1], id="list-%03d" % n, name="Archive %03d" % n)
+                for n in range(min(2000, int(os.environ["MOCK_LARK_LIST"])))]
             cursor, limit = int(q.get("cursor", ["0"])[0] or "0"), int(q.get("limit", ["60"])[0])
             h.send_json({"conversations": rows[cursor:cursor + limit], "account_id": LARK_ACCOUNT_ID,
                          "next_cursor": str(cursor + limit) if cursor + limit < len(rows) else ""})
             return True
+        # Plain MOCK_LARK keeps the body it had on main (no account_id). TOPIC adds f4 and the account stamp
+        # the Messages page requires (`LarkConversationsModel.owner`); without it the list is "Hub update needed".
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json({"conversations": fs_convs(), "next_cursor": "", "account_id": LARK_ACCOUNT_ID}); return True
         h.send_json({"conversations": FS_CONVS, "next_cursor": ""}); return True
     if p.startswith("/api/v1/lark/conversations/") and p.endswith("/messages"):
-        h.send_json(fs_page(p.split("/")[5], q)); return True
+        feed = p.split("/")[5]
+        if os.environ.get("MOCK_LARK_TOPIC") and feed in LARK_TOPIC_FEEDS:
+            page = lark_window(LARK_MESSAGES.get(feed, []), q)
+            page["topic"] = True
+            h.send_json(page); return True
+        # MOCK_LARK_RICH mutates LARK_MESSAGES["f3"] (the long hiking history); the rich-page FS_MESSAGES["f3"] is short.
+        if os.environ.get("MOCK_LARK_RICH") and feed in LARK_MESSAGES:
+            h.send_json(lark_window(LARK_MESSAGES[feed], q)); return True
+        h.send_json(fs_page(feed, q)); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/thread"):
         mid = p.split("/")[5]
+        if os.environ.get("MOCK_LARK_TOPIC"):
+            h.send_json(fs_thread(mid, q)); return True
         root = fs_find(mid)
         h.send_json({"messages": ([root] if root else []) + FS_THREADS.get(mid, []), "has_older": False}); return True
     if p.startswith("/api/v1/lark/messages/") and p.endswith("/url-preview"):
@@ -13970,6 +14143,9 @@ def model_configuration(include_uses=False):
                       model=l.get("model"), hidden=l.get("hidden", False)) for l in LAUNCHERS if l["source"] != "builtin"]
     providers += [{"id": "launcher.claude", "name": "claude", "kind": "launcher", "model": "model-chat"},
                   {"id": "legacy.ai", "name": "轻量 API", "kind": "api", "api": "messages", "model": "model-fast"}]
+    if os.environ.get("MOCK_MODEL_PICK") == "otherkind":
+        # The current main chat runs Codex while Main chat still defaults to Claude (#4662).
+        next(p for p in providers if p["id"] == "launcher.codex").update(agent="codex", agent_type="codex")
     if MEETING_MODELS:
         for provider in providers:
             launcher = next((l for l in LAUNCHERS if provider["id"] == "launcher." + l["name"]), None)
@@ -14323,7 +14499,9 @@ def machine_launchers(mid=""):
         out = [dict(l, run_here=True, prompt_optional=True) if l.get("agent") == "codex" else l for l in out]
     if MOCK_PROVIDERS:
         out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source", "pi") if l.get(k)}
-                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api" and l["name"] != OWN_SERVICE_PROVIDER["name"]]
+    if OWN_SERVICE_SKIP and not own_service_skips(OWN_SERVICE_PROVIDER, mid):  # #8109: listed where its rule lets it run
+        out.append({k: OWN_SERVICE_PROVIDER[k] for k in ("name", "display_name", "base_url", "model", "source")})
     if os.environ.get("MOCK_DESKTOP_APPS") and mid == "macbook":
         # The MacBook's Claude desktop app keeps Claude Code sessions: its launcher starts one there (#5480,
         # docs/integrations/claude-integration.md "New sessions in the desktop app").
@@ -17993,6 +18171,18 @@ def paged_sessions(query):
     fields = {"machine_id": "machine_id", "session_id": "session_id",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
+    scope = query.get("agents_only", ["0"])
+    if len(scope) != 1 or scope[0] not in ("0", "1", "false", "true"):
+        return {"error": "agents_only must be true, false, 1, or 0", "code": "invalid_query"}, 400
+    agents_only = scope[0] in ("1", "true")
+
+    def agent_row(s):
+        cwd = posixpath.normpath((s.get("cwd") or "").replace("\\", "/"))
+        parts = cwd.split("/")
+        health_dir = any(parent in (".persona", ".jarvis") and re.fullmatch(r"health(?:-m-[0-9a-f]+)?", name)
+                         for parent, name in zip(parts, parts[1:]))
+        return not (s.get("assistant") or s.get("space") == "health" or health_dir)
+
     # sessions_hierarchy (#5120): roots=1 leaves the folded children out and counts each parent by its folded state;
     # parent_session_id=<id> (with machine_id) lists the sessions folded under it.
     roots, under = query.get("roots", [""])[0] == "1", query.get("parent_session_id", [""])[0]
@@ -18020,7 +18210,8 @@ def paged_sessions(query):
     origin, not_origin = query.get("pane_source", [""])[0], query.get("exclude_pane_source", [""])[0]
 
     def matching(rows):
-        rows = [s for s in rows if (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
+        rows = [s for s in rows if (not agents_only or agent_row(s))
+                and (not roots or not s.get("folded_under")) and (not under or s.get("folded_under") == under)
                 and (not query.get("state", [""])[0] or query["state"][0] == state_of(s))
                 and all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
                                       for k, v in fields.items())
@@ -19410,8 +19601,8 @@ def features():
 
 
 _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-errors>\s*"),
-                re.compile(r"(?s)<persona-context\b[^>]*>.*?</persona-context>\s*"),
-                re.compile(r"<persona-file\b[^>]*?/?>(?:\s*</persona-file>)?")]
+                re.compile(r"(?s)<" + CONTEXT_TAG_PATTERN + r"\b[^>]*>.*?</" + CONTEXT_TAG_PATTERN + r">\s*"),
+                re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
@@ -21083,6 +21274,9 @@ def zrle_rect(px, W, x, y, w, h, z):
 SCREEN_INPUT = {"mode": os.environ.get("MOCK_SCREEN_INPUT", "")}
 SCREEN_VIDEO = {"mode": os.environ.get("MOCK_SCREEN_VIDEO", ""), "pairs": set(), "streams": [], "starts": [], "reports": 0,
                 "updates": [], "refuse": False, "tiers": os.environ.get("MOCK_SCREEN_VIDEO_TIERS") == "1"}
+# MOCK_SCREEN_X264=1 (#8859): MacBook's node found the user's own ffmpeg with libx264 (`screen_video.x264`), so its page
+# offers x264 for the live screen.
+SCREEN_X264 = os.environ.get("MOCK_SCREEN_X264") == "1"
 _SCREEN_VIDEO_FIXTURE = {}
 _SCREEN_VIDEO_FILES = {"hevc": "fixture.bin", "h264": "fixture-h264.bin"}
 
@@ -22352,6 +22546,7 @@ def computer_of(machine_id, enabled):
         c["screen_video"] = {"version": 1, "codecs": ["hevc", "h264"],
                              "permission": "missing" if SCREEN_VIDEO["mode"] in ("missing", "denied") else "granted"}
         if SCREEN_VIDEO["mode"] == "denied": c["screen_video"]["asked"] = True
+        if SCREEN_X264: c["screen_video"]["x264"] = "ffmpeg 9.0.2"
     if machine_id == "macbook" and c.get("screen_sharing") and SCREEN_INPUT["mode"]:  # MOCK_SCREEN_INPUT (#7775)
         c["screen_input"] = {"version": 1, "permission": "granted" if SCREEN_INPUT["mode"] == "granted" else "missing"}
         if SCREEN_INPUT["mode"] == "asked": c["screen_input"]["asked"] = True
@@ -22941,6 +23136,9 @@ PLUGINS = {
                         "source": "installed", "enabled": True, "error": "这个扩展要 hub 的构建号 >=202612010000，这台是 202611041200",
                         "contributes": {"connectors": ["exampleweather"]}, "form": {"fields": []}, "config": {}, "secrets": [], "permissions": [_RUNS]},
 }
+import volc_mock  # noqa: E402  MOCK_VOLC: the built-in Volcengine speech extension (docs/extensions/volcengine-speech.md)
+if volc_mock.ENABLED:
+    PLUGINS[volc_mock.EXT] = volc_mock.plugin(_RUNS)
 PLUGINS["example-gateway"] = {
     "id": "example-gateway", "name": "Example 网关面板", "kind": "ui", "status": "running", "version": "1.0.0", "source": "installed",
     "enabled": True, "description": "在启动器页上显示 Example 网关的余额、Key 和用量。", "contributes": {"ui": ["home", "panel", "usage", "today", "gpu", "notes"]},
@@ -23056,6 +23254,10 @@ if MOCK_COMPUTER:
                           {"name": "no_auto_lock", "type": "array", "title": "插件开着时不自动锁屏", "unique_items": True,
                            "description": "打开的 Mac 在插件开着时一直不因空闲锁屏（node 持有 caffeinate，不改系统设置）；和 hub 断开 30 分钟后自动恢复。手动锁屏、合盖照常",
                            "confirm": "打开后这台 Mac 在插件开着时一直不会因为空闲锁屏，坐在它前面的人能直接用它。和 hub 断开 30 分钟后自动恢复。",
+                           "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
+                          {"name": "screen_x264", "type": "array", "title": "实时屏幕用 x264 编码", "unique_items": True,  # #8859
+                           "description": "打开的 Mac 在局域网直连时用你自己装的 ffmpeg（带 libx264，比如 Homebrew 的）编码实时屏幕：每帧快约 6 ms，多用一些 CPU。Persona 不带 x264 或 ffmpeg；没装、离开局域网或跟不上时用系统自带的编码器",
+                           "confirm": "打开后，这台 Mac 在局域网直连时用你自己装的 ffmpeg 编码实时屏幕。x264 是 GPL 软件，Persona 不带它；它更费 CPU，跟不上时自动换回系统自带的编码器。",
                            "items": {"name": "items", "type": "string", "format": "machine", "os": ["darwin"]}},
                           {"name": "keep_awake", "type": "boolean", "title": "操作或开着 VNC 时保持唤醒", "default": True,
                            "description": "助手操作那台 Mac、或有人在看它的画面时，它不睡、不因空闲锁屏；最后一次操作 10 分钟后、画面关掉后就撤掉，不改系统设置"},
@@ -23968,6 +24170,8 @@ def markets_route(handler, p, body):
                 ui = [{"plugin": "example-gateway", "id": "panel", "title": "Example 网关", "placement": "launcher_section"},
                       {"plugin": "example-gateway", "id": "elsewhere", "title": "别家网关", "placement": "launcher_section"}]
         ui += [u for u in INBOX_ITEM_UI if placement in ("", u["placement"])]
+        if volc_mock.ENABLED and PLUGINS.get(volc_mock.EXT, {}).get("enabled") and placement in ("", "plugin_page", "extension_page"):
+            ui += PLUGINS[volc_mock.EXT]["ui"]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -23978,6 +24182,9 @@ def markets_route(handler, p, body):
     if len(parts) == 8 and parts[4] == "example-chat" and parts[5:7] == ["-", "ui"] and method == "POST" and INBOX_ITEM_UI:
         code, out = inbox_item_ui(parts[7], req)
         handler.send_json(out, code); return True
+    if volc_mock.ENABLED and len(parts) == 8 and parts[3] == "plugins" and parts[4] == volc_mock.EXT and parts[5:7] == ["-", "ui"] \
+            and method == "POST" and PLUGINS.get(volc_mock.EXT, {}).get("enabled"):
+        handler.send_json(volc_mock.page_post(PLUGINS[volc_mock.EXT], req)); return True
     if len(parts) == 8 and parts[3] == "plugins" and parts[5] == "-" and parts[6] == "ui" and method == "POST":
         if parts[4] != "example-gateway" or "example-gateway" not in PLUGINS:
             handler.send_json({"error": "no such plugin", "code": "not_found"}, 404); return True
@@ -24341,6 +24548,8 @@ def features():
 
 
 def _plugin_needs(pl):
+    if volc_mock.ENABLED and pl["id"] == volc_mock.EXT:
+        return volc_mock.view(pl, ASSISTANT_CONFIG)
     missing = ["密钥「%s」" % s["title"] for s in pl.get("secrets", []) if s.get("required") and not s.get("set")]
     if pl["enabled"] and pl["status"] in ("needs_setup", "running") and pl["source"] == "installed":
         pl["status"] = "needs_setup" if missing else "running"
@@ -24420,6 +24629,13 @@ def plugins_route(handler, p, body):
         elif pl["id"] in _EXTENSION_PACK_OFF:
             _EXTENSION_PACK_OFF.remove(pl["id"])
         _auto_upgrade_paused(pl)
+    elif volc_mock.ENABLED and pl["id"] == volc_mock.EXT and rest == ["config"] and method == "PUT":
+        volc_mock.config_put(pl, req.get("config") or {}, ASSISTANT_CONFIG)
+    elif volc_mock.ENABLED and pl["id"] == volc_mock.EXT and rest == ["secrets", "key"] and method == "PUT" and not req.get("reference"):
+        why = volc_mock.secret_put(pl, req.get("value") or "")
+        if why:
+            handler.send_json({"error": why, "code": "check_failed"}, 400)
+            return True
     elif rest == ["config"] and method == "PUT":
         cfg = req.get("config") or {}
         if pl["id"] == "example-gateway-quota":
@@ -24459,7 +24675,8 @@ def plugins_route(handler, p, body):
             for m in MACHINES:
                 if "computer" in m:
                     m["computer"] = {**computer_of(m["id"], m["id"] in (cfg.get("machines") or [])),
-                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or [])}  # #1507 b2
+                                     "no_auto_lock": m["id"] in (cfg.get("no_auto_lock") or []),  # #1507 b2
+                                     "screen_x264": m["id"] in (cfg.get("screen_x264") or [])}  # #8859
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
@@ -24551,7 +24768,7 @@ MOCK_HELP = [
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
     "MOCK_REPLY_CUT=1|error  The review chat's last turn stopped right after its first words (interrupted; =error: a model API error): its reply says it did not complete (#5314)",
-    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
+    "MOCK_LN=1  Low-distraction mode on (#7782); GET /mock/ln?on=0|1 or the apps' PUT /api/v1/push/ln-mode (#8157) switches it until /mock/reset. Either way /api/v1/push/intercepts has two P1 pushes and one P2 push held today, the first linking the /orders investigation to-do (todo_id), and one of yesterday that clients leave out",
 ]
 
 _features_without_voice = features
@@ -24732,7 +24949,8 @@ if VOICE_MODE:  # iOS's protocol 2 beside the script above (docs/assistant/voice
 
 
 # ---------- area: model defaults (#2455) ----------
-# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none),
+# MOCK_MODEL_DEFAULTS=1: the main chat has a "Runtime" (cli / agentsdk, saved in its binding; "cli" is stored as none)
+# and "New chats' Claude profile" (#4633: private / legacy, saved in its binding; "private" is stored as none),
 # GET /api/v1/machines/{mid}/launchers carries `default` (?purpose=, "New Agent"'s agent.new when absent), and the main
 # conversation asked for the Agent SDK but runs on the CLI (runtime_fallback).
 MODEL_DEFAULTS = os.environ.get("MOCK_MODEL_DEFAULTS") == "1"
@@ -24752,6 +24970,11 @@ def model_configuration(include_uses=False):
                 binding.pop("runtime")
         purpose["runtimes"] = ["cli", "agentsdk"]
         purpose["fields"] = purpose["fields"] + ["runtime"]
+        for binding in (purpose["override"], purpose["effective"]):
+            if binding.get("config_dir") == "private":
+                binding.pop("config_dir")
+        purpose["config_dirs"] = ["private", "legacy"]
+        purpose["fields"] = purpose["fields"] + ["config_dir"]
     return catalog
 
 
@@ -24785,6 +25008,7 @@ def model_defaults_launchers(h, p, q):
             default["runtime"] = b.get("runtime") or "cli"
     out = {"launchers": machine_launchers(p.split("/")[4]), "default": default}
     if pid == "agent.new":
+        out = with_own_service_unavailable(out, p.split("/")[4], h.headers.get("Accept-Language"))
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
         out["tiers_profile"] = {"id": "performance", "name": "Performance"}
@@ -24847,6 +25071,49 @@ if LAUNCHER_HEALTH:
 # ---------- end of area: launcher health ----------
 
 
+# ---------- area: a provider its own-service rule leaves out (#8109) ----------
+# MOCK_OWN_SERVICE_SKIP=1: a Persona-managed provider added with the defaults (DeepSeek: share all, own_service skip) and
+# the MacBook's Claude Code signed in on its own. New Agent's list (GET /api/v1/machines/{mid}/launchers, agent.new or no
+# purpose) leaves it out on the MacBook and says why in `unavailable` (code launcher_own_service, the hub's sentence in
+# the request's language); the server and the Mac Studio, without a sign-in of their own, list it. Settings › Model
+# providers has it, so How to fix opens its page.
+OWN_SERVICE_SKIP = os.environ.get("MOCK_OWN_SERVICE_SKIP") == "1"
+OWN_SERVICE_PROVIDER = {"name": "deepseek", "display_name": "DeepSeek", "source": "persona",
+                        "base_url": "https://api.deepseek.example.com/anthropic", "model": "deepseek-v4", "has_key": True,
+                        "auth": "bearer", "share": "all", "delivery": "on_demand", "own_service": "skip"}
+OWN_SERVICE_SIGNED_IN = ("macbook",)  # computers whose Claude Code has a sign-in of its own
+
+
+def own_service_skips(launcher, mid):
+    """The provider's own-service rule leaves it out on computer mid."""
+    return launcher.get("own_service") == "skip" and mid in OWN_SERVICE_SIGNED_IN
+
+
+def own_service_unavailable(mid, accept_language):
+    """New Agent's `unavailable` on computer mid (hub ownServiceSkipped): absent (None) when there is none."""
+    if not OWN_SERVICE_SKIP or mid not in OWN_SERVICE_SIGNED_IN:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+    machine = next((m["name"] for m in MACHINES if m["id"] == mid), mid)
+    l = OWN_SERVICE_PROVIDER
+    reason = readiness_mock.t(readiness_mock.lang_of(accept_language), "assistant-models_launchers.err_own_service",
+                              machine=machine, harness="Claude Code", provider=l["display_name"])
+    return [{"name": l["name"], "display_name": l["display_name"], "kind": "launcher", "agent": "claude",
+             "code": "launcher_own_service", "reason": reason}]
+
+
+def with_own_service_unavailable(out, mid, accept_language):
+    """A launcher list's answer with `unavailable` added where the rule leaves the provider out (MOCK_OWN_SERVICE_SKIP)."""
+    skipped = own_service_unavailable(mid, accept_language)
+    return dict(out, unavailable=skipped) if skipped else out
+
+
+if OWN_SERVICE_SKIP:
+    LAUNCHERS.insert(0, dict(OWN_SERVICE_PROVIDER))
+# ---------- end of area: a provider its own-service rule leaves out ----------
+
+
 # ---------- HTTP ----------
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -24862,6 +25129,17 @@ class H(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *a):
         LOG.write("%s %s\n" % (self.command, self.path)); LOG.flush()
+
+    def send_share_page(self):
+        """GET /mock/share-page: a plain page with a title, for Share › Persona from Safari (#2282, ShareFromAppsTests)."""
+        page = (b'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                b'<title>A Page Worth Reading</title></head><body><h1>A Page Worth Reading</h1>'
+                b'<p>Made-up text for sharing from Safari.</p></body></html>')
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
 
     def send_json(self, obj, status=200, headers=None, add_error_code=True):
         global LOST_RECEIPT
@@ -25262,6 +25540,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/renew": return self.send_json(*renew_requests(int(q.get("minutes", ["30"])[0] or 30)))
         if p == "/api/v1/auth/tokens": return self.send_json({"tokens": TOKENS, "current": "dev_phone", "push": TOKEN_PUSH})
         if p == "/mock/sent": return self.send_json({"sent": SENT})
+        if p == "/mock/share-page": return self.send_share_page()
         if p == "/mock/sent_to": return self.send_json({"sent": SENT_TO})
         if p == "/mock/lark_reads": return self.send_json({"reads": LARK_READS})
         if p == "/mock/mail_sent": return self.send_json({"sent": MAIL_SENT})
@@ -25316,6 +25595,9 @@ class H(BaseHTTPRequestHandler):
             SESSIONS[:] = [x for x in SESSIONS if not x["session_id"].startswith("d4e6f8a0-")]
             # MOCK_RESUME_TERMINAL: the stopped Agents a test resumed are stopped again (#5521).
             SESSIONS[:] = [copy.deepcopy(RT_START[x["session_id"]]) if x["session_id"] in RT_START else x for x in SESSIONS]
+            # MOCK_CANT_ANSWER: the Codex thread a test attached is not joined again (#6868).
+            SESSIONS[:] = [copy.deepcopy(CANT_ANSWER_START[x["session_id"]]) if x["session_id"] in CANT_ANSWER_START else x
+                           for x in SESSIONS]
             del RECONNECTS[:], STARTED[:], SEEN[:]
             INTERACTIONS.extend(SESSION_CLOSE["interactions"])
             SESSION_CLOSE.update(fail=False, attempts=[], closed=[], interactions=[])
@@ -25383,6 +25665,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/rewinds": return self.send_json({"rewinds": REWINDS})
         if p == "/mock/queue": return self.send_json(queue_messages(q.get("text", [None])[0], "clear" in q, int(q.get("photos", ["0"])[0] or 0)))
         if p == "/mock/queue_edits": return self.send_json({"edits": QUEUE_EDITS})
+        if p == "/mock/send_nows": return self.send_json({"send_nows": SEND_NOWS})
         if p == "/mock/terminal_input": return self.send_json({"input": TERMINAL_INPUT})
         if p == "/mock/terminal_node":
             state, mid = q.get("state", [""])[0], q.get("machine", [TERMINAL_NODE["machine"]])[0]
@@ -25820,7 +26103,8 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": machine_launchers(p.split("/")[4])})
+            mid = p.split("/")[4]
+            return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -26704,9 +26988,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "操控电脑的插件没打开，或这台不是 Mac"}, 404)
             body = json.loads(self.last_body or b"{}")
             if "enabled" in body:
-                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False)}
+                machine["computer"] = {**computer_of(machine["id"], bool(body["enabled"])), "no_auto_lock": machine["computer"].get("no_auto_lock", False),
+                                       "screen_x264": machine["computer"].get("screen_x264", False)}
             if "no_auto_lock" in body:  # "Do not lock automatically while the plugin is open" (#1507 b2)
                 machine["computer"] = {**machine["computer"], "no_auto_lock": bool(body["no_auto_lock"]) and machine["computer"].get("enabled", False)}
+            if "screen_x264" in body:  # x264 for the live screen (#8859)
+                machine["computer"] = {**machine["computer"], "screen_x264": bool(body["screen_x264"]) and machine["computer"].get("enabled", False)}
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
@@ -27661,6 +27948,9 @@ class H(BaseHTTPRequestHandler):
                 if st["key"] == body.get("key"):
                     st["value"] = body.get("value")
             return self.send_json({"settings": store[mid]})
+        if p == "/api/v1/push/ln-mode" and self.command == "PUT":  # Settings › Notifications › Low-distraction mode (#8157)
+            LN["on"] = json.loads(self.last_body or b"{}").get("enabled") is True
+            return self.send_json({"enabled": LN["on"]})
         if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):  # Settings › Notifications
             body = json.loads(self.last_body or b"{}")
             PREFS.update({k: v for k, v in body.items() if k in ("input", "done", "live_activity", "lock_details")})
@@ -27671,11 +27961,20 @@ class H(BaseHTTPRequestHandler):
                 PREFS["quiet"] = {k: body["quiet"].get(k, "") for k in ("enabled", "start", "end", "tz")}
             return self.send_json(PREFS)
         if p.startswith("/api/v1/sessions/") and p.endswith("/messages") and os.environ.get("MOCK_SEND_REFUSE"):
-            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds
+            # MOCK_SEND_REFUSE=input_draft|dialog_open: the computer refuses sends (SendSafety); clear_draft then succeeds.
+            # =peer_held|peer_unconfirmed: a Claude session outside Persona's terminals got it through its peer inbox but did
+            # not take it (held for approval at the computer in bypass permissions mode / not confirmed): delivered unknown
             body = json.loads(self.last_body or b"{}")
             SENT.append(body)
             if body.get("clear_draft"):
                 return self.send_json({"ok": True})
+            if os.environ["MOCK_SEND_REFUSE"] in ("peer_held", "peer_unconfirmed"):
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+                code = os.environ["MOCK_SEND_REFUSE"]
+                lang = readiness_mock.lang_of(self.headers.get("Accept-Language", ""))
+                return self.send_json({"error": readiness_mock.t(lang, "rpc-errors." + code), "code": code,
+                                       "detail": "the node's own words", "delivered": "unknown"}, 409)
             if os.environ["MOCK_SEND_REFUSE"] == "dialog_open":
                 # As the hub words a node's refusal: its own sentence, the dialog's first line flat beside it (#3752).
                 return self.send_json({"error": "终端正在等待选择，请先到终端处理。", "code": "dialog_open", "delivered": "none",
@@ -27706,16 +28005,19 @@ class H(BaseHTTPRequestHandler):
             KEYS.append(json.loads(self.last_body or b"{}"))
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/sessions/") and p.endswith("/attach"):  # Attach live to a Codex app-server thread
-            for s in all_sessions():
+            for s in SESSIONS + ASSISTANT:  # the rows themselves: all_sessions() hands out copies, which lost the join
                 if s["session_id"] == unquote(p.split("/")[5]):
                     caps = s.get("capabilities") or {}
                     if not s.get("source_kind") or not caps.get("attach"):
                         return self.send_json({"error": "这个会话不能实时接入", "code": "codex_read_only", "delivered": "none"}, 403)
                     s["attached"] = True
                     s["capabilities"] = dict(caps, approve=True)  # joining lets the phone answer its approvals
+                    s["rev"] = (s.get("rev") or 0) + 1
+                    push_machine(s["machine_id"])  # as the hub pushes the node's new row: a delta hub's app keeps pushed rows
                     return self.send_json({"ok": True})
             return self.send_json({"error": "session not found"}, 404)
         if p.startswith("/api/v1/sessions/") and p.endswith("/queue/send-now"):  # node session.queue.send_now (#6088)
+            SEND_NOWS.append(p.split("/")[4] + "/" + p.split("/")[5])
             s = next((x for x in SESSIONS + ASSISTANT if x["session_id"] == p.split("/")[5]), None)
             if not (s or {}).get("queued"):
                 return self.send_json({"code": "nothing_queued", "error": "Nothing is queued for the agent any more."}, 409)
@@ -28443,6 +28745,7 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
+MOCK_HELP.append("MOCK_ASSISTANT_CARDS=run  主对话连着请求改六项设置（persona_settings set），输入区上方只占一张卡的位置（「1 / 6」），答完下一张在原位顶上来，已回答的合成一行，最后一次回答后约 3 秒收起")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_LONG_REPORT=1|cjk|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); cjk: the report as varied in Chinese characters as a real one, ~800 distinct (#5076); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_QUESTION_CANCEL=1  Adds can_cancel to the network tests' Agent question and Persona's main ask_user card for MOCK_ASK_LONG=1|actions|swipe|review; /mock/reset restores both unanswered exactly once and clears their resolved and interaction history entries")
@@ -30010,8 +30313,11 @@ MOCK_HELP.append("MOCK_CUSTOM_MODELS=1|forgetfail|empty|fail  手动输入模型
 # /api/v1/assistant/conversations/{id}/model keep or drop `model_pick` on the conversation (the out-of-scope one is 409
 # launcher_out_of_scope, an unknown one 409 launcher_missing, another agent than the chat's 409 launcher_other_kind, a
 # model with sonnetcc 400). =picked: the second chat starts
-# with a pick. GET /mock/model_pick: the requests; ?reset=1 drops every pick.
+# with a pick. =otherkind: the main chat already runs Codex while its default stays Claude (#4662). GET /mock/model_pick:
+# the requests; ?reset=1 drops every pick and restores the default; ?default=claude|codex|gone changes the launcher-list
+# default and pushes a main-chat revision for the notice's live positive, same-kind and unknown-default browser cases.
 MODEL_PICK_MODE = os.environ.get("MOCK_MODEL_PICK", "")
+MODEL_PICK_DEFAULT = "claude"
 MODEL_PICK_LOG = []
 MODEL_PICK_LAUNCHERS = [
     {"name": "claude", "model": "opus", "source": "builtin"},
@@ -30035,28 +30341,41 @@ if MODEL_PICK_MODE:
 
 
 def model_pick_reset():
+    global MODEL_PICK_DEFAULT
+    MODEL_PICK_DEFAULT = "claude"
     for s in ASSISTANT:
         s.pop("model_pick", None)
     if MODEL_PICK_MODE == "picked":
         for s in ASSISTANT:
             if s["session_id"] == ASK2:
                 s["model_pick"] = {"launcher": "team-api", "effort": "medium"}
+    elif MODEL_PICK_MODE == "otherkind":
+        for s in ASSISTANT:
+            if s["session_id"] == ASK1:
+                s.update(agent="codex", launcher="codex", model="gpt-5.5", effort="medium")
 
 
 def model_pick_route(handler, p, body):
     """MOCK_MODEL_PICK: the main chat's launchers with `unavailable`, PUT / DELETE …/conversations/{id}/model. False otherwise."""
     if not MODEL_PICK_MODE: return False
+    global MODEL_PICK_DEFAULT
     query = parse_qs(urlparse(handler.path).query)
     lang = cron_lang(handler.headers.get("Accept-Language"))
     if p == "/mock/model_pick":
         if query.get("reset"):
             model_pick_reset()
             push_machine(ASSISTANT_CONFIG["machine_id"])
-        return handler.send_json({"requests": MODEL_PICK_LOG}) or True
+        if query.get("default"):
+            MODEL_PICK_DEFAULT = query["default"][0]
+            main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+            if main is not None:
+                main["rev"] = (main.get("rev") or 0) + 1
+            push_machine(ASSISTANT_CONFIG["machine_id"])
+        return handler.send_json({"requests": MODEL_PICK_LOG, "default": MODEL_PICK_DEFAULT}) or True
     if handler.command == "GET" and re.fullmatch(r"/api/v1/machines/[^/]+/launchers", p) and query.get("purpose") == ["assistant"]:
         return handler.send_json({
             "launchers": [dict(l) for l in MODEL_PICK_LAUNCHERS],
-            "default": {"provider": "claude", "model": "opus", "effort": "high"},
+            "default": {"provider": MODEL_PICK_DEFAULT, "model": "gpt-5.5" if MODEL_PICK_DEFAULT == "codex" else "opus", "effort": "high"},
             "unavailable": [
                 {"name": "gpt-direct", "display_name": "GPT direct", "kind": "api", "api": "responses", "code": "api_protocol", "reason": MODEL_PICK_REASONS["api_protocol"][lang]},
                 {"name": "far-gw", "display_name": "Far gateway", "kind": "launcher", "code": "launcher_out_of_scope", "reason": MODEL_PICK_REASONS["launcher_out_of_scope"][lang]},
@@ -30104,9 +30423,10 @@ def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
 
 
-MOCK_HELP.append("MOCK_MODEL_PICK=1|picked  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
+MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"
                  "（一个 Responses 直连 API、一个不对这台电脑开放的服务商）；PUT / DELETE /api/v1/assistant/conversations/{id}/model 记下或清掉 model_pick。"
-                 "picked：第二个对话一开始就有自己的选择。GET /mock/model_pick 看请求，?reset=1 复原")
+                 "picked：第二个对话一开始就有自己的选择；otherkind：当前主对话跑 Codex、默认仍是 Claude（#4662）。"
+                 "GET /mock/model_pick 看请求，?reset=1 复原；?default=claude|codex|gone 改启动器列表的默认")
 
 
 # Switching a running Agent to another provider (#5035, docs/protocol/protocol.md "Switching a running Agent to another

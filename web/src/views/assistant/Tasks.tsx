@@ -5,7 +5,7 @@
 // side panel.
 import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
-import { prBlockers } from "../../lib/todo-triage";
+import { openMergePRs, prBlockers } from "../../lib/todo-triage";
 import { assistantEntries, needsYouBySupervisor, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -71,7 +71,7 @@ import { feedWake, HandoffCard, HandoffCards, taskHandoffs, whyNotStarted } from
 import { latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { useChosenManager, useLinkManager } from "../../lib/manager-choice";
-import { AnsweredCard, InteractionCard, underCard } from "../chat/Interactions";
+import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
 import { interactionKicker } from "../../lib/row-line";
@@ -680,9 +680,7 @@ export const TaskQuestions = memo(function TaskQuestions({ conversation }: { con
   if (!first && !answered.length) return null;
   return (
     <div className="flex flex-col gap-1">
-      {answered.map((a) => (
-        <AnsweredCard key={a.ix.id} card={a} />
-      ))}
+      {answered.length > 0 && <AnsweredSummary answered={answered} />}
       {first && (
         <>
           <div className="flex items-center gap-1.5 px-1 text-label font-semibold text-attention">
@@ -727,9 +725,10 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
     });
 }
 
-type AssistantTray = "needs" | "running" | "pr";
-/** Each entry's mark: Needs you waits on the user, In progress is work under way. */
-const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running: "bg-accent", pr: "bg-accent" };
+type AssistantTray = "needs" | "running" | "review" | "pr";
+/** Each entry's mark: Needs you waits on the user, In progress is work under way; Persona reviewing is neutral, since
+ *  nothing in it is the user's (#8678). */
+const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running: "bg-accent", review: "bg-ink-3", pr: "bg-accent" };
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
@@ -761,7 +760,7 @@ function statusTone(state: string, toStart: boolean): string {
 }
 
 /** One slot, one row: live task/session state wins over historical feed metadata. */
-function ProgressTaskRow({ card, conversation, activity, countsOpen, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; onOpen?: () => void }) {
+function ProgressTaskRow({ card, conversation, activity, countsOpen, supervisorReview, onOpen }: { card: TaskCardMetadata; conversation: string; activity?: BackgroundWork; countsOpen: boolean; supervisorReview?: boolean; onOpen?: () => void }) {
   const todo = useTodo(card.todo_id);
   const task = useTaskNow(todo);
   const plans = useFeed((s) => s.plans);
@@ -788,7 +787,9 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, onOpen }: {
   const liveLine = backgroundWorkLine(liveWork);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = liveWork || finished || state === "cancelled" ? undefined : parkedLine(todo);
-  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" && starting ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  // judged finished and with its supervisor for review (the Persona reviewing tray, lib/assistant-entries `review`): the row says whose turn it is
+  const reviewing = !!supervisorReview && !liveWork && !finished && state !== "cancelled";
+  const statusLabel = liveWork ? stateName("working") : parked ? t("assistant-tasks.review_parked") : reviewing ? t("assistant-tasks.review_supervisor") : accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : state === "not_started" && starting ? t("assistant-tasks.status_starting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
   const mark: TodoStatus = liveWork ? "working" : accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
@@ -827,15 +828,17 @@ function ProgressTaskRow({ card, conversation, activity, countsOpen, onOpen }: {
   );
 }
 
-/** A fresh, open PR waiting for its maintainer, shown in its own tray group. */
+/** A task's fresh, open PRs waiting for their maintainers, shown in their own tray group: each with its own blockers. */
 function WaitingMergeRow({ todo }: { todo: Todo }) {
-  const blockers = prBlockers(todo);
+  const prs = openMergePRs(todo, Date.now());
   return <div data-pr-waiting-row={todo.id} className="flex items-start gap-2 px-3 py-2.5">
     <Icon name="pullRequest" size={14} className="mt-0.5 shrink-0 text-accent-ink" />
     <div className="min-w-0 flex-1">
       <button type="button" data-pr-task-link={todo.id} onClick={() => openTask(todo.id)} className="block max-w-full truncate text-left text-sm font-medium hover:underline">{todo.title}</button>
-      <a href={todo.pr_url} target="_blank" rel="noreferrer noopener" title={todo.pr_url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{todo.pr_url}</a>
-      <div className="truncate text-xs text-ink-2">{blockers.map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
+      {prs.map((facts) => <div key={facts.url} data-pr-waiting-url={facts.url}>
+        <a href={facts.url} target="_blank" rel="noreferrer noopener" title={facts.url} className="block max-w-full truncate text-xs text-accent-ink hover:underline">{facts.url}</a>
+        <div className="truncate text-xs text-ink-2">{prBlockers(todo, facts).map((key) => t(`assistant-tasks.pr_blocker_${key}`)).join(" · ")}</div>
+      </div>)}
     </div>
   </div>;
 }
@@ -1166,7 +1169,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   // no to-do — hand-opened Agents, plans waiting for Start, draft cards, the chat's own ask cards — still add one.
   const badgeOf = (items: { kind: string; countsOpen?: boolean }[]) =>
     items.reduce((n, item) => n + (item.kind === "task" ? (item.countsOpen ? 1 : 0) : 1), 0);
-  const counts: Record<AssistantTray, number> = { needs: ownAsks.length + badgeOf(entries.needsYou), running: badgeOf(entries.running), pr: badgeOf(entries.pr) };
+  const counts: Record<AssistantTray, number> = { needs: ownAsks.length + badgeOf(entries.needsYou), running: badgeOf(entries.running), review: badgeOf(entries.review), pr: badgeOf(entries.pr) };
   // the card is in the chat already: close the tray onto it and bring it into view
   const openOwn = (id: string) => {
     setTray(null);
@@ -1181,8 +1184,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       window.removeEventListener("persona:task-start", needs);
     };
   }, [conversation]);
-  const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), pr: t("todos.section_pr") };
-  const entryKeys: AssistantTray[] = ["needs", "running", ...(counts.pr > 0 || tray === "pr" ? ["pr" as const] : [])];
+  const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), review: t("assistant-tasks.tray_review"), pr: t("todos.section_pr") };
+  // Persona reviewing is there only while a task waits for its review (#8678), Waiting for merge while a PR is counted
+  const entryKeys: AssistantTray[] = ["needs", "running", ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(counts.pr > 0 || tray === "pr" ? ["pr" as const] : [])];
   const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
   // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
   // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
@@ -1228,6 +1232,10 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             )}
             {entries.justFinished.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={false} onOpen={() => seeJustFinished(item.todo)} />)}
           </div>}
+          {tray === "review" && <div className="divide-y divide-line">
+            {entries.review.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} countsOpen={item.countsOpen} supervisorReview />)}
+            {!entries.review.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_review")}</p>}
+          </div>}
           {tray === "pr" && <div className="divide-y divide-line">
             {entries.pr.map((item) => item.kind === "task" && <WaitingMergeRow key={item.key} todo={item.todo} />)}
             {!entries.pr.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pr")}</p>}
@@ -1264,7 +1272,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
               aria-expanded={open}
               aria-controls={open ? trayId : undefined}
               onClick={() => setTray(open ? null : key)}
-              className={cx(DOCK_CAPSULE, "gap-2 font-medium", open ? "bg-ink text-surface" : quiet ? "bg-field text-ink-3 hover:bg-hover" : "bg-field text-ink hover:bg-hover")}
+              className={cx(DOCK_CAPSULE, "gap-2 font-medium", open ? "bg-ink text-surface" : quiet ? "bg-field text-ink-3 hover:bg-hover" : key === "review" ? "bg-field text-ink-2 hover:bg-hover" : "bg-field text-ink hover:bg-hover")}
             >
               <span aria-hidden className={cx("size-2 shrink-0 rounded-full", quiet ? "bg-ink-3" : TRAY_DOT[key])} />
               <span>{labels[key]}</span>

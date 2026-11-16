@@ -23,6 +23,7 @@ const (
 	sigInterrupted = "interrupted" // the model service cut its turn off
 	sigFailed      = "failed"      // its agent did not start
 	sigStarted     = "started"     // its agent started after the supervisor's retry (start_remedy.go)
+	sigPRConflict  = "pr_conflict" // the task's current open PR has merge conflicts at this head
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
@@ -118,7 +119,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigOwnerCannot, // the owner waits on a decision they cannot answer as it is
 		sigParkDecided: // the owner answered: what they said is acted on soon
 		return true
@@ -411,14 +412,15 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
 	s.pruneAllStoppedDedup(ctx)
-	lists := machineSessions{}   // each machine listed once for all the supervised tasks (#3029)
-	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	lists := machineSessions{}     // each machine listed once for all the supervised tasks (#3029)
+	history := s.planHistoryOnce() // and the plans read once, when a task's start needs them (start_remedy.go)
+	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
 	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
-		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
+		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		agents := s.taskAgentsIn(ctx, t, lists)
 		group := s.allStoppedGroup(ctx, t, groups[t.ID], lists)
 		allStopped := false

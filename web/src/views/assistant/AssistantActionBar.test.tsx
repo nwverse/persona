@@ -92,7 +92,7 @@ const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assi
 /** Opens the Needs you rows the tray folds to a line (#5569); a row with its key opens that one. */
 const openRows = (key?: string) => act(async () => host.querySelectorAll<HTMLButtonElement>(`button[data-needs-row${key ? `="${key}"` : ""}][aria-expanded="false"]`).forEach((b) => b.click()));
 
-const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), pr: t("todos.section_pr") };
+const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running"), review: t("assistant-tasks.tray_review"), pr: t("todos.section_pr") };
 // where a click went as a page (set to Full page, #5096); the side panel, the default, says so itself (getPanel)
 const opened = () => location.pathname + location.search;
 const trays = () => host.querySelector("[data-assistant-actionbar]")!.textContent;
@@ -114,6 +114,19 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(row.querySelector("a")?.classList).toContain("truncate");
     act(() => row.querySelector<HTMLButtonElement>("[data-pr-task-link]")!.click());
     expect(getPanel()).toEqual({ kind: "task", todo: "tray-task" });
+  });
+
+  it("keeps a task whose last PR merged in the waiting tray while an earlier PR of it is open, each PR with its own blockers", () => {
+    const merged = "https://github.com/example/demo/pull/43", open = "https://github.com/example/demo/pull/42";
+    const checked = new Date(now.getTime() - 60_000).toISOString();
+    act(() => putTodo({ ...todo, agents: [], pr_url: merged,
+      pr_status: { url: merged, state: "merged", draft: false, review: "approved", checks: "success", conflicts: false, checked_at: checked },
+      other_prs: [{ url: open, state: "open", draft: false, review: "required", checks: "success", conflicts: false, checked_at: checked }] }));
+    expect(entry("pr").textContent).toContain("1");
+    act(() => entry("pr").click());
+    const row = host.querySelector<HTMLElement>("[data-pr-waiting-row='tray-task']")!;
+    expect([...row.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([open]);
+    expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_review_required"));
   });
 
   it("uses the Working mark and live subtitle for background work, with a clock only after all work ends", () => {
@@ -414,6 +427,55 @@ describe("Assistant Needs you / In progress trays", () => {
     const request = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PATCH")!;
     expect(JSON.parse(String(request[1]?.body))).toEqual({ done: true });
     expect(writes.filter((path) => /accept|message|resume/.test(path))).toEqual([]);
+  });
+
+  it("lists a task waiting for its supervisor's review under Persona reviewing, never Needs you, however long it waits (#8678)", async () => {
+    moreSessions = [{ machine_id: "demo", session_id: "review-worker", title: "Review agent", cwd: "/demo", state: "idle", status: "idle", updated_at: at } as Session];
+    const reviewed = (pending_since?: string, patch: Partial<Todo> = {}): Todo => ({
+      ...todo, id: "tray-review", title: "Reviewed task", pr_url: undefined, plan_id: undefined,
+      agents: [{ machine_id: "demo", session_id: "review-worker", linked_at: at }],
+      supervision: { supervisor: conversation, state: "pending_review", updated_at: at, reviews: [], ...(pending_since ? { pending_since } : {}) },
+      ...patch,
+    });
+    // no review waiting: no Persona reviewing entry at all
+    expect(entry("review")).toBeNull();
+    moreTodos = [reviewed("2026-11-10T08:50:00Z")]; // ten minutes before `now`
+    await act(async () => { await refresh(); await refreshTodos(); });
+    // the supervisor's review is not the owner's: Needs you stays empty and uncounted, In progress keeps only the task at work
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`, `${label.review}1`]);
+    // a neutral entry: a grey dot and secondary ink, neither the attention nor the working colour
+    const dot = entry("review").querySelector("span[aria-hidden]")!;
+    expect(dot.className).toContain("bg-ink-3");
+    expect(dot.className).not.toMatch(/bg-(attention|accent)/);
+    expect(entry("review").className).toContain("text-ink-2");
+    act(() => entry("running").click());
+    expect(trayRow("Reviewed task")).toBeUndefined();
+    act(() => entry("review").click());
+    expect(host.querySelector("section h2")!.textContent).toBe(label.review);
+    const row = trayRow("Reviewed task")!;
+    expect(row.dataset.countsOpen).toBe("true");
+    expect(row.querySelector("[data-task-status]")!.textContent).toBe(t("assistant-tasks.review_supervisor"));
+    act(() => row.click());
+    expect(getPanel()).toEqual({ kind: "task", todo: "tray-review" });
+    // an hour on, nobody reviewed it yet: still Persona's, not the owner's
+    act(() => putTodo(reviewed("2026-11-10T07:00:00Z")));
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`, `${label.review}1`]);
+    // a hub that does not say since when: the same
+    act(() => putTodo(reviewed()));
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`, `${label.review}1`]);
+    // the review ends on a decision only the owner can make: Needs you; the open tray stays to say it is empty, and
+    // once closed Persona reviewing goes away
+    act(() => putTodo(reviewed(undefined, { supervision: { supervisor: conversation, state: "needs_user", updated_at: at, reviews: [] } })));
+    expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`, label.review]);
+    expect(trays()).toContain(t("assistant-tasks.tray_empty_review"));
+    act(() => entry("review").click());
+    expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
+    // an open ask (please verify) during a review is the owner's too
+    act(() => putTodo(reviewed("2026-11-10T08:50:00Z", { ask: { outcome: "done", verdict: "Please check that the login page loads.", asked_at: at } })));
+    expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}1`]);
+    // accepted: closed, in no entry
+    act(() => putTodo(reviewed(undefined, { done_at: at, supervision: { supervisor: conversation, state: "accepted", updated_at: at, reviews: [] } })));
+    expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
   });
 
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {

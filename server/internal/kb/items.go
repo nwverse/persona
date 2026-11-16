@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"cmp"
 	"context"
 	"os"
 	"path/filepath"
@@ -533,10 +534,11 @@ func (e *Engine) List(kind, tag string) []Entry {
 	return out
 }
 
-// recordingEntry is a recording as lists show it: Extra is the device it was made on.
+// recordingEntry is a recording as lists show it: Extra is the device it was made on, RecordingKind its kind (a
+// recording stored before kinds is a note, as an upload without one is).
 func recordingEntry(r *Recording) Entry {
 	return Entry{Kind: KindRecording, ID: r.ID, Name: r.Name, OneLine: r.OneLine, Importance: r.Importance,
-		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device}
+		Relevance: r.Relevance, Tags: r.Tags, Updated: r.StartedAt, Extra: r.Device, RecordingKind: cmp.Or(r.Kind, RecordingNote)}
 }
 
 // Prompt is a short Markdown digest of the most important projects and chats, for the assistant's live snapshot.

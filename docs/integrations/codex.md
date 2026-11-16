@@ -118,6 +118,10 @@ Since 2026-11-04 (#1709), Codex sessions controlled by the phone through app-ser
 (`source_kind: codex_app_server`), and herdr panes already joined to the shared daemon ("Sessions on the daemon" above, "Connection: app-server").
 Messages to them already use `turn/start` / `turn/steer`; thinking effort is the thread's own setting, requiring no terminal typing (`node/codex_effort.go`).
 
+Assistant conversations on a custom Codex launcher also accept Codex's native levels, including `minimal` and `ultra`.
+Both the first-message selection and a configured effort are checked against the agent that the launcher actually runs,
+not its command name; Claude launchers still reject Codex-only levels (`node/assistant_codex_alias_effort_test.go`).
+
 - **Unchanged**: permission mode still cannot be changed on the phone (Codex approval policy and sandbox remain determined by launch arguments and `config.toml`; requests with permission mode return
   "Only Codex thinking effort can be changed on the phone; change permission mode on the computer"). Terminal-only panes (terminal route), sub-Agents
   and the internal Codex fork cannot even change thinking effort, with existing prompts unchanged. Codex desktop App chats change it through the App (#5575, "Sessions in the Codex desktop App" below). Starting Codex from the phone still omits thinking effort (see "Starting from the phone").
@@ -126,8 +130,11 @@ Messages to them already use `turn/start` / `turn/steer`; thinking effort is the
   An explicitly empty list means unsupported: neither show nor accept it. The session includes `efforts` (levels from weakest to strongest) and `effort` (current value); clients show the selector only when `efforts` is nonempty
   (`docs/protocol/protocol.md`, "Codex sources and capabilities"). The node validates levels itself: observed 0.163 `thread/settings/update` accepts any string.
 - **Current value**: the value app-server says is configured for this thread (`reasoningEffort` from `thread/read` every 5 seconds, the join-time `thread/resume` reply,
-  and `thread/settings/updated` notifications). If unset (`null`, as on new threads), use the model's default (`defaultReasoningEffort` in `model/list`);
-  old app-servers without these fields use the last rollout turn's `turn_context`. Changes in the computer TUI update the phone.
+  and `thread/settings/updated` notifications). Otherwise use the latest rollout turn's `turn_context.effort`, including
+  terminal-only and history-only sessions. A model's default (`defaultReasoningEffort` in `model/list`) is only a fallback
+  for a controlled thread with no recorded effort. The computer-wide `config.toml` is not session evidence.
+  The incremental metadata scan retains the latest effort even when long tool output pushes its turn context outside the quick tail.
+  Changes in the computer TUI update the phone. Readback does not grant control: unsupported sessions still offer no effort choices.
 - **Changing it**: after validation, the node sends `thread/settings/update {threadId, effort}`. It applies from the next turn, whether sent from phone or computer; the TUI also receives
   `thread/settings/updated`. It can be changed while the current turn runs, without affecting that turn. In 0.163 this method is experimental (the node already declares `experimentalApi` when connecting).
   Observed: successful call, immediate `thread/settings/updated`, new value read back with `thread/read`.
@@ -142,12 +149,94 @@ Messages to them already use `turn/start` / `turn/steer`; thinking effort is the
   session display follows its next read).
 - **Clients**: web, iOS, and Android show only thinking effort for send-capable sessions with nonempty `efforts`: the chip below the web input, the label above the old iOS input and new shell's "Model · Thinking effort"
   menu, Android's "Mode" button. Options come directly from `efforts` (minimal "Minimal", ultra "Ultra"; unknown values shown as-is). Claude Code and the assistant still have both settings.
+  On the web, the current Codex model row remains actionable for its effort flyout even when changing the model itself is unsupported.
+  The panel preserves recorded effort even if the launcher's catalog omits that level; it never replaces it with the catalog default.
+  Offline, read-only, parent-controlled, terminal-only, and non-adjustable-model states explain why effort cannot change here.
+  Supported changes explain that they apply on the next turn without interrupting the current one.
 - **Tests**: `node/codex_effort_test.go` (synthetic app-server: rejected before joining; after joining accepts only effort; invalid levels; `thread/settings/update` parameters;
   -32601 carries effort on next `turn/start` but not `turn/steer`; other errors / timeout / disconnect report failure, record nothing, and clear previous selections; rejected `turn/start` discards the selection;
   changed connection or unloaded thread invalidates it; model levels and defaults; Codex rejection; model without levels; `thread/settings/updated`; terminal route and internal fork still rejected);
   web `session-actions.test.ts`; iOS `SyncEventTests.codexThreadOnItsAppServerSetsItsEffortOnly`; Android `SessionSourceTest`, `SessionModesTest`.
   Real Codex was manually checked only for `model/list`, `thread/settings/update`, and `thread/read` on a stdio app-server with temporary `CODEX_HOME` (no model run).
   `scripts/test/test-codex.sh` does not yet cover this.
+
+## Gateway model catalog
+
+A managed Codex provider (Settings › Models, agent `codex`) runs its codex with Persona's own model provider
+(`docs/integrations/launchers.md`, "Provider model and gateway parameters (#2455)"). Codex knows nothing of a gateway's models from that: its picker
+lists the OpenAI models it bundles, and a model only the gateway has runs on fallback metadata ("Model metadata for `…`
+not found. Defaulting to fallback metadata"), with the wrong context window, compaction threshold and thinking levels.
+Since #8797, when the gateway serves Codex's own catalog, the provider table carries `model_catalog_url` and codex reads
+the gateway's models from it (`server/internal/node/codex_catalog.go`).
+
+- **Codex's side** (checked against the 0.167.0 source and run): `model_catalog_url` is a key of the provider table.
+  Codex asks `<url>?client_version=<major.minor.patch>` with the provider's key (`Authorization: Bearer`), within 5
+  seconds and following no redirect, and reads `{"models":[…]}` of its own model entries. That catalog is then the only
+  list it uses: one that fails, never answers or cannot be decoded leaves no list, and the start still runs, the model
+  on fallback metadata. The key exists since 0.156; until 0.160 Codex reads it only with
+  `[features] api_key_model_discovery = true`, stable and on by default since 0.161. Older versions ignore the key.
+  A `model_catalog_json` file would have to hold every field Codex requires in its version, and one Codex cannot read
+  stops it from starting; `model_context_window` changes one model's window, not the list or its levels. Neither is used.
+- **Codex's cache** (`$CODEX_HOME/models_cache.json`, checked with codex-cli 0.167.0, two providers in one
+  `CODEX_HOME`, #8814): one file for every provider in that home, holding the last list fetched and whose it was. Each
+  fetch overwrites it, so a gateway's catalog and the user's own codex take turns in it; neither ever lists the other's
+  models (an entry is used only by the provider that wrote it), each just fetches again. A catalog that fails is
+  answered from it only when the file is that provider's, from the same Codex version and under 5 minutes old; else
+  the list is empty.
+- **Finding the catalog**: the node asks, when `personad launch` asks for the provider (`launcher.env`), what codex
+  would: both `<base>/models` (Codex's own path for its backend's catalog; some gateways answer it in Codex's shape when
+  `client_version` is given, with OpenAI's list otherwise) and `<base>/codex/models` (magpie's, beside an OpenAI
+  `/v1/models`), at once, with the provider's key and proxy and this computer's `codex --version`, in 5 seconds in all.
+  The first, in that order, whose answer is a catalog Codex can read is taken: a `models` list whose entries each have a
+  unique slug and every field Codex 0.161–0.169 requires, of its JSON kind (`display_name`, `supported_reasoning_levels`
+  with an `effort` and a `description` in each, `shell_type`, `visibility`, `supported_in_api`, `priority` (a whole
+  number), `support_verbosity`, `truncation_policy` with a `mode` and a whole-number `limit`,
+  `experimental_supported_tools`), one of them
+  listed. The words inside (a level, a shell type) are left to the gateway, which was told the version. An entry with
+  only some of them is none: codex-cli 0.167.0 fails such a catalog whole ("failed to decode models response"), lists
+  nothing and runs the model on fallback metadata, worse than no catalog. OpenAI's `{"data":[…]}`, an error or a
+  redirect is none too. Nothing depends on the gateway's name; the node's log names only the path below the base URL.
+- **Never holding a start**: `launcher.env` waits for that whole lookup (finding codex, its version, the probe) at most
+  2 seconds (`codexCatalogWait`, well under the 10 seconds `personad launch` waits for the node). Past it the provider's
+  codex starts without a catalog, as before, and the lookup goes on: what it finds is kept for the next start. The
+  answer, a catalog or none, is fresh for 10 minutes per gateway, key, proxy and Codex version; for a day after that it
+  is still given at once while the gateway is asked again in the background. A probe that cannot tell (no answer in
+  time, a body that does not arrive whole, a 5xx, 408 or 429) keeps the catalog found before and is tried again after a
+  minute; only a gateway that answers without a catalog drops it. A codex that is not found, or whose `--version` fails
+  or hangs (its run gets a second to give up the output after it is stopped), is looked for again after a minute, not on
+  every start; a run its caller gave up on keeps nothing. A version read is fresh for 10 minutes, then still given at
+  once while `codex --version` runs again in the background: a shim (volta, mise, asdf) stays the same file when the
+  codex behind it is upgraded, and a slow one must not hold a start. A panic in the lookup's own goroutines is logged
+  and finds no catalog; it does not end the node. One lookup runs at a time per gateway, key and proxy as codex will
+  see them, the provider's own `env` included (a gateway set only there is looked up too).
+- **Which codex**: the node checks the codex it finds, and `launcher.env` names it (`codex_catalog_codex`). The codex
+  `personad launch` runs comes from the shell's `PATH`, which may name another install: then `personad launch` asks
+  that one its version (within 5 seconds, after the node has answered, so not part of `LaunchNodeWait`) and passes no
+  catalog to one before 0.161 or one that does not answer.
+- **Exactly as before** without one: no gateway, no key (codex would not fetch it and would list nothing), a codex
+  before 0.161 or a prerelease of it, arguments that choose their own provider or profile (the provider and everything
+  in it are left out then), a base URL with a query, or a probe that found nothing. The arguments are then the same,
+  byte for byte, and an older node or `personad` simply does not pass the fields (`codex_catalog_url`,
+  `codex_catalog_codex`, node.sock only; nothing new on the hub–node wire). The probe runs on the node with the node's
+  environment and the provider's: a proxy only the shell sets is not used for it, so such a computer may find no
+  catalog its codex could read (it then starts as before); codex reads the catalog from the same gateway it talks to. The user's `~/.codex/config.toml` is never written.
+- **The picker**: the node lists a managed Codex launcher's models by running `personad launch <name> app-server` and
+  asking `model/list` (`node/launcher_models.go`). That is the same codex a start runs, with the same catalog, so the
+  picker's models and levels are the ones codex is given. A model whose catalog entry has no levels offers none, and no
+  default level when Codex reports that default as `none`. Before #8797 the node ran `personad launch <name>` alone, whose
+  codex started its TUI and exited with "stdin is not a terminal", so the picker had no list for these launchers.
+- **Tests**: `node/codex_catalog_test.go` (found at either path by shape, the first in order winning; OpenAI's list, an
+  error, a redirect, a body that is no catalog and no answer in time are none; no probe for an old or prerelease codex,
+  no codex, no key, the launcher's own provider or profile; kept per key; given at once when stale and asked again;
+  kept through a probe that cannot tell, dropped by a gateway without one; a failing `codex --version` not rerun on
+  every start; #8814: every required field of its kind, a cut-off body, `launcher.env`'s bounded wait for a slow gateway
+  or `codex --version`, a `--version` whose child keeps the output open, a shim's upgrade read again in the background,
+  a caller giving up, a missing codex, a gateway set in the provider's `env`, a panic in the lookup, the log line),
+  `nodecmd` `TestLaunchWaitsLongerThanTheCatalogLookup`, `node/managed_test.go`
+  `TestLaunchArgsCodexGateway` (the catalog goes in the provider table only; arguments unchanged without it),
+  `node/launcher_models_test.go` `TestManagedCodexModelsAskTheAppServer`, and `cmd/personad`
+  `TestLaunchCodexGatewayCatalog` (a fake node and a fake codex: catalog, none, the caller's own provider, another
+  codex than the node checked that reads one or is too old).
 
 ## Sessions in the Codex desktop App (App-local IPC)
 
@@ -422,6 +511,14 @@ Before answering, the node restores the TUI to an answerable state. If it cannot
 Codex 0.166's model/path/warning footer is not draft text, even without a blank separator or shortcuts row.
 The blinking `[ . ]` / `[ ! ] Action Required | ` title prefix is also status, not part of the thread name. A named
 pane that cannot be identified uses neither a stale pane binding nor directory-based rollout guessing.
+The session id herdr reports for the pane stands under such a title while `session_index.jsonl` has no name for that
+thread: nothing says the title names another one, and dropping it left the pane unlisted and its thread only as its
+app-server's row, without a terminal (#7538). A reported thread the index knows under another name is still dropped,
+unless the index gave that thread the title's name before its latest one: a rename (Persona renames a joined thread on
+its app-server with `thread/name/set`) leaves two lines for the thread, and a title still showing the first name is
+the same thread's.
+A reported sub-Agent id is not: the name the index has is its main chat's, not the reported thread's, so the pane stays
+the main chat's row.
 
 | On the computer | Behavior |
 | --- | --- |

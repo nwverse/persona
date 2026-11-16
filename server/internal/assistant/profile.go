@@ -133,6 +133,9 @@ type Settings struct {
 	// relay to the main or a leader conversation (dispatch_policy.go). nil or expired: every conversation behaves as
 	// without it.
 	DispatchPolicy *DispatchPolicy `json:"dispatch_policy,omitempty"`
+	// StartDefaults is the optional policy of what task Agents start with beyond what their caller named, by the kind
+	// of work (start_defaults.go). nil or expired: every task starts as without it.
+	StartDefaults *StartDefaultsPolicy `json:"start_defaults,omitempty"`
 	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
 	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
 	Leaders []string `json:"leaders,omitempty"`
@@ -609,7 +612,11 @@ func (s *Service) profileRoutes() {
 			apierr.Write(w, http.StatusBadRequest, fmt.Errorf("space %q: health or none", space))
 			return
 		}
-		apierr.WriteJSON(w, s.view(r.Context(), archived == "1" || archived == "true", space))
+		out := s.view(r.Context(), archived == "1" || archived == "true", space)
+		if r.Header.Get(RoleHeader) == roleExtension {
+			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("PUT /api/v1/assistant", s.putSettings)
 	// warm: the app opened the chat tab; get a process ready so the first message skips claude's startup, and say what
@@ -699,7 +706,7 @@ func (s *Service) warm(launcher string) {
 	if err != nil {
 		return
 	}
-	params := map[string]any{"cwd": cwd, "launcher": launcher}
+	params := map[string]any{"cwd": cwd, "launcher": launcher, "is_main": true}
 	if picked {
 		err = s.applyPick(ctx, params, pick)
 	} else {
@@ -709,7 +716,16 @@ func (s *Service) warm(launcher string) {
 		s.logf("warm model: %v", err)
 		return
 	}
-	if err := s.call(ctx, machine, DeviceAssistantWarm, params, nil); err != nil {
+	// The spare is adopted only by a new conversation in the same profile (node/assistant_spare.go), and a new one is
+	// started in the main chat's, on a carried pick too (startMain, startOn).
+	profiled := s.withNewConversationProfile(ctx, machine, "assistant", params)
+	ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
+	if profiled && (nodeOutdated(err) || profileRefused(err)) { // as startOn: an old node, or another agent than Claude Code
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantWarm, params, nil)
+	}
+	if err != nil {
 		s.logf("warm assistant: %v", err)
 	}
 }

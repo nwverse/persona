@@ -47,7 +47,9 @@ type larkCall struct {
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown)
 	Args []string // lark-cli's arguments, for the phone card
 
-	relBody bool // the body is a relative @file, read from the conversation's directory (classifyLark, #8404)
+	relFile      bool // a relative @file body or query input, read from the conversation's directory (classifyLark, #8404)
+	queryUnknown bool // execution-time stdin, expansion, or -G data cannot be bound to a query-confirmed grant
+	dataInQuery  bool // -G moved the parsed data argument to the query, leaving the actual request body empty
 }
 
 // larkVerdict: what the gate makes of a whole Bash command.
@@ -97,8 +99,23 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	// classified: every call read off the command and nothing else in it that the gate cannot follow.
 	classified := !v.unparsed && !v.unknown && !v.unsure
 	for _, c := range v.calls {
-		if larkDecision(cfg, c) == "deny" {
+		decision := larkDecision(cfg, c)
+		if decision == "deny" {
 			return "deny", "这个操作按配置不允许（" + c.Method + " " + c.Path + "）。", nil
+		}
+		if decision == "allow" && c.dataInQuery && c.Gate >= 0 && c.Gate < len(cfg.Gates) {
+			// firstLark matched the data as a request body, but curl -G sends it in the query with an empty body. A
+			// body-scoped allow therefore does not authorize the actual call, especially a direct non-Auth command.
+			if rule, ok := firstLark(cfg.Gates[c.Gate].Rules, c); ok && len(rule.Body) > 0 {
+				return "deny", "-G/--get 会把 data 移到查询并留下空请求体，实际请求不再满足按请求体放行的规则。", nil
+			}
+		}
+		// Only a rule-allowed call needs no query-bound grant. A confirmation-required GET needs one too, and a non-Auth
+		// script has no proxy backstop. Health writes always need confirmation. Refuse every unknown query in those cases
+		// rather than confirm different bytes.
+		needsConfirmation := decision != "allow" || (health && !larkRead(c))
+		if c.queryUnknown && needsConfirmation {
+			return "deny", "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。", nil
 		}
 		classified = classified && larkBypassSafe(c)
 	}
@@ -211,6 +228,9 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 // tells the manager once the API has taken one (the sent-as-user ledger).
 func (n *Node) grantGateCalls(cfg proto.AssistantLark, session string, calls []larkCall, through proto.LarkLetThrough) {
 	for _, c := range calls {
+		if c.queryUnknown {
+			continue // rule-allowed calls need no grant; larkCheck refused every confirmation-required unknown query
+		}
 		if !c.CLI && c.Gate >= 0 && c.Gate < len(cfg.Gates) && cfg.Gates[c.Gate].Auth != nil {
 			n.gates().grant(cfg.Gates[c.Gate].Command, session, c, through)
 		}

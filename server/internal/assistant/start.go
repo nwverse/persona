@@ -60,7 +60,7 @@ func (s *Service) claudeMD(ctx context.Context, here string, larkCLI bool) strin
 	hello := s.hello(ctx)
 	d := prompts.AssistantClaudeMD{Owner: strings.TrimSpace(hello.Owner), Notes: s.notes(ctx), ExtraDirs: s.kbExtraDirs(ctx),
 		KnowledgeDir: s.kb.dir, LarkCLI: larkCLI, Language: answerLanguage(hello.Locale),
-		BackgroundSupervisor: s.backgroundOn(s.settings(ctx))}
+		BackgroundSupervisor: s.backgroundOn(s.settings(ctx)), UrgentCall: s.urgentPrompt(ctx)}
 	devices := s.devices(ctx)
 	if i := slices.IndexFunc(devices, func(d Device) bool { return d.ID == here }); i >= 0 {
 		d.OnHub = devices[i].Kind == "local"
@@ -309,12 +309,14 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if _, err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
+	// A guest's profile is its own: the main chat's setting is for the user's conversations only.
+	fromSetting := p.GuestTools == nil && s.withNewConversationProfile(ctx, machine, purpose, params)
 	used, _ := params["launcher"].(string)
 	// A profile is Claude Code's: the node refuses a config_dir for any other agent before starting it (#6467). Judged
 	// here, by the launcher the start finally runs on, not the one asked for: the model configuration and a fallback
 	// can both change it. One hidden from the pickers still runs what it runs (withUnhidden, as finishMainChatModel
-	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent, and
-	// startSignedIn starts again without it (#6884).
+	// reads it); one whose agent is not known here keeps the profile, which the node refuses for another agent before
+	// starting anything, and the start goes again without it: startSignedIn's, and the main chat's below (#6884).
 	if _, asked := params["config_dir"]; asked && used != "" && used != "claude" {
 		if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" && agent != "claude" {
 			delete(params, "config_dir")
@@ -332,7 +334,17 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
+	if main && p.Space == "" && p.GuestTools == nil {
+		cfg := s.settings(ctx)
+		ctx = context.WithValue(ctx, supervisionStartup{}, cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks)
+	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
+		// A node too old to be told a profile starts it where it always has; a launcher running another agent than
+		// Claude Code, which alone has profiles, starts without one.
+		delete(params, "config_dir")
+		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	}
 	s.startRefused(ctx, machine, used, err) // Claude Code or the launcher missing: the readiness's claude step
 	if err != nil {
 		if d, ok := s.device(ctx, machine); ok {
@@ -1049,6 +1061,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
+	if err := s.putSupervisionInstructions(ctx, p.MachineID, p.SessionID, params); err != nil {
+		return nil, false, err
+	}
 	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
 		return nil, false, err // an ended room: 409 meeting_ended (meeting_room.go)
 	}
@@ -1106,6 +1121,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 // …/conversations/{id}/model, model_pick.go), its effort under the message's own: that is the user's choice for the
 // conversation, so it is never replaced; a pick that can't run here refuses the message, saying why in lang.
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any, lang i18n.Lang) error {
+	ctx = withLauncherPurpose(ctx, "assistant")
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine
 	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {

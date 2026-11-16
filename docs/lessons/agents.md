@@ -183,6 +183,10 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Don't map Codex panes from "newest rollout in the same directory" (same pitfall as Claude): terminal titles are "thread name | directory"; map by thread name in `session_index.jsonl`.
   Rollouts keep writing in the directory of the thread's start date; scanning only the last two weeks' date directories misses old threads (2026-10-31: a running Codex appeared as another session with a gray dot).
   Comparing content by id won't catch this; compare against actual pane truth (`scripts/diag/live_panes_check.py`).
+- A Codex pane title that names no thread in `session_index.jsonl` is not evidence that the pane runs another thread: the index may simply lack the name.
+  Discarding herdr's reported session id for it left the pane mapped to nothing, so a Persona-started Codex joined on its app-server was listed only as the `codex_app_server` row, with no pane or terminal (#7538).
+  Drop the reported id only when the index knows that thread under a different name, and never under a name it gave the thread before (a rename leaves the earlier line in the index, and the node keeps only the latest); a remembered pane binding is still dropped.
+  Check the name of the thread herdr reported, not of the main chat a sub-Agent id was replaced with: that name says nothing about the reported thread.
   Claude panes likewise: pane bindings for Persona-started sessions live in hub's database and reload after node restart, but can be stale; `sessions/<pid>.json` takes priority.
   After changing pane identification logic, rerun verification after deployment (restart); pre- and post-restart results may differ.
 - herdr `agent.prompt` pastes, then waits about 300 ms before Enter: serialize sends to the same session, or the second screen read mistakes the first message for an input draft. Sending deduplication lives in hub Postgres (`sent_messages`):
@@ -196,6 +200,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   is silently dropped (`max` too; settings accepts only low…xhigh). The picker has no auto position. `/effort auto` clears this model's default in settings;
   phone auto handling must differ by path (`docs/apple/ios.md` ("Effort and permission modes")). Testing `/effort …` on a dev machine also changes real settings.json; don't use your own configuration.
 - **Settings defaults and session effort need different option lists** (#5946): Claude Code 2.1.318 / Agent SDK 0.3.318 accept only `low`, `medium`, `high`, and `xhigh` in settings.json. Keep `max` in session controls, reject it in settings writes, and report an existing stored `max` as ignored with the model default in effect. Never reuse `proto.EffortLevels` for the settings whitelist. Web settings override node descriptions with their own translations, so a server warning also needs a localized web warning.
+- **Catalog defaults need execution precedence too** (#8941). A launcher's `--settings` model can differ from the CLI catalog's recommendation, but its `effortLevel` does not beat `CLAUDE_CODE_EFFORT_LEVEL`, `--effort`, or a saved level in the same file's `modelSettings`. Native model matching covers aliases and provider IDs, so keep the native effort where that matching may apply. A probe's differential `Env` also omits inherited shell values: combine `Shell`, `Unset`, launcher changes and profile/explicit settings env before projecting a default. Preserve native aliases and leave unknown settings or unsupported levels unchanged; test both inherited variables and settings values that only session controls accept.
+- **A custom launcher name does not identify its Agent** (#8940): assistant effort validation must resolve the executable behind the launcher before deciding whether Codex-only levels are valid. Validate cold and warm starts, explicit and configured effort, and a follow-up that inherits the saved launcher; checking only the literal `codex` command leaves aliases broken. Once dispatch has selected Claude or Codex, validate against that backend rather than the launcher's spelling.
 - **An explicit `--permission-mode default` is not "unset"** (#3026): it overrides `permissions.defaultMode` in Claude Code's settings.json, so
   filling an unset mode with `default` (#2194) silently put every Agent the assistant started into Ask every step for someone whose Claude Code
   starts in Auto. Resolve "unset" to the mode that would really run (the computer's `permissions.defaultMode`), or pass no flag and show it as unset.
@@ -232,6 +238,11 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   read the input box once; if it's still the just-sent text (strip `[Image #n]` / `[Pasted text #n]`, compare the first few words), press Enter once more. If empty or different, press nothing.
   Use only that post-wait read: the first version read immediately and gave up on a mismatch, which missed the 11-01 case (right after pasting the box may not yet contain this text).
 - Codex app-server integration (2026-11-02): Unix sockets carry WebSocket, not JSON-lines; external stdio has no second attach port. Directory discovery doesn't resume; control goes only to the original loaded owner. Unknown / cancelled requests must not send error / decline, which could consume the desktop approval callback. `serverRequest/resolved` withdraws cards as dismissed without fabricating approval; deduplicate using generation and typed request ID together. Generic server errors after send admission aren't "definitely not sent" and must not auto-retry; old outbox operation ids don't expire after one day (`docs/integrations/codex-app-server.md`).
+- Session effort readback is not an edit capability (#6887): keep Codex rollout effort visible for terminal/history rows,
+  and do not replace a running effort missing from a stale model list with its default. Long tool output can move the
+  latest `turn_context` beyond the quick tail; include those small setting rows in the existing incremental scan.
+  A current row unable to switch models can still open its effort controls, while genuinely unsupported changes need
+  a visible reason. Connection tests must apply the draft effort on the wire, not just echo an ignored input.
 - Codex app-server `thread/loaded/list` isn't all chats (2026-11-05, #2118, 0.166): TUI creates `ephemeral: true` threads for small background tasks in the shared managed daemon
   (`threadSource: "thread_title"`, title generation), without `path` / rollout; they stay loaded and `active` after finishing. Ignoring `ephemeral` produces a row of untitled "Working" Codex entries from the same directory and second on the Agents page.
   Skip `ephemeral` before listing sessions; they also don't support `includeTurns` (returns -32600).
@@ -315,6 +326,40 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - **A normalizer applied twice must be idempotent**: the hub stores its result and the node applies it again at launch. Dropping only one `/v1` made `https://gw/v1/v1` test as `/v1/v1/messages` and launch as `/v1/messages`; the function drops a whole run.
 - **Not every base is an `ANTHROPIC_BASE_URL`**: Responses / Chat Completions bases and Codex's `OPENAI_BASE_URL` include `/v1` by convention (`https://api.openai.com/v1`), and the web sends `api: "messages"` for every launcher, Codex ones included. What is stored, delivered to nodes and launched is decided by the agent and protocol together (`ManagedLauncher.LaunchBaseURL`), never by `api` alone; only the connection test, which sends a Messages request whenever `api` says so, goes by the protocol.
 
+## Behind a gateway, read what Claude Code sends, not what its docs or other clients say (2026-11-16, #8798)
+
+- **Measure the request, on the version you ship against**: a local fake gateway that logs each body (`model`,
+  `max_tokens`, `thinking`, `output_config`, `safeguards`, `anthropic-beta`), with `claude -p`, `HOME` and
+  `CLAUDE_CONFIG_DIR` in a temporary directory, a fake key and `env -i`, so neither the user's settings nor the shell
+  of the session running the test leaks in. On 2.1.325 this showed what no page says: an unknown model is sent
+  `output_config.effort: high` with no `--effort`, and auto mode behind a gateway with nonessential traffic off refuses
+  every reviewed action when no review comes back, where the permission-modes page describes a fall-back to the local
+  classifier. Another open-source client's notes were right about the variables but describe a different launch
+  (`CLAUDE_CODE_USE_GATEWAY`), where the 2.1.325 code gives an unknown model no thinking level by default.
+- **A working variable is not a supported one**: `CLAUDE_CODE_MODEL_CAPABILITIES` does what it should behind
+  `ANTHROPIC_BASE_URL`, but it is missing from the official reference, while the documented
+  `ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES` are ignored there. Writing an undocumented variable into every
+  launch ties every provider to its current format; record what it does and leave it to a provider's own `env`.
+- **A per-process value must hold for every model of the process**: `CLAUDE_CODE_MAX_OUTPUT_TOKENS` serves the
+  session, its tiers, the small model and sub-Agents at once. Taking the session model's limit alone would ask a
+  smaller tier for more than it writes, so the launch takes the least reported limit and sets nothing when one of them
+  reports none (`outputTokens`). And the session's model is the start's `--model`, not the provider's default the
+  node's env and the settings file are written for: a value pinned in the settings file would beat the one worked out
+  for the start, so `personad launch` works it out again and the settings file leaves it out (`sessionOutput`,
+  `docs/integrations/claude-integration.md`, "What a gateway reports about a model").
+- **What Persona puts in the environment reaches the commands Claude runs** (#8816): Claude Code passes its environment
+  to Bash, so a `personad launch` inside a session inherits every value the outer launch set. A rule "clear it only
+  when this launch sets it" then hands the outer session's reply limit to a provider that reports none. Clearing it
+  always would also drop a value the user exported; mark the value Persona writes (`PERSONA_MAX_OUTPUT_TOKENS`) and
+  clear an inherited one only while it still equals the mark.
+- **A larger reply is also a smaller room for input**: a gateway that counts input plus `max_tokens` against the window
+  refuses long before Claude Code compacts once the reply asked for passes the 20,000 it reserves. Claude Code recovers
+  only from Anthropic's wording of the refusal; an OpenAI-compatible wording ends the turn and, behind a gateway,
+  triggers a compaction. Bound the reply by the window (an eighth, `outputLimit`), not only by what the model writes.
+- **Check a doc's side effect in the code before acting on it**: the reference says raising the reply limit "reduces
+  the effective context window available before auto-compaction"; 2.1.325 reserves `min(max output, 20000)`, so going
+  from 32,000 to 128,000 reserves exactly as much as before.
+
 ## Claude Code writes into its transcript as it exits: delete it after the process (2026-11-11, #4665)
 
 Deleting a meeting room stopped its `claude -p` and removed the transcript at once; a moment later the file was back
@@ -334,6 +379,19 @@ setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `for
 `settings.json` in its own `--settings`. The synthetic reply is an ordinary assistant text item (`isApiErrorMessage`,
 model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
 taking the turn's last words as an answer.
+
+## A setting in `~/.claude/settings.json` does not reach a private profile: put it in the launcher's environment (2026-11-14, #7319)
+
+`CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK=1` in the user's `~/.claude/settings.json` `env` kept Claude Code from switching
+refused replies to a fallback model the gateway does not serve, but only in the default profile: on one install over 7
+days, 71 such stops there ended without a switch, while all 4 switches in Persona conversations ended in 404. Those run
+in a private config directory (`<PERSONA_HOME>/profiles/<launcher>`, #4310), and Claude Code reads the user settings of
+the config directory it runs in, never `~/.claude`'s. Something that must hold wherever Persona runs claude goes into the
+managed launcher's environment (`providerEnv`, `node/launcherenv.go`): that reaches `personad launch`, the generated
+`--settings` env and the Agent SDK bridge, whatever profile the process uses. A rule Persona applies to every provider
+of a kind is code there (as #7319 is for gateways whose model list lacks a fallback model); a user's own choice is the
+provider's `env` field, where a value, an empty one too, overrides a Persona default. Check such a setting in the
+profile the process really uses, not in `~/.claude`.
 
 ## `--setting-sources project` still reads `~/.claude` as the home's project files (2026-11-12, #5786)
 
@@ -518,6 +576,37 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   Bind remembered selections to that connection and thread; invalidate on change.
 - Test method: start stdio `codex app-server` in a temporary `CODEX_HOME`; `thread/start` needs no login and calls no model, so it can test settings APIs. Don't touch live `~/.codex`.
   See `docs/integrations/codex.md` ("Thinking effort").
+
+## A gateway's Codex catalog replaces Codex's own list, and `personad launch` is no shell `codex` (2026-11-16, #8797)
+
+- `model_catalog_url` in a Codex provider table makes that catalog the only list Codex has: no bundled fallback. A URL
+  that answers an error at start leaves Codex with no models (or the last list in `$CODEX_HOME/models_cache.json`), and
+  a keyless provider never fetches it, so the list is empty too. Pass one only where the gateway answered with a
+  catalog, and only with `env_key`; do not let a timeout or a 5xx overwrite that answer, and do not make a start wait on
+  asking again (give the last answer and ask in the background).
+- 0.156–0.160 know the key but read it only with `api_key_model_discovery` on; 0.161 made that the default, so the node
+  needs 0.161 (`codex --version`) rather than enabling an under-development feature, whose warning a 0.160 TUI would
+  show. The node's codex (the service's `PATH`) need not be the one `personad launch` execs (the shell's): the launch
+  checks its own when they are different files.
+- `GET /v1/models` has two shapes on some gateways: Codex's catalog when the request carries `client_version`, OpenAI's
+  list without. A probe must send what Codex sends (its whole version, no prerelease) and judge the answer's shape; a
+  name or path alone says nothing. Codex itself appends `client_version`: a URL that already has one is refused there.
+- A managed launcher's codex is started by `personad launch`, which execs codex: wrappers that codexShell puts around
+  the shell's `codex` (adding `app-server`) never apply to it. The model list ran `personad launch <name>` alone, and
+  its codex started a TUI on a pipe ("stdin is not a terminal"): put the subcommand in the launch's own arguments.
+  Reproduce with a fake `personad` that is an app-server only when it gets `app-server`
+  (`TestManagedCodexModelsAskTheAppServer`).
+- Whatever the node does while `launcher.env` waits counts against the 10 seconds `personad launch` waits for the
+  node (`LaunchNodeWait`), and those steps add up: finding codex can run a login shell for 15 seconds, a `codex
+  --version` whose wrapper's child keeps stdout open outlives its timeout without `WaitDelay`, and the probe takes 5
+  more. Bound the wait itself (`codexCatalogWait`), let the lookup go on behind it, and keep failures for a while (#8814).
+- Judge a catalog by every field Codex requires, not a few: one entry short of them fails Codex's whole list, and the
+  start then runs on fallback metadata with no list at all. A 200 whose body does not arrive whole says nothing about
+  the catalog. `$CODEX_HOME/models_cache.json` is one file for every provider in that home, used only for its writer,
+  the same version and 5 minutes (#8814).
+- Observe Codex against a local fake gateway with a temporary `CODEX_HOME`: the requests it makes (path, query,
+  `Authorization`), what `model/list` returns and whether `codex exec` warns about fallback metadata. Never point the
+  experiment at a real gateway with the user's key. See `docs/integrations/codex.md` ("Gateway model catalog").
 
 ## Interrupt (Esc) doesn't trigger Stop; pid files include procStart (2026-11-04)
 
@@ -999,6 +1088,14 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
 `command_lifecycle` lines for it instead (queued, started, cancelled, completed). Take one back with `cancel_async_message`, and treat
 `cancelled: false` as "it went in": writing it again would send it twice. Check such behavior against the real CLI with a short
 `claude -p` script before building on it; the requests are not in the public docs.
+
+## Completed Codex history is not the current turn's state (#8946)
+
+The session list promoted a pane to working from its shared app-server, then demoted it to done because a materialized
+paginated transcript ended on an older completed turn. Check the unambiguous live owner's cached active or waiting state
+before applying stale-rollout correction, including when no current turn ID was observed. Test the published session row
+with old completed history, a late join, a start notification and completion; testing only the intermediate status misses
+the overwrite. Keep the terminal-only stale-turn fallback, and do not add RPC or transcript reads to the live guard.
 
 ## Herdr workspace directories come from panes (#4761)
 
