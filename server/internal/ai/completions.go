@@ -52,12 +52,8 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 			resp.Body.Close()
 			// Recognized machine codes always win over compatibility wording: a limit or a model/context/endpoint
 			// failure must never trigger a modified request, even when its message names a rejected field.
-			httpFailure := newHTTPError(resp, raw)
-			if _, recognized := failureKindForCode(httpFailure.code); recognized {
-				return Reply{}, false, httpFailure
-			}
-			if _, recognized := limitReasonForCode(httpFailure.code, httpFailure.message); recognized {
-				return Reply{}, false, httpFailure
+			if HasRecognizedErrorCode(raw) {
+				return Reply{}, false, newHTTPError(resp, raw)
 			}
 			// Some models reject max_tokens and explicitly ask for the newer name, and strict compatible servers
 			// reject stream_options or reasoning_effort. Each such response leads to a modified request, not a replay
@@ -83,7 +79,7 @@ func (c *Client) chatCompletions(ctx context.Context, hc *http.Client, key strin
 				delete(body, "stream_options")
 				continue
 			}
-			return Reply{}, false, httpFailure
+			return Reply{}, false, newHTTPError(resp, raw)
 		}
 		reply, err := readCompletions(resp.Body)
 		resp.Body.Close()

@@ -90,6 +90,17 @@ func failureKindForCode(code string) (kind FailureKind, recognized bool) {
 	}
 }
 
+// HasRecognizedErrorCode reports whether raw's explicit machine code already determines the outcome: a limit or a
+// recognized model/context/endpoint failure. Such a response must not trigger a modified compatibility request.
+func HasRecognizedErrorCode(raw []byte) bool {
+	code, _ := gatewayErrorDetails(raw)
+	if _, recognized := failureKindForCode(code); recognized {
+		return true
+	}
+	_, limited := limitReasonForCode(code, "")
+	return limited
+}
+
 func failureKindFor(status int, code, message, typ string) FailureKind {
 	// Codes are machine semantics; a type such as not_found_error is not a general substitute for one.
 	if kind, recognized := failureKindForCode(code); recognized {
