@@ -23,6 +23,7 @@ Measure the normalized first-screen chunks, not a helper's standalone compressed
 can cost more than it removes. Menu-only actions and text selection can share the existing reply-controls chunk
 through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
 remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
+Build the touch menu's Select text action there as well as its dialog, so its label does not remain eager.
 Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
 The fork action's label and callback belong in that same cold chunk; its opener needs only eligibility. Read the
 conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.

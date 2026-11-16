@@ -23,11 +23,12 @@ describe("startupMatcher", () => {
     const configured = startupMatcher(startup);
     for (const key of [
       "chat-messageactions.translate", "chat-messageactions.translating", "chat-messageactions.show_original",
-      "chat-messageactions.copy", "chat-messageactions.select_text", "rewind.editing", "rewind.unsupported",
+      "chat-messageactions.copy", "rewind.editing", "rewind.unsupported",
     ]) expect(configured(key), key).toBe(true);
     for (const key of [
       "chat-messageactions.translation_failed", "chat-messageactions.done", "chat-messageactions.save_as_prompt",
       "chat-messageactions.fork", "chat-messageactions.fork_chat",
+      "chat-messageactions.select_text",
       "rewind.menu", "rewind.conversation", "rewind.code_and_conversation", "rewind.confirm_code",
     ]) expect(configured(key), key).toBe(false);
   });

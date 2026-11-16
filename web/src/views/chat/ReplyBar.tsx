@@ -17,6 +17,7 @@ import { exactTime, relativeTime } from "../../lib/relative-time";
 import { Button, copyText, cx, Dialog, Menu, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { REPLY_BAR_FADE_MS, REPLY_BAR_LINGER_MS } from "../../ui/motion";
+import { isNoHover } from "../../ui/media-query";
 import type { Action } from "./MessageActions";
 import { TurnUsage } from "./TurnUsage";
 import type { ReplyTranslation } from "../../lib/reply-translation";
@@ -123,7 +124,7 @@ function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: 
 }
 
 /** Menu-only actions and their live disabled reasons load with the existing reply controls, not the transcript. */
-export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, rewindText, messageId, isUser, onDelete, more }: {
+export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, rewindText, messageId, isUser, onDelete, more, onSelectText }: {
   anchor: HTMLElement | { x: number; y: number };
   onClose: () => void;
   primary: Action[];
@@ -134,11 +135,15 @@ export function MessageMenu({ anchor, onClose, primary: actions, itemId, text, r
   isUser?: boolean;
   onDelete?: () => void;
   more?: boolean;
+  onSelectText: () => void;
 }) {
   const chat = useChatActions();
   const rewind = isUser ? chat?.rewind : undefined;
   const block = useWhileOpen(rewind?.block, true, "");
-  const primary = more ? actions.filter((a) => a.key === "forward" || a.key === "context") : actions;
+  const primary = more ? actions.filter((a) => a.key === "forward" || a.key === "context") : [...actions];
+  if (!more && isNoHover()) primary.splice(1, 0, {
+    key: "select", label: t("chat-messageactions.select_text"), icon: "read", onSelect: onSelectText,
+  });
   const extras = [
     ...moreActions(itemId, chat?.fork, chat?.assistant),
     ...rewindActions(messageId, rewindText, rewind && { block, code: rewind.code, run: rewind.run }),

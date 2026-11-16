@@ -21,7 +21,7 @@ import { addContext, newContext } from "../../lib/links";
 import type { Item } from "../../lib/types";
 import { copyText, cx, type MenuItem } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { isNoHover, NO_HOVER, useMedia } from "../../ui/media-query";
+import { NO_HOVER, useMedia } from "../../ui/media-query";
 import { useChatActions, type ChatActions } from "./chat-actions";
 import { pickParts } from "./picking-parts";
 import { useIsLatestMessage } from "./latest-message-time";
@@ -48,10 +48,9 @@ export interface Action extends Pick<MenuItem, "hint" | "disabled" | "danger" | 
   onSelect: () => void | Promise<unknown>;
 }
 
-function messageActions(chat: ChatActions | null, text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, select: () => void, forward?: ForwardPick, editText?: string): Action[] {
+function messageActions(chat: ChatActions | null, text: string, isUser: boolean, ts: string | undefined, task: QuotedTask | undefined, forward?: ForwardPick, editText?: string): Action[] {
   if (!text.trim()) return [];
   const out: Action[] = [{ key: "copy", label: t("chat-messageactions.copy"), icon: "copy", onSelect: () => void copyText(text) }];
-  if (isNoHover()) out.push({ key: "select", label: t("chat-messageactions.select_text"), icon: "read", onSelect: select });
   if (chat?.canCompose) {
     out.push({ key: "quote", label: t("chat-messageactions.quote"), icon: "quote", onSelect: () => void sendDraft(chat.draftKey, { type: "quote", text, from: isUser ? t("chat-messageactions.me") : chat.speaker, ts, task }) });
   }
@@ -134,7 +133,7 @@ export function MessageActions({
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
   const chat = useChatActions();
-  const actions = messageActions(chat, text, Boolean(isUser), ts, task, () => setSelecting(true), pick, editText);
+  const actions = messageActions(chat, text, Boolean(isUser), ts, task, pick, editText);
   // the chat picks messages to forward (#3838): the checkbox over this one, when it is one to forward
   const picker = chat?.forward ? chat.pick : undefined;
   const picking = Boolean(picker);
@@ -250,7 +249,7 @@ export function MessageActions({
       >
         {side && ts && !latest && <span className="mr-1 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
         {actions
-          .filter((a) => a.key !== "select" && !(side && (a.key === "forward" || a.key === "context")))
+          .filter((a) => !(side && (a.key === "forward" || a.key === "context")))
           .map((a) => (
             <button
               key={a.key}
@@ -306,6 +305,7 @@ export function MessageActions({
       {menu && !picking && <MessageMenu
         anchor={menu.anchor} onClose={close} primary={actions} more={menu.more}
         itemId={itemId} text={text} rewindText={editText ?? text} messageId={messageId} isUser={isUser} onDelete={onDelete}
+        onSelectText={() => setSelecting(true)}
       />}
       <SelectMessageText open={selecting} onClose={() => setSelecting(false)} text={text} />
     </div>
