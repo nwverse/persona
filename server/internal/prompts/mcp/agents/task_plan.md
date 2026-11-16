@@ -13,7 +13,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
   "properties": {
     "supervisor": {
       "type": "string",
-      "description": "optional, main conversation only: the id of the leader conversation (assistant.leaders) whose direction this work belongs to; it supervises the tasks. Leave it out for work of no direction or of your own"
+      "description": "Main conversation only: assistant.leaders id for this direction's supervisor. Omit for work of no direction or your own."
     },
     "tasks": {
       "type": "array",
@@ -53,7 +53,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "description": "the project directory: absolute path or ~/…"
           },
           "workspace": {
-            "description": "Task workspace policy. Omit to use the assistant preference and readonly/busy exceptions. new uses the machine engine and default branch task/<todo id>; existing accepts an absolute/~/ path or a workspace id on that machine; none creates nothing. To choose a branch use {new:{branch:...}}. No custom worktree root.",
+            "description": "Omit for preference/readonly/busy defaults. Engine-owned new: branch task/<todo id> or {new:{branch:...}}. existing: absolute/~/ path or machine workspace id. none: no creation. No custom worktree root.",
             "oneOf": [
               { "type": "string", "enum": ["new", "none"] },
               { "type": "object", "required": ["existing"], "additionalProperties": false, "properties": { "existing": { "type": "string", "minLength": 1 } } },
@@ -82,7 +82,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           "role": {
             "type": "string",
             "enum": ["leader"],
-            "description": "optional: leader makes this task's agent a task leader that may hand direct workers to its own task (any conversation may give it); leave it out for an ordinary worker task"
+            "description": "Any conversation may set leader to allow direct workers on this task. Omit for an ordinary worker."
           },
           "ultracode": {
             "type": "boolean",
@@ -94,7 +94,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "user_requested": {
             "type": "boolean",
-            "description": "true when the user asked for this very task in their latest message (told you to do it, to have an agent do it, to go ahead and start); false when it is your own idea or inferred from something they did not ask for"
+            "description": "True only if the user's latest message requested this very task or its start; false for your own idea or inferred work."
           },
           "why": {
             "type": "string",
@@ -110,7 +110,7 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "goal": {
             "type": "string",
-            "description": "the work in one sentence, as the owner would say what they get from it (Chinese); required for a read-only task, the title when left out of a writable one"
+            "description": "One-sentence outcome in the owner's words (Chinese); required for read-only tasks, defaults to title for writable ones."
           },
           "out_of_bounds": {
             "type": "array",
@@ -122,15 +122,15 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
           },
           "continues": {
             "type": "string",
-            "description": "optional: the original todo id this task continues. Continuations always reuse this same todo and its unchanged brief and criteria; never split work to a new todo. At Start, stop/release still-active prior Agents and reopen this todo if closed. Refuse unauthorized takeovers, an unreachable prior Agent that cannot be stopped, and legacy open successor duplicates. Failed starts keep this todo. Needs continues_why; if no permission change is wanted, agent_send can follow up the same live Agent"
+            "description": "Original todo id, with continues_why. Reuse its unchanged brief/criteria even on start failure; never split to a new todo. At Start stop/release prior Agents, reopen if closed. Refuse unauthorized takeovers, unreachable prior Agents that cannot be stopped, and legacy open successor duplicates. Without a permission change, agent_send may follow up the same live Agent."
           },
           "continues_why": {
             "type": "string",
-            "description": "with continues: one line on why the earlier task stopped or needs a replacement; kept on this continuation's plan"
+            "description": "With continues: one-line reason the earlier task stopped or needs replacement; kept on this plan."
           },
           "started_why": {
             "type": "string",
-            "description": "when the owner did not just ask for this (your own idea, something a 督办 message or a routine led to): one line on why you start it; kept on the brief"
+            "description": "If not just requested by the owner (your idea, 督办 or routine): one-line reason for starting, kept on the brief."
           },
           "attachments": {
             "type": "array",
@@ -138,20 +138,20 @@ Workspace policy: "new" makes an isolated checkout; {"new":{"branch":"task/my-ch
             "items": {
               "type": "string"
             },
-            "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+            "description": "Absolute paths on your computer of pictures/files the user supplied for this task in this conversation only. Copied to the Agent's computer, listed at its message's end; mentions are rewritten to the copies."
           },
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
-            "description": "about how long the task should take, in minutes; required (above 0) unless continues is given. A task with no progress for 1.5× that (at least 20 minutes) counts as stuck, and one with no end after 3× that (at least a day) is raised to you as overdue"
+            "description": "Estimated minutes; required positive unless continues. No progress for 1.5× (minimum 20 minutes) is stuck; no end for 3× (minimum one day) is raised to you as overdue."
           },
           "project": {
             "type": "string",
-            "description": "optional: the knowledge-base project it belongs to: the slug or name of an existing project, usually a long-term one for an area of the user's work (kb_list projects). Set it when the area is clear; never make up a near-duplicate of an existing project"
+            "description": "Existing knowledge-base project slug/name (kb_list projects), preferably a long-term work area. Set only when clear; never invent near-duplicates."
           },
           "todo_id": {
             "type": "string",
-            "description": "optional: an open todo this conversation opened or supervises, with no live Agent working on it; stopped Agents are released at Start. For a handoff that stops a live Agent or reopens a closed todo, use continues and continues_why instead. If both continues and todo_id are given they must name the same todo"
+            "description": "Open todo opened/supervised by this conversation; no live Agent. Release stopped Agents at Start. To stop a live Agent or reopen use continues/continues_why; both IDs must match if given."
           },
           "tier": {
             "type": "string",
