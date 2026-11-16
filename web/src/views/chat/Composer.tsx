@@ -1,3 +1,4 @@
+import { conversationDeletionScope, conversationKeyDeleted } from "../../lib/conversation-deleted";
 import { storedValue } from "../../lib/compatibility";
 // Beautiful UI's Prompt Bar, wired to a session: multi-line input, / commands, @ files and sessions, image attachments
 // (paste, drop, pick; click one to mark it up), files uploaded to the session's machine, send — and stop while the
@@ -11,6 +12,7 @@ import { promptCommands, type ComposerCommand as Command } from "../../lib/exten
 import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
 import { LOOP_TEXT, loopHint } from "../../lib/loop-command";
 import { WORKFLOWS_COMMAND } from "../../lib/background-panel";
+import { credentialOwner } from "../../lib/api";
 import { composerEntryDrop, dragHasEntry, droppedEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
 import { lazyPage } from "../../lib/lazy-page";
@@ -198,6 +200,11 @@ export const Composer = memo(function Composer({
    *  cindy's pending queue, #5327). Keep it the same object while nothing in it changes, as `footer`. */
   top?: React.ReactNode;
 }) {
+  // Deferred saves and failed sends still belong to this account and conversation after unmount.
+  const canWriteDraft = useMemo(() => {
+    const owner = credentialOwner(), scope = conversationDeletionScope();
+    return () => owner === credentialOwner() && scope === conversationDeletionScope() && !conversationKeyDeleted(draftKey);
+  }, [draftKey]);
   const [draft, setDraft] = useState(() => splitSkillDraft(storedValue(`draft:${draftKey}`) ?? "").text);
   const [atts, setAtts] = useState<Attachment[]>([]);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
@@ -319,6 +326,7 @@ export const Composer = memo(function Composer({
   useEffect(
     () =>
       onDraftEvent(draftKey, (e) => {
+        if (!canWriteDraft()) return;
         // a send from an earlier box of this conversation failed: its words come back even while sending is off
         if (e.type === "unsent") {
           const split = splitSkillDraft(e.text);
@@ -366,6 +374,7 @@ export const Composer = memo(function Composer({
           toast(t("chat-composer.replaced"), "ok", {
             label: t("chat-composer.undo"),
             run: () => {
+              if (!canWriteDraft()) return;
               if (startsEdit) editNow.current?.cancel();
               setQuotes(draftKey, kept.quotes);
               restoreSkills(skillDraft(kept.skills, kept.text));
@@ -398,19 +407,19 @@ export const Composer = memo(function Composer({
           setCaret(next.length);
         });
       }),
-    [draftKey],
+    [draftKey, canWriteDraft],
   );
 
   // What is typed goes into the conversation's stored draft 250 ms after the last key; one still waiting is written at
   // once when the box goes away or moves to another conversation, and when the page is hidden (closed, reloaded,
   // backgrounded or the screen locked — mobile WebViews often skip pagehide there), so the last words typed before
   // switching are not lost (#4591).
-  const unsaved = useRef<{ key: string; text: string } | null>(null);
+  const unsaved = useRef<{ key: string; text: string; current: () => boolean } | null>(null);
   const saveDraft = useCallback(() => {
     const u = unsaved.current;
     if (!u) return;
     unsaved.current = null;
-    storeDraft(u.key, skillDraft(getContexts(u.key), u.text));
+    if (u.current()) storeDraft(u.key, skillDraft(getContexts(u.key), u.text));
   }, []);
   // The render that moves the box to another conversation still holds the old words: they are not that one's draft
   // (the box reads its own next, and this runs again if it differs).
@@ -420,10 +429,10 @@ export const Composer = memo(function Composer({
       savedFor.current = draftKey;
       return;
     }
-    unsaved.current = { key: draftKey, text: draft };
+    unsaved.current = { key: draftKey, text: draft, current: canWriteDraft };
     const t = setTimeout(saveDraft, 250);
     return () => clearTimeout(t);
-  }, [draft, draftKey, saveDraft, contexts]);
+  }, [draft, draftKey, saveDraft, contexts, canWriteDraft]);
   useEffect(() => {
     // visibilitychange to hidden reaches mobile WebViews that never fire pagehide; saveDraft is a no-op without unsaved words
     const flushOnHidden = () => {
@@ -711,6 +720,7 @@ export const Composer = memo(function Composer({
   const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
 
   const submit = async (text = draft) => {
+    if (!canWriteDraft()) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     // a file still on its way holds the message, as a video does on the phone (#8361); the words stay in the box
@@ -728,7 +738,7 @@ export const Composer = memo(function Composer({
     let committed: Outgoing["edit"];
     if (edit) {
       const done = await edit.commit();
-      if (!done) return;
+      if (!done || !canWriteDraft()) return;
       if (typeof done === "object") committed = done;
       // the box went away or shows another conversation: the words wait in this one's stored draft
       if (!mounted.current || keyNow.current !== draftKey) return;
@@ -755,6 +765,7 @@ export const Composer = memo(function Composer({
     const said = !text.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : text;
     const body = withFiles(withQuoteBlock(q, said), sentFiles);
     const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })), ...(committed ? { edit: committed } : {}) });
+    if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok) {
       history.record(skillDraft(refs, text));
       releaseAttachments(sent);
