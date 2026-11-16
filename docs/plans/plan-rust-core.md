@@ -575,8 +575,13 @@ Phase 3 lands in several PRs.
     The final unfinished block-marker hold-back (#9084) separately covers all 13 Apple `markersOnly` inputs/controls,
     with malformed/wrong-expected and digit-boundary checks. Malformed input and deliberately wrong expected objects
     are rejected. Tables (#9164) add 22 repair and 15 table/text end assertions through the same real Kotlin/JNI
-    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. Inline markup,
-    math blocks, `plainOpenFence`, visual gaps, timing, rendering, NAPI/Swift bindings, production adapters and the
+    boundary: half-written rows, early delimiter insertion, list indentation and lazy-line exclusion. The C ABI
+    projection `persona_core_project_stream_repair` and the `stream_repair` ArkTS host projection (#9241) replay the
+    same 21 fence + 14 marker + 22 table repairs and 6 fence-end + 15 table/text end expectations stated
+    independently from the Apple Swift test source, with malformed inputs and deliberately wrong expectations
+    rejected in both surfaces. The NAPI export `coreProjectStreamRepair` is committed in the generated ArkTS
+    declaration and covered by the drift check. Inline markup,
+    math blocks, `plainOpenFence`, visual gaps, timing, rendering, real-NAPI/Swift bindings, production adapters and the
     #4044 performance goal remain open.
 
 - **Answer, stream chunks and task index through the ArkTS host (#8937).**

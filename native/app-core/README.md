@@ -46,7 +46,9 @@ and `--print-records` prints the validated raw records. Keep the complete generi
 unchanged fixtures through every pure C projection: sort's `empty_list`, `persona_core_project_answer` and
 `persona_core_display_answer` for all 15 question + 8 recommendation cases (complete conditional expected objects,
 invalid page/option and the U+200B boundaries), `persona_core_project_stream_chunks` for all 21 complete
-`{done, tail}` objects, `persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
+`{done, tail}` objects, `persona_core_project_stream_repair` (#9241) for 21 fence + 14 marker + 22 table repairs
+plus 6 fence-end and 15 table/text end expectations stated independently from the Apple Swift test source,
+`persona_core_project_turns` for all 57 static cases with the checked-in current-iOS overlay
 applied by the client (62 complete turn objects across the 54 non-empty cases), and
 `persona_core_project_task_index` for all five complete expected objects plus the background receipt, and
 `persona_core_project_viewed_images` (#9017) for the complete post-overlay ordinary viewed line and a source-derived
@@ -220,9 +222,12 @@ from the unchanged checked-in fixtures, with exact-name, invalid-input and wrong
 21 stream_chunks and 5 task_index cases plus the background receipt through a host JSON projection command. The answer comparison preserves the fixture's
 conditional next-page, picks and display fields. The receipt retains its description and started call with empty
 notices/statuses. Exact manifests, malformed inputs and deliberately wrong expected objects are checked per domain.
-The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks` and
-`coreProjectTaskIndex`; their generated declarations are checked for drift. `coreDisplayAnswer` takes a bare option
-label, while the other three take JSON documents.
+`harmony/tests/core-host/stream-repair.test.mjs` (#9241) replays 21 fence + 14 marker + 22 table repairs and 6
+fence-end + 15 table/text end expectations stated independently from the Apple Swift test source through the
+`stream_repair` host projection command, with malformed inputs and deliberately wrong expectations rejected.
+The `ohos`-feature NAPI exports are `coreProjectAnswer`, `coreDisplayAnswer`, `coreProjectStreamChunks`,
+`coreProjectStreamRepair` (#9241) and `coreProjectTaskIndex`; their generated declarations are checked for drift.
+`coreDisplayAnswer` takes a bare option label, while the other four take JSON documents.
 `harmony/tests/rustcore-wire.test.mjs` round-trips the generated codec against itself, which cannot catch a symmetric
 mistake, so it is not a substitute. These host projections do not execute the NAPI functions or exercise a state codec,
 a loaded NAPI module, NAPI argument conversion or callbacks, a production ArkTS adapter, a HAP/HDC run or a physical

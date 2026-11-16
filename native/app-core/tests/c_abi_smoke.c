@@ -1,9 +1,12 @@
-// An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017).
+// An independently compiled C consumer of the checked-in C header (#8560, #8912, #9017, #9241).
 //
 // Beyond the original sort smoke, this client replays the unchanged spec fixtures through the real C ABI:
 // answer + display_answer (15 + 8 cases), stream_chunks (21), turns (57 static cases with the checked-in current-iOS
 // overlay applied here, never in the core), task_index (5 complete expected objects plus the background receipt), and
 // viewed_images (ordinary post-overlay plus source-derived folded expected objects).
+// The stream_repair replay (21 fence + 14 marker + 22 table repairs, plus 6 fence-end and 15 table/text end
+// expectations) mirrors the Apple Swift assertions that the Kotlin JNI replay already states; the expectations are
+// written here independently from that source, never derived from the Rust output.
 // Expected objects are compared completely: both sides are parsed and re-serialized canonically (sorted object keys,
 // compact separators), so object key order is insignificant while every value, array order and Unicode string is exact.
 // Malformed inputs must return an empty buffer and a deliberately wrong expectation must be detected, per domain.
@@ -770,6 +773,218 @@ static void check_stream(const char *fixtures) {
     printf("c-abi: stream_chunks %zu/21 complete expected objects\n", replayed);
 }
 
+/* ---------- stream_repair ---------- */
+
+/* The Apple StreamRepairTests cases are mirrored verbatim from apple/Packages/PersonaKit/Tests/PersonaKitTests/
+ * StreamRepairTests.swift, matching the Kotlin JNI replay (StreamRepairBindingFixtureTest). Expectations are stated
+ * here, never derived from the Rust output. */
+typedef struct {
+    const char *input;
+    const char *repaired;
+} RepairCase;
+typedef struct {
+    const char *input;
+    const char *end;
+} EndCase;
+
+static JValue *repair_input(const char *text) {
+    JValue *input = jnew(J_OBJECT);
+    jset(input, "text", jstring(text));
+    return input;
+}
+
+static JValue *repair_expected(const char *repaired, const char *end) {
+    JValue *expected = jnew(J_OBJECT);
+    jset(expected, "repaired", jstring(repaired));
+    jset(expected, "end", jstring(end));
+    return expected;
+}
+
+static void check_stream_repair(void) {
+    /* 21 fence-repair expectations: closesAnOpenCodeFenceWithItsOwnMarker and holdsAFencesOpeningLineBack cases. */
+    static const RepairCase fence[] = {
+        {"text\n```ts\nconst a", "text\n```ts\nconst a\n```"},
+        {"~~~~\nx\n", "~~~~\nx\n~~~~"},
+        {"```\na\n```\ndone", "```\na\n```\ndone"},
+        {"看这段：\n```swi", "看这段：\n"},
+        {"```mermaid", ""},
+        {"看这段：\n```swift\n", "看这段：\n```swift\n```"},
+        {"```\nlet a = 1\n``", "```\nlet a = 1\n```"},
+        {"````\nx\n```", "````\nx\n````"},
+        {"````\nx\n```\n", "````\nx\n```\n````"},
+        {"prefix\n````\nx\n```\n", "prefix\n````\nx\n```\n````"},
+        {"```\n**x [a](b", "```\n**x [a](b\n```"},
+        {"```\n-", "```\n-\n```"},
+        {"1. 安装依赖：\n\n   ```bash\n   npm install", "1. 安装依赖：\n\n   ```bash\n   npm install\n   ```"},
+        {"1. 安装依赖：\n   ```bash\n   npm install\n", "1. 安装依赖：\n   ```bash\n   npm install\n   ```"},
+        {"- 运行：\n  ~~~\n  make", "- 运行：\n  ~~~\n  make\n  ~~~"},
+        {"- 运行：\n  ```\n  make\n  ``", "- 运行：\n  ```\n  make\n  ```"},
+        {"```\na\n  ", "```\na\n```"},
+        {"这是 **重要", "这是 **重要"},
+        {"```swift\nlet a\n```", "```swift\nlet a\n```"},
+        {"```swift\nlet a\n```\n", "```swift\nlet a\n```\n"},
+        {"", ""},
+    };
+    /* 6 fence-end expectations: tellsWhereTheTextEnds. */
+    static const EndCase fence_end[] = {
+        {"", "text"},
+        {"这是 **重要", "text"},
+        {"看这段：\n```swi", "code"},
+        {"```swift\nlet a", "code"},
+        {"```swift\nlet a\n```", "code"},
+        {"```swift\nlet a\n```\n", "text"},
+    };
+    /* 14 unfinished-marker cases: holdsALastLineOfOnlyMarkersBack. */
+    static const RepairCase marker[] = {
+        {"- 第一项\n-", "- 第一项\n"},
+        {"- 第一项\n- ", "- 第一项\n"},
+        {"1. 第一步\n2.", "1. 第一步\n"},
+        {"1. 第一步\n12", "1. 第一步\n"},
+        {"正文\n##", "正文\n"},
+        {"正文\n>", "正文\n"},
+        {"标题\n---", "标题\n"},
+        {"- [ ]", ""},
+        {"**", ""},
+        {"- 第", "- 第"},
+        {"2026年", "2026年"},
+        {"1.5 倍", "1.5 倍"},
+        {"-\n", "-\n"},
+        {"正文\n---\n", "正文\n---\n"},
+    };
+    /* 22 Apple table-repair expectations from holdsATablesHalfWrittenLastRowBack, givesATableHeaderItsDelimiterRowEarly,
+     * findsATableRightUnderAParagraphLine, keepsATableInTheListItemItIsIn and findsNoTableInALazyLine. */
+#define TABLE_HEAD "| 文件 | 改动 |\n| --- | --- |\n| a.swift | 刷新 |\n"
+    static const RepairCase table[] = {
+        {TABLE_HEAD "| b.swi", TABLE_HEAD},
+        {TABLE_HEAD "| b.swift | 超时 |\n", TABLE_HEAD "| b.swift | 超时 |\n"},
+        {"| 文件 | 改", "| 文件 | 改"},
+        {"Use a | b\n| not a table", "Use a | b\n| not a table"},
+        {"| 文件 | 改动 |\n", "| 文件 | 改动 |\n| --- | --- |"},
+        {"| a | b |\n| --", "| a | b |\n| --- | --- |"},
+        {"| a | b |\n|", "| a | b |\n| --- | --- |"},
+        {"## 结果\n| a | b | c |\n", "## 结果\n| a | b | c |\n| --- | --- | --- |"},
+        {"| a | b |\n| :-- | --: |", "| a | b |\n| :-- | --: |"},
+        {"| 不是表格\n", "| 不是表格\n"},
+        {"| x |\n| a | b |\n", "| x |\n| a | b |\n"},
+        {"**结果：**\n| a | b |\n", "**结果：**\n| a | b |\n| --- | --- |"},
+        {"**结果：**\n| a | b |\n| --", "**结果：**\n| a | b |\n| --- | --- |"},
+        {"**结果：**\n| a | b |\n| --- | --- |\n| 1", "**结果：**\n| a | b |\n| --- | --- |\n"},
+        {"- 项\n\n  | a | b |\n", "- 项\n\n  | a | b |\n  | --- | --- |"},
+        {"1. 项\n   | a | b |\n   | -", "1. 项\n   | a | b |\n   | --- | --- |"},
+        {"- 项\n  | a | b |\n  | --- | --- |\n  | 1", "- 项\n  | a | b |\n  | --- | --- |\n"},
+        {"- 项\n\n  | a | b |\n  | --- | --- |\n  ", "- 项\n\n  | a | b |\n  | --- | --- |\n"},
+        {"- 项\n| a | b |\n", "- 项\n| a | b |\n"},
+        {"- a\n  - b\n  | x |\n", "- a\n  - b\n  | x |\n"},
+        {"> 引用\n| a | b |\n", "> 引用\n| a | b |\n"},
+        {"- 项\n| a | b |\n| --- | --- |\n| 1", "- 项\n| a | b |\n| --- | --- |\n| 1"},
+    };
+    /* 15 table/text end expectations from the same Apple tests plus tellsWhereTheTextEnds. */
+    static const EndCase table_end[] = {
+        {"**结果：**\n| a | b |\n| --- | --- |\n| 1", "table"},
+        {"**结果：**\n| a | b |\n| --- | --- |\n| 1 | 2 |\n", "table"},
+        {"| a | b |\n| --- | --- |\nfoo", "table"},
+        {"| a | b |\n| --- | --- |\n- 项", "text"},
+        {"- 项\n  | a | b |\n  | --- | --- |\n  | 1", "table"},
+        {"- 项\n\n  | a | b |\n  | --- | --- |\n  ", "table"},
+        {"- 项\n\n  | a | b |\n", "table"},
+        {"- 项\n\n  | a | b |\n  ", "table"},
+        {"- 项\n| a | b |\n| --- | --- |\n| 1", "text"},
+        {"| a | b |\n| --- | --- |\n| 1", "table"},
+        {"| a | b |\n| --- | --- |\n| 1 | 2 |\n", "table"},
+        {"| a | b |\n", "table"},
+        {"| a | b |\n| -", "table"},
+        {"| a | b", "text"},
+        {"| a | b |\n| --- | --- |\n\n后文", "text"},
+    };
+    size_t fence_repaired = 0;
+    for (size_t i = 0; i < sizeof(fence) / sizeof(fence[0]); i++) {
+        JValue *input = repair_input(fence[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        if (!actual) { fail("stream_repair", "fence", "empty projection"); jfree(input); continue; }
+        const char *repaired = jstr(jget(actual, "repaired"));
+        if (!repaired || strcmp(repaired, fence[i].repaired) != 0) {
+            fail("stream_repair", "fence", "repaired differs from the Apple-derived expectation");
+        } else {
+            fence_repaired++;
+        }
+        jfree(actual);
+        jfree(input);
+    }
+    for (size_t i = 0; i < sizeof(fence_end) / sizeof(fence_end[0]); i++) {
+        JValue *input = repair_input(fence_end[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        if (!actual) { fail("stream_repair", "fence_end", "empty projection"); jfree(input); continue; }
+        const char *end = jstr(jget(actual, "end"));
+        if (!end || strcmp(end, fence_end[i].end) != 0) fail("stream_repair", "fence_end", "end differs from the Apple-derived expectation");
+        jfree(actual);
+        jfree(input);
+    }
+    size_t marker_repaired = 0;
+    for (size_t i = 0; i < sizeof(marker) / sizeof(marker[0]); i++) {
+        JValue *input = repair_input(marker[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        if (!actual) { fail("stream_repair", "marker", "empty projection"); jfree(input); continue; }
+        const char *repaired = jstr(jget(actual, "repaired"));
+        if (!repaired || strcmp(repaired, marker[i].repaired) != 0) {
+            fail("stream_repair", "marker", "repaired differs from the Apple-derived expectation");
+        } else {
+            marker_repaired++;
+        }
+        jfree(actual);
+        jfree(input);
+    }
+    size_t table_repaired = 0;
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+        JValue *input = repair_input(table[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        if (!actual) { fail("stream_repair", "table", "empty projection"); jfree(input); continue; }
+        const char *repaired = jstr(jget(actual, "repaired"));
+        if (!repaired || strcmp(repaired, table[i].repaired) != 0) {
+            fail("stream_repair", "table", "repaired differs from the Apple-derived expectation");
+        } else {
+            table_repaired++;
+        }
+        /* A deliberately wrong expectation must not compare equal. */
+        if (i == 0) {
+            JValue *wrong = repair_expected(table[i].repaired, "text");
+            if (jequal(actual, wrong)) fail("stream_repair", "table", "a wrong expected object compared equal");
+            jfree(wrong);
+        }
+        jfree(actual);
+        jfree(input);
+    }
+    size_t table_end_matched = 0;
+    for (size_t i = 0; i < sizeof(table_end) / sizeof(table_end[0]); i++) {
+        JValue *input = repair_input(table_end[i].input);
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        if (!actual) { fail("stream_repair", "table_end", "empty projection"); jfree(input); continue; }
+        const char *end = jstr(jget(actual, "end"));
+        if (!end || strcmp(end, table_end[i].end) != 0) fail("stream_repair", "table_end", "end differs from the Apple-derived expectation");
+        else table_end_matched++;
+        jfree(actual);
+        jfree(input);
+    }
+    if (fence_repaired != 21) fail("stream_repair", "manifest", "expected exactly 21 fence repair cases");
+    if (marker_repaired != 14) fail("stream_repair", "manifest", "expected exactly 14 marker cases");
+    if (table_repaired != 22) fail("stream_repair", "manifest", "expected exactly 22 table repair cases");
+    if (table_end_matched != 15) fail("stream_repair", "manifest", "expected exactly 15 table/text end cases");
+    /* Malformed inputs must produce an empty buffer. */
+    expect_empty(persona_core_project_stream_repair, "stream_repair", "wrong_schema", "{\"invalid\":true}");
+    expect_empty(persona_core_project_stream_repair, "stream_repair", "invalid_json", "not JSON");
+    /* A deliberately wrong fence expectation must not compare equal. */
+    {
+        JValue *input = repair_input("text\n```ts\nconst a");
+        JValue *actual = project_case(persona_core_project_stream_repair, input);
+        JValue *wrong = repair_expected("text\n```ts\nconst a\n~~~", "text");
+        if (jequal(actual, wrong)) fail("stream_repair", "fence_negative", "a wrong fence expectation compared equal");
+        jfree(wrong);
+        jfree(actual);
+        jfree(input);
+    }
+    printf("c-abi: stream_repair %zu/21 fence + %zu/14 marker + %zu/22 table + %zu/15 table/text end complete expectations\n",
+           fence_repaired, marker_repaired, table_repaired, table_end_matched);
+}
+
 /* ---------- answer + display_answer ---------- */
 
 static const char *const question_manifest[] = {
@@ -1424,6 +1639,7 @@ int main(int argc, char **argv) {
     }
     check_sort(argv[1]);
     check_stream(argv[1]);
+    check_stream_repair();
     check_answer_file(argv[1], "questions.json", 0, 15);
     check_answer_file(argv[1], "recommended.json", 1, 8);
     check_answer_boundaries();
@@ -1435,6 +1651,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "c-abi-smoke: FAIL %d check(s)\n", failures);
         return 1;
     }
-    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
+    puts("c-abi-smoke: ok independently compiled C client; sort, answer 15+8, stream 21, stream_repair 21+14+22+15, turns 57 (+overlay), task_index 5+receipt, transport 20 shared-scalar refusals, viewed ordinary+fold; malformed inputs and wrong expectations rejected");
     return 0;
 }
