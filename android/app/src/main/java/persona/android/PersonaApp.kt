@@ -39,6 +39,12 @@ class PersonaApp : Application() {
     val pairingReady = MutableStateFlow(false)
     val pairingRestoreError = MutableStateFlow(false)
 
+    /** Captures debug-only selection before the graph starts; this never creates a core. */
+    val continuityFactory: (String, (persona.core.data.ContinuityAdapter.Applied) -> Unit) -> persona.core.data.ContinuityAdapter by lazy {
+        if (BuildConfig.DEBUG) ContinuitySelection.factory(this)
+        else { chat, _ -> persona.core.data.KotlinContinuityAdapter(chat) }
+    }
+
     /** Settings › Interface style; device-wide, kept across pairings. */
     val appearance: persona.core.designsystem.AppStyleStore by lazy { persona.core.designsystem.AppStyleStore(this) }
 
@@ -68,6 +74,7 @@ class PersonaApp : Application() {
     override fun onCreate() {
         // Before Hilt builds the graph, so a crash there is written too.
         errorReporting.installCrashHandler()
+        continuityFactory // Capture before Hilt, and before a debug Activity can save the next selection.
         super.onCreate()
         // The core modules' words (errors, the data repositories' state) in the shown language (docs/protocol/i18n.md).
         persona.core.contracts.CoreText.words = { it.resolve(this) }
