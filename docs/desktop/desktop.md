@@ -85,6 +85,17 @@ On a Mac the desktop app can show the Agents' state at the notch (#7669), as the
   at the top center over the menu bar. Moving or adding displays places it again.
 - **Not yet**: the iPhone's other presets (tokens per minute, today's tokens), buttons on the island, Windows.
 
+Captured from the built desktop app against the synthetic hub (`scripts/mock/mock_hub.py`), in English; the island is
+always dark, as the notch is. The check by a person on a real Mac is section 9 of [mac-acceptance.md](mac-acceptance.md).
+
+| Settings, light, off | Settings, dark, on |
+| --- | --- |
+| ![Show at the MacBook notch, off](screenshots/notch-island/settings-light-off.png) | ![Show at the MacBook notch, on](screenshots/notch-island/settings-dark-on.png) |
+
+| Closed | Open, the pointer over it |
+| --- | --- |
+| ![The island closed](screenshots/notch-island/island-closed.png) | ![The island open](screenshots/notch-island/island-open.png) |
+
 ## Packaging and verification
 
 `electron-builder.yml` defines universal macOS DMG/ZIP and Windows NSIS artifacts. `electron-builder.unsigned.yml` uses a temporary development app ID and explicitly disables certificate discovery/signing and notarization. It is for development only. Unsigned artifacts do not prove signed distribution, notarization or installation.
