@@ -64,15 +64,18 @@ patch acknowledgement. State wakes use their chat identity.
 
 The adapter consumes #7554 without changing Rust, JNI or codecs: `ChatPatch.verified` owns verification,
 `Action::HubChanged` owns changes heard during a fill, and adjacent input/`Ack` submissions distinguish applied no-ops
-from queued work. Fold responses carry `fold_id`, so independent folds open concurrently. Older/fold calls install a
-single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects from expired inputs cannot satisfy
+from queued work. Asynchronous fold responses carry `fold_id`, so independent folds open concurrently. Asynchronous
+older/fold calls install a single-use input slot before dispatch and wait with `withTimeoutOrNull`; effects from expired inputs cannot satisfy
 later calls. The driver tags effects at the worker's ordered Ack wake and delivers completed slots from `patch.acked`.
 
 Asynchronous fill completion belongs to the applied callback chain. Merely queuing `After` or `Reloaded` neither
 finishes nor cancels it; until a response is successfully queued, its request owner reports failures or cancellation
-with `FillFailed`. Successful content acknowledgements, not arbitrary Acks, clear errors and complete a reconciliation.
-Synchronous adapters retain the native state lock and serialized HTTP operations; only asynchronous adapters submit
-outside that lock and open concurrent folds. Ack-only frames reuse the item list and do not schedule cache writes.
+with `FillFailed`. Only content inputs newer than an error's input boundary can clear that error; arbitrary or older
+Acks cannot. Each reconciliation waits for its own successful fill-response receipt. Synchronous repository paths
+retain the original state-lock sections, serialized HTTP operations, downloaded fold results and error-clearing rules.
+They do not use receipt timeouts, operation slots or submitted-history generations. Only asynchronous adapters submit
+outside that lock and open concurrent folds. Ack-only frames reuse the item list, skip coverage scans and do not
+schedule cache writes.
 `Rejected` has no chat
 or input identity, so the driver records diagnostics and broadcasts a notification without failing another chat or
 releasing its gates. Bounded native waits and the core's duplicate-fill gate keep later retries possible.
