@@ -164,6 +164,8 @@ class PersonaShellOverlayTest {
         back(scenario)
         awaitText("The packing list is ready.")
         back(scenario)
+        awaitText("Pick a session")
+        rule.onNodeWithContentDescription("Show list").performClick()
         awaitText(agent.displayTitle)
         rule.onAllNodesWithText("The packing list is ready.").assertCountEquals(0)
     }
@@ -177,6 +179,8 @@ class PersonaShellOverlayTest {
         back(scenario)
         close().assertDoesNotExist()
         rule.onNodeWithText("Agents").performClick()
+        frames()
+        rule.onNodeWithContentDescription("Show list").performClick()
         awaitText(agent.displayTitle)
         rule.onNodeWithText(agent.displayTitle).performClick()
         awaitText("The trip outline is ready.")
@@ -205,7 +209,61 @@ class PersonaShellOverlayTest {
         }
     }
 
+    @Test fun anUnselectedAgentsPageKeepsTheListOverItsPlaceholder() = shell { scenario ->
+        awaitText("The trip outline is ready.")
+        clickText("Agents")
+        awaitText("Pick a session")
+        close().assertDoesNotExist()
+        rule.onNodeWithContentDescription("Show list").performClick()
+        frames()
+        close().assertExists()
+        awaitText(agent.displayTitle)
+        back(scenario)
+        close().assertDoesNotExist()
+        awaitText("Pick a session")
+        rule.onNodeWithContentDescription("Show list").performClick()
+        frames()
+        clickText(agent.displayTitle)
+        awaitText("The trip outline is ready.")
+    }
+
+    @Test fun leavingTheAgentsOverlayForAPersonaTodoKeepsThePreviousAgentInItsStack() = shell(agents = true, withTodos = true) { scenario ->
+        awaitText("The trip outline is ready.")
+        sidebar()
+        close().assertExists()
+        clickText("Assistant")
+        close().assertDoesNotExist()
+        sidebar()
+        clickText("To-dos")
+        awaitText("Trip plan")
+        clickText("Trip plan")
+        awaitText(otherAgent.displayTitle)
+        clickText(otherAgent.displayTitle)
+        awaitText("The packing list is ready.")
+        awaitSavedAgent(otherAgent.sessionId)
+        close().assertDoesNotExist()
+        back(scenario)
+        // Back returns to its Persona source; the retained Agents stack must still hold the earlier chat.
+        awaitText("Trip plan")
+        awaitSavedAgent(agent.sessionId)
+    }
+
+    @Test fun aNonDetailActionFromTheOverlaidListReturnsToThePreviousChat() = shell(agents = true, withTodos = true,
+        groupByTodo = true) { scenario ->
+        awaitText("The trip outline is ready.")
+        sidebar()
+        awaitText("Trip plan")
+        rule.onNodeWithContentDescription("View to-do").performClick()
+        frames()
+        close().assertDoesNotExist()
+        awaitText(otherAgent.displayTitle)
+        back(scenario)
+        awaitText("The trip outline is ready.")
+        close().assertDoesNotExist()
+    }
+
     private fun shell(agents: Boolean = false, sideInset: Int = 0, width: MutableState<Int>? = null,
+        withTodos: Boolean = false, groupByTodo: Boolean = false,
         check: (ActivityScenario<ComponentActivity>) -> Unit) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
@@ -237,7 +295,22 @@ class PersonaShellOverlayTest {
             override suspend fun downloadFile(file: LarkPart.File): String = error("No files in this fixture")
         }
         val hubScope = HubScope("overlay-test", "fixture")
+        File(app.noBackupFilesDir, "hub-data/${hubScope.path}").mkdirs()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val todo = Todo("trip", "Trip plan", agents = listOf(TodoAgent(otherAgent.machineId, otherAgent.sessionId)))
+        val tasks = if (withTodos) persona.core.domain.tasks.TasksStore(object : TasksApi {
+            override suspend fun todos() = listOf(todo)
+            override suspend fun todoDecisions(todoId: String) = emptyList<TodoDecision>()
+            override suspend fun feed(conversation: String, since: String?): FeedResponse = error("No feed in this fixture")
+            override suspend fun startPlan(id: String, remember: Boolean): TaskPlan = error("No plans in this fixture")
+            override suspend fun dismissPlan(id: String): TaskPlan = error("No plans in this fixture")
+            override suspend fun retryTask(todoId: String): Todo = error("No retries in this fixture")
+            override suspend fun removeTask(todoId: String) = error("No removal in this fixture")
+            override suspend fun route(conversation: String, todoId: String, text: String): FeedItem = error("No sends in this fixture")
+            override suspend fun today(conversation: String): FeedItem = error("No today card in this fixture")
+            override suspend fun mainConversation(): String? = null
+            override suspend fun inboxReply(itemId: String, text: String, card: String?) = error("No replies in this fixture")
+        }, connection, scope) else null
         val drafts = object : DraftRepository {
             override fun observe(key: DraftKey) = MutableStateFlow(DraftSnapshot(hubScope, key))
             override suspend fun read(key: DraftKey) = DraftSnapshot(hubScope, key)
@@ -282,7 +355,9 @@ class PersonaShellOverlayTest {
             }
             override fun assistantRepository() = assistant
         }
-        val session = ShellSession(hubScope.path, connection, repositories, chat, interactions, sender, assistant, inbox, preferences())
+        val preferences = preferences()
+        if (groupByTodo) kotlinx.coroutines.runBlocking { preferences.grouping(persona.core.domain.sort.AgentGrouping.Todo) }
+        val session = ShellSession(hubScope.path, connection, repositories, chat, interactions, sender, assistant, inbox, preferences, tasks = tasks)
         val host = object : ShellHost {
             override val automation = true
             override val posture = mutableStateOf<String?>(null)
@@ -339,6 +414,17 @@ class PersonaShellOverlayTest {
         buttons[visible].performClick()
         frames()
     }
+    private fun clickText(text: String) {
+        val nodes = rule.onAllNodesWithText(text)
+        val visible = (0 until nodes.fetchSemanticsNodes().size).single { nodes[it].isDisplayed() }
+        nodes[visible].performClick()
+        frames()
+    }
+    private fun awaitSavedAgent(sessionId: String) {
+        val app = ApplicationProvider.getApplicationContext<OverlayTestApplication>()
+        val store = ShellPositionStore(app, HubScope("overlay-test", "fixture").path)
+        rule.waitUntil(10_000) { store.load().chats[AppTab.Agents]?.sessionId == sessionId }
+    }
     private fun back(scenario: ActivityScenario<ComponentActivity>) {
         scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         frames()
@@ -352,7 +438,8 @@ class PersonaShellOverlayTest {
         val deadline = System.nanoTime() + 30_000_000_000L
         do {
             frames()
-            if (rule.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) return
+            val nodes = rule.onAllNodesWithText(text, useUnmergedTree = true)
+            if ((0 until nodes.fetchSemanticsNodes().size).any { nodes[it].isDisplayed() }) return
             Thread.sleep(20)
         } while (System.nanoTime() < deadline)
         error("Missing $text: ${rule.onRoot().printToString()}")

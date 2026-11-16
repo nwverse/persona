@@ -87,8 +87,9 @@ fun JShellDrawer(
             ambientShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
             spotShadowColor = Color.Black.copy(alpha = HomeTokens.drawerShadowAlpha)
         }.then(if (progress > 0f) Modifier.border(Tokens.Space.Standard.xxs / 2, palette.line, shape) else Modifier)) {
-            Box(Modifier.fillMaxSize().focusProperties { canFocus = !opened }
-                .then(if (opened) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
+            // A closed drawer must not override a descendant overlay's focus restriction.
+            Box(Modifier.fillMaxSize().then(if (opened)
+                Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)) { content() }
             if (opened || progress > 0f) Box(Modifier.fillMaxSize().background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
                 .clickable(enabled = opened, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })
         }
@@ -134,8 +135,8 @@ fun JSidebarColumn(
             Box(Modifier.align(Alignment.TopEnd).width(Tokens.Space.xxs / 2).fillMaxHeight().background(palette.line))
         }
         Box(Modifier.fillMaxSize().padding(start = if (sidebar != null && !overlay) pageStart * progress else 0.dp)) {
-            Box(Modifier.fillMaxSize().focusProperties { canFocus = !modal }
-                .then(if (modal) Modifier.clearAndSetSemantics {} else Modifier)) { content() }
+            Box(Modifier.fillMaxSize().then(if (modal)
+                Modifier.focusProperties { canFocus = false }.clearAndSetSemantics {} else Modifier)) { content() }
             if (overlay && visible) Box(Modifier.fillMaxSize().padding(start = width * progress)
                 .background(palette.scrim.copy(alpha = palette.scrim.alpha * progress))
                 .clickable(enabled = shown, role = Role.Button, onClick = onDismiss).semantics { contentDescription = close })

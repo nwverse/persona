@@ -206,7 +206,14 @@ class FoldableWindowShotsTest {
                     val stack = stacks.getValue(selected)
                     val listDetail = rememberShellListDetail(selected, directive, width, emptyList(), detailOf(stack) != null,
                         store = dividerStore, collapsible = canCollapseList(stack))
-                    val overlay = rememberAgentsOverlayStrategy(over && selected == AppTab.Agents, agentsOverShown)
+                    val overlay = rememberAgentsOverlayStrategy(over && selected == AppTab.Agents, agentsOverShown) {
+                        CompositionLocalProvider(LocalHomeChrome provides HomeChrome(navigationItems(emptyMap()), selected.name,
+                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
+                                JPersonaButton(PersonaState.Idle, "Sidebar", { drawerShown.value = true })
+                            })) {
+                            AgentsEmptyPage { agentsOverShown.value = true }
+                        }
+                    }
                     Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("shot")) {
                         JShellDrawer(drawerShown.value, onDismiss = { drawerShown.value = false }, drawer = sidebar) {
                             NavDisplay(backStack = stack, onBack = navigator::back,
@@ -224,7 +231,7 @@ class FoldableWindowShotsTest {
                                                 }
                                             }
                                         }
-                                        agentsEntries(listNavigator, dependencies)
+                                        agentsEntries(navigator, dependencies, listNavigator = listNavigator)
                                         entry<ChatRoute> { route ->
                                             Box(Modifier.fillMaxSize().testTag("agent-page")) {
                                                 ChatScreen(SessionKey(route.machineId, route.sessionId), chats, sender, interactions, repositories, onBack = navigator::back)
@@ -269,6 +276,13 @@ class FoldableWindowShotsTest {
                         capture("$window-assistant-picked", s, d)
                     }
                     rule.runOnIdle { navigator.selectTab(AppTab.Agents) }
+                    if (window.startsWith("upright")) {
+                        frames()
+                        capture("$window-agents-empty-away", s, d)
+                        rule.onNodeWithContentDescription("Show list").performClick()
+                        awaitText(agent.displayTitle)
+                        capture("$window-agents-empty-over", s, d)
+                    }
                     awaitText(agent.displayTitle)
                     rule.onNodeWithText(agent.displayTitle, useUnmergedTree = true).performClick()
                     awaitText("The trip outline is ready.")

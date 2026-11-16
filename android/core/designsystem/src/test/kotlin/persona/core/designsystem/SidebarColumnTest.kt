@@ -16,7 +16,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.getBoundsInRoot
@@ -95,20 +99,38 @@ class SidebarColumnTest {
         var overlay by mutableStateOf(true)
         var built = 0
         var pageTaps = 0
+        var pageFocused = false
         val focus = FocusRequester()
+        val columnFocus = FocusRequester()
+        lateinit var focusManager: FocusManager
         rule.setContent {
             PersonaTheme(reduceMotion = true) {
-                JSidebarColumn(sidebar = { Box(Modifier.fillMaxSize().testTag("column")) },
+              focusManager = LocalFocusManager.current
+              // Production nests the column inside the shared drawer, even while that drawer is closed.
+              JShellDrawer(opened = false, onDismiss = {}, drawer = {}) {
+                JSidebarColumn(sidebar = { Box(Modifier.fillMaxSize().testTag("column").focusRequester(columnFocus).focusable()) },
                     width = 320.dp, pageStart = 320.dp, shown = shown, overlay = overlay, onDismiss = { shown = false }) {
                     remember { built++ }
-                    Box(Modifier.fillMaxSize().testTag("page").focusRequester(focus).focusable().clickable { pageTaps++ })
+                    Box(Modifier.fillMaxSize().testTag("page").focusRequester(focus).onFocusChanged { pageFocused = it.isFocused }
+                        .focusable().clickable { pageTaps++ })
                 }
+              }
             }
         }
         rule.onNodeWithTag("page").assertWidthIsEqualTo(673.dp)
         rule.runOnIdle { assertTrue(focus.requestFocus()); shown = true }
         rule.waitForIdle()
-        rule.runOnIdle { assertFalse(focus.requestFocus()) }
+        rule.runOnIdle {
+            assertFalse(focus.requestFocus())
+            assertFalse(pageFocused)
+            assertTrue(columnFocus.requestFocus())
+            // Tab / D-pad traversal must never enter the page under the scrim either.
+            repeat(4) {
+                focusManager.moveFocus(FocusDirection.Next)
+                assertFalse(focus.requestFocus())
+                assertFalse(pageFocused)
+            }
+        }
         rule.onNodeWithTag("column").assertWidthIsEqualTo(320.dp)
         rule.onNodeWithTag("column").performTouchInput { click(center) }
         rule.runOnIdle { assertTrue(shown); assertEquals(0, pageTaps) }

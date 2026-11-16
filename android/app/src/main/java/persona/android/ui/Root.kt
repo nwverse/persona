@@ -252,7 +252,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
     // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
     val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
-    // A configuration change closes transient overlays; the beside-column choice above stays saved.
+    // Overlays close when the tab or beside/over placement changes; the beside-column choice stays saved.
     val sidebarOverlayShown = remember { mutableStateOf(false) }
     val agentsOverlayShown = remember { mutableStateOf(false) }
     fun dismissSidebar() {
@@ -494,7 +494,6 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         active = selected == AppTab.Persona && connection == ConnectionState.Online)
     // Links over the whole shell, persona:// links from conversations, "Hand to Persona" from pages (ShellLinks.kt).
     ShellLinkHost(session, navigator, shell.feedback) {
-      BoxWithConstraints(Modifier.fillMaxSize()) {
         val uriHandler = LocalUriHandler.current
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
         val style = PersonaTheme.style
@@ -556,7 +555,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val sideLeft = sides.getLeft(LocalDensity.current, LocalLayoutDirection.current)
         val sideRight = sides.getRight(LocalDensity.current, LocalLayoutDirection.current)
         // The same inset area measured by the pane box below, including in split-screen windows.
-        val paneWidth = maxWidth - with(LocalDensity.current) { (sideLeft + sideRight).toDp() }
+        val paneWidth = windowWidth - with(LocalDensity.current) { (sideLeft + sideRight).toDp() }
         // The vertical folds across the panes' area, in dp from its left edge: snap points for the divider, or (when
         // the two sides are apart) where the split is fixed.
         val paneHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
@@ -565,7 +564,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val columnsOver = regular && columnPlacement(paneWidth.value, paneHinges) == ColumnPlacement.Over
         val currentColumnsOver = rememberUpdatedState(columnsOver)
         val currentPaneWidth = rememberUpdatedState(paneWidth)
-        LaunchedEffect(columnsOver) {
+        LaunchedEffect(columnsOver, selected) {
             sidebarOverlayShown.value = false
             agentsOverlayShown.value = false
         }
@@ -647,6 +646,26 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 BackHandler(selected == AppTab.Persona && over && sidebarOverlayShown.value) { sidebarOverlayShown.value = false }
             }
         }
+        val leading: @Composable (Boolean) -> Unit = { assistantRoot ->
+            Box {
+                // The dot is spoken too: that something waits at another assistant.
+                val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
+                    if (!currentOthersWaiting.value) label
+                    else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
+                        stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
+                }
+                JPersonaButton(sidebar.personaState, sidebarLabel, {
+                    if (assistantRoot && currentRegular.value) {
+                        val shown = if (currentColumnsOver.value) sidebarOverlayShown else sidebarColumnShown
+                        shown.value = !shown.value
+                    }
+                    else sidebar.opened.value = true
+                })
+                // Something waits at another assistant: the switcher's badges say where, as iOS's AssistantWaitingDot.
+                if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
+            }
+        }
+        val currentLeading = rememberUpdatedState(leading)
         // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
         val chrome = remember(style, items, selected) {
             NavEntryDecorator<NavKey> { entry ->
@@ -661,25 +680,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
                         LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
                         LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
-                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight, leading = {
-                                Box {
-                                    // The dot is spoken too: that something waits at another assistant.
-                                    val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
-                                        if (!currentOthersWaiting.value) label
-                                        else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
-                                            stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
-                                    }
-                                    JPersonaButton(sidebar.personaState, sidebarLabel, {
-                                        if (assistantRoot && currentRegular.value) {
-                                            val shown = if (currentColumnsOver.value) sidebarOverlayShown else sidebarColumnShown
-                                            shown.value = !shown.value
-                                        }
-                                        else sidebar.opened.value = true
-                                    })
-                                    // Something waits at another assistant: the switcher's badges say where. Still, as iOS's `AssistantWaitingDot`.
-                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs), breathes = false)
-                                }
-                            }) else null) {
+                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
+                            leading = { currentLeading.value(assistantRoot) }) else null) {
                         if (primary) Box(Modifier.fillMaxSize()) {
                             entry.Content()
                             // The home bar holds no title to say the link is down: a pill under it does, as on iOS (#4339 C14).
@@ -714,8 +716,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         hubGroup = hubGroups.takeIf { it.size > 1 }?.firstOrNull { it.selected }?.name)
                 }
             }
-            agentsEntries(agentsListNavigator, agents, machine, { machine = it },
-                terminalPanes = if (session.demo == null) shell.terminalPanes?.available ?: kotlinx.coroutines.flow.flowOf(false) else kotlinx.coroutines.flow.flowOf(false))
+            agentsEntries(navigator, agents, machine, { machine = it },
+                terminalPanes = if (session.demo == null) shell.terminalPanes?.available ?: kotlinx.coroutines.flow.flowOf(false) else kotlinx.coroutines.flow.flowOf(false),
+                listNavigator = agentsListNavigator)
             spaceEntries(navigator, agents)
             machineSpacesEntries(navigator, agents)
             chatEntries(navigator) {
@@ -807,7 +810,17 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         val listDetail = rememberShellListDetail(tab, directive, maxWidth, paneHinges, detailOpen = detail != null,
                             store = paneStore, collapsible = canCollapseList(stacks.getValue(tab)))
                         val agentsOverlay = rememberAgentsOverlayStrategy(columnsOver && tab == AppTab.Agents &&
-                            stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown)
+                            stacks.getValue(tab).drop(1).all(::isDetailDestination), agentsOverlayShown) {
+                            val barHeight = remember { mutableIntStateOf(0) }
+                            CompositionLocalProvider(LocalHomeChrome provides HomeChrome(items, selected.name,
+                                onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, barHeight = barHeight,
+                                leading = { currentLeading.value(false) })) {
+                                Box(Modifier.fillMaxSize()) {
+                                    AgentsEmptyPage { agentsOverlayShown.value = true }
+                                    HomeLinkPill(currentConnection.value, barHeight.intValue)
+                                }
+                            }
+                        }
                         ShellTabLifecycle(shown) {
                             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalDetailKey provides detail,
                                 persona.feature.settings.LocalExtensionPageVisible provides shown) {
@@ -887,7 +900,6 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
               }
           }
         }
-      }
     }
 }
 
