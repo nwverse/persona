@@ -480,11 +480,13 @@ fun buildFlatAgentList(
             }
         }
         AgentGrouping.Recent -> {
+            // iOS draws no section when the list is empty (ChatsView `recentSection`); keep loading/empty on
+            // `groups.isEmpty()` in AgentsScreen. The section never folds.
             val rows = recentAgentOrder(filtered.filter { it.id !in pins.sessions })
-            val id = RecentGroup
-            val folded = id in settings.folded
-            result += AgentListGroup(id, CoreText.of(Key.AgentsRecentlyUsed), rows, if (folded) emptyList() else rows, folded,
-                stateCounts = stateCounts(rows), waitingInBackground = waiting(rows))
+            if (rows.isNotEmpty()) {
+                result += AgentListGroup(RecentGroup, CoreText.of(Key.AgentsRecentlyUsed), rows, rows, folded = false,
+                    stateCounts = stateCounts(rows), waitingInBackground = waiting(rows))
+            }
         }
         AgentGrouping.Space -> {
             val spaces = agentSpaces(live)

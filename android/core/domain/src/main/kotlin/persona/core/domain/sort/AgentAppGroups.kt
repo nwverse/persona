@@ -198,6 +198,7 @@ object AppGroups {
         return parts.size == 3 && parts[0].endsWith(":") && parts[1] == "Users"
     }
 
+    // Android's Session only carries machineId; iOS uses machineRef.path (hub-qualified). No hub id on the wire type yet.
     private fun machinePath(session: Session): String = session.machineId
 
     private val TRAE = setOf("trae", "trae-cli", "traecli")

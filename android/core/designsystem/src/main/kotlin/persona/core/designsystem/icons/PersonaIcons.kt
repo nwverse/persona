@@ -34,8 +34,6 @@ object PersonaIcons {
     val backgroundWaiting: PhIcon get() = PhIcons.Clock
     /** SF Symbol `macwindow`. */
     val byApp: PhIcon get() = PhIcons.AppWindow
-    /** SF Symbol `clock.arrow.circlepath` (Recently Used). */
-    val recent: PhIcon get() = PhIcons.ArrowClockwise
     /** SF Symbol `calendar`. */
     val calendarView: PhIcon get() = PhIcons.CalendarBlank
     /** SF Symbol `camera`. */
@@ -270,6 +268,8 @@ object PersonaIcons {
     val quietHours: PhIcon get() = PhIcons.MoonStars
     /** SF Symbol `text.quote`. */
     val quote: PhIcon get() = PhIcons.Quotes
+    /** SF Symbol `clock.arrow.circlepath`. */
+    val recent: PhIcon get() = PhIcons.ArrowCounterClockwise
     /** SF Symbol `waveform.circle`. */
     val recording: PhIcon get() = PhIcons.Waveform
     /** SF Symbol `bell.circle`. */

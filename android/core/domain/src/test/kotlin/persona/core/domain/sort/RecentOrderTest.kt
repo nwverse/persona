@@ -64,4 +64,20 @@ class RecentOrderTest {
         assertEquals(listOf("a"), list.groups[0].rows.map { it.session.sessionId })
         assertEquals(listOf("b"), list.groups[1].rows.map { it.session.sessionId })
     }
+
+    @Test fun emptyRecentListEmitsNoSection() {
+        val list = buildAgentList(emptyList(), settings = AgentListSettings(grouping = AgentGrouping.Recent))
+        assertEquals(emptyList<String>(), list.groups.map { it.id })
+    }
+
+    @Test fun recentlyUsedSectionNeverFolds() {
+        val rows = listOf(row("a", updated = 10))
+        val list = buildAgentList(
+            rows,
+            settings = AgentListSettings(grouping = AgentGrouping.Recent, folded = setOf(RecentGroup)),
+        )
+        assertEquals(listOf(RecentGroup), list.groups.map { it.id })
+        assertEquals(false, list.groups.single().folded)
+        assertEquals(1, list.groups.single().visibleRows.size)
+    }
 }

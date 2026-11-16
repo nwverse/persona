@@ -620,8 +620,30 @@ internal fun AgentsScreen(
                             AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                                 icon = PersonaIcons.pinned, counts = group.headingCounts,
                                 detail = pluralStringResource(R.plurals.agents_count_todos, todoCount, todoCount))
+                        } else if (group.under?.startsWith("app/") == true && "/project/" in group.id) {
+                            // By App's project fold row (#9199, iOS `AppProjectRow`): under the app heading, not a section of its own.
+                            val siblingMachines = page.list.groups.asSequence()
+                                .filter { it.under == group.under }
+                                .mapNotNull { it.rows.firstOrNull()?.session?.machineId }
+                                .toSet()
+                            val machineName = if (siblingMachines.size > 1) {
+                                names[group.rows.firstOrNull()?.session?.machineId]
+                            } else null
+                            AgentAppProjectRow(
+                                title = groupTitle,
+                                count = group.totalCount ?: group.rows.size,
+                                folded = group.folded,
+                                onToggle = { model.fold(group) },
+                                other = group.id.endsWith("/project/other#"),
+                                machine = machineName,
+                                // iOS `compact ? CompactList…`; Board uses the denser type too.
+                                compact = page.preferences.compact || PersonaTheme.style == AppStyle.Board,
+                            )
                         } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
-                            icon = PhIcons.PushPin.takeIf { group.id == "pinned" } ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" },
+                            icon = PhIcons.PushPin.takeIf { group.id == "pinned" }
+                                ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" }
+                                ?: PersonaIcons.recent.takeIf { group.id == RecentGroup }
+                                ?: PersonaIcons.byApp.takeIf { group.id.startsWith("app/") },
                             counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.sectionCounts, waitsInBackground = group.id == "state/background",
                             // Pinned's counts are the states', so a clock counts the agents that only wait in the background apart.
                             waiting = if (group.stateSectionCounts == null && group.todoLooseCounts == null) group.waitingInBackground else 0)
