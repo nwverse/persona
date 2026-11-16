@@ -101,7 +101,8 @@ it on the computer with `omp --resume`. The hub puts both into the reader's lang
 ## Differences from pi
 
 - **No pi-web and no companion process.** omp has no web client; its sessions live in its own process.
-- **Its own agent directory.** `~/.omp/agent`, or `$PI_CODING_AGENT_DIR` when set. pi's `~/.pi/agent` is never read.
+- **Its own agent directory.** `~/.omp/agent`, or `$PI_CODING_AGENT_DIR` when set, whatever its name: the node lists stopped
+  sessions from the same directory omp and the extension use. pi's `~/.pi/agent` is not read unless that variable names it.
 - **Its own runtime identity and slot.** The runtime is `omp-<pid>`, the apps' name and agent are `omp`, and card ids start with
   `omp`. The extension keeps its host in `__personaOmp` (`integrations/pi` uses `__personaPi`), so an omp and a pi loaded in the
   same process do not collide.

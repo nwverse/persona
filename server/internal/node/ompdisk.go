@@ -58,11 +58,10 @@ type ompDiskState struct {
 	scanned time.Time
 }
 
-// ompAgentDir is omp's agent directory: PI_CODING_AGENT_DIR when it names an omp one (…/.omp/agent, so a pi's own
-// directory is never taken for it), else <home>/.omp/agent.
+// ompAgentDir is omp's agent directory, the one omp and its Persona extension use (integrations/omp/lib/compat.js):
+// PI_CODING_AGENT_DIR when it is set, whatever its name, else <home>/.omp/agent.
 func ompAgentDir(home string) string {
-	if d := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); d != "" &&
-		filepath.Base(d) == "agent" && filepath.Base(filepath.Dir(d)) == ".omp" {
+	if d := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); d != "" {
 		return d
 	}
 	return filepath.Join(home, ".omp", "agent")

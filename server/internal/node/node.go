@@ -904,7 +904,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if res, err, handled := n.runtimeHandle(ctx, h, method, params); handled {
 			return res, err
 		}
-	} else if _, ok := n.ompSession(p.SessionID); ok { // a stopped omp: a notice, no send (ompcalls.go)
+	} else if n.ompStopped(method, p.SessionID) { // a stopped omp: a notice, no send (ompcalls.go)
 		if res, err, handled := n.ompOfflineCalls(method, p.SessionID); handled {
 			return res, err
 		}

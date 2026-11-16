@@ -15,6 +15,22 @@ import (
 // words (the refusal's detail); clients get rpc-errors.omp_resume_unknown in their language (apierr).
 const ompOfflineRefusal = "这个 omp 会话已停止，Persona 还不能恢复它：请在电脑上用 omp --resume 接着它。这次没有发送。"
 
+// ompOfflineMethods are the calls ompOfflineCalls answers. Only these look a session up among the stopped ones, so
+// the other calls never wait on a scan of omp's session files.
+var ompOfflineMethods = map[string]bool{
+	"session.items": true, "session.item": true, "session.image": true,
+	"session.watch": true, "session.unwatch": true, "session.send": true,
+}
+
+// ompStopped: a call ompOfflineCalls answers, about a stopped omp session (ompdisk.go).
+func (n *Node) ompStopped(method, id string) bool {
+	if !ompOfflineMethods[method] {
+		return false
+	}
+	_, ok := n.ompSession(id)
+	return ok
+}
+
 // ompOfflineCalls answers the calls only a reader of the conversation could, for a stopped session: an empty
 // conversation saying it is stopped, and a send refused (the node does not resume from its file yet). Terminal
 // calls are not this branch's: a stopped session has no terminal.

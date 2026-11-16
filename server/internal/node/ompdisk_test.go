@@ -286,3 +286,45 @@ func TestOmpDiskPaneOnAnotherSessionShowsTheOlderOnes(t *testing.T) {
 		}
 	}
 }
+
+// A custom agent directory omp and its extension use (PI_CODING_AGENT_DIR, whatever its name) is where the node
+// lists stopped sessions from too, and a send to one of them gets the stopped-session refusal.
+func TestOmpDiskCustomAgentDir(t *testing.T) {
+	n, _, home := herdrNode(t)
+	custom := filepath.Join(t.TempDir(), "my-omp-config")
+	t.Setenv("PI_CODING_AGENT_DIR", custom)
+	id := "01a10000-0000-7000-8000-000000000051"
+	writeOmpSession(t, filepath.Join(custom, "sessions"), "-w-custom", id, "custom", "/w/custom", time.Now())
+	writeOmpSession(t, ompSessionsDir(home), "-w-default", "01a10000-0000-7000-8000-000000000052", "default", "/w/default", time.Now())
+	rows := n.ompSessions()
+	if len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("rows from a custom agent directory: %+v", rows)
+	}
+	onlyRow(t, listSessions(t, n), id)
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "hi"}); err == nil || !strings.Contains(err.Error(), "omp") {
+		t.Fatalf("a send to a stopped session in a custom directory: %v", err)
+	}
+}
+
+// Only the calls a stopped session answers look it up: any other call never scans omp's session files.
+func TestOmpOfflineLookupOnlyForItsCalls(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	n, _, home := herdrNode(t)
+	id := "01a10000-0000-7000-8000-000000000061"
+	writeOmpSession(t, ompSessionsDir(home), "-w-calls", id, "stopped", "/w/calls", time.Now())
+	scanned := func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		return n.ompDisk != nil
+	}
+	_, _ = request(t, n, "session.interrupt", map[string]any{"session_id": id})
+	if scanned() {
+		t.Fatal("an interrupt scanned omp's session files")
+	}
+	if _, err := request(t, n, "session.items", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
+	if !scanned() {
+		t.Fatal("a page of a stopped session did not look it up")
+	}
+}
