@@ -94,6 +94,28 @@ final class PhoneScreenTests: XCTestCase {
         XCTAssertEqual(PhoneScreenPreflight.line(trusted: true), "phone_screen: 1 granted")
     }
 
+    func testTerminalsAndEditorsGetBiggerTextAndBrowsersDoNot() {
+        XCTAssertEqual(PhoneScreenZoom.steps(for: "com.mitchellh.ghostty"), 2)
+        XCTAssertEqual(PhoneScreenZoom.steps(for: "com.microsoft.VSCode"), 2)
+        XCTAssertEqual(PhoneScreenZoom.steps(for: "com.google.Chrome"), 0)
+        XCTAssertEqual(PhoneScreenZoom.steps(for: "com.apple.Safari"), 0)
+        XCTAssertEqual(PhoneScreenZoom.steps(for: nil), 0)
+        // An app-wide zoom is undone on the app even when its window went away; every one of them gets the zoom.
+        XCTAssertTrue(PhoneScreenZoom.appWide.isSubset(of: PhoneScreenZoom.apps))
+        XCTAssertFalse(PhoneScreenZoom.appWide.contains("com.mitchellh.ghostty"))
+    }
+
+    func testTheZoomGoesInTheRecordAndAnOldRecordStillReads() throws {
+        var r = PhoneScreenRestore()
+        r.add(.init(pid: 3, window: 4, app: "T", frame: .init(x: 0, y: 0, width: 1, height: 1), minimized: false, fullScreen: false))
+        r.setZoom(2, pid: 3, window: 4)
+        XCTAssertEqual(r.record(pid: 3, window: 4)?.zoom, 2)
+        r.setZoom(5, pid: 9, window: 9) // no record: nothing
+        XCTAssertEqual(r.records.count, 1)
+        let old = #"{"records":[{"pid":1,"window":2,"app":"A","frame":{"x":0,"y":0,"width":1,"height":1},"minimized":false,"fullScreen":false}]}"#
+        XCTAssertNil(try JSONDecoder().decode(PhoneScreenRestore.self, from: Data(old.utf8)).records.first?.zoom)
+    }
+
     func testOverlapAndMatch() {
         let a = PhoneScreenRect(x: 0, y: 0, width: 10, height: 10)
         XCTAssertFalse(a.overlaps(PhoneScreenRect(x: 10, y: 0, width: 5, height: 5)))
