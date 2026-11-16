@@ -499,7 +499,7 @@ struct TodoDetailView: View {
         // The regular control size with a 30 pt label: 44 pt buttons, a whole tap target and about the sidebar's New
         // Chat (46). On a wide page (an iPad) the row is no wider than a readable page, centered, as the Inbox's
         // hand-off bar. At the large size across the whole page they were 61 pt tall and on an iPad 380 pt wide each,
-        // and hid more of the notes (#8958).
+        // and hid more of the notes (#9008).
         StackingButtonRow(spacing: Theme.Space.m, stackedSpacing: Theme.Space.s) {
             bottomButtons(todo)
         }
@@ -511,7 +511,7 @@ struct TodoDetailView: View {
     }
 
     /// Each label is measured at its full size (`minimumScale: 1`): at the regular size the row's 0.8 allowance kept
-    /// "Hand to Agent" beside Done at xxxLarge, cut to "Hand to Age…" instead of shrunk (#8958).
+    /// "Hand to Agent" beside Done at xxxLarge, cut to "Hand to Age…" instead of shrunk (#9008).
     @ViewBuilder private func bottomButtons(_ todo: TodoItem) -> some View {
         // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
         if !todo.isDone {

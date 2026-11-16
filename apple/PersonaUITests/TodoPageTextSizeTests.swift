@@ -30,7 +30,7 @@ final class TodoPageTextSizeTests: XCTestCase {
         }
     }
 
-    /// The bottom bar in the page's three states (#8958): with an Agent at work and a stage, with nothing yet, and done
+    /// The bottom bar in the page's three states (#9008): with an Agent at work and a stage, with nothing yet, and done
     /// (Reopen alone). Its buttons are as tall as the app's other buttons (44 pt, not the large control size), and on a wide
     /// page (an iPad) the row is no wider than `Theme.Size.readable`, centered. `bar-<state>.png` in PERSONA_SHOTS;
     /// PERSONA_LANDSCAPE=1 turns the device first; PERSONA_BEFORE shoots and checks nothing.
