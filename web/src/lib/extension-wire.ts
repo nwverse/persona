@@ -721,6 +721,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -1088,6 +1101,8 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
 }
 
 export interface UIPlaces {

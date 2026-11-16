@@ -1039,6 +1039,20 @@ data class ExtensionUIItem(
      * widget only: how often the widget is drawn again on its own (30 when not said).
      */
     @SerialName("refresh_minutes") val refreshMinutes: Int? = null,
+    /**
+     * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+     * l10n's groups.
+     */
+    val group: ExtensionUIGroup? = null,
+)
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+@Serializable
+data class ExtensionUIGroup(
+    val id: String = "",
+    val title: String = "",
 )
 
 @Serializable
@@ -1516,6 +1530,10 @@ data class ExtensionUIPlace(
     val opens: String? = null,
     val badge: ExtensionBadge? = null,
     val connector: String? = null,
+    /**
+     * A nav_page's sidebar group, its title in the request's language (#9071).
+     */
+    val group: ExtensionUIGroup? = null,
 )
 
 @Serializable

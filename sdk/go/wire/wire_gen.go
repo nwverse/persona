@@ -719,6 +719,15 @@ type UIItem struct {
 	Families []string `json:"families,omitempty"`
 	// widget only: how often the widget is drawn again on its own (30 when not said).
 	RefreshMinutes int `json:"refresh_minutes,omitempty"`
+	// nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+	// l10n's groups.
+	Group *UIGroup `json:"group,omitempty"`
+}
+
+// UIGroup: A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+type UIGroup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 type AgentSourceItem struct {
@@ -1094,6 +1103,8 @@ type UIPlace struct {
 	Opens         string `json:"opens,omitempty"`
 	Badge         *Badge `json:"badge,omitempty"`
 	Connector     string `json:"connector,omitempty"`
+	// A nav_page's sidebar group, its title in the request's language (#9071).
+	Group *UIGroup `json:"group,omitempty"`
 }
 
 type UIPlaces struct {
@@ -6163,6 +6174,7 @@ var newDef = map[string]func() any{
 	"AssistantItem":                 func() any { return new(AssistantItem) },
 	"MCPServerItem":                 func() any { return new(MCPServerItem) },
 	"UIItem":                        func() any { return new(UIItem) },
+	"UIGroup":                       func() any { return new(UIGroup) },
 	"AgentSourceItem":               func() any { return new(AgentSourceItem) },
 	"ChannelItem":                   func() any { return new(ChannelItem) },
 	"ChannelCapabilities":           func() any { return new(ChannelCapabilities) },
