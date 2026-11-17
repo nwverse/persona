@@ -23,9 +23,10 @@ import (
 // ("full"): nothing is stored, and restarting either side recounts the same numbers; the manager keeps the week
 // (docs/server/machines.md "Token usage").
 //
-// Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal),
-// and a reply is counted once in the window even when it is in more than one file: a fork (Claude Code's
-// --fork-session, Codex's fork) copies the history it starts from, timestamps and all, into the new file.
+// Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal)
+// and which agent (its adapter's), and a reply is counted once in the window even when it is in more than one file: a
+// fork (Claude Code's --fork-session, Codex's fork) copies the history it starts from, timestamps and all, into the
+// new file.
 
 const (
 	usageWindow  = 26 * time.Hour // "today" in any time zone, and the hour before
@@ -38,6 +39,7 @@ type usageKey struct {
 	minute   int64
 	model    string
 	launcher string
+	agent    string
 }
 
 type usageFile struct {
@@ -213,7 +215,7 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 	if m.launcherOf != nil && uf.session != "" {
 		launcher = m.launcherOf(uf.session)
 	}
-	uf.skip, uf.at = false, usageKey{minute, model, launcher}
+	uf.skip, uf.at = false, usageKey{minute, model, launcher, r.Agent}
 	m.addTo(uf.at, r.Tokens, true)
 }
 
@@ -221,7 +223,7 @@ func (m *usageMeter) add(uf *usageFile, r tokenuse.Record, cutoff time.Time) {
 func (m *usageMeter) addTo(k usageKey, t tokenuse.Tokens, request bool) {
 	b := m.buckets[k]
 	if b == nil {
-		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher}
+		b = &proto.UsageBucket{Minute: k.minute, Model: k.model, Launcher: k.launcher, Agent: k.agent}
 		m.buckets[k] = b
 	}
 	b.Input += t.Input
