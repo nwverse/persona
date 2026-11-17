@@ -1124,8 +1124,14 @@ explicit alias or the shared repository-name default. Duplicate names fail.
 
 Preview calls the selected computer's read-only `workspace.naming.resolve` RPC.
 It supplies its own home and native path semantics; no browser-provided home or
-resolved path is trusted. It checks lexical paths, existing credential-folder
-restrictions and local branch format. No directory is created, no repository is
+resolved path is trusted. The pure resolver checks lexical paths; on Darwin it
+compares components without case to conservatively reserve private state even
+on case-sensitive volumes, while Linux comparisons remain case-sensitive.
+The Node resolves existing symlink ancestors of the base, task root and every
+repository's absolute path through its existing guarded walker, then rejects
+credential paths and physical private state. Only a missing tail is accepted;
+other resolution errors fail closed. It also validates local branch format.
+No directory is created, no repository is
 queried or fetched, and no Engine is opened. `.persona` and `.git` task path
 segments and private state directories are unavailable; `{persona-home}` has no
 registered public workspace subtree in this version and is unsupported.
@@ -1140,8 +1146,9 @@ after expanding it on the Node. Windows device names (`CON`, `PRN`, `AUX`, `NUL`
 every component, regardless of case or extension. The shared repository helper
 checks only reserved names: task paths still allow Unicode, internal spaces and
 components longer than a repository alias. Ordinary near-matches such as
-`COM10` and `NUL-backup` remain valid. This is lexical validation, not proof that
-the target filesystem can create the path.
+`COM10` and `NUL-backup` remain valid. This is naming validation, not proof that
+the target filesystem can create the path. Preparation must recheck physical
+paths when it creates or reuses resources; preview does not freeze the filesystem.
 
 The sole resolver and wire contract are in
 `server/internal/workspacenaming/naming.go`, with an exact shared vector in
@@ -1172,10 +1179,9 @@ preview selections for repositories no longer associated with the task; existing
 selections stay unchanged and newly associated repositories require selection.
 Both entry points load the shared editor through `lazyPage` when rendered, keeping
 its module out of the first screen's page-preload dependencies. The connection
-context hook lives with the repository request helpers, so naming does not load
-the repository editor just to scope its requests.
-Assistant settings wraps the naming subtree in its own `PageBoundary`, retaining
-the existing one-time chunk reload and recoverable error. A persistent import
-failure leaves the other settings mounted and editable.
+context guard is shared with the repository editor. Both Assistant settings and
+Todo details wrap naming in a local `PageBoundary`, retaining the existing
+one-time chunk reload and recoverable error. A persistent import failure leaves
+the other editors mounted and saveable.
 Edits and computer or assistant changes invalidate pending preview responses.
 These controls never select a creation mode or start an Agent.

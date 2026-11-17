@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -304,9 +305,21 @@ func (p *Preview) add(code, field, repo, severity string) {
 	}
 }
 func within(base, path string) bool {
+	return withinOS(base, path, runtime.GOOS)
+}
+func withinOS(base, path, goos string) bool {
+	// macOS commonly uses a case-insensitive volume. Reserve private paths
+	// conservatively there, even on a case-sensitive volume; Linux stays exact.
+	if goos == "darwin" {
+		base, path = strings.ToLower(base), strings.ToLower(path)
+	}
 	rel, err := filepath.Rel(base, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
+
+// InPrivateState checks lexical containment under the target's private-state policy.
+// Node callers must resolve existing symlinks before checking physical paths.
+func InPrivateState(path, state string) bool { return within(state, path) }
 
 // Resolve never reads the clock, filesystem, Git, environment or network. Node
 // supplies its own path context. Paths are lexical, not ownership attestation.
@@ -362,7 +375,7 @@ func Resolve(s Source, n NodeContext) Preview {
 	if state == "" {
 		state = filepath.Join(n.Home, ".persona")
 	}
-	if !filepath.IsAbs(base) || within(state, base) {
+	if !filepath.IsAbs(base) || InPrivateState(base, state) {
 		p.add("base_scope_denied", "base_directory", "", "error")
 		return p
 	}
@@ -377,7 +390,7 @@ func Resolve(s Source, n NodeContext) Preview {
 		return p
 	}
 	root := filepath.Join(base, filepath.FromSlash(rel))
-	if !within(base, root) || root == base || within(state, root) {
+	if !within(base, root) || root == base || InPrivateState(root, state) {
 		p.add("path_invalid", "task_directory_template", "", "error")
 		return p
 	}
