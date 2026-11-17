@@ -73,7 +73,7 @@ func TestLauncherHealthUsageLimitProbeModelScope(t *testing.T) {
 		{"You've hit your Haiku limit", "opus", false},
 		{"You've hit your weekly limit", "m", true},
 	} {
-		if got := usageLimitProbeMatches(tc.limit, tc.model); got != tc.matches {
+		if got := len(limitFamiliesLeft(limitFamilies(tc.limit), tc.model)) == 0; got != tc.matches {
 			t.Errorf("limit=%q model=%q matches=%v, want %v", tc.limit, tc.model, got, tc.matches)
 		}
 	}

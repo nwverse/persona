@@ -40,7 +40,7 @@ func TestUsageBackfillScan(t *testing.T) {
 		}
 	}
 	lim := &readLimiter{rate: 1 << 30, start: time.Now()}
-	buckets, err := n.backfillScan(context.Background(), since, before, lim)
+	buckets, err := n.backfillScan(context.Background(), n.backfillFiles(context.Background(), since, lim), since, before, lim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestUsageBackfillScan(t *testing.T) {
 	// The connection ended: the scan stops.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := n.backfillScan(ctx, since, before, lim); err == nil {
+	if _, err := n.backfillScan(ctx, n.backfillFiles(context.Background(), since, lim), since, before, lim); err == nil {
 		t.Fatal("a scan after its connection ended")
 	}
 }
@@ -141,11 +141,15 @@ func TestUsageBackfillWeeks(t *testing.T) {
 		}
 	}
 	lim := &readLimiter{rate: 1 << 30, start: time.Now()}
-	first, err := n.backfillScan(context.Background(), w1, w2, lim)
+	listed := n.backfillFiles(context.Background(), w1.Add(-backfillSlice), lim)
+	if start := backfillStart(listed, w1.Add(-backfillSlice)); !start.Equal(w1.Add(time.Hour)) {
+		t.Fatalf("the weeks start at %v, want the first line's hour %v", start, w1.Add(time.Hour))
+	}
+	first, err := n.backfillScan(context.Background(), listed, w1, w2, lim)
 	if err != nil || len(first) != 1 || first[0].Requests != 1 || first[0].CacheRead != 100 || first[0].Minute != w1.Add(time.Hour).Unix() {
 		t.Fatalf("the first week = %+v, %v", first, err)
 	}
-	second, err := n.backfillScan(context.Background(), w2, w2.Add(backfillSlice), lim)
+	second, err := n.backfillScan(context.Background(), listed, w2, w2.Add(backfillSlice), lim)
 	var replies int
 	for _, b := range second {
 		replies += b.Requests
@@ -162,5 +166,51 @@ func TestUsageBackfillWeeks(t *testing.T) {
 	read, err := m.scanSlice(context.Background(), p, st, w1, w2, lim)
 	if err != nil || read >= st.Size()/2 || read == 0 {
 		t.Fatalf("read %d of %d bytes for the first week (%v)", read, st.Size(), err)
+	}
+}
+
+// The weeks start at the earliest first line (none before it hold anything), unless a file has no timestamp in its
+// head; a week reads only the files that can hold its lines.
+func TestBackfillStartAndOverlap(t *testing.T) {
+	since := time.Date(2025, 11, 16, 0, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	mk := func(name, body string, mod time.Time) backfillFile {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+		st, _ := os.Stat(p)
+		return backfillFile{usagePath: usagePath{p, st}, first: firstTime([]byte(body))}
+	}
+	a := mk("a.jsonl", claudeReply(time.Date(2026, 10, 3, 9, 30, 0, 0, time.UTC), "a", "m", 0, 0, 1, 1), time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC))
+	b := mk("b.jsonl", claudeReply(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC), "b", "m", 0, 0, 1, 1), time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
+	if got := backfillStart([]backfillFile{a, b}, since); !got.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("start = %v", got)
+	}
+	none := mk("c.jsonl", `{"type":"summary"}`+"\n", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC))
+	if got := backfillStart([]backfillFile{a, none}, since); !got.Equal(since) {
+		t.Fatalf("with a file of unknown start = %v, want since", got)
+	}
+	if got := backfillStart(nil, since); !got.Equal(since) {
+		t.Fatalf("no files = %v", got)
+	}
+	week := func(y int, m time.Month, d int) (time.Time, time.Time) {
+		s := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		return s, s.Add(backfillSlice)
+	}
+	if s, e := week(2026, 9, 1); a.overlaps(s, e) { // before its first line
+		t.Fatal("a file read for a week before it began")
+	}
+	if s, e := week(2026, 10, 1); !a.overlaps(s, e) {
+		t.Fatal("a file not read for the week it began in")
+	}
+	if s, e := week(2026, 10, 10); a.overlaps(s, e) { // after its last change
+		t.Fatal("a file read for a week after it last changed")
+	}
+	if s, e := week(2026, 10, 10); !none.overlaps(s, e) {
+		t.Fatal("a file of unknown start not read")
 	}
 }
