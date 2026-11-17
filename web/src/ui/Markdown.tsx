@@ -3,7 +3,8 @@ import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markd
 import remarkGfm from "./remark-gfm-parse";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import type { PluggableList } from "unified";
-import { clickLink, linkHref, linkRoute, prefetchLink } from "../lib/links";
+import { clickLink, linkHref, prefetchLink } from "../lib/links";
+import { appLinkPage } from "../lib/deep-links";
 import { fileDownloadURL } from "../lib/api";
 import { isMachineRef, resolveRef } from "../lib/files";
 import { useLinkManager } from "../lib/manager-choice";
@@ -334,10 +335,10 @@ export function linkify(md: string, { math = false }: { math?: boolean } = {}): 
     .join("");
 }
 
-// persona://session links survive (they move to that conversation); everything else as react-markdown decides
-// (javascript: and other apps' schemes are dropped).
+// App links to a page of Persona's survive (persona://open<path>, persona://session|task|kb…: they open that page,
+// docs/protocol/deep-links.md); everything else as react-markdown decides (javascript: and other apps' schemes are dropped).
 export function markdownUrl(url: string): string {
-  return linkRoute(url).kind === "session" ? url : defaultUrlTransform(url);
+  return appLinkPage(url) ? url : defaultUrlTransform(url);
 }
 
 // A link opens where it belongs (lib/links.ts): Feishu documents in the side panel (read as the chat's manager),
